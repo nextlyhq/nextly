@@ -651,19 +651,20 @@ function inlineEditProblem(outcome: InlineCommit): string | null {
  * the one from before it, and committing that would save a page missing the
  * words they were in the middle of writing.
  *
- * Telling the author happens HERE rather than at each call site, so leaving and
- * saving cannot come to describe the same refusal differently. `mayClose` is
- * separate from the document because the two answers differ: a refused passage
- * changed nothing, so there is a perfectly good document to save, and the only
- * thing that must not happen is unmounting the editor still holding the words.
+ * Says nothing to the author: the surface reports every finished edit through
+ * one callback, including the ones started here, so reporting again from this
+ * return value would announce the same edit twice.
+ *
+ * `mayClose` is separate from the document because the two answers differ: a
+ * refused passage changed nothing, so there is a perfectly good document to
+ * save, and the only thing that must not happen is unmounting the editor still
+ * holding the words.
  */
 function finishInlineEdit(
   inline: { commit: () => InlineCommit },
   held: BlockDocument
 ): { document: BlockDocument; mayClose: boolean } {
   const outcome = inline.commit();
-  const problem = inlineEditProblem(outcome);
-  if (problem !== null) toast.error(problem);
   return {
     document: documentAfter(outcome, held),
     mayClose: outcome.status !== "refused",
@@ -723,7 +724,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * keeps its node classes recognisable, and this package is already on the
    * admin side of that line.
    */
-  const inline = useInlineEditing(editor, loadInlineRichTextEditor);
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineCommit) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
    * The entry's other fields, or null when there is no surrounding form. Null

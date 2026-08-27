@@ -287,6 +287,7 @@ export { useInlineRichText } from "./use-inline-rich-text";
 export type {
   InlineRichTextEditing,
   InlineRichTextEditorLoader,
+  InlineRichTextFinished,
   UseInlineRichTextResult,
 } from "./use-inline-rich-text";
 export {

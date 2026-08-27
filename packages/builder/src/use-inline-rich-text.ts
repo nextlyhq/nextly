@@ -182,6 +182,23 @@ interface LoadedEditor {
 }
 
 /**
+ * Told how every finished edit turned out.
+ *
+ * A host cannot learn this from `commit`'s return value alone, because most
+ * edits do not end by the host calling `commit`. Leaving the passage ends one,
+ * so does opening another, so does the canvas unmounting — and the outcome that
+ * most needs saying, an edit whose value stopped being editable while it was
+ * open, is reached almost entirely through the first of those. A host reporting
+ * only what its own calls returned would say nothing on the common path.
+ *
+ * Called for EVERY commit including the host's own, so that reporting has one
+ * home. A host should read `commit`'s return value for control flow — whether
+ * it may close, which document to save — and this for anything it says to the
+ * author; doing both from the return value reports the same edit twice.
+ */
+export type InlineRichTextFinished = (outcome: InlineCommit) => void;
+
+/**
  * How the editor is fetched.
  *
  * A parameter rather than a hard import so the rules of this hook can be
@@ -198,7 +215,8 @@ export type InlineRichTextEditorLoader = () => Promise<LoadedEditor>;
  */
 export function useInlineRichText(
   editor: EditorState,
-  load: InlineRichTextEditorLoader | undefined
+  load: InlineRichTextEditorLoader | undefined,
+  onFinished?: InlineRichTextFinished
 ): UseInlineRichTextResult {
   const [editing, setEditing] = useState<InlineRichTextEditing | null>(null);
 
@@ -211,6 +229,11 @@ export function useInlineRichText(
   editorRef.current = editor;
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  // Held in a ref for the same reason, and for one more: a host passing an
+  // inline arrow would otherwise give `commit` a new identity every render, and
+  // `commit` is what the handover effect depends on.
+  const finishedRef = useRef(onFinished);
+  finishedRef.current = onFinished;
 
   /**
    * The element a pointer handed over, used in place of searching for one.
@@ -272,13 +295,26 @@ export function useInlineRichText(
     live.element.removeAttribute(EDITING_ATTRIBUTE);
   }, []);
 
+  /**
+   * Say how an edit turned out, and answer with it.
+   *
+   * Every path out of `commit` goes through this, so a new one cannot be added
+   * that a host never hears about — which is the defect this exists to close:
+   * the outcome was reported at the two places the host itself called, and the
+   * ways an edit actually ends most often are not those.
+   */
+  const report = useCallback((outcome: InlineCommit): InlineCommit => {
+    finishedRef.current?.(outcome);
+    return outcome;
+  }, []);
+
   const commit = useCallback((): InlineCommit => {
     const live = mounted.current;
     if (live === null) {
       // No session, but possibly a pending one: `editing` is set from the
       // moment the passage is requested and the editor arrives later.
       letGo();
-      return INLINE_COMMIT_UNCHANGED;
+      return report(INLINE_COMMIT_UNCHANGED);
     }
     /*
      * Let go only once the write is SETTLED, never before.
@@ -286,10 +322,16 @@ export function useInlineRichText(
      * Releasing is what destroys an author's words: they exist in the editor
      * and nowhere else, so tearing it down loses them and puts the page's older
      * copy back in their place with nothing said. So each way of failing to
-     * write is asked first, and the two an author can still act on keep the
+     * write is asked first, and the ones an author can still act on keep the
      * passage open — their text stays on screen, and Escape still discards it
      * deliberately.
      */
+    // Read BEFORE detaching: a detached session answers nothing, deliberately,
+    // so that a superseded one cannot read the live passage. Read before
+    // JUDGING as well — every refusal below is a refusal to destroy something,
+    // so whether there is anything to destroy is the first question.
+    const next = live.session.read();
+    const typed = richTextChanged(live.baseline, next);
     if (
       richTextMovedOn(
         editorRef.current.document,
@@ -298,11 +340,20 @@ export function useInlineRichText(
         live.opened
       )
     ) {
-      return { status: "refused", reason: "moved-on" };
+      /*
+       * The document moved on. Holding the passage open protects an author's
+       * words from being replaced by the older copy — but only if they wrote
+       * any. A caret that merely sat in a passage has nothing to protect, and
+       * refusing there is worse than doing nothing: the host cannot close, and
+       * the untouched editor goes on showing the stale passage over the newer
+       * one that arrived, until somebody presses Escape.
+       */
+      if (!typed) {
+        letGo();
+        return report(INLINE_COMMIT_UNCHANGED);
+      }
+      return report({ status: "refused", reason: "moved-on" });
     }
-    // Read BEFORE detaching: a detached session answers nothing, deliberately,
-    // so that a superseded one cannot read the live passage.
-    const next = live.session.read();
     // The passage this session was opened for, not whichever is current now.
     const op = richInlineTextOp(
       editorRef.current.document,
@@ -324,9 +375,8 @@ export function useInlineRichText(
        * anything. Whether their typing was actually lost is worth saying, and
        * the comparison that says it is the same one the op made.
        */
-      const typed = richTextChanged(live.baseline, next);
       letGo();
-      return typed ? INLINE_COMMIT_DISCARDED : INLINE_COMMIT_UNCHANGED;
+      return report(typed ? INLINE_COMMIT_DISCARDED : INLINE_COMMIT_UNCHANGED);
     }
     const written = editorRef.current.apply(op);
     if (written === null) {
@@ -336,11 +386,11 @@ export function useInlineRichText(
        * applied, so the words are still only in the editor and the passage
        * stays open: an author who has hit a cap can shorten what they wrote.
        */
-      return { status: "refused", reason: "rejected" };
+      return report({ status: "refused", reason: "rejected" });
     }
     letGo();
-    return { status: "written", document: written };
-  }, [letGo]);
+    return report({ status: "written", document: written });
+  }, [letGo, report]);
 
   const cancel = useCallback(() => {
     letGo();

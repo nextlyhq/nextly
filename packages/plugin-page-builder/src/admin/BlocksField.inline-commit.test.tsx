@@ -111,11 +111,29 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       undoDepth: 0,
     }),
     useInlineText: () => ({ onDoubleClick: () => {} }),
-    useInlineEditing: () => ({
+    /*
+     * Answers the chosen outcome AND reports it the way the real hook does —
+     * through the callback, on every commit including the host's own. A stub
+     * that only returned it would let this file pass against a host that never
+     * wired the callback at all, which is the defect this replaced.
+     *
+     * That the REAL hook reports from blur, from being superseded and from
+     * unmount is asserted in the builder's own suite against the real hook.
+     * The division is deliberate: there, that the outcome is produced; here,
+     * that this component acts on it.
+     */
+    useInlineEditing: (
+      _editor: unknown,
+      _load: unknown,
+      onFinished?: (finished: InlineCommit) => void
+    ) => ({
       editing: null,
       editingRich: null,
       begin: () => false,
-      commit: () => outcome,
+      commit: () => {
+        onFinished?.(outcome);
+        return outcome;
+      },
       cancel: () => {},
       onDoubleClick: () => {},
     }),

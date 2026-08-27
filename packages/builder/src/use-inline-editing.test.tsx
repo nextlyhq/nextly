@@ -647,14 +647,24 @@ describe("a write the document refuses", () => {
     const detach = vi.fn();
     const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
       focus: vi.fn(),
-      read: vi.fn(() => ({
-        root: {
-          type: "root",
-          children: [
-            { type: "paragraph", children: [{ type: "text", text: "TYPED" }] },
-          ],
-        },
-      })),
+      // The passage AS OPENED first, then as the author left it. A fixture
+      // answering one value for both says the author typed nothing, and an
+      // untouched passage is released rather than held — so it would assert
+      // the opposite rule from the one this case is about.
+      read: vi
+        .fn()
+        .mockReturnValueOnce({ root: { type: "root", children: [] } })
+        .mockReturnValue({
+          root: {
+            type: "root",
+            children: [
+              {
+                type: "paragraph",
+                children: [{ type: "text", text: "TYPED" }],
+              },
+            ],
+          },
+        }),
       detach,
     }));
     const load = vi.fn(() => Promise.resolve({ attach }));
@@ -1197,5 +1207,178 @@ describe("the passage surface used on its own", () => {
 
     expect(opened).toBe(true);
     expect(attach.mock.calls.length).toBeGreaterThan(attachesWhileOpen);
+  });
+});
+
+describe("how a host hears about an edit it did not finish itself", () => {
+  /*
+   * Almost no edit ends by the host calling `commit`. Leaving the passage ends
+   * one, opening another ends one, and the canvas unmounting ends one — so a
+   * host reporting only what its own calls returned is silent on every common
+   * path, including the one that loses the author's words.
+   */
+  function articleWith(text: string) {
+    return [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: {
+          content: {
+            root: {
+              type: "root",
+              children: [
+                { type: "paragraph", children: [{ type: "text", text }] },
+              ],
+            },
+          },
+        },
+      } as BlockNode,
+    ];
+  }
+
+  function typingEditor(stored: string, typed: string) {
+    const passage = (text: string) => ({
+      root: {
+        type: "root",
+        children: [{ type: "paragraph", children: [{ type: "text", text }] }],
+      },
+    });
+    const detach = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi
+        .fn()
+        .mockReturnValueOnce(passage(stored))
+        .mockReturnValue(passage(typed)),
+      detach,
+    }));
+    return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
+  }
+
+  it("reports a passage discarded by LEAVING it, not only by exiting", async () => {
+    /*
+     * The node is locked while the caret is in it, and the author clicks away.
+     * Blur is the ordinary way to finish an edit; the text is gone, and if this
+     * outcome does not reach the host then nothing on screen ever says so.
+     */
+    const finished = vi.fn();
+    const { load } = typingEditor("STORED", "TYPED");
+    registerArticle();
+    paint();
+    const nodes = articleWith("STORED");
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, load as never, finished)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    nodes[0]!.locked = true;
+    rerender();
+    finished.mockClear();
+
+    const element = document.querySelector<HTMLElement>(
+      '[data-nx-prop="content"]'
+    );
+    await act(async () => {
+      element?.dispatchEvent(new Event("blur"));
+    });
+
+    expect(finished).toHaveBeenCalledWith({ status: "discarded" });
+  });
+
+  it("reports an ordinary blur as nothing worth saying", async () => {
+    // The control: reporting `discarded` for every blur would have the host
+    // announcing lost work to an author who clicked into a passage and out.
+    const finished = vi.fn();
+    const { load } = typingEditor("STORED", "STORED");
+    registerArticle();
+    paint();
+    const state = {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: articleWith("STORED"),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() =>
+      useInlineEditing(state, load as never, finished)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    finished.mockClear();
+
+    const element = document.querySelector<HTMLElement>(
+      '[data-nx-prop="content"]'
+    );
+    await act(async () => {
+      element?.dispatchEvent(new Event("blur"));
+    });
+
+    expect(finished).toHaveBeenCalledWith({ status: "unchanged" });
+  });
+
+  it("releases an UNTOUCHED passage when the document moved on", async () => {
+    /*
+     * Holding a passage open protects the author's words from the older copy
+     * being put back over them — but only if they wrote any. A caret that
+     * merely sat there has nothing to protect, and refusing is worse than doing
+     * nothing: the host cannot close, and the untouched editor goes on showing
+     * the stale passage over the newer one that arrived.
+     */
+    const finished = vi.fn();
+    const { detach, load } = typingEditor("STORED", "STORED");
+    registerArticle();
+    paint();
+    const nodes = articleWith("STORED");
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, load as never, finished)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    // Somebody else rewrites the passage while the caret sits in it.
+    nodes[0]!.props = {
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [{ type: "text", text: "SOMEONE ELSE" }],
+            },
+          ],
+        },
+      },
+    };
+    rerender();
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = result.current.commit();
+    });
+
+    expect(outcome).toEqual({ status: "unchanged" });
+    // Let go, so the newer passage is what the page renders from here.
+    expect(detach).toHaveBeenCalled();
+    expect(result.current.editingRich).toBeNull();
   });
 });

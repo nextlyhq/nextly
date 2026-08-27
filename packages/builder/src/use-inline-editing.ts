@@ -35,6 +35,7 @@ import {
   type CaretPoint,
   type InlineRichTextEditing,
   type InlineRichTextEditorLoader,
+  type InlineRichTextFinished,
 } from "./use-inline-rich-text";
 import { useInlineText, type InlineTextEditing } from "./use-inline-text";
 
@@ -97,14 +98,23 @@ function markedAt(target: EventTarget | null): {
 /**
  * @param editor - the editor state whose document is being edited
  * @param loadRichText - how to obtain the shared rich-text editor, when there is one
+ * @param onFinished - told how every finished PASSAGE turned out; see {@link InlineRichTextFinished}
  * @returns one edit at a time, and the canvas handler that starts it
  */
 export function useInlineEditing(
   editor: EditorState,
-  loadRichText?: InlineRichTextEditorLoader
+  loadRichText?: InlineRichTextEditorLoader,
+  onFinished?: InlineRichTextFinished
 ): UseInlineEditingResult {
   const plain = useInlineText(editor);
-  const rich = useInlineRichText(editor, loadRichText);
+  /*
+   * Passages only. The plain surface commits from its own blur handler and
+   * answers the pre-union way, so an edit it ends is not observable from here
+   * at all — a line of text lost to a capped write goes unreported, which is a
+   * defect of that surface rather than something this can translate. Stated so
+   * a host does not read silence as "nothing happened".
+   */
+  const rich = useInlineRichText(editor, loadRichText, onFinished);
 
   /** The kind the block declared for this value, or `null` if it declared none. */
   const kindOf = useCallback(
