@@ -180,6 +180,7 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "ResizableHandle (value)",
   "ResizablePanel (value)",
   "ResizablePanelGroup (value)",
+  "SHELL_MEASURE (value)",
   "Select (value)",
   "SelectContent (value)",
   "SelectGroup (value)",
