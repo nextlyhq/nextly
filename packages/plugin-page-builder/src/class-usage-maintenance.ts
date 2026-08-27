@@ -246,7 +246,55 @@ async function storedRowsWhere(
   where: Record<string, { equals: string }>,
   describe: string
 ): Promise<StoredClassUsageRow[]> {
-  const rows: StoredClassUsageRow[] = [];
+  return rowsWhere(store, where, describe, readStoredRow);
+}
+
+/**
+ * The identity of a stored row, without decoding the columns it is not keyed by.
+ *
+ * A row whose `variant` is NULL — written before that column existed, or left
+ * that way by a restore — is rejected by `readStoredRow`, which is right for
+ * reconciliation: that walk binds a variant, so a row carrying none belongs to
+ * no subject it could be compared against, and nothing there knows enough to
+ * remove it.
+ *
+ * A document-wide DELETE knows enough. It binds only the document, the document
+ * is gone, and every row keyed to it goes with it whatever else the row says.
+ * Decoding the variant there would silently spare exactly the rows no subject
+ * can reach and no sweep visits — they would outlive their document and count
+ * towards their classes for ever, with nothing able to remove them.
+ */
+interface ClassUsageRowIdentity {
+  id: string;
+  scope: string;
+  entity: string;
+  entityKey: string;
+}
+
+/** Read only the columns a document-wide removal is keyed by. */
+function readRowIdentity(item: unknown): ClassUsageRowIdentity | null {
+  if (!isPlainRecord(item)) return null;
+  const parts = readStrings(item, ["id", "scope", "entity", "entityKey"]);
+  if (parts === null) return null;
+  const [id, scope, entity, entityKey] = parts;
+  return { id, scope, entity, entityKey };
+}
+
+/**
+ * Every row matching a query, decoded by the caller's reader.
+ *
+ * The reader is a parameter because two walks need different amounts of the
+ * row: reconciliation compares whole subjects, while a removal needs only what
+ * it is keyed by. Sharing the paging and the misbinding check keeps them from
+ * drifting apart, which is how one of them would stop refusing foreign rows.
+ */
+async function rowsWhere<T extends { id: string }>(
+  store: ClassUsageIndexStore,
+  where: Record<string, { equals: string }>,
+  describe: string,
+  decode: (item: unknown) => T | null
+): Promise<T[]> {
+  const rows: T[] = [];
   await walkPages({
     maxPages: MAX_PAGES,
     describe,
@@ -263,7 +311,7 @@ async function storedRowsWhere(
       }),
     onPage: items => {
       for (const item of items) {
-        const row = readStoredRow(item);
+        const row = decode(item);
         if (row === null) continue;
         // Validated HERE rather than by each consumer. Every path that reads
         // rows goes on to delete some of them, and a row outside the requested
@@ -289,7 +337,7 @@ async function storedRowsWhere(
  * invisibly on every call and nothing would ever report it.
  */
 function assertRowMatches(
-  row: StoredClassUsageRow,
+  row: { id: string },
   where: Record<string, { equals: string }>,
   describe: string
 ): void {
@@ -415,6 +463,10 @@ export async function maintainClassUsage(args: {
  *
  * Rows are read whole before any is deleted. These are offset queries, so
  * deleting while paging shifts later rows behind the cursor and skips them.
+ *
+ * Only the identity columns are decoded, so a row whose `variant` or `locale`
+ * is unreadable still goes. Those are precisely the rows no subject can name
+ * and no sweep visits, so sparing them here would strand them for ever.
  */
 export async function forgetDeletedDocument(args: {
   store: ClassUsageIndexStore;
@@ -427,10 +479,11 @@ export async function forgetDeletedDocument(args: {
     entity: { equals: args.entity },
     entityKey: { equals: args.entityKey },
   };
-  const rows = await storedRowsWhere(
+  const rows = await rowsWhere(
     args.store,
     where,
-    `${args.scope}:${args.entity}:${args.entityKey}:*`
+    `${args.scope}:${args.entity}:${args.entityKey}:*`,
+    readRowIdentity
   );
 
   let removed = 0;

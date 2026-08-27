@@ -512,6 +512,51 @@ describe("forgetting a document that was deleted", () => {
     expect(calls.filter(c => c.startsWith("delete:"))).toEqual([]);
   });
 
+  it("removes a LEGACY row whose variant is unreadable", async () => {
+    // A row written before the `variant` column existed, or left NULL by a
+    // restore, is rejected by the reconciler's reader — correctly, because that
+    // walk binds a variant and such a row belongs to no subject it could be
+    // compared against. It is therefore reachable by no reconciliation and by
+    // no sweep, so if the delete spared it too it would outlive its document
+    // and count towards its class for ever with nothing able to remove it.
+    const deleted: string[] = [];
+    const store: ClassUsageIndexStore = {
+      find: async () => ({
+        items: [
+          {
+            id: "legacy",
+            scope: "collection",
+            entity: "pages",
+            entityKey: "page-1",
+            field: "content",
+            // The two columns a legacy row is missing. Neither is bound by this
+            // query, and neither is needed to know the row belongs to a
+            // document that is gone.
+            locale: null,
+            variant: null,
+            classId: "hero",
+          },
+        ],
+        meta: { hasNext: false },
+      }),
+      create: async () => ({}),
+      delete: async args => {
+        deleted.push(args.id);
+        return {};
+      },
+    };
+
+    const result = await forgetDeletedDocument({
+      store,
+      scope: "collection",
+      entity: "pages",
+      entityKey: "page-1",
+    });
+
+    expect(result).toEqual({ removed: 1 });
+    expect(deleted).toEqual(["legacy"]);
+  });
+
   it("REFUSES to delete a row the query did not ask for", async () => {
     // If a misbound query returns a foreign row, deleting it removes usage
     // belonging to a document that still exists. The refusal must raise rather
