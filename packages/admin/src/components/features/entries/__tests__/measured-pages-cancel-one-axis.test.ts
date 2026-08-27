@@ -45,6 +45,9 @@
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it } from "vitest";
 
 /**
  * A path spelled with `/` on every platform.
@@ -54,9 +57,6 @@ import { dirname, resolve, sep } from "node:path";
  * forward slashes on Windows while the file paths beneath them still match.
  */
 const toPosix = (p: string): string => p.split(sep).join("/");
-import { fileURLToPath } from "node:url";
-
-import { describe, expect, it } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ADMIN_SRC = resolve(HERE, "../../../..");

@@ -30,6 +30,12 @@
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import ts from "typescript";
+import { describe, expect, it } from "vitest";
+
+import { inertClassesFor } from "./inert-classes";
 
 /**
  * A repo-relative path spelled with `/` on every platform.
@@ -39,12 +45,6 @@ import { dirname, extname, join, relative, resolve, sep } from "node:path";
  * against a path that is otherwise correct.
  */
 const toPosix = (p: string): string => p.split(sep).join("/");
-import { fileURLToPath } from "node:url";
-
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
-
-import { inertClassesFor } from "./inert-classes";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adminSrc = resolve(here, "../../..");

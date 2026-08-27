@@ -41,6 +41,10 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import postcss from "postcss";
+import { describe, expect, it } from "vitest";
 
 /**
  * A repo-relative path spelled with `/` on every platform. The allowlists and
@@ -48,10 +52,6 @@ import { dirname, extname, join, relative, resolve, sep } from "node:path";
  * platform separator, which on Windows matches none of them.
  */
 const toPosix = (p: string): string => p.split(sep).join("/");
-import { fileURLToPath } from "node:url";
-
-import postcss from "postcss";
-import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../../../../..");
