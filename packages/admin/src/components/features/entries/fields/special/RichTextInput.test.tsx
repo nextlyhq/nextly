@@ -1,16 +1,35 @@
 import { TooltipProvider } from "@nextlyhq/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SerializedEditorState } from "lexical";
+import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import type { LexicalCommand, SerializedEditorState } from "lexical";
 import type { RichTextFieldConfig } from "nextly/config";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
 import { RichTextInput } from "./RichTextInput";
+import { RICH_TEXT_NODES } from "./rich-text-kit";
+import {
+  RichTextTablePlugin,
+  OPEN_TABLE_DIALOG_COMMAND,
+} from "./RichTextTablePlugin";
+import {
+  RichTextVideoPlugin,
+  OPEN_VIDEO_DIALOG_COMMAND,
+} from "./RichTextVideoPlugin";
+import {
+  RichTextButtonLinkPlugin,
+  OPEN_BUTTON_LINK_DIALOG_COMMAND,
+} from "./RichTextButtonLinkPlugin";
+import {
+  RichTextButtonGroupPlugin,
+  OPEN_BUTTON_GROUP_DIALOG_COMMAND,
+} from "./RichTextButtonGroupPlugin";
 
-// Lexical's selection and toolbar code touch DOM APIs jsdom does not
-// implement — stub them so the editor can mount and re-render.
+// Lexical selection & toolbar DOM stub
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
   window.matchMedia =
@@ -27,7 +46,6 @@ const FIELD = {
   name: "body",
 } as unknown as RichTextFieldConfig;
 
-/** A minimal serialized Lexical document holding one paragraph of plain text. */
 function doc(text: string): SerializedEditorState {
   return {
     root: {
@@ -60,16 +78,26 @@ function doc(text: string): SerializedEditorState {
   } as unknown as SerializedEditorState;
 }
 
-// Never retries in tests, so a plugin's failed background query cannot hang a run.
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 });
 
-/**
- * Form harness mirroring the entry/single editors: the editor is bound through RHF
- * `control`, and a locale switch arrives as `form.reset(...)` with another language's
- * value — the exact external-change path the editor must follow.
- */
+type Dispatcher = (command: LexicalCommand<unknown>, payload: unknown) => void;
+
+function CommandBridgePlugin({
+  onReady,
+}: {
+  onReady: (dispatch: Dispatcher) => void;
+}) {
+  const [editor] = useLexicalComposerContext();
+  useEffect(() => {
+    onReady((cmd, payload) => {
+      editor.dispatchCommand(cmd, payload);
+    });
+  }, [editor, onReady]);
+  return null;
+}
+
 function Harness({
   initial,
   readOnly = false,
@@ -81,8 +109,6 @@ function Harness({
     defaultValues: { body: initial },
   });
   return (
-    // The editor's media plugins query the API and the toolbar renders inside
-    // tooltips, so the harness supplies the same app-level providers the admin does.
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <RichTextInput
@@ -97,7 +123,6 @@ function Harness({
         <button onClick={() => form.reset({ body: null })}>clear</button>
         <button
           onClick={() =>
-            // A corrupted stored value: parseable JSON, but not a Lexical document.
             form.reset({ body: { root: { type: "bogus-node-type" } } })
           }
         >
@@ -115,43 +140,35 @@ describe("RichTextInput — external value sync", () => {
   });
 
   it("follows an external form reset to another language's content", async () => {
+    const user = userEvent.setup();
     render(<Harness initial={doc("English body")} />);
     await screen.findByText("English body");
 
-    // A locale switch resets the form with the other language's fetched value; the
-    // editor must display it instead of keeping the first-mounted language.
-    await userEvent.click(screen.getByText("switch-es"));
+    await user.click(screen.getByText("switch-es"));
 
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
     expect(screen.queryByText("English body")).not.toBeInTheDocument();
   });
 
   it("clears when the external value becomes empty", async () => {
+    const user = userEvent.setup();
     render(<Harness initial={doc("English body")} />);
     await screen.findByText("English body");
 
-    // An untranslated language has no stored value — the editor must show empty,
-    // not the previous language's content.
-    await userEvent.click(screen.getByText("clear"));
+    await user.click(screen.getByText("clear"));
 
     expect(screen.queryByText("English body")).not.toBeInTheDocument();
   });
 
   it("degrades to an empty document when the external value cannot be parsed", async () => {
+    const user = userEvent.setup();
     render(<Harness initial={doc("English body")} />);
     await screen.findByText("English body");
 
-    // A corrupted or version-mismatched stored value must not crash the editor
-    // tree, and must not leave the previous document on screen (a save from that
-    // screen would write the previous language's content into this one).
-    await userEvent.click(screen.getByText("corrupt"));
+    await user.click(screen.getByText("corrupt"));
 
-    // The whole document is empty — not just missing the previous content, but
-    // holding nothing else either (no partial or garbled render of the bad value).
-    // The contentEditable carries the field name as its accessible label.
     expect(screen.getByLabelText("body").textContent).toBe("");
-    // The editor is still alive: a follow-up valid value loads normally.
-    await userEvent.click(screen.getByText("switch-es"));
+    await user.click(screen.getByText("switch-es"));
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
   });
 });
@@ -160,9 +177,6 @@ describe("RichTextInput — read-only", () => {
   it("offers the formatting toolbar while the field is editable", async () => {
     render(<Harness initial={doc("Body copy")} />);
 
-    // The control for the negative below: without this, an absent toolbar in
-    // the read-only case would be satisfied by a harness that renders no
-    // toolbar under any circumstances.
     expect(
       await screen.findByRole("toolbar", { name: /text formatting/i })
     ).toBeInTheDocument();
@@ -171,11 +185,201 @@ describe("RichTextInput — read-only", () => {
   it("renders no formatting toolbar when the field is read-only", async () => {
     render(<Harness initial={doc("Body copy")} readOnly />);
 
-    // The content still has to be there — an absent toolbar proves nothing if
-    // the editor failed to mount at all.
     expect(await screen.findByText("Body copy")).toBeInTheDocument();
     expect(
       screen.queryByRole("toolbar", { name: /text formatting/i })
     ).toBeNull();
+  });
+});
+
+describe("RichTextInput — insert dialogs shell characterization", () => {
+  function renderPluginHarness() {
+    let dispatch: Dispatcher = () => {};
+    const view = render(
+      <TooltipProvider>
+        <LexicalComposer
+          initialConfig={{
+            namespace: "DialogTestEditor",
+            nodes: [...RICH_TEXT_NODES],
+            onError: err => {
+              console.error(err);
+            },
+          }}
+        >
+          <RichTextTablePlugin />
+          <RichTextVideoPlugin />
+          <RichTextButtonLinkPlugin />
+          <RichTextButtonGroupPlugin />
+          <CommandBridgePlugin
+            onReady={d => {
+              dispatch = d;
+            }}
+          />
+        </LexicalComposer>
+      </TooltipProvider>
+    );
+
+    return {
+      ...view,
+      openTable: () => dispatch(OPEN_TABLE_DIALOG_COMMAND, undefined),
+      openVideo: () => dispatch(OPEN_VIDEO_DIALOG_COMMAND, undefined),
+      openButtonLink: () =>
+        dispatch(OPEN_BUTTON_LINK_DIALOG_COMMAND, undefined),
+      openButtonGroup: () =>
+        dispatch(OPEN_BUTTON_GROUP_DIALOG_COMMAND, undefined),
+    };
+  }
+
+  describe("Table dialog", () => {
+    it("opens, resets on cancel, reports validation error, and submits with Enter", async () => {
+      const { openTable } = renderPluginHarness();
+
+      openTable();
+      expect(
+        await screen.findByRole("heading", { name: "Insert Table" })
+      ).toBeInTheDocument();
+      const rowsInput = screen.getByLabelText(/^rows/i);
+      const colsInput = screen.getByLabelText(/^columns/i);
+      expect(rowsInput).toHaveValue(3);
+      expect(colsInput).toHaveValue(3);
+
+      // Cancel closes and resets
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(
+        screen.queryByRole("heading", { name: "Insert Table" })
+      ).not.toBeInTheDocument();
+
+      // Re-open: invalid row count -> validation error
+      openTable();
+      const rowsInput2 = await screen.findByLabelText(/^rows/i);
+      fireEvent.change(rowsInput2, { target: { value: "0" } });
+      fireEvent.click(screen.getByRole("button", { name: /^insert table$/i }));
+      expect(
+        await screen.findByText("Rows must be between 1 and 20")
+      ).toBeInTheDocument();
+
+      // Valid value + Enter key submits
+      fireEvent.change(rowsInput2, { target: { value: "4" } });
+      fireEvent.keyDown(rowsInput2, { key: "Enter", code: "Enter" });
+      expect(
+        screen.queryByRole("heading", { name: "Insert Table" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Video dialog", () => {
+    it("opens, disables submit when empty, shows preview, and submits with Enter", async () => {
+      const { openVideo } = renderPluginHarness();
+
+      openVideo();
+      expect(
+        await screen.findByRole("heading", { name: "Embed Video" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /^embed video$/i })
+      ).toBeDisabled();
+
+      // Cancel closes
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(
+        screen.queryByRole("heading", { name: "Embed Video" })
+      ).not.toBeInTheDocument();
+
+      // Re-open and fill YouTube URL
+      openVideo();
+      const urlInput = await screen.findByLabelText(/video url/i);
+      fireEvent.change(urlInput, {
+        target: { value: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" },
+      });
+
+      expect(await screen.findByText(/video detected/i)).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /^embed video$/i })
+      ).toBeEnabled();
+
+      // Enter key submits
+      fireEvent.keyDown(urlInput, { key: "Enter", code: "Enter" });
+      expect(
+        screen.queryByRole("heading", { name: "Embed Video" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Button Link dialog", () => {
+    it("opens, validates URL on submit, and submits with Enter", async () => {
+      const { openButtonLink } = renderPluginHarness();
+
+      openButtonLink();
+      expect(
+        await screen.findByRole("heading", { name: "Insert Button Link" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /^insert button$/i })
+      ).toBeDisabled();
+
+      const textInput = screen.getByLabelText(/^button text/i);
+      const urlInput = screen.getByLabelText(/^url/i);
+
+      // Invalid URL error on submit
+      fireEvent.change(textInput, { target: { value: "Documentation" } });
+      fireEvent.change(urlInput, { target: { value: "javascript:alert(1)" } });
+      expect(
+        screen.getByRole("button", { name: /^insert button$/i })
+      ).toBeEnabled();
+
+      fireEvent.click(screen.getByRole("button", { name: /^insert button$/i }));
+      expect(
+        await screen.findByText("Please enter a valid URL")
+      ).toBeInTheDocument();
+
+      // Valid URL + Enter key submits
+      fireEvent.change(urlInput, { target: { value: "https://nextlyhq.com" } });
+      fireEvent.keyDown(urlInput, { key: "Enter", code: "Enter" });
+      expect(
+        screen.queryByRole("heading", { name: "Insert Button Link" })
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Button Group dialog", () => {
+    it("opens, validates buttons, and submits on valid input", async () => {
+      const { openButtonGroup } = renderPluginHarness();
+
+      openButtonGroup();
+      expect(
+        await screen.findByRole("heading", { name: "Insert Button Group" })
+      ).toBeInTheDocument();
+
+      // Submitting empty -> validation error
+      fireEvent.click(
+        screen.getByRole("button", { name: /^insert button group$/i })
+      );
+      expect(
+        await screen.findByText("Button 1: Please enter button text")
+      ).toBeInTheDocument();
+
+      // Cancel closes
+      fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(
+        screen.queryByRole("heading", { name: "Insert Button Group" })
+      ).not.toBeInTheDocument();
+
+      // Re-open and fill valid buttons
+      openButtonGroup();
+      const textInputs = await screen.findAllByPlaceholderText("Click here");
+      const urlInputs = screen.getAllByPlaceholderText("https://example.com");
+
+      fireEvent.change(textInputs[0], { target: { value: "Docs" } });
+      fireEvent.change(urlInputs[0], { target: { value: "/docs" } });
+      fireEvent.change(textInputs[1], { target: { value: "Blog" } });
+      fireEvent.change(urlInputs[1], { target: { value: "/blog" } });
+
+      fireEvent.click(
+        screen.getByRole("button", { name: /^insert button group$/i })
+      );
+      expect(
+        screen.queryByRole("heading", { name: "Insert Button Group" })
+      ).not.toBeInTheDocument();
+    });
   });
 });
