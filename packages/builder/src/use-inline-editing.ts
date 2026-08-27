@@ -35,6 +35,7 @@ import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
 import {
   useInlineRichText,
+  type CaretPoint,
   type InlineRichTextEditing,
   type InlineRichTextEditorLoader,
 } from "./use-inline-rich-text";
@@ -63,8 +64,20 @@ export interface UseInlineEditingResult {
   commit: () => BlockDocument | null;
   /** Finish whichever edit is open, discarding it. */
   cancel: () => void;
-  /** Enter an edit from a double-click on the canvas. */
-  onDoubleClick: (event: { target: EventTarget | null }) => void;
+  /**
+   * Enter an edit from a double-click on the canvas.
+   *
+   * The pointer's position is read when it is there. A passage needs it to put
+   * the caret where the author aimed: the canvas suppresses the browser's own
+   * text selection so a press on a block is a grab rather than a highlight, so
+   * there is no selection to ask and the point is the only record of where they
+   * meant to type.
+   */
+  onDoubleClick: (event: {
+    target: EventTarget | null;
+    clientX?: number;
+    clientY?: number;
+  }) => void;
 }
 
 /** What a double-click landed on, or `null` when it was not on a value. */
@@ -121,12 +134,13 @@ export function useInlineEditing(
       kind: InlinePropKind,
       nodeId: string,
       prop: string,
-      element?: HTMLElement
+      element?: HTMLElement,
+      point?: CaretPoint
     ) => {
       plain.commit();
       rich.commit();
       return kind === "rich"
-        ? rich.begin(nodeId, prop, element)
+        ? rich.begin(nodeId, prop, element, point)
         : plain.begin(nodeId, prop);
     },
     [plain, rich]
@@ -164,14 +178,22 @@ export function useInlineEditing(
   }, [plain, rich]);
 
   const onDoubleClick = useCallback(
-    (event: { target: EventTarget | null }) => {
+    (event: {
+      target: EventTarget | null;
+      clientX?: number;
+      clientY?: number;
+    }) => {
       const found = markedAt(event.target);
       if (found === null) return;
+      const point =
+        event.clientX === undefined || event.clientY === undefined
+          ? undefined
+          : { x: event.clientX, y: event.clientY };
       if (kindOf(found.nodeId, found.prop) === "rich") {
         // The element the gesture landed on is passed rather than looked up
         // again: two canvases showing one document carry the same node ids, so
         // a search of the page can answer with the other one's passage.
-        openOn("rich", found.nodeId, found.prop, found.element);
+        openOn("rich", found.nodeId, found.prop, found.element, point);
         return;
       }
       // Finished for the same reason `openOn` does it, then delegated: the

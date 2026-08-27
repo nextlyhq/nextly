@@ -43,26 +43,79 @@ import { richInlineTargets, richInlineTextOp } from "./inline-rich-text";
 import { namedTarget } from "./inline-target";
 import { editableElement, EDITING_ATTRIBUTE } from "./use-inline-text";
 
+/** Where a point falls in a document's text, however this engine spells it. */
+interface CaretLocator {
+  /** WebKit and Chromium. */
+  caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  /** The standard spelling, which Firefox implements. */
+  caretPositionFromPoint?: (
+    x: number,
+    y: number
+  ) => { offsetNode: Node; offset: number } | null;
+}
+
+/** A point where the author pressed, in client coordinates. */
+export interface CaretPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 /**
- * Where the caret sits inside an element, as a character offset into its text.
+ * The text position under a point, as a range.
  *
- * Counted rather than kept as a DOM range, because attaching REBUILDS the
- * subtree: a range captured now points at nodes that will not be in the
- * document by the time there is an editor to hand it to. An offset survives
- * that, and it is what the gesture meant.
- *
- * `undefined` when there is no selection, when it is not inside this element,
- * or when the runtime has no selection at all — every one of which means "no
- * better answer than the editor's own", not an error.
+ * Two spellings because no single one is implemented everywhere, and both are
+ * optional because a runtime may have neither — jsdom does not, which is one of
+ * the reasons this behaviour cannot be observed there at all.
  */
-function caretOffsetIn(element: HTMLElement): number | undefined {
-  const selection = element.ownerDocument.defaultView?.getSelection();
-  if (!selection || selection.rangeCount === 0) return undefined;
-  const range = selection.getRangeAt(0);
-  if (!element.contains(range.startContainer)) return undefined;
-  const upToCaret = range.cloneRange();
+function caretRangeAt(
+  document: Document,
+  point: CaretPoint
+): { container: Node; offset: number } | undefined {
+  const locator: CaretLocator = document;
+  const range = locator.caretRangeFromPoint?.(point.x, point.y);
+  if (range)
+    return { container: range.startContainer, offset: range.startOffset };
+  const position = locator.caretPositionFromPoint?.(point.x, point.y);
+  if (position)
+    return { container: position.offsetNode, offset: position.offset };
+  return undefined;
+}
+
+/**
+ * Where the author's pointer fell inside an element, as a character offset into
+ * its text.
+ *
+ * Taken from the POINT rather than from the document's selection, and that is
+ * the whole difficulty. A press on a block is a grab, not a text selection —
+ * the canvas suppresses the browser's own selection so that dragging a block
+ * does not highlight its words — so at the moment a double-click arrives there
+ * is no selection to read. Measured in a browser: `rangeCount` is 0. An earlier
+ * version of this read the selection and therefore always answered `undefined`,
+ * which sent every edit's caret to the end of the passage.
+ *
+ * Counted rather than kept as a range, because attaching REBUILDS the subtree:
+ * a range captured now points at nodes that will not be in the document by the
+ * time there is an editor to hand it to. An offset survives that.
+ *
+ * `undefined` when the point is outside this element or the engine cannot
+ * locate it — both meaning "no better answer than the editor's own".
+ */
+function caretOffsetAt(
+  element: HTMLElement,
+  point: CaretPoint
+): number | undefined {
+  const found = caretRangeAt(element.ownerDocument, point);
+  if (found === undefined) return undefined;
+  if (!element.contains(found.container)) return undefined;
+  const upToCaret = element.ownerDocument.createRange();
   upToCaret.selectNodeContents(element);
-  upToCaret.setEnd(range.startContainer, range.startOffset);
+  try {
+    upToCaret.setEnd(found.container, found.offset);
+  } catch {
+    // The located node is not one this range can end in — an offset past its
+    // length, or a node type the range refuses. The editor's own answer stands.
+    return undefined;
+  }
   return upToCaret.toString().length;
 }
 
@@ -87,7 +140,12 @@ export interface UseInlineRichTextResult {
    * the search can answer with the other canvas's passage, attaching there
    * while committing here.
    */
-  begin: (nodeId: string, prop?: string, element?: HTMLElement) => boolean;
+  begin: (
+    nodeId: string,
+    prop?: string,
+    element?: HTMLElement,
+    point?: CaretPoint
+  ) => boolean;
   /**
    * Finish, writing whatever the author left behind.
    *
@@ -152,6 +210,9 @@ export function useInlineRichText(
    * needs.
    */
   const handed = useRef<HTMLElement | null>(null);
+
+  /** Where the pointer fell, when a pointer is what started the edit. */
+  const handedPoint = useRef<CaretPoint | null>(null);
 
   /** The live editor, the element it holds, and what to put back. */
   const mounted = useRef<{
@@ -224,7 +285,12 @@ export function useInlineRichText(
   }, [release]);
 
   const begin = useCallback(
-    (nodeId: string, prop?: string, element?: HTMLElement) => {
+    (
+      nodeId: string,
+      prop?: string,
+      element?: HTMLElement,
+      point?: CaretPoint
+    ) => {
       if (load === undefined) return false;
       const target = namedTarget(
         richInlineTargets(editorRef.current.document, nodeId),
@@ -242,6 +308,7 @@ export function useInlineRichText(
        */
       if (mounted.current !== null) commit();
       handed.current = element ?? null;
+      handedPoint.current = point ?? null;
       setEditing({ nodeId: target.nodeId, prop: target.prop });
       return true;
     },
@@ -294,7 +361,9 @@ export function useInlineRichText(
     let cancelled = false;
     // Read now, while the element still holds what the page rendered. The
     // editor replaces this subtree, so afterwards there is nothing to measure.
-    const caret = caretOffsetIn(element);
+    const point = handedPoint.current;
+    handedPoint.current = null;
+    const caret = point === null ? undefined : caretOffsetAt(element, point);
     const targets = richInlineTargets(
       editorRef.current.document,
       editing.nodeId
