@@ -177,42 +177,42 @@ describe("resolving a subject to its document", () => {
     expect(calls[0]).not.toHaveProperty("status");
   });
 
-  it("ACCEPTS a document whose id an afterRead hook reshaped", async () => {
-    // `afterRead` REPLACES the document, and a collection may legitimately drop
-    // or rewrite `id` when it reshapes its public read. The by-id read has
-    // already pinned the entry in its own query, so identity is a property of
-    // what was asked rather than of what came back — comparing them would fail
-    // every maintenance pass on such a collection, and a class the save
-    // introduced would get no row at all.
+  it("REFUSES a document that does not identify as the subject's", async () => {
+    // Neither end of the read can be trusted alone. `beforeOperation` may
+    // rewrite the queried id and the service builds its predicate from the
+    // rewritten one (collection-query-service.ts:757), so asking about a
+    // document is not being answered about it. `afterRead` may rewrite or drop
+    // `id` for reasons unrelated to which row was read. A differing id is
+    // therefore either a legitimate reshape or another document, and nothing
+    // available here tells them apart.
     //
-    // Core removed its own id comparison for exactly this
-    // (runtime/routing/__tests__/content-route-by-id.test.ts:198).
+    // Reconciling an unconfirmed document files ITS classes here and removes
+    // the rows the real one earned, so a class the real document still renders
+    // reads as unused and becomes deletable. Refusing costs a maintenance pass
+    // and leaves the rows alone. Only one of those is recoverable.
     const { api } = recordingApi({
       findByID: async () => ({
-        id: "reshaped-by-a-hook",
-        content: documentUsing("hero"),
+        id: "some-other-page",
+        content: documentUsing("intruder"),
       }),
     });
 
-    const document = await classUsageDocumentReader(api)(
-      subject({ variant: "published" })
-    );
-
-    expect(document).toEqual(documentUsing("hero"));
+    await expect(
+      classUsageDocumentReader(api)(subject({ variant: "published" }))
+    ).rejects.toThrow(/some-other-page/);
   });
 
-  it("ACCEPTS a document an afterRead hook stripped the id from", async () => {
-    // The other half of the same reshape: a projection that omits `id`
-    // entirely. Requiring the column would reject it just as a rewrite does.
+  it("REFUSES a document an afterRead hook stripped the id from", async () => {
+    // The same undecidability with nothing to compare at all: a stripped id
+    // cannot confirm the read reached this subject, so it cannot licence
+    // removing this subject's rows either.
     const { api } = recordingApi({
       findByID: async () => ({ content: documentUsing("hero") }),
     });
 
-    const document = await classUsageDocumentReader(api)(
-      subject({ variant: "published" })
-    );
-
-    expect(document).toEqual(documentUsing("hero"));
+    await expect(
+      classUsageDocumentReader(api)(subject({ variant: "published" }))
+    ).rejects.toThrow(/cannot be confirmed|identifying as/);
   });
 
   it("sends NO locale for a shared field rather than the empty string", async () => {

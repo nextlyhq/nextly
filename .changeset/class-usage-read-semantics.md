@@ -67,10 +67,20 @@ permits it, and the pages that render it lose it. Only one of those is recoverab
 variant that has genuinely gone are removed by the rebuild's sweep, which walks the documents
 and can tell them apart.
 
-The document's identity is taken from the read that was ISSUED rather than from the row that
-came back. A by-id read pins the entry in its own query, and `afterRead` may legitimately
-replace the document - a collection that reshapes its public read can rewrite or drop the id
-entirely. Comparing the returned id against the requested one would reject those collections on
-every maintenance pass, and a class introduced by such a save would receive no row at all. The
-refusal that does still apply is on the index's own list reads, whose predicates a hook can
-widen, and where a row outside the query is another document's.
+A document that does not identify itself as the subject's is refused, and its rows are left
+alone. Neither end of the read can be trusted on its own: a `beforeOperation` read hook may
+rewrite the queried id and the service builds its predicate from the rewritten one, so asking
+about a document is not the same as being answered about it; and `afterRead` replaces the
+document, so a collection may rewrite or drop the id for reasons unrelated to which row was
+read. A returned id that differs is therefore either a legitimate reshape or another document
+entirely, and nothing available to a plugin distinguishes them.
+
+The asymmetry decides it rather than a guess about which hook is likelier. Reconciling an
+unconfirmed document files ITS classes under this subject and removes the rows the real document
+earned, so a class that document still renders reads as unused and becomes deletable. Refusing
+costs a maintenance pass: the rows stay, the index over-counts, a delete is refused, the caller
+is told, and the next rebuild corrects it.
+
+The cost is worth naming plainly. A collection whose `afterRead` rewrites or strips the id
+cannot have its class usage maintained, and every save on it reports a maintenance failure. That
+is a loud, diagnosable refusal instead of a silent corruption.

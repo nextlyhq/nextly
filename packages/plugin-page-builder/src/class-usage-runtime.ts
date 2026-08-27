@@ -245,35 +245,56 @@ async function readById(
     // stale.
     ...AS_THE_SYSTEM,
   });
-  return recordOf(row);
+  return recordOf(row, subject);
 }
 
 /**
- * The record a read answered, or nothing when it answered no document.
+ * The record a read answered, once it identifies itself as the subject's.
  *
- * It deliberately does NOT compare the returned `id` against the subject. The
- * by-id read pins the entry in its own query — `eq(schema.id, entryId)` — so
- * the identity is a property of what was ASKED, not of what came back, and
- * re-deriving it from the response would only test the response.
+ * NEITHER end of this call can be trusted on its own, which is what decides the
+ * rule:
  *
- * That distinction matters because `afterRead` legitimately REPLACES the
- * document: a collection may reshape its public read and drop or rewrite `id`.
- * Core hit this exact defect and removed its own id comparison for it —
- * `runtime/routing/__tests__/content-route-by-id.test.ts:198` keeps the case,
- * noting that "the old compare-the-id approach rejected a valid grant whenever
- * a collection reshaped its public read". Comparing here would fail every
- * maintenance pass on such a collection, and a class the save introduced would
- * get no row at all.
+ * - the REQUEST can be retargeted. A `beforeOperation` read hook may rewrite
+ *   the id, and the service builds its predicate from the rewritten one —
+ *   `resolveReadEntryId` does `beforeOpArgs?.id ?? params.entryId`
+ *   (`collection-query-service.ts:757`). So asking for a document is not the
+ *   same as being answered about it.
+ * - the RESPONSE can be reshaped. `afterRead` REPLACES the document, so a
+ *   collection may rewrite or drop `id` for reasons that have nothing to do
+ *   with which row was read.
  *
- * The widening this once guarded against is a property of a LIST read, whose
- * predicate `beforeOperation` and `beforeRead` may replace or clear. Nothing in
- * this module reads a document that way any more; the index's own list reads
- * still do, and `assertRowMatches` refuses a foreign row there — which is where
- * that check belongs, because that is where a predicate can be widened.
+ * Those two make each other undecidable: a returned id that differs from the
+ * subject is either a legitimate reshape or another document entirely, and
+ * nothing available to a plugin tells them apart. There is no read this module
+ * can issue that a hook cannot redirect, and no field of the answer that a hook
+ * cannot rewrite.
+ *
+ * So the rule is the ruled asymmetry rather than a guess about which hook is
+ * more likely. Reconciling an unconfirmed document files ITS classes under this
+ * subject and removes the rows the real document earned — the class it still
+ * renders then reads as unused and becomes deletable, which is the data loss
+ * this index exists to prevent. Refusing costs a maintenance pass: the rows are
+ * left alone, the index over-counts, a delete is refused, the caller is told,
+ * and the next rebuild corrects it. Only one of those is recoverable.
+ *
+ * The cost is real and worth naming: a collection whose `afterRead` rewrites or
+ * strips `id` cannot have its class usage maintained, and every save on it will
+ * report a maintenance failure. That is a loud, diagnosable refusal rather than
+ * a silent corruption, and it is the direction to fail in.
  */
-function recordOf(row: unknown): Record<string, unknown> | undefined {
+function recordOf(
+  row: unknown,
+  subject: ClassUsageSubject
+): Record<string, unknown> | undefined {
   if (typeof row !== "object" || row === null) return undefined;
-  return row as Record<string, unknown>;
+  const record = row as Record<string, unknown>;
+  if (record.id === subject.entityKey) return record;
+  throw new Error(
+    `Class-usage read for ${subject.entity}:${subject.entityKey} was answered ` +
+      `by a document identifying as "${String(record.id)}". A read hook can ` +
+      `retarget the query and another can rewrite the answer, so this cannot ` +
+      `be confirmed as the subject's document; its rows are left untouched.`
+  );
 }
 
 /**
