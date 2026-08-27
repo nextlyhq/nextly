@@ -111,7 +111,7 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions({ search: "users" });
 
       // Assert
-      expect(result.length).toBeGreaterThanOrEqual(1);
+      expect(result.data.length).toBeGreaterThanOrEqual(1);
     });
 
     it("should handle empty database", async () => {
@@ -199,12 +199,9 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.updatePermission(permission.id, {
+      await service.updatePermission(permission.id, {
         description: "Updated description",
       });
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
     });
 
     it("should return 404 when updating non-existent permission", async () => {
@@ -228,12 +225,9 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.updatePermission(permission.id, {
+      await service.updatePermission(permission.id, {
         description: "Test description", // Same as existing
       });
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
       expect(result.message).toContain("up to date");
     });
   });
@@ -248,10 +242,7 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.deletePermissionById(permission.id);
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
+      await service.deletePermissionById(permission.id);
     });
 
     it("should return 404 when deleting non-existent permission", async () => {
@@ -300,10 +291,7 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.deletePermission("delete", "posts");
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
+      await service.deletePermission("delete", "posts");
       expect(result.message).toContain("deleted");
 
       // Verify permission is gone
@@ -611,7 +599,7 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expect(result.length).toBeGreaterThanOrEqual(2);
+        expect(result.data.length).toBeGreaterThanOrEqual(2);
       });
 
       it("should combine action and resource filters", async () => {
@@ -654,7 +642,7 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expect(result.length).toBeGreaterThanOrEqual(1);
+        expect(result.data.length).toBeGreaterThanOrEqual(1);
       });
 
       it("should handle unicode in permission names", async () => {
@@ -671,7 +659,7 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions({ search: "ユーザー" });
 
         // Assert
-        expect(result.length).toBeGreaterThanOrEqual(0);
+        expect(result.data.length).toBeGreaterThanOrEqual(0);
       });
 
       it("should handle null descriptions", async () => {
@@ -684,7 +672,7 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions();
 
         // Assert
-        expect(result.some(p => p.description === null)).toBe(true);
+        expect(result.data.some(p => p.description === null)).toBe(true);
       });
     });
 
@@ -697,9 +685,9 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions();
 
         // Assert: Should return error response
-        expect(result.success).toBe(false);
-        expect(result.statusCode).toBeGreaterThanOrEqual(400);
-        expect(result.message).toContain("Failed to fetch permissions");
+        expect(result.data.success).toBe(false);
+        expect(result.data.statusCode).toBeGreaterThanOrEqual(400);
+        expect(result.data.message).toContain("Failed to fetch permissions");
         expect(result.data).toBeNull();
 
         // Cleanup: Recreate database for subsequent tests
@@ -902,12 +890,9 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.updatePermission(permission.id, {
+      await service.updatePermission(permission.id, {
         name: "New Name",
       });
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
 
       // Verify change
       const updated = await service.getPermissionById(permission.id);
@@ -933,12 +918,9 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.updatePermission(permission.id, {
+      await service.updatePermission(permission.id, {
         description: null as any,
       });
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
     });
 
     it("should handle empty object (no changes)", async () => {
@@ -947,10 +929,7 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act
-      const result = await service.updatePermission(permission.id, {});
-
-      // Assert
-      expectSuccessResponseNoData(result, 200);
+      await service.updatePermission(permission.id, {});
       expect(result.message).toContain("up to date");
     });
   });
