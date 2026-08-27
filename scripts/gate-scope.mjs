@@ -128,20 +128,29 @@ export function filtersFor(paths, workspaces) {
   const unlisted = new Set();
 
   for (const raw of paths) {
-    const path = String(raw);
-    const owner = ownerOf(path, workspaces);
-    if (owner !== undefined) names.add(owner.name);
-    else {
-      const missing =
-        removedWorkspaceDir(path) ?? missingWorkspaceDir(path, roots);
-      if (missing !== null) unlisted.add(missing);
-    }
+    const verdict = classify(String(raw), workspaces, roots);
+    if (verdict.name !== null) names.add(verdict.name);
+    if (verdict.missing !== null) unlisted.add(verdict.missing);
   }
 
   return {
     filters: [...names].sort(),
     unreadable: [...unlisted].sort(),
   };
+}
+
+/**
+ * What one path contributes: a workspace to gate, a workspace that is gone, or
+ * neither.
+ *
+ * Exactly one of the two can be set. A path a workspace claims is gated and is
+ * never also reported missing; a path no workspace claims cannot name a filter.
+ */
+function classify(path, workspaces, roots) {
+  const owner = ownerOf(path, workspaces);
+  if (owner !== undefined) return { name: owner.name, missing: null };
+  const missing = removedWorkspaceDir(path) ?? missingWorkspaceDir(path, roots);
+  return { name: null, missing };
 }
 
 /**
