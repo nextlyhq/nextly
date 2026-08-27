@@ -30,24 +30,23 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  * is a compile error here rather than a silently ignored attribute at fifteen
  * call sites.
  */
-export const CONTENT_PAGE_MEASURE: NonNullable<PageContainerProps["width"]> =
-  "wide";
+export const CONTENT_PAGE_MEASURE: keyof typeof CAPPED_MEASURE_TOKEN = "wide";
 
 /**
- * The token each named measure resolves to, so a length can be derived from a
- * width rather than restated beside it.
+ * The token each CAPPED measure resolves to.
  *
- * `full` has no token because it is the absence of a cap. Typed as a total
- * `Record`, so a measure added to the vocabulary cannot be forgotten here.
+ * `full` is deliberately absent rather than mapped to null. It is the absence
+ * of a cap, so it has no length to convert to, and an entry for it would need a
+ * fallback — which is a wrong answer waiting to be returned rather than a
+ * missing one. Leaving it out makes `CONTENT_PAGE_MEASURE` below unassignable
+ * from `full`, so the case cannot arise instead of being handled badly.
  */
-const MEASURE_TOKEN: Record<
-  NonNullable<PageContainerProps["width"]>,
-  string | null
-> = {
+const CAPPED_MEASURE_TOKEN = {
   form: "--nx-measure-form",
   wide: "--nx-measure-wide",
-  full: null,
-};
+} as const satisfies Partial<
+  Record<NonNullable<PageContainerProps["width"]>, string>
+>;
 
 /**
  * The content measure as a CSS length, for content that bounds its own column.
@@ -59,4 +58,4 @@ const MEASURE_TOKEN: Record<
  * the disagreement this module exists to prevent, and writing the token out
  * again by hand is how it would return.
  */
-export const CONTENT_MEASURE_LENGTH = `var(${MEASURE_TOKEN[CONTENT_PAGE_MEASURE] ?? "--nx-measure-wide"})`;
+export const CONTENT_MEASURE_LENGTH = `var(${CAPPED_MEASURE_TOKEN[CONTENT_PAGE_MEASURE]})`;

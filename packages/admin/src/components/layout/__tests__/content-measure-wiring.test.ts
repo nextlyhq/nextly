@@ -27,6 +27,12 @@ import { describe, expect, it } from "vitest";
 const SRC = join(process.cwd(), "src");
 
 /** Every route whose page is a document rather than a settings form. */
+/** A `PluginSlot` wrapper and whatever attributes it carries. */
+const SLOT_WRAPPER = /<div\b([^>]*)>\s*<PluginSlot\b/g;
+
+/** The route that renders plugin injection slots beside the form. */
+const EDIT_ROUTE = "pages/dashboard/entries/[slug]/[id]/index.tsx";
+
 const CONTENT_ROUTES = [
   "pages/dashboard/entries/[slug]/[id]/index.tsx",
   "pages/dashboard/entries/[slug]/create.tsx",
@@ -74,6 +80,48 @@ describe("content routes read the shared measure", () => {
       }
     });
   }
+
+  it("bounds the injection slots that the self-measuring frame renders", () => {
+    // The frame gives the panel to the form-and-rail row, so anything else it
+    // renders is uncapped unless it says so. `PluginSlot` wrappers are direct
+    // children, and one left unbounded stretches the whole width — a shape
+    // change to third-party content nobody asked for, invisible in a route
+    // that ships no plugin.
+    const source = readFileSync(join(SRC, EDIT_ROUTE), "utf8");
+    const marker = "<MeasuredPageFrame contentCarriesMeasure>";
+    expect(source).toContain(marker);
+    const selfMeasuring = source.slice(source.indexOf(marker));
+
+    const slots = [...selfMeasuring.matchAll(SLOT_WRAPPER)].map(
+      m => m[1] as string
+    );
+    // Population: a renamed component or a reshaped wrapper yields an empty
+    // list, and "every slot is bounded" would pass having found none.
+    expect(slots.length).toBeGreaterThan(0);
+    for (const attrs of slots) {
+      expect(attrs).toContain("CONTENT_MEASURE_LENGTH");
+    }
+  });
+
+  it("discriminates: a slot under the PAGE-measured frame stays unbounded", () => {
+    // The control, and it has to be capable of the other answer. The custom
+    // edit view keeps the page measure, so its slot is bounded BY the page and
+    // must not carry a length of its own — if this ever comes back bounded,
+    // either the frames were conflated or the scan stopped telling them apart,
+    // and the assertion above is passing on the wrong region.
+    const source = readFileSync(join(SRC, EDIT_ROUTE), "utf8");
+    const pageMeasured = source.slice(
+      0,
+      source.indexOf("<MeasuredPageFrame contentCarriesMeasure>")
+    );
+    const slots = [...pageMeasured.matchAll(SLOT_WRAPPER)].map(
+      m => m[1] as string
+    );
+    expect(slots.length).toBeGreaterThan(0);
+    for (const attrs of slots) {
+      expect(attrs).not.toContain("CONTENT_MEASURE_LENGTH");
+    }
+  });
 
   it("discriminates: a settings route still declares its own literal", () => {
     // If this ever comes back as the constant, either settings pages were swept
