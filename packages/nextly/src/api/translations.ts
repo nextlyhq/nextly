@@ -32,6 +32,7 @@ import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
 import {
   authorizationGroups,
+  countIsTrustworthy,
   byMostRecentlyUpdated,
   eligibleCollections,
   hasTranslatableFields,
@@ -365,11 +366,20 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // `translationFilter` to it precisely so the two agree — so this is the
       // real size of this collection's backlog, including the part beyond
       // `limit` that these rows do not contain.
-      const total =
-        typeof result.data.totalDocs === "number"
-          ? result.data.totalDocs
-          : rows.length;
-      return { slug: null, rows, total };
+      //
+      // And a count that contradicts its own rows did not run. `listEntries`
+      // answers a failed COUNT beside successful rows with `success: true` and
+      // `totalDocs: 0`, so believing it would report a collection's whole
+      // backlog as however many rows happened to fit — the same lie as an
+      // unconsulted collection, arriving through the one path that still had a
+      // silent fallback. Such a collection is named as unconsulted and its rows
+      // are left out, so `notConsulted` keeps ONE meaning: this answer did not
+      // cover that collection. Half-covering it — rows on screen, no honest
+      // size — invites exactly the belief that the rows are all of it.
+      if (!countIsTrustworthy(result.data.totalDocs, rows.length)) {
+        return { slug: coll.slug, rows: [] as TranslationWorkRow[], total: 0 };
+      }
+      return { slug: null, rows, total: result.data.totalDocs };
     })
   );
 

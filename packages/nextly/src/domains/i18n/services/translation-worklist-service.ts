@@ -39,6 +39,7 @@
  * @module domains/i18n/services/translation-worklist-service
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { TranslationFilterState } from "../companion-join";
 
@@ -100,6 +101,33 @@ export function worklistTotal(
 }
 
 /**
+ * Whether a collection's reported count can be believed.
+ *
+ * `listEntries` runs the rows and the count as two queries and returns SUCCESS
+ * when the rows arrive, falling back to `totalDocs: 0` if the count failed. So
+ * a transient error on the count arm alone is indistinguishable from an empty
+ * collection by the flag — and taking the zero at face value hides the whole of
+ * that collection's backlog behind the handful of rows that did come back, with
+ * nothing in the response saying anything was missing. That is the
+ * truncation-as-census failure once more, arriving through the one path that
+ * still had a silent fallback.
+ *
+ * The contradiction is what gives it away, and it needs no new plumbing: a
+ * count is the number of rows MATCHING, so it can never be smaller than the
+ * rows returned. `totalDocs < docs.length` is therefore impossible for a count
+ * that ran, and certain for one that did not — whenever there were rows to
+ * contradict it, which is exactly the case where believing it would cost
+ * something. A failed count on a genuinely empty collection reports zero
+ * against zero rows and is both undetectable and harmless.
+ */
+export function countIsTrustworthy(
+  totalDocs: unknown,
+  rowCount: number
+): boolean {
+  return typeof totalDocs === "number" && totalDocs >= rowCount;
+}
+
+/**
  * How many pages the backlog would take, at this page size.
  *
  * Derived from `total` rather than stated beside it, because the two are one
@@ -156,6 +184,27 @@ export function authorizationGroups(
   slugs: readonly string[],
   concurrency: number = AUTHORIZATION_CONCURRENCY
 ): string[][] {
+  // A non-positive step never advances `i`, and a negative one walks it
+  // backwards: either spins forever on a non-empty list. Unreachable today —
+  // the only caller takes the default — which is precisely what makes the guard
+  // cheap: it reads two values already in hand and its branch never runs.
+  //
+  // It THROWS where `worklistTotalPages` returns a safe value for the same
+  // shape of bad input, and the difference is where the value comes from.
+  // `limit` is a request parameter, clamped upstream, so a caller can put a
+  // zero in front of it and refusing there would be a 500 for a request the
+  // system chose to accept. `concurrency` is a module constant no request can
+  // reach, so a bad one is a programming error — `INTERNAL_ERROR` is the honest
+  // classification, and the value travels in `logContext` where an operator can
+  // see it without it reaching the response.
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw NextlyError.internal({
+      logContext: {
+        concurrency,
+        reason: "authorization concurrency must be a positive integer",
+      },
+    });
+  }
   if (slugs.length === 0) return [];
   const groups: string[][] = [[slugs[0]]];
   const rest = slugs.slice(1);

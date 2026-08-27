@@ -4,6 +4,7 @@ import {
   AUTHORIZATION_CONCURRENCY,
   MAX_WORKLIST_COLLECTIONS,
   authorizationGroups,
+  countIsTrustworthy,
   byMostRecentlyUpdated,
   eligibleCollections,
   hasTranslatableFields,
@@ -378,5 +379,82 @@ describe("worklistTotalPages", () => {
     // guard costs nothing while its branch never runs, and `Math.ceil(n / 0)`
     // is Infinity — a number that would serialize into the envelope.
     expect(worklistTotalPages(10, 0)).toBe(1);
+  });
+});
+
+describe("countIsTrustworthy", () => {
+  it("disbelieves a zero count reported beside rows that exist", () => {
+    // The case that costs something. `listEntries` returns success with
+    // `totalDocs: 0` when the ROWS arrived and the paired COUNT failed, so
+    // taking the zero hides that collection's whole backlog behind however many
+    // rows happened to fit — and nothing in the response says so.
+    expect(countIsTrustworthy(0, 50)).toBe(false);
+  });
+
+  it("disbelieves any count smaller than the rows it came with", () => {
+    // A count is the number of rows MATCHING, so it cannot be smaller than the
+    // rows returned. Impossible for a count that ran; certain for one that did
+    // not.
+    expect(countIsTrustworthy(12, 13)).toBe(false);
+  });
+
+  it("believes a count that is larger than the page it accompanies", () => {
+    // The control, and the whole point of summing counts: 100 matches behind a
+    // page of 50 is the ordinary, correct case and must not be discarded as
+    // untrustworthy.
+    expect(countIsTrustworthy(100, 50)).toBe(true);
+  });
+
+  it("believes an exact count", () => {
+    expect(countIsTrustworthy(50, 50)).toBe(true);
+  });
+
+  it("believes zero against no rows", () => {
+    // An empty collection. A failed count here is undetectable and harmless —
+    // there is no backlog for it to hide.
+    expect(countIsTrustworthy(0, 0)).toBe(true);
+  });
+
+  it("disbelieves a count that is not a number at all", () => {
+    expect(countIsTrustworthy(undefined, 0)).toBe(false);
+  });
+
+  it("disbelieves a count that only LOOKS like a number", () => {
+    // The reason the type check is there rather than relying on `>=` alone:
+    // `"100" >= 50` coerces and is true, so a stringified count would be
+    // trusted and summed into a total as a string.
+    expect(countIsTrustworthy("100", 50)).toBe(false);
+  });
+});
+
+describe("authorizationGroups — a step that cannot advance", () => {
+  it("refuses a concurrency of zero rather than looping forever", () => {
+    // `i += 0` never reaches `rest.length`. Unreachable today, which is what
+    // makes the guard cheap rather than what makes it unnecessary.
+    expect(() => authorizationGroups(["a", "b"], 0)).toThrow(
+      expect.objectContaining({ code: "INTERNAL_ERROR" })
+    );
+  });
+
+  it("refuses a negative concurrency, which walks the index backwards", () => {
+    expect(() => authorizationGroups(["a", "b"], -1)).toThrow(
+      expect.objectContaining({ code: "INTERNAL_ERROR" })
+    );
+  });
+
+  it("refuses a fractional concurrency", () => {
+    expect(() => authorizationGroups(["a", "b"], 1.5)).toThrow(
+      expect.objectContaining({ code: "INTERNAL_ERROR" })
+    );
+  });
+
+  it("still accepts the smallest useful step", () => {
+    // The control: the guard must reject the values that cannot work, not the
+    // edge of the ones that can.
+    expect(authorizationGroups(["a", "b", "c"], 1)).toEqual([
+      ["a"],
+      ["b"],
+      ["c"],
+    ]);
   });
 });
