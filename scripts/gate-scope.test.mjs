@@ -12,6 +12,7 @@ const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "gate-scope.mjs");
 import {
   changedPaths,
   filterArguments,
+  rootWideChanges,
   filtersFor,
   filtersRefusal,
   report,
@@ -119,12 +120,20 @@ describe("the workspaces pnpm reports", () => {
     ]);
   });
 
-  it("ignores an entry with no usable name", () => {
-    // A filter built from an empty name matches nothing, so it would shrink the
-    // gate while reading as coverage.
+  it("KEEPS an entry with no usable name, so it can be refused", () => {
+    // A filter built from an empty name matches nothing, so it must never
+    // become one. But dropping the entry was worse: its paths then had no
+    // owner and no derived root, so a change inside it produced an empty scope
+    // and the hook skipped its tests. Kept, it is refused by name below.
     expect(
       workspacesFrom([{ name: "", path: "/repo/packages/x" }], "/repo")
-    ).toEqual([]);
+    ).toEqual([{ name: "", dir: "packages/x" }]);
+  });
+
+  it("still drops an entry with no usable DIRECTORY", () => {
+    // The repository root resolves to the empty string and is dropped by this
+    // same rule; an entry with no path is unusable for the same reason.
+    expect(workspacesFrom([{ name: "x", path: "/repo" }], "/repo")).toEqual([]);
   });
 
   it("derives the roots from the workspaces themselves", () => {
@@ -132,6 +141,49 @@ describe("the workspaces pnpm reports", () => {
     // disagree about where a workspace lives. A bare directory contributes no
     // root and needs none — it matches itself.
     expect(workspaceRootsOf(WS)).toEqual(["apps", "packages"]);
+  });
+});
+
+describe("a change that redefines the graph for every package", () => {
+  it("refuses to narrow a workspace-declaration change", () => {
+    // Removing an entry from `pnpm-workspace.yaml` detaches a directory that
+    // still exists, so no manifest is deleted and no path names the workspace
+    // that just lost its gate — the only changed file is the YAML itself.
+    // Narrowing to whatever package happens to sit beside it in the diff would
+    // skip the detached workspace entirely.
+    const rootWide = rootWideChanges([
+      "pnpm-workspace.yaml",
+      "packages/ui/src/x.ts",
+    ]);
+
+    expect(rootWide).toEqual(["pnpm-workspace.yaml"]);
+    expect(filtersRefusal([], rootWide)).toMatch(/refusing to narrow/);
+  });
+
+  it("refuses for the task graph too, not only the workspace list", () => {
+    // `turbo.jsonc` defines the tasks every workspace runs, so a filtered run
+    // exercises the new definition for one package and none of the others.
+    expect(rootWideChanges(["turbo.jsonc"])).toEqual(["turbo.jsonc"]);
+  });
+
+  it("says so in the report as well as in the refusal", () => {
+    // The two audiences are separate: one is spliced into a command, the other
+    // is read by a person, and a person following the report must not be told
+    // a narrower scope than the machine refused.
+    expect(
+      report({
+        filters: ["@nextlyhq/ui"],
+        unreadable: [],
+        scripts: false,
+        rootWide: ["pnpm-workspace.yaml"],
+      })
+    ).toMatch(/UNFILTERED/);
+  });
+
+  it("stays silent for an ordinary change", () => {
+    // The control: refusing every push would be its own failure.
+    expect(rootWideChanges(["packages/ui/src/x.ts"])).toEqual([]);
+    expect(filtersRefusal([], [])).toBeNull();
   });
 });
 
@@ -172,7 +224,10 @@ describe("a workspace the diff removed", () => {
         "apps/playground/app/page.tsx",
         "apps/playground/package.json",
       ],
-      survivors
+      survivors,
+      // Both manifests were DELETED, which is what makes them removals rather
+      // than ordinary manifests sitting outside every workspace.
+      new Set(["e2e/package.json", "apps/playground/package.json"])
     );
 
     expect(filters).toEqual([]);
@@ -185,6 +240,42 @@ describe("a workspace the diff removed", () => {
     expect(
       filtersFor(["packages/ui/fixtures/package.json"], WS)
     ).toEqual({ filters: ["@nextlyhq/ui"], unreadable: [] });
+  });
+
+  it("reports a removal only when the manifest was actually DELETED", () => {
+    // Presence in a diff says nothing about direction. A manifest ADDED
+    // outside every workspace — a fixture, a scaffold template — looked
+    // identical to one removed from inside a workspace, and reporting the
+    // first as a removal refused a push that was perfectly valid.
+    const added = filtersFor(["docs/example/package.json"], WS, new Set());
+    expect(added).toEqual({ filters: [], unreadable: [] });
+
+    const survivors = workspacesFrom(
+      [{ name: "nextly-project-setup", path: "/repo" }],
+      "/repo"
+    );
+    const removed = filtersFor(
+      ["e2e/package.json"],
+      survivors,
+      new Set(["e2e/package.json"])
+    );
+    expect(removed.unreadable).toEqual(["e2e"]);
+  });
+
+  it("REFUSES a workspace whose manifest omits a name, rather than dropping it", () => {
+    // A `--filter` built from an empty name matches nothing, so it would
+    // shrink the gate while reading as coverage. Dropping the entry was worse
+    // still: its paths then had no owner AND no derived root, so a change
+    // inside it produced an empty scope and the hook skipped its tests.
+    const nameless = workspacesFrom(
+      [{ name: "nextly-project-setup", path: "/repo" }, { path: "/repo/e2e" }],
+      "/repo"
+    );
+
+    expect(filtersFor(["e2e/tests/a.spec.ts"], nameless)).toEqual({
+      filters: [],
+      unreadable: ["e2e"],
+    });
   });
 
   it("does NOT report a root-level path as a missing workspace", () => {

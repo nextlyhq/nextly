@@ -62,7 +62,11 @@ export function workspacesFrom(entries, rootDir) {
   const listed = Array.isArray(entries) ? entries : [];
   return listed
     .map(entry => oneWorkspace(entry, rootDir))
-    .filter(w => w.name.length > 0 && w.dir.length > 0)
+    // A directory is enough to be KEPT. An entry whose manifest omits `name`
+    // cannot produce a filter, but dropping it made its paths ownerless and
+    // rootless too, so a change inside it derived an empty scope and the hook
+    // skipped its tests entirely. Kept, it is refused instead.
+    .filter(w => w.dir.length > 0)
     .sort((a, b) => b.dir.length - a.dir.length);
 }
 
@@ -122,13 +126,13 @@ export function workspaceRootsOf(workspaces) {
  * deleted or renamed — which the author should see rather than have hidden
  * behind a smaller gate.
  */
-export function filtersFor(paths, workspaces) {
+export function filtersFor(paths, workspaces, deleted = new Set()) {
   const roots = workspaceRootsOf(workspaces);
   const names = new Set();
   const unlisted = new Set();
 
   for (const raw of paths) {
-    const verdict = classify(String(raw), workspaces, roots);
+    const verdict = classify(String(raw), workspaces, roots, deleted);
     if (verdict.name !== null) names.add(verdict.name);
     if (verdict.missing !== null) unlisted.add(verdict.missing);
   }
@@ -146,10 +150,17 @@ export function filtersFor(paths, workspaces) {
  * Exactly one of the two can be set. A path a workspace claims is gated and is
  * never also reported missing; a path no workspace claims cannot name a filter.
  */
-function classify(path, workspaces, roots) {
+function classify(path, workspaces, roots, deleted) {
   const owner = ownerOf(path, workspaces);
-  if (owner !== undefined) return { name: owner.name, missing: null };
-  const missing = removedWorkspaceDir(path) ?? missingWorkspaceDir(path, roots);
+  // A workspace with no usable name cannot be gated: a `--filter` built from
+  // an empty string matches nothing, so it would shrink the gate while reading
+  // as coverage. Reported instead, under the directory that does identify it.
+  if (owner !== undefined)
+    return owner.name.length > 0
+      ? { name: owner.name, missing: null }
+      : { name: null, missing: owner.dir };
+  const missing =
+    removedWorkspaceDir(path, deleted) ?? missingWorkspaceDir(path, roots);
   return { name: null, missing };
 }
 
@@ -180,9 +191,14 @@ function ownerOf(path, workspaces) {
  * Consulted only for a path no workspace claims, so a manifest nested inside a
  * live workspace — a fixture, say — is owned before it reaches here.
  */
-function removedWorkspaceDir(path) {
+function removedWorkspaceDir(path, deleted) {
   const suffix = "/package.json";
   if (!path.endsWith(suffix)) return null;
+  // DELETED, not merely present in the diff. A manifest ADDED outside every
+  // workspace — `docs/example/package.json`, a fixture, a scaffold template —
+  // is an ordinary change, and reporting it as a removal refused a push that
+  // was perfectly valid.
+  if (!deleted.has(path)) return null;
   const dir = path.slice(0, -suffix.length);
   return dir.length > 0 ? dir : null;
 }
@@ -200,14 +216,43 @@ function missingWorkspaceDir(path, roots) {
   return end === -1 ? null : path.slice(0, end);
 }
 
+/**
+ * The files that define the workspace or task graph for EVERY package.
+ *
+ * A change to one of these cannot be narrowed to the packages it appears
+ * beside. `pnpm-workspace.yaml` decides what a workspace IS — removing an
+ * entry detaches a directory that still exists, and the only changed path is
+ * the YAML itself, so nothing names the workspace that just lost its gate.
+ * `turbo.jsonc` defines the tasks every workspace runs, so a filtered run
+ * exercises the new definition for one package and none of the others.
+ */
+const ROOT_WIDE_FILES = new Set([
+  "pnpm-workspace.yaml",
+  "turbo.json",
+  "turbo.jsonc",
+]);
+
+/**
+ * The graph-defining files a change touches.
+ *
+ * Reported rather than silently widened, because widening is a decision the
+ * runner makes and this module only derives. A caller that cannot narrow
+ * safely should run the root gates unfiltered.
+ */
+export function rootWideChanges(paths) {
+  const hits = paths.map(String).filter(path => ROOT_WIDE_FILES.has(path));
+  return [...new Set(hits)].sort();
+}
+
 /** Whether a change reaches the root `scripts/` task, which `turbo run test` does not. */
 export function touchesScripts(paths) {
   return paths.some(path => String(path).split("/")[0] === "scripts");
 }
 
 /** The human-readable report. */
-export function report({ filters, unreadable, scripts }) {
+export function report({ filters, unreadable, scripts, rootWide = [] }) {
   const sections = [
+    rootWideSection(rootWide),
     filterSection(filters),
     unreadableSection(unreadable),
     scripts ? SCRIPTS_NOTE : "",
@@ -225,6 +270,14 @@ export function report({ filters, unreadable, scripts }) {
 /** `turbo run test` has its own task list and does not reach `scripts/`. */
 const SCRIPTS_NOTE =
   "Also run `pnpm test:scripts` — `turbo run test` does not reach scripts/.";
+
+function rootWideSection(rootWide) {
+  if (rootWide.length === 0) return "";
+  return [
+    "Root gates only, UNFILTERED — these define the graph for every package:",
+    ...rootWide.map(f => `  ${f}`),
+  ].join("\n");
+}
 
 function filterSection(filters) {
   if (filters.length === 0) return "";
@@ -278,7 +331,15 @@ function git(cwd, args) {
  * demonstrable — the exit status is what a hook acts on, and a hook is not a
  * thing a unit test can observe.
  */
-export function filtersRefusal(unreadable) {
+export function filtersRefusal(unreadable, rootWide = []) {
+  if (rootWide.length > 0) {
+    return (
+      "gate-scope: " +
+      rootWide.join(", ") +
+      " defines the workspace or task graph for every package — refusing to " +
+      "narrow. Run the root gates unfiltered."
+    );
+  }
   if (unreadable.length === 0) return null;
   return (
     "gate-scope: no readable manifest for " +
@@ -298,12 +359,16 @@ function main() {
   const paths = changedPaths(cwd, base);
   const { filters, unreadable } = filtersFor(
     paths,
-    workspacesFrom(pnpmWorkspaces(cwd), cwd)
+    workspacesFrom(pnpmWorkspaces(cwd), cwd),
+    new Set(deletedPaths(cwd, base))
   );
+  const rootWide = rootWideChanges(paths);
 
-  if (args.includes("--filters")) emitFilters(filters, unreadable);
+  if (args.includes("--filters")) emitFilters(filters, unreadable, rootWide);
   else
-    console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
+    console.log(
+      report({ filters, unreadable, rootWide, scripts: touchesScripts(paths) })
+    );
 }
 
 /**
@@ -337,6 +402,28 @@ export function changedPaths(cwd, base) {
   ];
 }
 
+/**
+ * The paths this branch DELETED, which is what names a removed workspace.
+ *
+ * Separate from the full list because presence in a diff says nothing about
+ * direction: a manifest ADDED outside every workspace looks identical to one
+ * removed from inside a workspace, and reporting the first as a removal
+ * refused a push that was valid.
+ */
+export function deletedPaths(cwd, base) {
+  const mergeBase = git(cwd, ["merge-base", base, "HEAD"]).trim();
+  return nulPaths(
+    git(cwd, [
+      "diff",
+      "--name-only",
+      "-z",
+      "--no-renames",
+      "--diff-filter=D",
+      mergeBase,
+    ])
+  );
+}
+
 /** Paths from a NUL-delimited Git listing. */
 function nulPaths(out) {
   return out.split("\0").filter(Boolean);
@@ -349,10 +436,10 @@ function nulPaths(out) {
  * into a command, the other is read by a person — and so the refusal is not
  * buried in a branch of a function that mostly formats prose.
  */
-function emitFilters(filters, unreadable) {
+function emitFilters(filters, unreadable, rootWide = []) {
   const line = filterArguments(filters);
   if (line) console.log(line);
-  const refusal = filtersRefusal(unreadable);
+  const refusal = filtersRefusal(unreadable, rootWide);
   if (refusal === null) return;
   console.error(refusal);
   process.exitCode = 1;
