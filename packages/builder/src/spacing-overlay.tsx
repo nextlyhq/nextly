@@ -40,10 +40,16 @@
  * ## When it re-measures, and the one case it cannot see
  *
  * A re-measure happens when the selection changes, when the document changes,
- * when the selected block resizes, and when the canvas root resizes. Between
- * them those cover an edit, an image or webfont arriving, the panels moving, and
- * a breakpoint changing — a breakpoint is driven by the canvas's own width, so
+ * whenever `watchCanvasGeometry` reports that a rectangle may have moved, and
+ * when a mutation lands outside this overlay's own layer. Between them those
+ * cover an edit, an image or webfont arriving, the panels moving, a scroller
+ * carrying the block, a transition settling, a recompiled site sheet, and a
+ * breakpoint changing — a breakpoint is driven by the canvas's own width, so
  * the root's resize is the event that reports it.
+ *
+ * Which of those the first of the two owns is deliberately not restated here:
+ * that list belongs to `canvas-geometry-watch.ts`, and a copy of it in this
+ * docblock would be a second answer to fall out of step.
  *
  * What is NOT covered is a spacing change driven purely by a CSS STATE: a
  * `:hover` or `:focus-visible` rule altering a margin repaints without mutating
@@ -66,7 +72,8 @@ import {
   usedCornerRadii,
   type CornerRadii,
 } from "./border-radii";
-import { CANVAS_ROOT_CLASS, nodeElement, nodeElements } from "./canvas";
+import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
+import { watchCanvasGeometry } from "./canvas-geometry-watch";
 import type { EditorState } from "./editor-state";
 import type { Rect, Scale } from "./geometry";
 import {
@@ -529,23 +536,17 @@ export function SpacingOverlay({
 
   /*
    * Re-measure when the layout moves for a reason no render reports — an image
-   * finishing, a webfont swapping, the panels being resized around the canvas.
+   * finishing, a webfont swapping, the panels being resized around the canvas,
+   * a scroller between a block and the root, a transition settling.
    *
-   * EVERY rendered node is observed, not just the selected one, because what
-   * moves a block is another block changing size. A `ResizeObserver` reports a
-   * size change and never a position one, so the selected block's own entry
-   * stays silent while a sibling above it grows and pushes it down.
+   * That whole list is `watchCanvasGeometry`'s, shared with every other overlay
+   * measuring against this root: which changes can move a rectangle is one
+   * question, and a second copy of the answer drifts from the first silently —
+   * the copy simply never hears one of the mechanisms, and looks complete.
    *
-   * Watching the canvas root does not stand in for this. The root is
-   * `min-height: 100%`, so on a page shorter than the viewport it holds that
-   * height and reports nothing however much the content inside it reflows — the
-   * case where the bands would sit furthest from the block they name. The root
-   * is still observed, for the resize the nodes cannot report: the panels moving
-   * around the canvas, which changes the frame without changing any node.
-   *
-   * The overlay cannot drive its own loop: it is `position: absolute` filling the
-   * root and carries no node marker, so nothing it draws is observed here or
-   * contributes to the root's size.
+   * The overlay cannot drive its own loop through it: it is `position: absolute`
+   * filling the root and carries no node marker, so nothing it draws is observed
+   * there or contributes to the root's size.
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
@@ -553,35 +554,22 @@ export function SpacingOverlay({
     const root =
       element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
     if (root === null) return;
-    /*
-     * Each observer is guarded separately, and that is not tidiness. They answer
-     * different questions — sizes changed, and the DOM changed — so a runtime
-     * missing one must still get the other. Guarding both behind `ResizeObserver`
-     * would silently drop mutation tracking wherever it is absent.
-     *
-     * Absent in jsdom unless a test supplies one, and absent in older browsers.
-     * A missing observer costs a re-measure, not correctness — every render path
-     * above still measures.
-     */
-    const sizes =
-      typeof ResizeObserver === "undefined"
-        ? null
-        : new ResizeObserver(() => measure());
-    if (sizes !== null) {
-      sizes.observe(root);
-      for (const node of nodeElements(root)) sizes.observe(node);
-    }
+    const geometry = watchCanvasGeometry(root, measure);
 
     /*
-     * The other half: a change that alters computed style without altering any
-     * size. A site-style save recompiles the sheet, and `PageRenderer` emits it
-     * as a `<style>` INSIDE the page root — so the bytes changing is a mutation
-     * in this subtree, where a resize observer has nothing to report because a
-     * class-driven margin moves blocks without resizing them.
+     * The one subscription that stays here, because it is the one this overlay
+     * has to answer for itself: a change that alters computed style without
+     * altering any size. A site-style save recompiles the sheet, and
+     * `PageRenderer` emits it as a `<style>` INSIDE the page root — so the
+     * bytes changing is a mutation in this subtree, where a resize observer has
+     * nothing to report because a class-driven margin moves blocks without
+     * resizing them.
      *
-     * Mutations inside the overlay's own layer are ignored. Drawing the bands is
-     * itself a mutation of this subtree, so reacting to it would have the
-     * measurement trigger the next measurement.
+     * Mutations inside the overlay's own layer are ignored, and that rule is
+     * why this cannot be shared. Drawing the bands is itself a mutation of the
+     * observed subtree, so reacting to it would have the measurement trigger
+     * the next measurement — and which mutations are "its own" is a different
+     * answer for every overlay.
      */
     const styles =
       typeof MutationObserver === "undefined"
@@ -600,37 +588,9 @@ export function SpacingOverlay({
       characterData: true,
     });
 
-    /*
-     * A transition moves geometry over time and emits nothing an observer sees:
-     * `transition` is a catalog property, a transform or margin animating past
-     * its first frame resizes nothing, and no DOM mutation accompanies the
-     * frames. The completion events are what the browser does offer, and they
-     * bubble, so one listener on the root covers every block.
-     *
-     * This corrects the FINAL geometry rather than following the animation.
-     * Tracking the frames between would mean measuring on every one, which costs
-     * more than a band being briefly behind a transition the author is watching.
-     */
-    const settled = (): void => measure();
-    root.addEventListener("transitionend", settled);
-    root.addEventListener("transitioncancel", settled);
-    /*
-     * `overflow: auto` and `overflow: scroll` are catalog values, so a block can
-     * sit inside a container the author scrolls. Scrolling it moves the block
-     * relative to the canvas while resizing nothing, mutating nothing and
-     * finishing no transition — none of the subscriptions above hear it.
-     *
-     * CAPTURE, because a scroll event does not bubble: listening on the root in
-     * the capture phase is what reaches a scroller nested anywhere inside it.
-     */
-    root.addEventListener("scroll", settled, true);
-
     return () => {
-      sizes?.disconnect();
+      geometry();
       styles?.disconnect();
-      root.removeEventListener("transitionend", settled);
-      root.removeEventListener("transitioncancel", settled);
-      root.removeEventListener("scroll", settled, true);
     };
     /*
      * `document` re-subscribes, and dropping it strands the observer on a

@@ -127,13 +127,14 @@
  * and it has three answers rather than two:
  *
  * - MEASURED — the pass found the element, accepted it, and holds a rectangle.
- * - DECLINED — the pass found the element and refused it: the stylesheet drew
- *   no box for it (see the section above), or an authored ancestor clips it
- *   (see `measure`). Both are re-decided on every pass, so this is a refusal
- *   for as long as the render keeps this shape, not a permanent one.
- * - UNMEASURED — no pass has reached this container. The canvas root has not
- *   mounted, a resize has not settled, or the element was not in the DOM when
- *   the pass ran.
+ * - DECLINED — the pass reached this container and refused it, for one of
+ *   three reasons: the render produced no element for it at all, the
+ *   stylesheet drew no box for the element it did produce (see the section
+ *   above), or an authored ancestor clips it (see `measure`). All three are
+ *   re-decided on every pass, so each is a refusal for as long as the render
+ *   keeps this shape rather than a permanent one.
+ * - UNMEASURED — no pass has run at all, because there is no canvas root to
+ *   run one against. Nothing has been asked about any container yet.
  *
  * An UNMEASURED control RENDERS, at `{ x: 0, y: 0, width: 0, height: 0 }`,
  * which is the property this section exists to protect: a control an author
@@ -152,7 +153,10 @@
  * and invisible. `.nx-empty-container-appenders__button` is `display: flex`
  * and `pointer-events: auto`, and its `:focus-visible` rule would draw an
  * outline on a box with no area. A `core/accordion-item` whose `children` slot
- * is empty reaches that state from its own `defaultProps`.
+ * is empty reaches that state from its own `defaultProps`, and so does any
+ * node `PageRenderer` leaves out of the tree it draws — one carrying
+ * `visibility.conditions`, or one whose props make it draw nothing — which the
+ * document goes on listing for as long as the author keeps it.
  *
  * The two used to share one representation — no entry in the measurement map —
  * so "not yet" and "never" were the same value and the second inherited the
@@ -181,12 +185,8 @@ import {
   type ReactElement,
 } from "react";
 
-import {
-  CANVAS_ROOT_CLASS,
-  CHROME_ATTRIBUTE,
-  nodeElement,
-  nodeElements,
-} from "./canvas";
+import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import { watchCanvasGeometry } from "./canvas-geometry-watch";
 import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
 import type { Rect } from "./geometry";
 import {
@@ -306,8 +306,9 @@ const UNMEASURED_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
  *
  * A refusal is a value here rather than the absence of one, because absence
  * already means something else — see the module docblock's three states. Both
- * members are recorded by `measure`, and a container it never got to is left
- * out of the map entirely.
+ * members are recorded by `measure`, which records one for EVERY container it
+ * is handed once it has a root: the map is empty only where there was no root
+ * to run a pass against.
  */
 type RecordedPlacement =
   | { readonly kind: "measured"; readonly rect: Rect }
@@ -462,12 +463,29 @@ export function EmptyContainerAppenders({
     for (const container of containers) {
       const target = nodeElement(root, container.id);
       /*
-       * Left out of the map rather than declined. A container the document
-       * has and the canvas has not rendered yet is UNMEASURED — nothing has
-       * been decided about it — and its control still renders at the zero
-       * rectangle, which is the state the module docblock protects.
+       * DECLINED rather than left out. This pass HAS a canvas root and has
+       * just searched it, so an id with no element is a container the render
+       * does not produce — not one it has not produced yet. `PageRenderer`
+       * drops whole subtrees before drawing anything: a node carrying
+       * `visibility.conditions` is omitted from output, and so is one whose
+       * props make it draw nothing. Neither ever reaches the DOM, however long
+       * this waits, so recording nothing would leave a zero-sized button in
+       * the tab order — announced by name, focusable, and pointing at content
+       * that is not on the canvas.
+       *
+       * That leaves absence from the map meaning only "no pass has run",
+       * which is the `root === null` return above and the one case where a
+       * control genuinely is waiting to be placed.
+       *
+       * Re-decided on the next pass exactly like the two refusals below: a
+       * container that starts rendering — a condition that begins to hold, an
+       * edit that gives the node markup — gets its control back as soon as
+       * anything re-measures.
        */
-      if (target === null) continue;
+      if (target === null) {
+        next.set(container.id, DECLINED);
+        continue;
+      }
       /*
        * The stylesheet's own condition, asked of the element the stylesheet
        * would ask it of — not a second condition computed here.
@@ -536,18 +554,23 @@ export function EmptyContainerAppenders({
   }, [measure, hidden, document]);
 
   /*
-   * Re-measure for a resize no render reports: a breakpoint driven by the
-   * canvas's own width, a rail panel opening, a webfont swapping in.
+   * Re-measure for the changes no render reports, all of them: a resize with
+   * no render behind it (a breakpoint driven by the canvas's own width, a rail
+   * panel opening, a webfont swapping in) and a move with no resize at all (a
+   * scroller between the container and the root, a transition finishing on a
+   * neighbour). Both move a control off the container it names, and the second
+   * kind is invisible to every observer.
    *
-   * EVERY rendered node is observed, not only the containers this overlay
-   * draws a control for — matching `SpacingOverlay`, which observes the same
-   * way for the same reason: what moves a container is often a SIBLING
-   * changing size rather than the container itself. An image finishing its
-   * load resizes that sibling and nothing else — not the empty container
-   * beside it, and not the root, which is `min-height: 100%` and can absorb
-   * the change while reporting nothing. An observer scoped to only the found
-   * containers never fires for that resize, and the control is left drawn
-   * over the coordinates the layout had before it.
+   * `watchCanvasGeometry` owns the whole list rather than this file
+   * subscribing to the part it happened to think of. The one subscription this
+   * overlay does NOT want is a `MutationObserver`, and that is what keeps it
+   * out of the shared helper: drawing a control is itself a mutation of the
+   * observed subtree, so adopting one means owning a rule for which mutations
+   * are this overlay's own. `SpacingOverlay` keeps such a rule beside its own
+   * call. The cost of leaving it out is stated rather than hidden: a
+   * recompiled site sheet moves blocks through changed class rules, and a
+   * control over one stays where it was until the next resize, scroll,
+   * transition or edit.
    */
   useEffect(() => {
     if (hidden || containers.length === 0) return;
@@ -555,14 +578,7 @@ export function EmptyContainerAppenders({
     const root =
       element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
     if (root === null) return;
-    // Absent in jsdom unless a test supplies one, and absent in older
-    // browsers. A missing observer costs a re-measure, not correctness —
-    // every render path above still measures.
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => measure());
-    observer.observe(root);
-    for (const node of nodeElements(root)) observer.observe(node);
-    return () => observer.disconnect();
+    return watchCanvasGeometry(root, measure);
   }, [measure, hidden, containers, document]);
 
   // `hidden` renders NOTHING, matching how `BlockToolbar` is suppressed during

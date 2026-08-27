@@ -1102,10 +1102,32 @@ export function BuilderShell({
   const handledInsertPanelToken = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
     if (openInsertPanelToken === undefined) return;
+    /*
+     * Nothing is applied until a store read has LANDED, and that ordering is
+     * the whole of this guard.
+     *
+     * `update` takes the newest preferences this hook has seen and writes the
+     * result straight back through the store. Reading the store is itself an
+     * effect, so on the mount pass it has only SCHEDULED the restored record —
+     * what `update` would spread here is still `DEFAULT_PREFERENCES`. A token
+     * defined at mount would therefore persist the defaults over the author's
+     * own record, taking their panel widths and their `showEmptyElements` with
+     * it, while the panel it was asked for opens and looks entirely correct.
+     *
+     * `loadCount` is the arrival this needs: it counts reads that have reached
+     * state rather than reads that have been started, so a nonzero value means
+     * `preferences` describes the store. It advances on EVERY store — a read
+     * cannot fail (`readPreferences` answers with the defaults for unreadable
+     * or malformed storage) and one that remembers nothing still answers — so
+     * this delays a mount-time token by a single render and can never hold one
+     * indefinitely. A token arriving any later meets a count already past zero
+     * and applies in the same flush it arrived in.
+     */
+    if (loadCount === 0) return;
     if (handledInsertPanelToken.current === openInsertPanelToken) return;
     handledInsertPanelToken.current = openInsertPanelToken;
     update(current => ({ ...current, leftPanel: "insert" }));
-  }, [openInsertPanelToken, update]);
+  }, [openInsertPanelToken, update, loadCount]);
 
   /*
    * The read half of the same gap: told on every value `showEmptyElements`

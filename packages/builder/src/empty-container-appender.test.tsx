@@ -660,12 +660,14 @@ describe("which containers it actually draws a control on", () => {
   };
 
   /**
-   * A document the overlay knows about and the canvas has not rendered.
+   * A document the overlay knows about and the canvas does not render.
    *
    * `ghost` is a perfectly ordinary empty container that no element in the DOM
-   * carries the id of, which is the state every container is in for the frame
-   * before the canvas mounts. The measurement pass finds no element for it and
-   * records nothing — leaving it UNMEASURED rather than declined.
+   * carries the id of — the state a node `PageRenderer` drops stays in for as
+   * long as it is dropped, whether for a `visibility.conditions` gate or for
+   * props that make it draw nothing. A pass with a canvas root under it has
+   * searched that root and found nothing, so the refusal is a decision rather
+   * than a wait.
    */
   const SHAPES_PLUS_UNRENDERED: BlockDocument = {
     ...SHAPES,
@@ -691,12 +693,15 @@ describe("which containers it actually draws a control on", () => {
    * `overlayDocument` defaults to the canvas's own, which is the ordinary
    * case; a caller passes a different one to model a container the document
    * holds and the render does not.
+   *
+   * Returns the rendered container, for a case that has to re-stub a
+   * rectangle and drive a second measurement of its own.
    */
   function measuredCanvas(
     canvasDocument: BlockDocument,
     boxes: Record<string, Box>,
     overlayDocument: BlockDocument = canvasDocument
-  ): void {
+  ): HTMLElement {
     registerShapes();
     withFakeResizeObserver();
 
@@ -719,6 +724,7 @@ describe("which containers it actually draws a control on", () => {
     const observer = FakeResizeObserver.instances.at(-1);
     if (observer === undefined) throw new Error("no observer subscribed");
     act(() => observer.fire());
+    return container;
   }
 
   it("draws NO control on a container whose root the stylesheet declines", () => {
@@ -769,16 +775,22 @@ describe("which containers it actually draws a control on", () => {
     ).toBeNull();
   });
 
-  it("tells a DECLINED container apart from one no pass has reached", () => {
+  it("draws NO control on a container the render does not produce", () => {
     /*
-     * The separating property between the two states, in one render: `ghost`
-     * is UNMEASURED — in the overlay's document, in no element's id — and
-     * `summary-bearing` is DECLINED. They must come out differently.
+     * The third refusal, and the only one with no element to ask anything of.
+     * `ghost` is in the overlay's document and in no element's id, which is
+     * where a node `PageRenderer` drops stays: one carrying
+     * `visibility.conditions`, or one whose props make it draw nothing. A pass
+     * that HAS a canvas root and cannot find the element has decided about
+     * that container, so treating it as not-yet-measured would leave a
+     * zero-sized button in the tab order, announced by name, for content the
+     * canvas does not show.
      *
-     * A single representation for both gives them the SAME outcome whichever
-     * way it is spelled: hide the unmeasured one and neither button exists;
-     * draw the declined one at the zero rectangle and both do. Only two
-     * distinct states pass this pair of assertions.
+     * Two controls in the same render and the same pass, because an absence
+     * assertion alone is satisfied by a component that drew nothing at all:
+     * `Wide box` proves the query finds a button here, and `Closed section`
+     * proves the OTHER refusal still refuses — so this is a statement about
+     * `ghost` rather than about the render as a whole.
      */
     measuredCanvas(
       SHAPES,
@@ -789,10 +801,85 @@ describe("which containers it actually draws a control on", () => {
       SHAPES_PLUS_UNRENDERED
     );
 
-    expect(drawnAt("Ghost box")).toEqual(["0px", "0px", "0px", "0px"]);
+    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Ghost box" })
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Add a block to Closed section" })
     ).toBeNull();
+  });
+
+  it("re-measures when a scroller between a container and the root scrolls", () => {
+    /*
+     * `overflow: auto` and `overflow: scroll` are catalog values, so an empty
+     * container can sit inside a scroller the author made. Scrolling it moves
+     * the container relative to the canvas while resizing nothing, mutating
+     * nothing and finishing no transition — so the resize observer this
+     * component already had has nothing to report, and the control stays at
+     * the coordinates the layout used to give it, over whatever is there now.
+     *
+     * The scroll is dispatched on the NESTED element rather than on the root,
+     * and with the default `bubbles: false` a scroll event really has: only a
+     * listener in the CAPTURE phase on the root hears one from a scroller
+     * inside it, so a bubbling listener would see nothing here. That is what
+     * makes this discriminate rather than merely pass.
+     *
+     * The rectangle is re-stubbed and the control's new position asserted, so
+     * what is checked is a completed re-measurement rather than the presence
+     * of a subscription.
+     */
+    const container = measuredCanvas(NESTED, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 0, width: 400, height: 200 },
+    });
+    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+
+    // The same container, 100px further down its scroller, and nothing
+    // resized: `clipper` still reports the canvas's own box.
+    layout(container, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 100, width: 400, height: 200 },
+    });
+    const scroller = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="clipper"]`
+    );
+    if (scroller === null) throw new Error("no element for clipper");
+    act(() => {
+      scroller.dispatchEvent(new Event("scroll"));
+    });
+
+    expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
+  });
+
+  it("re-measures when a transition finishes inside the canvas", () => {
+    /*
+     * The second change that moves a control while resizing nothing:
+     * `transition` is a catalog property, so a neighbour animating a margin or
+     * a transform past the first frame moves an empty container without
+     * changing any observed box. The completion event bubbles, so the one
+     * listener on the root hears it wherever inside the canvas it is raised —
+     * dispatched here on the wrapper rather than on the root to say so.
+     */
+    const container = measuredCanvas(NESTED, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 0, width: 400, height: 200 },
+    });
+    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+
+    layout(container, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 100, width: 400, height: 200 },
+    });
+    const animated = container.querySelector(
+      `[${NODE_ID_ATTRIBUTE}="clipper"]`
+    );
+    if (animated === null) throw new Error("no element for clipper");
+    act(() => {
+      animated.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    });
+
+    expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
   });
 
   it("keeps the control inside a container narrower than it", () => {
@@ -822,6 +909,13 @@ describe("a container no measurement pass has reached", () => {
      * container — and the control is still in the accessibility tree, where a
      * screen reader can reach it, because a control that has not been placed
      * yet is not a control that has been refused.
+     *
+     * This is one half of what separates UNMEASURED from DECLINED, and the
+     * halves cannot share a render: whether a pass has run at all is a
+     * property of the MOUNT rather than of a container. The other half is
+     * "draws NO control on a container the render does not produce" above,
+     * where the same missing element under a canvas root draws nothing.
+     * Conflate the two states in either direction and one of the pair fails.
      */
     render(
       <EmptyContainerAppenders

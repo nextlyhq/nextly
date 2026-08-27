@@ -427,6 +427,85 @@ describe("opening the insert panel from outside the shell", () => {
     expect(screen.getByText("insert panel")).toBeTruthy();
   });
 
+  it("keeps every stored preference when a token is already set at mount", () => {
+    /*
+     * The store is READ in an effect, so on the mount pass the restored record
+     * has only been scheduled: the newest preferences this shell has seen are
+     * still the defaults. A token applied there computes its write from those
+     * defaults and persists them, so the author's panel widths and their
+     * `showEmptyElements` are gone — from the store and from the state — while
+     * the panel they asked for opens and everything on screen looks right.
+     *
+     * Every stored field is asserted, plus the panel: a test asserting only
+     * that the panel opened passes against exactly that loss, and one
+     * asserting only the record passes against a token that never applies at
+     * all. `showEmptyElements` is additionally read off the chrome attribute,
+     * because the store and the state are two separate casualties and the
+     * record alone cannot tell them apart.
+     */
+    stubContainerFits(true);
+    const layouts = { "canvas,panel": { canvas: 3, panel: 1 } };
+    const store = memoryStore(
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPinned: false,
+        showEmptyElements: false,
+        layouts,
+      })
+    );
+
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+    // Queried rather than assumed present: a selector that matched nothing
+    // would make the attribute assertion pass on `undefined`.
+    const chrome = document.querySelector(".nx-builder-chrome");
+    expect(chrome).not.toBeNull();
+    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
+    expect(JSON.parse(store.value as string)).toMatchObject({
+      leftPanel: "insert",
+      leftPinned: false,
+      showEmptyElements: false,
+      layouts,
+    });
+  });
+
+  it("still applies a mount-time token when the shell falls back to its own store", () => {
+    /*
+     * Waiting for a store read raises one question: can a token WAIT FOREVER?
+     * It cannot, and the case with no `store` prop at all is where that would
+     * show — the shell builds its own fallback, and the read that releases the
+     * token runs for it exactly as for a supplied one. Reading cannot fail
+     * either: unreadable or malformed storage answers with the defaults rather
+     * than throwing, so there is no path where the count stays where it was.
+     *
+     * `localStorage` is cleared on both sides because this is the only case in
+     * the file that reaches the fallback store: before, so the mount starts
+     * from a known-empty one, and after, so nothing it wrote is still there
+     * for another mount to restore.
+     */
+    stubContainerFits(true);
+    window.localStorage.clear();
+
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+    window.localStorage.clear();
+  });
+
   it("does not reopen a manually closed panel when the SAME token survives an unrelated effect re-run", () => {
     // `update`'s identity follows the `store` prop (documented on `store`
     // above: a host swapping stores is expected to hand over a new object),
