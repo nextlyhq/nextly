@@ -25,17 +25,6 @@ import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /*
- * Declared here rather than in a setup file, because neither this package nor
- * the builder configures one. `React.act` refuses to run without it, and the
- * refusal is a warning rather than a failure — so a version of this file
- * missing it would drive nothing and still assert against the FIRST render's
- * props, passing for two of the cases below.
- */
-(
-  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-).IS_REACT_ACT_ENVIRONMENT = true;
-
-/*
  * ONE document object for the life of the mount.
  *
  * The editor replaces its state rather than mutating it, so this component
