@@ -820,15 +820,73 @@ export function clippedByAncestor(
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
   const box = element.getBoundingClientRect();
+  return anyAncestorCuts(element, root, node =>
+    cutByAncestor(node, box, radii, view, root)
+  );
+}
 
+/**
+ * Walks the ancestors strictly between `element` and `root`, reporting
+ * whether any one of them satisfies `cut`.
+ *
+ * Shared by {@link clippedByAncestor} and {@link clippedByAncestorRect}
+ * rather than each climbing the chain on its own: the two answer different
+ * questions about the same ancestor and must stop at the same first match for
+ * the same reason `ancestorClipContext` is shared rather than re-derived —
+ * two copies of "which elements to ask" agree on the day both are written and
+ * are free to drift the moment either caller's walk changes.
+ */
+function anyAncestorCuts(
+  element: Element,
+  root: Element,
+  cut: (node: Element) => boolean
+): boolean {
   for (
     let node: Element | null = element.parentElement;
     node !== null && node !== root;
     node = node.parentElement
   ) {
-    if (cutByAncestor(node, box, radii, view, root)) return true;
+    if (cut(node)) return true;
   }
   return false;
+}
+
+/**
+ * Whether an ancestor cuts the block's own RECTANGLE — the straight-edge
+ * question alone, with no opinion about a rounded corner.
+ *
+ * {@link clippedByAncestor} additionally refuses a block whose SQUARE corner
+ * pokes past a more tightly rounded ancestor's arc — correct for a bounding
+ * box a caller draws chrome flush against, like a spacing band that runs the
+ * full length of an edge. A caller drawing something anchored to the block's
+ * CENTRE and never reaching its corners has no use for that refinement: it
+ * would refuse a container for a clip that exists only within a few pixels of
+ * a corner nothing is drawn near, and it is refused for exactly the
+ * containers most likely to have one — an ordinary full-width child sitting
+ * flush inside a rounded, clipping parent is genuinely cut by a few pixels at
+ * each corner where the two curves disagree, which is real and irrelevant to
+ * anything drawn away from the corners.
+ *
+ * Shares {@link ancestorClipContext} with {@link clippedByAncestor} rather
+ * than reading `overflow`, composing scale or resolving the clip rectangle a
+ * second time: the two answer different questions about the same ancestor,
+ * and the parts they share have to stay exactly the same reading.
+ */
+export function clippedByAncestorRect(
+  element: Element,
+  root: Element
+): boolean {
+  const view = element.ownerDocument.defaultView;
+  if (view === null) return false;
+  const box = element.getBoundingClientRect();
+  return anyAncestorCuts(element, root, node => {
+    const context = ancestorClipContext(node, view, root);
+    if (context.kind === "cut") return true;
+    return (
+      context.kind === "clips" &&
+      cutByEdges(box, context.clip, context.clipsX, context.clipsY)
+    );
+  });
 }
 
 /**
@@ -847,6 +905,68 @@ function cutByAncestor(
   view: Window,
   root: Element
 ): boolean {
+  const context = ancestorClipContext(node, view, root);
+  if (context.kind === "no-clip") return false;
+  if (context.kind === "cut") return true;
+  if (cutByEdges(box, context.clip, context.clipsX, context.clipsY))
+    return true;
+  /*
+   * The BLOCK's radii are composed here too, and for the same reason the
+   * ancestor's geometry is.
+   *
+   * The caller scales them by the block's own composition, which stops below
+   * the root — so the outer curve below carries the canvas scale and the inner
+   * one does not. Compared across that difference, an oversized inner curve
+   * reads as fitting inside the outer one, and a block whose visible corner IS
+   * clipped keeps its bands and draws them over clipped pixels.
+   *
+   * Done at the comparison rather than at the call site: this is the only place
+   * that holds both curves, and asking the caller to pre-compose one of them
+   * puts half a decision somewhere that cannot see the other half.
+   */
+  const inner = scaleCornerRadii(radii, context.painted);
+  return cutByCorner(
+    box,
+    inner,
+    context.clip,
+    context.style,
+    context.scale,
+    context.clipsX && context.clipsY,
+    CLIP_SLACK_PX
+  );
+}
+
+/**
+ * What one ancestor's clip means for a descendant, computed ONCE and shared
+ * by {@link clippedByAncestor} (the corner-aware question) and
+ * {@link clippedByAncestorRect} (the straight-edge one) — reading `overflow`,
+ * composing the rendered scale and resolving the clip rectangle are the same
+ * work either caller needs, and a second reading of any of them is a second
+ * chance for the two to disagree about the same ancestor.
+ *
+ * Three outcomes rather than a boolean, because "does not clip at all" and
+ * "clips, but the geometry cannot be described" are different answers a
+ * caller must not conflate: the first lets the walk continue up to the next
+ * ancestor, the second is itself a refusal.
+ */
+type AncestorClipContext =
+  | { readonly kind: "no-clip" }
+  | { readonly kind: "cut" }
+  | {
+      readonly kind: "clips";
+      readonly clipsX: boolean;
+      readonly clipsY: boolean;
+      readonly style: CSSStyleDeclaration;
+      readonly clip: EdgeBounds;
+      readonly scale: RenderedScale;
+      readonly painted: Scale;
+    };
+
+function ancestorClipContext(
+  node: Element,
+  view: Window,
+  root: Element
+): AncestorClipContext {
   const style = view.getComputedStyle(node);
   /*
    * PER AXIS, because the two can differ and the catalog ships the shorthand
@@ -862,7 +982,7 @@ function cutByAncestor(
    */
   const clipsX = style.overflowX !== "visible";
   const clipsY = style.overflowY !== "visible";
-  if (!clipsX && !clipsY) return false;
+  if (!clipsX && !clipsY) return { kind: "no-clip" };
   /*
    * A computed `overflow` is not the same as an overflow that CLIPS. The
    * property does not apply to every generated box, and the computed value says
@@ -870,7 +990,7 @@ function cutByAncestor(
    * span gets the declaration in the computed style and no clip on the page.
    * Reading the first as the second cuts a descendant nothing removes.
    */
-  if (!overflowApplies(style.display)) return false;
+  if (!overflowApplies(style.display)) return { kind: "no-clip" };
   /*
    * Overflow clips at the PADDING edge, and `getBoundingClientRect` reports the
    * BORDER box. On a container with a border the two differ by its width, so a
@@ -957,33 +1077,9 @@ function cutByAncestor(
    * same answer this module already gives for every other shape it cannot
    * describe.
    */
-  if (!scale.describable) return true;
-  /*
-   * The BLOCK's radii are composed here too, and for the same reason the
-   * ancestor's geometry is.
-   *
-   * The caller scales them by the block's own composition, which stops below
-   * the root — so the outer curve below carries the canvas scale and the inner
-   * one does not. Compared across that difference, an oversized inner curve
-   * reads as fitting inside the outer one, and a block whose visible corner IS
-   * clipped keeps its bands and draws them over clipped pixels.
-   *
-   * Done at the comparison rather than at the call site: this is the only place
-   * that holds both curves, and asking the caller to pre-compose one of them
-   * puts half a decision somewhere that cannot see the other half.
-   */
-  const inner = scaleCornerRadii(radii, painted);
+  if (!scale.describable) return { kind: "cut" };
   const clip = clipEdges(outer, style, scale);
-  if (cutByEdges(box, clip, clipsX, clipsY)) return true;
-  return cutByCorner(
-    box,
-    inner,
-    clip,
-    style,
-    scale,
-    clipsX && clipsY,
-    CLIP_SLACK_PX
-  );
+  return { kind: "clips", clipsX, clipsY, style, clip, scale, painted };
 }
 
 /**

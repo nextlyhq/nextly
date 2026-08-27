@@ -17,11 +17,20 @@
  * `toBeEmptyDOMElement` is not available and every assertion below reaches for
  * a plain vitest one instead.
  */
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  clearBlocks,
+  hasBlock,
+  registerBlocks,
+  type BlockDocument,
+} from "@nextlyhq/blocks-engine";
+import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
 import { EmptyContainerAppenders } from "./empty-container-appender";
+import { registrySlotSource } from "./inserter";
 
 // This suite queries by role against the whole document (`screen`), so a tree
 // left mounted by one test is still there for the next `getByRole` to trip
@@ -29,6 +38,8 @@ import { EmptyContainerAppenders } from "./empty-container-appender";
 // both call this between cases.
 afterEach(() => {
   cleanup();
+  clearBlocks();
+  vi.unstubAllGlobals();
 });
 
 // Two container TYPES, not just two nodes of one type — `core/card` exists so
@@ -202,5 +213,137 @@ describe("the empty-container appender", () => {
     expect(screen.getAllByRole("button")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: /Card/ }));
     expect(onAppend).toHaveBeenCalledWith("card-2");
+  });
+});
+
+/**
+ * A stand-in for `ResizeObserver`, which jsdom does not implement.
+ *
+ * Mirrors `spacing-overlay.test.tsx`'s own fake for the same reason: these
+ * tests assert the SUBSCRIPTION rather than the redraw, since jsdom never
+ * reflows and so can never produce the resize the real observer would report.
+ */
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  readonly observed: Element[] = [];
+  disconnected = false;
+  constructor(_callback: ResizeObserverCallback) {
+    FakeResizeObserver.instances.push(this);
+  }
+  observe(target: Element): void {
+    this.observed.push(target);
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    this.disconnected = true;
+  }
+}
+
+function withFakeResizeObserver() {
+  FakeResizeObserver.instances = [];
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+}
+
+describe("what it stays subscribed to", () => {
+  /**
+   * A real container and a real leaf, registered so `Canvas` renders an
+   * actual tree with `NODE_ID_ATTRIBUTE` markers this suite's own `doc`/
+   * `blocks` fixtures never produce — the bare-render tests above assert this
+   * component's OWN behaviour and deliberately mount no canvas at all, but
+   * "which elements a resize is watched on" is a question only a rendered
+   * canvas root can answer.
+   */
+  function registerCanvasBlocks() {
+    if (hasBlock("acme/empty-container-appender-box")) return;
+    registerBlocks(
+      [
+        {
+          name: "acme/empty-container-appender-box",
+          version: 1,
+          description: "A container with one slot.",
+          example: { props: {} },
+          slots: { children: {} },
+          // Typed with the one shape this fixture reads, rather than the
+          // full `BlockRenderArgs` — matching how `EmptyContainerAppenders`
+          // itself narrows to `BlockLookup` above, and how it is discarded
+          // anyway by `as never` below; the annotation only exists so `tsc`
+          // can check the destructure rather than reporting an implicit `any`.
+          render: ({
+            className,
+            renderSlot,
+          }: {
+            className: string;
+            renderSlot: (name: string) => React.ReactNode;
+          }) =>
+            React.createElement("div", { className }, renderSlot("children")),
+        },
+        {
+          name: "acme/empty-container-appender-leaf",
+          version: 1,
+          description: "A leaf with nothing to fill.",
+          example: { props: {} },
+          render: () => React.createElement("p", null, "leaf"),
+        },
+      ] as never,
+      { source: "empty-container-appender-test" }
+    );
+  }
+
+  const CANVAS_DOCUMENT = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "empty-container",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+      },
+      {
+        id: "sibling-leaf",
+        type: "acme/empty-container-appender-leaf",
+        version: 1,
+        props: {},
+      },
+    ],
+  } as unknown as BlockDocument;
+
+  it("watches EVERY rendered node, not only the container it draws a control for", () => {
+    // The separating property for this fix: a populated sibling resizing —
+    // an image finishing its load — moves nothing this component drew a
+    // control for and nothing the canvas root itself reports, so an observer
+    // scoped to only the empty containers never fires. `sibling-leaf` is
+    // never empty and gets no button, and it must still be observed.
+    registerCanvasBlocks();
+    withFakeResizeObserver();
+
+    const { container } = render(
+      <Canvas
+        document={CANVAS_DOCUMENT}
+        siteStyles={{ css: "", classes: {} } as never}
+        overlay={
+          <EmptyContainerAppenders
+            document={CANVAS_DOCUMENT}
+            slots={registrySlotSource()}
+            // The accessible name is not what this test asks about; a lookup
+            // that resolves nothing still exercises which nodes get a
+            // control, since that decision comes from `slots` alone.
+            blocks={{ get: () => undefined }}
+            onAppend={() => undefined}
+          />
+        }
+      />
+    );
+
+    const observer = FakeResizeObserver.instances.at(-1);
+    expect(observer?.observed).toContain(
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="empty-container"]`)
+    );
+    expect(observer?.observed).toContain(
+      container.querySelector(`[${NODE_ID_ATTRIBUTE}="sibling-leaf"]`)
+    );
+    expect(observer?.observed).toContain(
+      container.querySelector(`.${CANVAS_ROOT_CLASS}`)
+    );
   });
 });

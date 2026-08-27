@@ -46,6 +46,42 @@
  * against: unscaled, it is wrong by `(1 - scale) * inset`, exactly zero at
  * 100% and invisible in precisely the configuration most testing happens in.
  *
+ * ## A fixed, centred square rather than a rectangle sized to the container
+ *
+ * The button does not stretch to the measured rectangle's own width and
+ * height. It is a fixed {@link APPENDER_SIZE_PX} square centred inside it,
+ * and that is a correction rather than a style choice.
+ *
+ * `emptySlotOf` names which SLOT is empty, but there is no DOM address for
+ * "slot X of node Y" to measure — `NODE_ID_ATTRIBUTE` marks a node's whole
+ * root element, and a node with several declared slots renders all of them
+ * inside that one root. So the only rectangle measurable here is the node's
+ * entire root, whether or not every slot inside it is empty. A button sized
+ * to that rectangle sits over a POPULATED later slot exactly as much as over
+ * the empty first one, stealing the pointer clicks the populated slot's own
+ * content should get. A fixed small square anchored to the root's centre
+ * cannot do that: the worst it can overlap is a small area near the middle,
+ * never the slot's whole content.
+ *
+ * The same fix answers a second problem for free. `canvasContentRect` reports
+ * a node's rectangle whether or not an authored ancestor clips it, because
+ * clipping happens in the DOM and this overlay draws in the root's flat
+ * coordinate space above it — so a full-bleed button drawn there paints over
+ * whatever unrelated content happens to sit at the un-clipped position. A
+ * clipped container is excluded outright below (see `measure`, and
+ * `clippedByAncestorRect` in `geometry-dom.ts`), and the fixed size is what
+ * makes that exclusion cheap to reason about: declining a single small square
+ * costs far less than declining a rectangle that might have spanned most of
+ * the canvas, and a control that never reaches a container's corners has no
+ * need of `clippedByAncestor`'s corner-aware refinement — see `measure` for
+ * why asking that stricter question here would cost more than it protects.
+ *
+ * For the ordinary case — a block declaring one slot, empty — this changes
+ * nothing an author can see: `builder-chrome.css`'s `[data-nx-slots]:empty`
+ * rule already gives such a container a 44px box, so centring a 44px square
+ * inside its own measured rectangle places the control exactly where that box
+ * already is.
+ *
  * ## Identity is independent of geometry, and has to stay that way
  *
  * Which containers get a control comes from the DOCUMENT alone. Position is a
@@ -76,10 +112,19 @@ import {
   type ReactElement,
 } from "react";
 
-import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
+import {
+  CANVAS_ROOT_CLASS,
+  CHROME_ATTRIBUTE,
+  nodeElement,
+  nodeElements,
+} from "./canvas";
 import { emptySlotOf } from "./empty-slot";
 import type { Rect } from "./geometry";
-import { canvasContentRect, canvasRootFrom } from "./geometry-dom";
+import {
+  canvasContentRect,
+  canvasRootFrom,
+  clippedByAncestorRect,
+} from "./geometry-dom";
 import type { SlotSource } from "./inserter";
 
 /**
@@ -174,6 +219,32 @@ const UNMEASURED_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
 /** No controls: the identity returned before the first measurement runs. */
 const NO_RECTS: ReadonlyMap<string, Rect> = new Map();
 
+/**
+ * The control's fixed side length, in the canvas's content pixels.
+ *
+ * Matches `builder-chrome.css`'s `[data-nx-slots]:empty` rule, whose
+ * `min-height: 2.75rem` (44px) is that stylesheet's own answer to "how small
+ * can a pointer target be and still be comfortable". Reusing the number
+ * rather than picking a second one keeps the control's footprint no larger
+ * than the placeholder box it already draws attention to.
+ */
+const APPENDER_SIZE_PX = 44;
+
+/**
+ * A fixed {@link APPENDER_SIZE_PX} square, centred inside a larger rectangle.
+ *
+ * See the module docblock ("A fixed, centred square") for why the button is
+ * never sized to the measured rectangle itself.
+ */
+function centeredControlRect(rect: Rect, size: number): Rect {
+  return {
+    x: rect.x + (rect.width - size) / 2,
+    y: rect.y + (rect.height - size) / 2,
+    width: size,
+    height: size,
+  };
+}
+
 export interface EmptyContainerAppendersProps {
   /** The document to scan for containers with nothing in them. */
   document: BlockDocument;
@@ -247,9 +318,33 @@ export function EmptyContainerAppenders({
     const next = new Map<string, Rect>();
     for (const container of containers) {
       const target = nodeElement(root, container.id);
-      if (target !== null) {
-        next.set(container.id, canvasContentRect(target, root));
-      }
+      if (target === null) continue;
+      /*
+       * Excluded outright rather than measured. `clippedByAncestorRect`
+       * answers "is this element's own rectangle cut by an authored ancestor
+       * between it and the root" — a clipped container's DOM is cut where
+       * this overlay is not, so a control measured from its un-clipped
+       * rectangle would be drawn over whatever the page actually shows at
+       * that position.
+       *
+       * The RECT question rather than `clippedByAncestor`'s corner-aware one.
+       * That refinement exists for a caller drawing chrome flush against a
+       * block's edges — a spacing band runs the full length of one and does
+       * reach the corners — and this control does not: it is a fixed square
+       * anchored to the container's CENTRE, nowhere near a corner unless the
+       * container itself is barely larger than the control. Measured against
+       * an ordinary full-width child sitting flush inside a rounded, clipping
+       * parent — `core/box` directly inside `core/card`, ordinary enough that
+       * `card.tsx` names it the commonest composition in the library — the
+       * two curves genuinely disagree by a few pixels at each corner, which
+       * `clippedByAncestor` correctly reports and which is irrelevant to
+       * anything drawn away from the corners. Asking the corner-aware
+       * question here would decline the control for exactly the composition
+       * an author reaches for most.
+       */
+      if (clippedByAncestorRect(target, root)) continue;
+      const measured = canvasContentRect(target, root);
+      next.set(container.id, centeredControlRect(measured, APPENDER_SIZE_PX));
     }
     setRects(next);
   }, [containers]);
@@ -269,10 +364,17 @@ export function EmptyContainerAppenders({
 
   /*
    * Re-measure for a resize no render reports: a breakpoint driven by the
-   * canvas's own width, a rail panel opening, a webfont swapping in. Every
-   * found container is watched, not only the canvas root, because what moves
-   * a container is often a SIBLING changing size rather than the container
-   * itself.
+   * canvas's own width, a rail panel opening, a webfont swapping in.
+   *
+   * EVERY rendered node is observed, not only the containers this overlay
+   * draws a control for — matching `SpacingOverlay`, which observes the same
+   * way for the same reason: what moves a container is often a SIBLING
+   * changing size rather than the container itself. An image finishing its
+   * load resizes that sibling and nothing else — not the empty container
+   * beside it, and not the root, which is `min-height: 100%` and can absorb
+   * the change while reporting nothing. An observer scoped to only the found
+   * containers never fires for that resize, and the control is left drawn
+   * over the coordinates the layout had before it.
    */
   useEffect(() => {
     if (hidden || containers.length === 0) return;
@@ -286,10 +388,7 @@ export function EmptyContainerAppenders({
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(() => measure());
     observer.observe(root);
-    for (const container of containers) {
-      const target = nodeElement(root, container.id);
-      if (target !== null) observer.observe(target);
-    }
+    for (const node of nodeElements(root)) observer.observe(node);
     return () => observer.disconnect();
   }, [measure, hidden, containers, document]);
 
