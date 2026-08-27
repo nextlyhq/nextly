@@ -242,6 +242,24 @@ export function useInlineRichText(
   // `commit` is what the handover effect depends on.
   const finishedRef = useRef(onFinished);
   finishedRef.current = onFinished;
+  /*
+   * The loader, read through a ref for a reason that costs an author their
+   * words otherwise.
+   *
+   * A consumer passing an inline closure — the ordinary way to write
+   * `useInlineRichText(editor, () => import("..."))` — gives it a new identity
+   * every render. As a DEPENDENCY that reruns the handover effect while the
+   * element is still mounted, and the cleanup below deliberately releases a
+   * held session because it assumes it is unmounting. So a re-render for any
+   * unrelated reason would tear down a passage being kept open precisely
+   * because its words exist nowhere else.
+   *
+   * The effect therefore depends on WHICH passage is being edited, not on how
+   * the editor is fetched. A loader that changes mid-edit is not a reason to
+   * re-open anything; the chunk in flight is already the right one.
+   */
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   /**
    * The element a pointer handed over, used in place of searching for one.
@@ -480,7 +498,11 @@ export function useInlineRichText(
    * renderer is about to commit.
    */
   useEffect(() => {
-    if (editing === null || load === undefined) return;
+    if (editing === null) return;
+    // Read once, here, rather than depended on — see `loadRef`. A host that
+    // supplies no loader edits plain text and simply never opens a passage.
+    const fetch = loadRef.current;
+    if (fetch === undefined) return;
     if (globalThis.document === undefined) return;
     // The element the gesture landed on, when there was one. Searching the
     // document is the fallback for a keyboard caller, which has no element.
@@ -509,7 +531,7 @@ export function useInlineRichText(
      */
     const point = handedPoint.current;
     handedPoint.current = null;
-    void load().then(
+    void fetch().then(
       live => {
         /*
          * The author may have left before the chunk arrived. Attaching then
@@ -656,7 +678,7 @@ export function useInlineRichText(
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, load, cancel, commit, letGo, report]);
+  }, [editing, cancel, commit, letGo, report]);
 
   return { editing, begin, commit, cancel };
 }

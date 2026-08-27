@@ -261,3 +261,70 @@ describe("codeTokenClass", () => {
     }
   });
 });
+
+describe("richTextToPlainText around a block-like leaf", () => {
+  it("separates a node that carries its own text but is drawn as a block", () => {
+    /*
+     * `button-link` stores its label in `text`, so a walk that treats "has
+     * text" as "is inline" reads the label and runs it straight into whatever
+     * follows. Handed to a crawler as a page description, that is a sentence
+     * the author never wrote.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [{ type: "text", text: "Before" }],
+          },
+          { type: "button-link", text: "Buy now" },
+          {
+            type: "paragraph",
+            children: [{ type: "text", text: "After" }],
+          },
+        ])
+      )
+    ).toBe("Before Buy now After");
+  });
+
+  it("still joins text leaves split only by formatting", () => {
+    /*
+     * The control, and the property the case above must not buy at its
+     * expense. Lexical splits a run at every change of format, so `prefix`
+     * with a bold second half is two adjacent leaves — a boundary between them
+     * would read as `pre fix`.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "pre" },
+              { type: "text", text: "fix", format: 1 },
+            ],
+          },
+        ])
+      )
+    ).toBe("prefix");
+  });
+
+  it("still keeps an inline link inside its line", () => {
+    // The other half of the control: a link is a container AND inline, so it
+    // must not earn a boundary either.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "see " },
+              { type: "link", children: [{ type: "text", text: "here" }] },
+              { type: "text", text: " now" },
+            ],
+          },
+        ])
+      )
+    ).toBe("see here now");
+  });
+});

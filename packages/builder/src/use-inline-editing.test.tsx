@@ -1740,3 +1740,102 @@ describe("a passage that could not be opened at all", () => {
     expect(result.current.editingRich).toBeNull();
   });
 });
+
+describe("a re-render that is not an unmount", () => {
+  it("keeps a refused passage when the LOADER identity changes", async () => {
+    /*
+     * `useInlineRichText(editor, () => import("..."))` is the ordinary way to
+     * write this, and an inline closure has a new identity every render. If the
+     * handover effect depended on it, any unrelated re-render would rerun the
+     * cleanup — which releases a held session on the assumption that it is
+     * unmounting, and takes with it the words the refusal exists to keep.
+     */
+    const passage = (text: string) => ({
+      root: {
+        type: "root",
+        children: [{ type: "paragraph", children: [{ type: "text", text }] }],
+      },
+    });
+    const detach = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi
+          .fn()
+          .mockReturnValueOnce(passage("STORED"))
+          .mockReturnValue(passage("TYPED")),
+        detach,
+        hold: vi.fn(),
+      })
+    );
+    registerArticle();
+    paint();
+    const nodes = [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: { content: passage("STORED") },
+      } as BlockNode,
+    ];
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      // Refuses the write, so the session is deliberately kept.
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+
+    // A NEW loader identity on every render, which is what a consumer writing
+    // an inline closure produces.
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, (() => Promise.resolve({ attach })) as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    await act(async () => {
+      result.current.commit();
+    });
+    // Held, not released.
+    expect(detach).not.toHaveBeenCalled();
+
+    await act(async () => {
+      rerender();
+    });
+
+    // Still held. A rerender is not a reason to destroy an author's only copy.
+    expect(detach).not.toHaveBeenCalled();
+    expect(result.current.editingRich?.prop).toBe("content");
+  });
+
+  it("still gives the element back when the canvas actually unmounts", async () => {
+    // The control: a cleanup that released nothing would leave the editor
+    // attached to a detached tree, which is the case the forced release exists
+    // for and the one this must not break.
+    const detach = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => ({ root: { type: "root", children: [] } })),
+        detach,
+        hold: vi.fn(),
+      })
+    );
+    const load = vi.fn(() => Promise.resolve({ attach }));
+    registerArticle();
+    paint();
+    const { result, unmount } = renderHook(() =>
+      useInlineEditing(editorState(), load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(attach).toHaveBeenCalled();
+
+    unmount();
+
+    expect(detach).toHaveBeenCalled();
+  });
+});

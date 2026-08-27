@@ -151,13 +151,23 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  * nor undoes the attribute, inline styles and replaced children it writes, and
  * a consumer should not have to know that.
  *
- * `attach` answers `null` when it REFUSES a passage, and a caller must handle
- * that rather than treating it as a failure to report. Two shapes are refused,
- * both because the editor would otherwise hold less than the document does and
- * the next keystroke would write that back: a node type this registry does not
- * know, and a decorator node whose visible output comes from `decorate()` and
- * is mounted by a React plugin this raw editor does not use. Leaving the
- * passage as the page rendered it is the only outcome that cannot lose work.
+ * `attach` answers with a STATUS, and a caller must narrow it rather than
+ * treating a refusal as a failure to report. It refuses for two unrelated
+ * reasons and says which, because only one of them is anything a caller can
+ * act on:
+ *
+ * - `"unsupported"` — this passage cannot be represented here, and nothing
+ *   about it changes by waiting: a node type this registry does not know, or a
+ *   decorator node whose visible output comes from `decorate()` and is mounted
+ *   by a React plugin this raw editor does not use. Either way the editor would
+ *   hold less than the document does and the next keystroke would write that
+ *   back, so leaving the passage as the page rendered it is the only outcome
+ *   that cannot lose work.
+ * - `"held"` — the editor is busy protecting an edit whose words exist nowhere
+ *   else, because writing it back was refused. Nothing is wrong with the
+ *   passage you asked for; the surface holding on has to finish first. Worth
+ *   SAYING to whoever is looking at the screen, or their gesture appears to do
+ *   nothing at all.
  *
  * Its undo history is created at `attach` and given away at `detach`, so it
  * covers the open passage alone. A surface with its own history — the page
@@ -174,8 +184,13 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  * @example
  * ```ts
  * const editor = await loadInlineRichTextEditor();
- * const session = editor.attach(element, node.props.content);
- * if (session === null) return; // this passage is not editable here
+ * const attachment = editor.attach(element, node.props.content);
+ * if (attachment.status === "refused") {
+ *   // Only one of the two is worth telling anyone about.
+ *   if (attachment.reason === "held") notify("Finish the other edit first.");
+ *   return;
+ * }
+ * const { session } = attachment;
  * session.focus();
  * // ...the author types...
  * const next = session.read();
@@ -184,7 +199,9 @@ export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
  */
 export {
   loadInlineRichTextEditor,
+  type InlineRichTextAttachment,
   type InlineRichTextEditor,
+  type InlineRichTextRefusal,
   type InlineRichTextSession,
 } from "@nextlyhq/admin";
 

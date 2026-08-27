@@ -165,6 +165,13 @@ const BLOCK_BOUNDARY: unique symbol = Symbol("rich-text block boundary");
  * space is introduced only when leaving a block-level container or crossing a
  * line break — which is where the author put a boundary.
  *
+ * "Block-level" is decided by the node's TYPE, not by whether it has children.
+ * A node can carry its own `text` and still be drawn as a block — `button-link`
+ * stores its label that way — and reading the label without the boundary runs
+ * it into whatever follows: a passage of `Before`, a button reading `Buy now`,
+ * then `After` flattens to `Before Buy nowAfter`, which is what a crawler would
+ * then be handed as the page description.
+ *
  * ## Iterative
  *
  * The walk uses an explicit stack rather than recursion. Nesting depth here is
@@ -193,11 +200,15 @@ export function richTextToPlainText(value: RichTextValue): string {
 
     const leaf = leafText(item);
     if (leaf !== null) {
+      // A leaf that is not inline still ENDS a block, so it earns the same
+      // boundary a container would. Pushed rather than appended, so it lands
+      // after this node the way the container case does.
+      if (!isInline(item)) stack.push(BLOCK_BOUNDARY);
       parts.push(leaf);
       continue;
     }
 
-    if (!INLINE_CONTAINERS.has(item.type)) stack.push(BLOCK_BOUNDARY);
+    if (!isInline(item)) stack.push(BLOCK_BOUNDARY);
     if (Array.isArray(item.children)) pushChildren(stack, item.children);
   }
 
@@ -228,6 +239,19 @@ function pushChildren(
  * A line break contributes a space: it is where the author ended a line, and
  * plain text has no other way to say so.
  */
+/**
+ * Whether a node sits INSIDE a line rather than ending one.
+ *
+ * Text and line breaks are the two the walk meets constantly and neither ends a
+ * block: a run split by formatting must join up, and a break already emits its
+ * own space. Everything else is decided by type.
+ */
+function isInline(node: RichTextNode): boolean {
+  if (typeof node.text === "string" && node.type === "text") return true;
+  if (node.type === "linebreak") return true;
+  return INLINE_CONTAINERS.has(node.type);
+}
+
 function leafText(node: RichTextNode): string | null {
   if (typeof node.text === "string") return node.text;
   if (node.type === "linebreak") return " ";
