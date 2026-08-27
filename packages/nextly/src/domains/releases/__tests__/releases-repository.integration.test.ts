@@ -340,5 +340,135 @@ describe.each(getConfiguredTestDialects())(
       const found = await repo.findDueMembersFor([ref("e1")], new Date());
       expect(found.get(documentRefKey(ref("e1"))) ?? []).toEqual([]);
     });
+
+    describe("which documents a due release would REVEAL", () => {
+      it("names a document whose due release publishes it", async () => {
+        // The widening query. A published-only read filters `status` in SQL, so a
+        // draft row is excluded by the database before any per-document
+        // decoration runs — a post-filter cannot add back a row the query never
+        // returned. This is what lets the filter include it in the first place.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        const targets = await repo.findDuePublishTargets({
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          now: new Date(),
+        });
+        expect(targets).toEqual(["e1"]);
+      });
+
+      it("does NOT name one whose release is still in the future", async () => {
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Later" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, FUTURE, "UTC");
+
+        expect(
+          await repo.findDuePublishTargets({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).toEqual([]);
+      });
+
+      it("does NOT name one whose release was never scheduled", async () => {
+        // A release still being assembled has no instant. Treating an unscheduled
+        // member as due would publish content the moment it was added to a draft
+        // release, which is the opposite of what a release is for.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Still assembling" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+
+        expect(
+          await repo.findDuePublishTargets({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).toEqual([]);
+      });
+
+      it("does NOT name one whose LATER due release takes it down again", async () => {
+        // Publish on the 1st, unpublish on the 20th; from the 20th both are due
+        // and the later one wins. The winner is decided by the SAME pure rule the
+        // per-document decoration uses, so the filter cannot admit a row the
+        // decoration then hides — which would surface as a listing whose count
+        // disagrees with its contents.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const up = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: up.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(
+          up.id,
+          new Date("2020-01-01T00:00:00Z"),
+          "UTC"
+        );
+
+        const down = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: down.id,
+          ...ref("e1"),
+          action: "unpublish",
+        });
+        await repo.scheduleRelease(
+          down.id,
+          new Date("2020-06-01T00:00:00Z"),
+          "UTC"
+        );
+
+        expect(
+          await repo.findDuePublishTargets({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).toEqual([]);
+      });
+
+      it("scopes to the collection asked about", async () => {
+        // The control for the cases above: a query that returned everything would
+        // satisfy the positive case while widening every other collection's read.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        expect(
+          await repo.findDuePublishTargets({
+            scopeKind: "collection",
+            scopeSlug: "other_collection",
+            now: new Date(),
+          })
+        ).toEqual([]);
+      });
+    });
   }
 );

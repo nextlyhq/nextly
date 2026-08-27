@@ -22,6 +22,7 @@ import type { VersionsDbApi } from "../versions/db-api";
 
 import { releaseMemberKey } from "./release-member-key";
 import type { DueMember } from "./resolve-release-effect";
+import { resolveReleaseEffect } from "./resolve-release-effect";
 
 /**
  * The database surface this repository needs.
@@ -246,6 +247,82 @@ export class ReleasesRepository {
       grouped.set(key, list);
     }
     return grouped;
+  }
+
+  /**
+   * The documents in one scope that a due release would PUBLISH.
+   *
+   * ## Why this exists at all, given `findDueMembersFor`
+   *
+   * That one decorates documents a read is already holding, which works in one
+   * direction only. A read filters `status` in SQL, so a document stored as a
+   * draft is excluded by the DATABASE before any decoration runs — and a
+   * post-filter cannot add back a row the query never returned. Hiding a
+   * published document works; revealing an unpublished one needs the filter
+   * itself to know, which is what this answers.
+   *
+   * ## Why it resolves the effect rather than matching `action = "publish"`
+   *
+   * A document can belong to several releases — "publish on the 1st",
+   * "unpublish on the 20th" is the ordinary case — so from the 20th two members
+   * are due at once and the later must win. Matching the action column alone
+   * would name a document whose takedown has already come due, the read filter
+   * would admit its row, and the per-document decoration would then hide it
+   * again. That disagreement surfaces as a listing whose count does not match
+   * its contents.
+   *
+   * Running `resolveReleaseEffect` here means the filter and the decoration
+   * reach their answer through the SAME pure rule, so they cannot disagree.
+   */
+  async findDuePublishTargets(input: {
+    scopeKind: VersionScopeKind;
+    scopeSlug: string;
+    now: Date;
+  }): Promise<string[]> {
+    const members = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: input.scopeKind },
+          { column: "scopeSlug", op: "=", value: input.scopeSlug },
+        ],
+      },
+    });
+    if (members.length === 0) return [];
+
+    // The release each member belongs to decides whether it counts, and the
+    // member row does not carry that. A release still being assembled has no
+    // instant, so `loadScheduledReleases` returning nothing for it is what
+    // keeps an unscheduled member from reading as due.
+    const releases = await this.loadScheduledReleases(
+      members.map(m => m.releaseId)
+    );
+    if (releases.size === 0) return [];
+
+    const grouped = new Map<string, { entryId: string; due: DueMember[] }>();
+    for (const member of members) {
+      const release = releases.get(member.releaseId);
+      if (release === undefined || release.scheduledAt === null) continue;
+      const key = documentRefKey(member);
+      const bucket = grouped.get(key) ?? { entryId: member.entryId, due: [] };
+      bucket.due.push({
+        memberId: member.id,
+        releaseId: member.releaseId,
+        action: member.action,
+        scheduledAt: release.scheduledAt,
+        createdAt: member.createdAt,
+      });
+      grouped.set(key, bucket);
+    }
+
+    const targets = new Set<string>();
+    for (const { entryId, due } of grouped.values()) {
+      const decision = resolveReleaseEffect({ members: due, now: input.now });
+      if (decision.effect === "publish") targets.add(entryId);
+    }
+    // A document localized into several languages contributes one member per
+    // language, and the row it would reveal is the same row. De-duplicated so
+    // the caller's `IN` clause names each id once.
+    return [...targets];
   }
 
   /**
