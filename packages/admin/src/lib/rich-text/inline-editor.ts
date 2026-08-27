@@ -106,6 +106,27 @@ export interface InlineRichTextSession {
   hold(): void;
 }
 
+/** Why the editor would not take a passage. */
+export type InlineRichTextRefusal =
+  /**
+   * This passage cannot be represented here — a node type the registry does not
+   * know, a decorator, or a value that will not serialize. Nothing about it
+   * changes by waiting.
+   */
+  | "unsupported"
+  /**
+   * The editor is HELD by an attachment protecting words that exist nowhere
+   * else. A different value entirely, and the only thing that resolves it is
+   * finishing the edit that is holding on — which is why a caller has to be
+   * able to tell the two apart rather than seeing one absence.
+   */
+  | "held";
+
+/** What asking for the editor produced. */
+export type InlineRichTextAttachment =
+  | { readonly status: "attached"; readonly session: InlineRichTextSession }
+  | { readonly status: "refused"; readonly reason: InlineRichTextRefusal };
+
 /** The one operation the page builder needs; everything else hangs off it. */
 export interface InlineRichTextEditor {
   /**
@@ -114,17 +135,22 @@ export interface InlineRichTextEditor {
    * Supersedes any previous attachment: the element it held is released and
    * restored first, so an author moving between passages never leaves two live.
    *
-   * `null` when this passage must NOT be edited here — see the module for the
-   * two cases — and when the live attachment is HELD, because superseding one
-   * that is deliberately keeping an author's unwritten words would destroy
-   * exactly what holding it protects. Refusing leaves the passage as the page
-   * rendered it, which is the only outcome that cannot lose an author's work.
+   * Refused when this passage must NOT be edited here — see the module for the
+   * cases — and when the live attachment is HELD, because superseding one that
+   * is deliberately keeping an author's unwritten words would destroy exactly
+   * what holding it protects. Refusing leaves the passage as the page rendered
+   * it, which is the only outcome that cannot lose an author's work.
+   *
+   * The reason is STATED rather than left as an absence: a host can do nothing
+   * about a passage this editor cannot represent, and can do something about an
+   * editor that is busy — at minimum say so, since the author's gesture
+   * otherwise appears to do nothing at all.
    *
    * @param element - the element to edit inside
    * @param value - the stored passage, or anything unusable for an empty one
-   * @returns the caller's hold on the editor, or `null` when it refuses
+   * @returns the caller's hold on the editor, or why it was refused
    */
-  attach(element: HTMLElement, value: unknown): InlineRichTextSession | null;
+  attach(element: HTMLElement, value: unknown): InlineRichTextAttachment;
 }
 
 /**
@@ -447,7 +473,7 @@ async function build(): Promise<InlineRichTextEditor> {
        * the author's words exist only inside this editor — so moving it, for
        * any reason, is the one thing that loses them.
        */
-      if (held) return null;
+      if (held) return { status: "refused", reason: "held" };
       /*
        * Parsed BEFORE anything is touched, so a passage this editor cannot
        * represent leaves the element exactly as the page rendered it.
@@ -466,10 +492,11 @@ async function build(): Promise<InlineRichTextEditor> {
        *   an absent one — see {@link loadable}.
        */
       const json = loadable(value);
-      if (json === null) return null;
+      if (json === null) return { status: "refused", reason: "unsupported" };
       reportedError = false;
       const parsed = editor.parseEditorState(json);
-      if (reportedError || holdsDecorator(parsed)) return null;
+      if (reportedError || holdsDecorator(parsed))
+        return { status: "refused", reason: "unsupported" };
 
       /*
        * Released only once the new passage is known to be acceptable.
@@ -544,7 +571,7 @@ async function build(): Promise<InlineRichTextEditor> {
       };
 
       const owns = (): boolean => owner === token;
-      return {
+      const session: InlineRichTextSession = {
         focus(at) {
           if (!owns()) return;
           // Placed BEFORE focusing: `focus()` keeps a selection that already
@@ -566,6 +593,7 @@ async function build(): Promise<InlineRichTextEditor> {
           if (owns()) held = true;
         },
       };
+      return { status: "attached", session };
     },
   };
 }

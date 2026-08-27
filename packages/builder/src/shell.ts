@@ -272,17 +272,17 @@ export type { UseInlineEditingResult } from "./use-inline-editing";
  */
 export {
   documentAfter,
-  INLINE_COMMIT_DISCARDED,
-  INLINE_COMMIT_UNCHANGED,
-} from "./inline-commit";
+  INLINE_EDIT_DISCARDED,
+  INLINE_EDIT_UNCHANGED,
+} from "./inline-edit-outcome";
 export type {
-  InlineCommit,
-  InlineCommitDiscarded,
-  InlineCommitRefusal,
-  InlineCommitRefused,
-  InlineCommitUnchanged,
-  InlineCommitWritten,
-} from "./inline-commit";
+  InlineEditOutcome,
+  InlineEditDiscarded,
+  InlineEditRefusal,
+  InlineEditRefused,
+  InlineEditUnchanged,
+  InlineEditWritten,
+} from "./inline-edit-outcome";
 export { useInlineRichText } from "./use-inline-rich-text";
 export type {
   InlineRichTextEditing,

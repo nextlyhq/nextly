@@ -39,10 +39,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
 import {
-  INLINE_COMMIT_DISCARDED,
-  INLINE_COMMIT_UNCHANGED,
-  type InlineCommit,
-} from "./inline-commit";
+  INLINE_EDIT_DISCARDED,
+  INLINE_EDIT_UNAVAILABLE,
+  INLINE_EDIT_UNCHANGED,
+  type InlineEditOutcome,
+} from "./inline-edit-outcome";
 import {
   richInlineTargets,
   richInlineTextOp,
@@ -163,7 +164,7 @@ export interface UseInlineRichTextResult {
    * REFUSED commit leaves the passage open with the author's words in it, so
    * closing or opening anything else on top of that destroys them.
    */
-  commit: () => InlineCommit;
+  commit: () => InlineEditOutcome;
   /** Finish, discarding it. */
   cancel: () => void;
 }
@@ -177,10 +178,15 @@ interface EditorSession {
   hold(): void;
 }
 
+/** What asking the facade for the editor produced, as this module reads it. */
+type Attachment =
+  | { readonly status: "attached"; readonly session: EditorSession }
+  | { readonly status: "refused"; readonly reason: "unsupported" | "held" };
+
 /** The facade's editor, as this module uses it. */
 interface LoadedEditor {
-  /** `null` when the editor refuses this passage — see the facade for when. */
-  attach(element: HTMLElement, value: unknown): EditorSession | null;
+  /** Refused for a passage this editor cannot take, or while it is held. */
+  attach(element: HTMLElement, value: unknown): Attachment;
 }
 
 /**
@@ -198,7 +204,7 @@ interface LoadedEditor {
  * it may close, which document to save — and this for anything it says to the
  * author; doing both from the return value reports the same edit twice.
  */
-export type InlineRichTextFinished = (outcome: InlineCommit) => void;
+export type InlineRichTextFinished = (outcome: InlineEditOutcome) => void;
 
 /**
  * How the editor is fetched.
@@ -305,18 +311,21 @@ export function useInlineRichText(
    * the outcome was reported at the two places the host itself called, and the
    * ways an edit actually ends most often are not those.
    */
-  const report = useCallback((outcome: InlineCommit): InlineCommit => {
-    finishedRef.current?.(outcome);
-    return outcome;
-  }, []);
+  const report = useCallback(
+    (outcome: InlineEditOutcome): InlineEditOutcome => {
+      finishedRef.current?.(outcome);
+      return outcome;
+    },
+    []
+  );
 
-  const commit = useCallback((): InlineCommit => {
+  const commit = useCallback((): InlineEditOutcome => {
     const live = mounted.current;
     if (live === null) {
       // No session, but possibly a pending one: `editing` is set from the
       // moment the passage is requested and the editor arrives later.
       letGo();
-      return report(INLINE_COMMIT_UNCHANGED);
+      return report(INLINE_EDIT_UNCHANGED);
     }
     /*
      * Let go only once the write is SETTLED, never before.
@@ -352,7 +361,7 @@ export function useInlineRichText(
        */
       if (!typed) {
         letGo();
-        return report(INLINE_COMMIT_UNCHANGED);
+        return report(INLINE_EDIT_UNCHANGED);
       }
       /*
        * Held at the SHARED editor as well as here. This hook's own `begin`
@@ -385,7 +394,7 @@ export function useInlineRichText(
        * the comparison that says it is the same one the op made.
        */
       letGo();
-      return report(typed ? INLINE_COMMIT_DISCARDED : INLINE_COMMIT_UNCHANGED);
+      return report(typed ? INLINE_EDIT_DISCARDED : INLINE_EDIT_UNCHANGED);
     }
     const written = editorRef.current.apply(op);
     if (written === null) {
@@ -533,21 +542,25 @@ export function useInlineRichText(
           setEditing(null);
           return;
         }
-        const session = live.attach(element, target.value);
-        if (session === null) {
+        const attachment = live.attach(element, target.value);
+        if (attachment.status === "refused") {
           /*
-           * The editor refused. Either this passage cannot be represented — it
-           * holds a node this editor does not know, and loading it would hand
-           * back less than the document has — or the editor is being HELD by
-           * an edit elsewhere whose words exist nowhere else.
+           * Dropping this edit is right either way: it leaves the passage as the
+           * page rendered it, which is the only outcome that cannot lose words,
+           * here or in whatever is holding on.
            *
-           * Dropping this edit is right in both cases: it leaves the passage as
-           * the page rendered it, which is the only outcome that cannot lose
-           * words, here or in whatever is holding on.
+           * The two reasons differ in what a host can say about it. A passage
+           * this editor cannot represent is nothing the author did and nothing
+           * they can act on, so it passes in silence. An editor busy protecting
+           * an edit elsewhere is worth saying: otherwise their gesture appears
+           * to do nothing, which is the same silent refusal this module already
+           * refuses to ship on the way OUT of an edit.
            */
           setEditing(null);
+          if (attachment.reason === "held") report(INLINE_EDIT_UNAVAILABLE);
           return;
         }
+        const session = attachment.session;
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
         // Measured against the passage now on screen, which is the one being
         // attached — see where the point was taken.
@@ -643,7 +656,7 @@ export function useInlineRichText(
       element.removeEventListener("click", swallow);
       element.removeEventListener("dblclick", swallow);
     };
-  }, [editing, load, cancel, commit, letGo]);
+  }, [editing, load, cancel, commit, letGo, report]);
 
   return { editing, begin, commit, cancel };
 }

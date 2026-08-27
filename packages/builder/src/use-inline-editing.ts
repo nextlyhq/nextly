@@ -27,7 +27,10 @@ import { getBlock, findNode } from "@nextlyhq/blocks-engine";
 import { useCallback } from "react";
 
 import type { EditorState } from "./editor-state";
-import { INLINE_COMMIT_UNCHANGED, type InlineCommit } from "./inline-commit";
+import {
+  INLINE_EDIT_UNCHANGED,
+  type InlineEditOutcome,
+} from "./inline-edit-outcome";
 import { inlinePropKind, type InlinePropKind } from "./inline-prop-kind";
 import { firstInlineProp } from "./inline-target";
 import {
@@ -59,7 +62,7 @@ export interface UseInlineEditingResult {
    * written yet is invisible in it, and a REFUSED commit is still holding the
    * author's words — so closing over it is what loses them.
    */
-  commit: () => InlineCommit;
+  commit: () => InlineEditOutcome;
   /** Finish whichever edit is open, discarding it. */
   cancel: () => void;
   /**
@@ -178,7 +181,7 @@ export function useInlineEditing(
     [editor, kindOf, openOn]
   );
 
-  const commit = useCallback((): InlineCommit => {
+  const commit = useCallback((): InlineEditOutcome => {
     // Both are asked, and at most one is open. Asking only the one believed to
     // be open would leave the other's edit hanging whenever that belief was
     // wrong, and each reports nothing when it holds nothing.
@@ -191,7 +194,7 @@ export function useInlineEditing(
     // own rather than something this can translate.
     if (passage.status !== "unchanged") return passage;
     return written === null
-      ? INLINE_COMMIT_UNCHANGED
+      ? INLINE_EDIT_UNCHANGED
       : { status: "written", document: written };
   }, [plain, rich]);
 

@@ -33,9 +33,10 @@ function attached(
   element: HTMLElement,
   value: unknown
 ): InlineRichTextSession {
-  const session = editor.attach(element, value);
-  if (session === null) throw new Error("the editor refused this passage");
-  return session;
+  const attachment = editor.attach(element, value);
+  if (attachment.status === "refused")
+    throw new Error(`the editor refused this passage: ${attachment.reason}`);
+  return attachment.session;
 }
 
 function host(): HTMLElement {
@@ -173,7 +174,10 @@ describe("a value the editor cannot load", () => {
     };
     cyclic.root.children.push(cyclic);
 
-    expect(editor.attach(element, cyclic)).toBeNull();
+    expect(editor.attach(element, cyclic)).toEqual({
+      status: "refused",
+      reason: "unsupported",
+    });
     expect(element.innerHTML).toBe(before);
     expect(element.hasAttribute("contenteditable")).toBe(false);
   });
@@ -187,10 +191,10 @@ describe("a value the editor cannot load", () => {
      */
     const editor = await loadInlineRichTextEditor();
 
-    expect(editor.attach(host(), undefined)).not.toBeNull();
+    expect(editor.attach(host(), undefined).status).toBe("attached");
     expect(
-      editor.attach(host(), { root: { type: "root", children: [] } })
-    ).not.toBeNull();
+      editor.attach(host(), { root: { type: "root", children: [] } }).status
+    ).toBe("attached");
   });
 });
 
@@ -227,7 +231,10 @@ describe("a passage this editor cannot represent", () => {
       },
     };
 
-    expect(editor.attach(element, unknown)).toBeNull();
+    expect(editor.attach(element, unknown)).toEqual({
+      status: "refused",
+      reason: "unsupported",
+    });
     // Untouched, not merely un-edited: a refusal that still marked the element
     // would leave it editable with nothing behind it.
     expect(element.innerHTML).toBe(before);
@@ -239,7 +246,7 @@ describe("a passage this editor cannot represent", () => {
     // would pass the case above while making the feature useless.
     const editor = await loadInlineRichTextEditor();
 
-    expect(editor.attach(host(), passage("Hello"))).not.toBeNull();
+    expect(editor.attach(host(), passage("Hello")).status).toBe("attached");
   });
 });
 
@@ -305,7 +312,10 @@ describe("an attachment that is holding an author's words", () => {
 
     session.hold();
 
-    expect(editor.attach(host(), passage("Somewhere else"))).toBeNull();
+    expect(editor.attach(host(), passage("Somewhere else"))).toEqual({
+      status: "refused",
+      reason: "held",
+    });
     // Still live, which is the point of refusing: a superseded session reads
     // nothing, and that is exactly what holding it prevents.
     expect(session.read()).not.toBeUndefined();
@@ -328,7 +338,9 @@ describe("an attachment that is holding an author's words", () => {
     session.hold();
     session.detach();
 
-    expect(editor.attach(host(), passage("Somewhere else"))).not.toBeNull();
+    expect(editor.attach(host(), passage("Somewhere else")).status).toBe(
+      "attached"
+    );
   });
 
   it("ignores a hold from a session that has already been superseded", async () => {
@@ -340,7 +352,7 @@ describe("an attachment that is holding an author's words", () => {
 
     stale.hold();
 
-    expect(editor.attach(host(), passage("Third"))).not.toBeNull();
+    expect(editor.attach(host(), passage("Third")).status).toBe("attached");
   });
 });
 

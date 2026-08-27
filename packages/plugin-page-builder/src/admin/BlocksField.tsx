@@ -74,7 +74,7 @@ import {
   useEditorState,
   useInlineEditing,
   documentAfter,
-  type InlineCommit,
+  type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -634,7 +634,9 @@ function hasUnsavedWork(
  * elsewhere cannot be reconciled from here, and the useful thing to say is that
  * their version is still on screen for as long as they leave it there.
  */
-function inlineEditProblem(outcome: InlineCommit): string | null {
+function inlineEditProblem(outcome: InlineEditOutcome): string | null {
+  if (outcome.status === "unavailable")
+    return "Another block is still holding text that has not been saved. Finish that one first.";
   if (outcome.status === "discarded")
     return "That block changed while you were editing it, so your text was not saved.";
   if (outcome.status !== "refused") return null;
@@ -661,7 +663,7 @@ function inlineEditProblem(outcome: InlineCommit): string | null {
  * holding the words.
  */
 function finishInlineEdit(
-  inline: { commit: () => InlineCommit },
+  inline: { commit: () => InlineEditOutcome },
   held: BlockDocument
 ): { document: BlockDocument; mayClose: boolean } {
   const outcome = inline.commit();
@@ -735,7 +737,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * entirely by the first of those, so reporting from the return value alone
    * said nothing on the common path.
    */
-  const announce = useCallback((outcome: InlineCommit) => {
+  const announce = useCallback((outcome: InlineEditOutcome) => {
     const problem = inlineEditProblem(outcome);
     if (problem !== null) toast.error(problem);
   }, []);

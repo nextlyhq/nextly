@@ -34,6 +34,8 @@ The stored shape, the format bits and the walk that draws them already existed a
 
 The editor is loaded on first edit rather than on mount, because its node classes carry a 630KB chunk an author who never edits a passage should never fetch. It is reached through `@nextlyhq/plugin-sdk/admin`, which now hands over the operations to edit one passage rather than the editor itself: a consumer that built its own would have to import Lexical, and a second copy of Lexical makes its node classes unrecognisable, with content saving and reading back as plain text.
 
+An author who double-clicks a passage while another one is holding unsaved text is now told why nothing opened, rather than finding the gesture silently do nothing.
+
 Two canvases open at once no longer take an unsaved passage from one another. There is one editor behind every surface, so a passage kept open because its words could not be written is now held at that editor rather than only by the surface holding it, and anything asking for the editor is refused until it is released.
 
 An element is also given back with the `autocapitalize` it arrived with, which the editor sets on focus and clears on release.

@@ -160,6 +160,8 @@ export {
   loadInlineRichTextEditor,
   type InlineRichTextEditor,
   type InlineRichTextSession,
+  type InlineRichTextAttachment,
+  type InlineRichTextRefusal,
 } from "./lib/rich-text/inline-editor";
 /**
  * A field telling the form it holds work the form's values do not contain.

@@ -109,6 +109,17 @@ function mount(load = pendingLoader()) {
   return { ...result, load };
 }
 
+/**
+ * A fake editor's answer to `attach`.
+ *
+ * The facade states whether it took the passage and why not, rather than
+ * answering with a session or nothing — so a fake that returned the session
+ * bare would be a different contract from the one under test.
+ */
+function attachment<T>(session: T): { status: "attached"; session: T } {
+  return { status: "attached", session };
+}
+
 /** Double-click whatever carries this prop. */
 function doubleClickOn(prop: string): { target: EventTarget | null } {
   const element = document.querySelector(`[data-nx-prop="${prop}"]`);
@@ -327,7 +338,9 @@ describe("the canvas going away mid-edit", () => {
       .mockReturnValueOnce({ root: { type: "root", children: [] } })
       .mockReturnValue(typed);
     const session = { focus: vi.fn(), read, detach, hold: vi.fn() };
-    const load = vi.fn(() => Promise.resolve({ attach: vi.fn(() => session) }));
+    const load = vi.fn(() =>
+      Promise.resolve({ attach: vi.fn(() => attachment(session)) })
+    );
 
     registerArticle();
     paint();
@@ -369,12 +382,14 @@ describe("which element a pointer gesture edits", () => {
     // Typed parameters, so the recorded call carries the element it was given:
     // an untyped `vi.fn(() => …)` records an empty argument tuple and the
     // assertion below could not reach it.
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi.fn(() => undefined),
-      detach: vi.fn(),
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => undefined),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
     const load = vi.fn(() => Promise.resolve({ attach }));
 
     registerArticle();
@@ -413,12 +428,14 @@ describe("walking away while the editor is still loading", () => {
      * block.
      */
     let land: ((editor: unknown) => void) | undefined;
-    const attach = vi.fn(() => ({
-      focus: vi.fn(),
-      read: vi.fn(() => undefined),
-      detach: vi.fn(),
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn(() =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => undefined),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
     const load = vi.fn(
       () =>
         new Promise(resolve => {
@@ -532,12 +549,14 @@ describe("a second passage begun before the first was released", () => {
      * name DIFFERENT passages, because otherwise the final state looks the same
      * whether the second one opened or the first simply re-ran.
      */
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi.fn(() => undefined),
-      detach: vi.fn(),
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => undefined),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
     const load = vi.fn(() => Promise.resolve({ attach }));
 
     registerTwoPassages();
@@ -586,22 +605,27 @@ describe("what a host gets back from finishing an edit", () => {
      * So the finish has to hand back what it wrote.
      */
     const written = { formatVersion: 1, kind: "page", nodes: [] };
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi
-        .fn()
-        .mockReturnValueOnce({ root: { type: "root", children: [] } })
-        .mockReturnValue({
-          root: {
-            type: "root",
-            children: [
-              { type: "paragraph", children: [{ type: "text", text: "NEW" }] },
-            ],
-          },
-        }),
-      detach: vi.fn(),
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi
+          .fn()
+          .mockReturnValueOnce({ root: { type: "root", children: [] } })
+          .mockReturnValue({
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [{ type: "text", text: "NEW" }],
+                },
+              ],
+            },
+          }),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
     const load = vi.fn(() => Promise.resolve({ attach }));
 
     registerArticle();
@@ -649,29 +673,31 @@ describe("a write the document refuses", () => {
      * their text on screen; Escape still discards it deliberately.
      */
     const detach = vi.fn();
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      // The passage AS OPENED first, then as the author left it. A fixture
-      // answering one value for both says the author typed nothing, and an
-      // untouched passage is released rather than held — so it would assert
-      // the opposite rule from the one this case is about.
-      read: vi
-        .fn()
-        .mockReturnValueOnce({ root: { type: "root", children: [] } })
-        .mockReturnValue({
-          root: {
-            type: "root",
-            children: [
-              {
-                type: "paragraph",
-                children: [{ type: "text", text: "TYPED" }],
-              },
-            ],
-          },
-        }),
-      detach,
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        // The passage AS OPENED first, then as the author left it. A fixture
+        // answering one value for both says the author typed nothing, and an
+        // untouched passage is released rather than held — so it would assert
+        // the opposite rule from the one this case is about.
+        read: vi
+          .fn()
+          .mockReturnValueOnce({ root: { type: "root", children: [] } })
+          .mockReturnValue({
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [{ type: "text", text: "TYPED" }],
+                },
+              ],
+            },
+          }),
+        detach,
+        hold: vi.fn(),
+      })
+    );
     const load = vi.fn(() => Promise.resolve({ attach }));
 
     registerArticle();
@@ -752,29 +778,37 @@ describe("a write the op layer refuses", () => {
   /** An editor whose first reading is the stored passage and whose next is typing. */
   function typingEditor(stored: string, typed: string) {
     const detach = vi.fn();
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi
-        .fn()
-        .mockReturnValueOnce({
-          root: {
-            type: "root",
-            children: [
-              { type: "paragraph", children: [{ type: "text", text: stored }] },
-            ],
-          },
-        })
-        .mockReturnValue({
-          root: {
-            type: "root",
-            children: [
-              { type: "paragraph", children: [{ type: "text", text: typed }] },
-            ],
-          },
-        }),
-      detach,
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi
+          .fn()
+          .mockReturnValueOnce({
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [{ type: "text", text: stored }],
+                },
+              ],
+            },
+          })
+          .mockReturnValue({
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [{ type: "text", text: typed }],
+                },
+              ],
+            },
+          }),
+        detach,
+        hold: vi.fn(),
+      })
+    );
     return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
   }
 
@@ -846,9 +880,11 @@ describe("a write the op layer refuses", () => {
     await act(async () => {
       result.current.onDoubleClick(doubleClickOn("content"));
     });
-    const session = attach.mock.results[0]?.value as
-      | { hold: { mock: { calls: unknown[] } } }
-      | undefined;
+    const session = (
+      attach.mock.results[0]?.value as
+        | { session?: { hold: { mock: { calls: unknown[] } } } }
+        | undefined
+    )?.session;
     expect(session?.hold.mock.calls).toHaveLength(0);
 
     await act(async () => {
@@ -898,9 +934,11 @@ describe("a write the op layer refuses", () => {
       result.current.commit();
     });
 
-    const session = attach.mock.results[0]?.value as
-      | { hold: { mock: { calls: unknown[] } } }
-      | undefined;
+    const session = (
+      attach.mock.results[0]?.value as
+        | { session?: { hold: { mock: { calls: unknown[] } } } }
+        | undefined
+    )?.session;
     expect(session?.hold.mock.calls).toHaveLength(1);
   });
 
@@ -929,9 +967,11 @@ describe("a write the op layer refuses", () => {
       result.current.commit();
     });
 
-    const session = attach.mock.results[0]?.value as
-      | { hold: { mock: { calls: unknown[] } } }
-      | undefined;
+    const session = (
+      attach.mock.results[0]?.value as
+        | { session?: { hold: { mock: { calls: unknown[] } } } }
+        | undefined
+    )?.session;
     expect(session?.hold.mock.calls).toHaveLength(0);
   });
 
@@ -1241,15 +1281,17 @@ describe("the passage surface used on its own", () => {
         children: [{ type: "paragraph", children: [{ type: "text", text }] }],
       },
     });
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi
-        .fn()
-        .mockReturnValueOnce(passage(stored))
-        .mockReturnValue(passage(typed)),
-      detach,
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi
+          .fn()
+          .mockReturnValueOnce(passage(stored))
+          .mockReturnValue(passage(typed)),
+        detach,
+        hold: vi.fn(),
+      })
+    );
     return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
   }
 
@@ -1365,15 +1407,17 @@ describe("how a host hears about an edit it did not finish itself", () => {
       },
     });
     const detach = vi.fn();
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi
-        .fn()
-        .mockReturnValueOnce(passage(stored))
-        .mockReturnValue(passage(typed)),
-      detach,
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi
+          .fn()
+          .mockReturnValueOnce(passage(stored))
+          .mockReturnValue(passage(typed)),
+        detach,
+        hold: vi.fn(),
+      })
+    );
     return { attach, detach, load: vi.fn(() => Promise.resolve({ attach })) };
   }
 
@@ -1517,12 +1561,14 @@ describe("the passage the editor is handed when it finally arrives", () => {
      * `moved-on` — a write lost to a conflict that had already resolved before
      * the editor existed.
      */
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
-      focus: vi.fn(),
-      read: vi.fn(() => ({ root: { type: "root", children: [] } })),
-      detach: vi.fn(),
-      hold: vi.fn(),
-    }));
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => ({ root: { type: "root", children: [] } })),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
     let arrive: (() => void) | undefined;
     const load = vi.fn(
       () =>
@@ -1597,5 +1643,100 @@ describe("the passage the editor is handed when it finally arrives", () => {
     expect(JSON.stringify(attach.mock.calls[0]?.[1])).not.toContain(
       "AS OPENED"
     );
+  });
+});
+
+describe("a passage that could not be opened at all", () => {
+  /** An editor that refuses everything for the stated reason. */
+  function refusingEditor(reason: "unsupported" | "held") {
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      status: "refused" as const,
+      reason,
+    }));
+    return { attach, load: vi.fn(() => Promise.resolve({ attach })) };
+  }
+
+  function article() {
+    return [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: {
+          content: {
+            root: {
+              type: "root",
+              children: [
+                {
+                  type: "paragraph",
+                  children: [{ type: "text", text: "STORED" }],
+                },
+              ],
+            },
+          },
+        },
+      } as BlockNode,
+    ];
+  }
+
+  function stateFor() {
+    return {
+      document: {
+        formatVersion: 1,
+        kind: "page",
+        nodes: article(),
+      } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+  }
+
+  it("tells the host when the editor is BUSY holding another edit", async () => {
+    /*
+     * Otherwise the author's double-click does nothing at all, with no cause
+     * they can see — the same silent refusal this module already declines to
+     * ship on the way out of an edit, arriving on the way in.
+     */
+    const finished = vi.fn();
+    const { load } = refusingEditor("held");
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineEditing(stateFor(), load as never, finished)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    expect(finished).toHaveBeenCalledWith({ status: "unavailable" });
+    // And nothing is left marked as being edited.
+    expect(result.current.editingRich).toBeNull();
+  });
+
+  it("says nothing when the passage simply cannot be represented", async () => {
+    /*
+     * The control, and a deliberate difference rather than an oversight: a node
+     * this editor cannot hold is nothing the author did and nothing they can
+     * act on, so announcing it would be noise on a page that renders correctly.
+     */
+    const finished = vi.fn();
+    const { load } = refusingEditor("unsupported");
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineEditing(stateFor(), load as never, finished)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    expect(
+      finished.mock.calls.filter(
+        ([outcome]) => (outcome as { status: string }).status === "unavailable"
+      )
+    ).toEqual([]);
+    expect(result.current.editingRich).toBeNull();
   });
 });

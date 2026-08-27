@@ -15,17 +15,17 @@
  * the answer directly is the assertion; producing a genuine refusal would need
  * a real editor, a real document race, and would still be observed here.
  *
- * @module admin/BlocksField.inline-commit.test
+ * @module admin/BlocksField.inline-outcome.test
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm, useWatch, type Control } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { InlineCommit } from "@nextlyhq/builder/shell";
+import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
 
 /** What the inline surface answers when this test's editor is finished. */
-let outcome: InlineCommit = { status: "unchanged" };
+let outcome: InlineEditOutcome = { status: "unchanged" };
 
 /** Errors raised for the author. */
 const errors: string[] = [];
@@ -125,7 +125,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     useInlineEditing: (
       _editor: unknown,
       _load: unknown,
-      onFinished?: (finished: InlineCommit) => void
+      onFinished?: (finished: InlineEditOutcome) => void
     ) => ({
       editing: null,
       editingRich: null,
@@ -252,6 +252,21 @@ describe("leaving the editor with an inline edit that could not be written", () 
     expect(editorIsOpen()).toBe(false);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("not saved");
+  });
+
+  it("says which passage is blocking when the editor could not be opened", () => {
+    // The author double-clicked and nothing happened. Without a message that is
+    // the editor appearing broken, on the one path where it is working exactly
+    // as intended — protecting words it refused to overwrite.
+    outcome = { status: "unavailable" };
+
+    openEditor();
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("has not been saved");
+    // Nothing is being held HERE, so leaving is not blocked.
+    expect(editorIsOpen()).toBe(false);
   });
 
   it("closes silently when the edit finished normally", () => {
