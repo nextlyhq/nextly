@@ -110,7 +110,26 @@ describe("ValidationRulesEditor — what it reports", () => {
     expect(reported).not.toHaveProperty("errorMessage");
   });
 
-  it("says the message describes the pattern only when one is offered", () => {
+  it("names the Pattern when the caller says its runtime scopes the message there", () => {
+    // The opt-in half. Without this the default is the only path exercised,
+    // and a component that ignored the prop entirely would pass the test below
+    // while silently giving every surface the general wording.
+    render(
+      <ValidationRulesEditor
+        allowed={["pattern", "message"]}
+        messageDescribes="pattern"
+        value={{}}
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/fails the Pattern above/i)).toBeInTheDocument();
+  });
+
+  it("defaults to the general wording, even beside a pattern", () => {
+    // A caller that has not thought about scope gets the wording that is true
+    // either way. The form runtime hands the same string to required, length
+    // and format failures, so defaulting to the pattern wording would put copy
+    // about a regex on failures it does not describe.
     render(
       <ValidationRulesEditor
         allowed={["pattern", "message"]}
@@ -118,7 +137,10 @@ describe("ValidationRulesEditor — what it reports", () => {
         onChange={vi.fn()}
       />
     );
-    expect(screen.getByText(/fails the Pattern above/i)).toBeInTheDocument();
+    expect(screen.queryByText(/the Pattern above/i)).not.toBeInTheDocument();
+    // The control: the help text is present and general, so the assertion
+    // above is about what it SAYS rather than about it having gone missing.
+    expect(screen.getByText(/fails validation/i)).toBeInTheDocument();
   });
 });
 

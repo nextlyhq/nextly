@@ -179,14 +179,25 @@ async function reconcileOne(
 ): Promise<ClassUsageSubjectOutcome> {
   try {
     const document = await args.read(subject);
-    // An absent document is left ALONE rather than reconciled against nothing.
-    // Reconciling would delete the subject's rows, and absence here does not
-    // mean the document was deleted: a read can answer null for a locale nobody
-    // has translated or a draft that was never started, and for a document
-    // whose read failed in a way the reader chose to report as absence. The
-    // sweep in the rebuild is what removes rows for documents that are really
-    // gone, because it can tell those apart and this cannot.
-    if (document === null || document === undefined) {
+    // An absent document leaves this subject's rows ALONE.
+    //
+    // Absence cannot be made definite through any read available here. A list
+    // read applies `beforeOperation` and `beforeRead` regardless of
+    // `overrideAccess` — they settle the predicate before any seam touches it
+    // — so a tenant scope or a soft-delete filter withholds the row and the
+    // page comes back empty. Nothing distinguishes that from a document that
+    // is genuinely gone.
+    //
+    // The asymmetry decides it. Keeping a row that should have gone OVERCOUNTS
+    // a class: the UI warns, a deletion is refused, and the next rebuild
+    // corrects it. Deleting a row that should have stayed UNDERCOUNTS: the
+    // class reads as unused, the safe-delete check permits it, and the pages
+    // that render it lose it. One is a recoverable annoyance; the other is the
+    // data loss this index exists to prevent.
+    //
+    // Rows for a variant that has genuinely gone are removed by the rebuild's
+    // sweep, which walks the documents and can tell those apart.
+    if (document === undefined || document === null) {
       return {
         subject,
         inserted: 0,
