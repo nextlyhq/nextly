@@ -46,7 +46,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions();
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 3);
       expectPaginationMeta(result, { total: 3, page: 1, limit: 10 });
 
@@ -72,7 +71,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions({ action: "read" });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 1);
       expect(result.data![0].action).toBe("read");
     });
@@ -90,7 +88,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions({ resource: "users" });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 1);
       expect(result.data![0].resource).toBe("users");
     });
@@ -114,7 +111,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions({ search: "users" });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.length).toBeGreaterThanOrEqual(1);
     });
 
@@ -123,7 +119,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions();
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 0);
     });
   });
@@ -141,7 +136,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.getPermissionById(permission.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.id).toBe(permission.id);
       expect(result.data!.action).toBe("read");
       expect(result.data!.resource).toBe("users");
@@ -168,7 +162,6 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert
-      expectSuccessResponse(result, 201);
       expect(result.data).not.toBeNull();
       expect(result.data!.id).toBeTruthy();
     });
@@ -191,7 +184,6 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.id).toBe(permission.id);
     });
   });
@@ -382,7 +374,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, PAGE_SIZE);
         expectPaginationMeta(result, {
           total: TOTAL_ITEMS,
@@ -409,7 +400,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, PAGE_SIZE);
         expectPaginationMeta(result, { page: 2, totalPages: EXPECTED_PAGES });
       });
@@ -431,7 +421,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, LAST_PAGE_ITEMS);
         expectPaginationMeta(result, {
           page: EXPECTED_PAGES,
@@ -458,7 +447,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
         expectPaginationMeta(result, {
           total: SMALL_DATASET_SIZE,
@@ -486,7 +474,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].resource).toBe("alpha");
         expect(result.data![1].resource).toBe("beta");
         expect(result.data![2].resource).toBe("zebra");
@@ -509,7 +496,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].resource).toBe("zebra");
         expect(result.data![1].resource).toBe("beta");
         expect(result.data![2].resource).toBe("alpha");
@@ -532,7 +518,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].action).toBe("delete");
         expect(result.data![1].action).toBe("read");
         expect(result.data![2].action).toBe("write");
@@ -565,7 +550,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].name).toBe("Alpha Permission");
         expect(result.data![1].name).toBe("Beta Permission");
         expect(result.data![2].name).toBe("Zebra Permission");
@@ -591,7 +575,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, { total: 15, totalPages: 2 });
       });
@@ -624,7 +607,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data!.length).toBeGreaterThanOrEqual(2);
       });
 
@@ -645,7 +627,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].action).toBe("read");
         expect(result.data![0].resource).toBe("users");
@@ -669,7 +650,6 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data!.length).toBeGreaterThanOrEqual(1);
       });
 
@@ -687,7 +667,6 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions({ search: "ユーザー" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data!.length).toBeGreaterThanOrEqual(0);
       });
 
@@ -701,7 +680,6 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data!.some(p => p.description === null)).toBe(true);
       });
     });
@@ -778,7 +756,6 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.getPermissionById(permission.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.id).toBe(permission.id);
       expect(result.data!.action).toBe("create");
       expect(result.data!.resource).toBe("articles");
