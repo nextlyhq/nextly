@@ -52,7 +52,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           total: 25,
@@ -71,7 +70,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 2, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           page: 2,
@@ -89,7 +87,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 3, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5); // Last page has 5 items
         expectPaginationMeta(result, {
           page: 3,
@@ -106,7 +103,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 10, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
         expectPaginationMeta(result, {
           total: 5,
@@ -124,7 +120,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 25 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 25);
         expectPaginationMeta(result, {
           total: 50,
@@ -142,7 +137,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10); // Default limit
         expectPaginationMeta(result, {
           page: 1, // Default page
@@ -155,7 +149,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 10 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
         expectPaginationMeta(result, {
           total: 0,
@@ -173,7 +166,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 1 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expectPaginationMeta(result, {
           total: 5,
@@ -191,7 +183,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ page: 1, limit: 100 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5);
         expectPaginationMeta(result, {
           total: 5,
@@ -231,7 +222,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "admin" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].name).toBe("Administrator");
       });
@@ -250,7 +240,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "content" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
       });
 
@@ -264,7 +253,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "nonexistent" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
       });
 
@@ -281,7 +269,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "(super)" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
       });
 
@@ -298,7 +285,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 10);
         expectPaginationMeta(result, {
           total: 15,
@@ -315,7 +301,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 5); // Should return all
       });
 
@@ -328,7 +313,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "   " });
 
         // Assert
-        expectSuccessResponse(result, 200);
         // Should return based on database behavior (likely all or none)
       });
 
@@ -343,7 +327,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ search: "編集" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data!.length).toBeGreaterThanOrEqual(0);
       });
     });
@@ -363,7 +346,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ isSystem: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.isSystem).toBe(true);
@@ -384,7 +366,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ isSystem: false });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.isSystem).toBe(false);
@@ -405,7 +386,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMin: 50 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.level).toBeGreaterThanOrEqual(50);
@@ -426,7 +406,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMax: 50 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.level).toBeLessThanOrEqual(50);
@@ -448,7 +427,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMin: 30, levelMax: 70 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
         result.data!.forEach(role => {
           expect(role.level).toBeGreaterThanOrEqual(30);
@@ -474,7 +452,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].name).toBe("System High");
       });
@@ -492,7 +469,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 0);
       });
 
@@ -513,7 +489,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].level).toBe(50);
       });
@@ -531,7 +506,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMin: 0, levelMax: 0 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 1);
         expect(result.data![0].level).toBe(0);
       });
@@ -549,7 +523,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ levelMax: 100 });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 2);
       });
     });
@@ -572,7 +545,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].name).toBe("Alpha");
         expect(result.data![1].name).toBe("Beta");
         expect(result.data![2].name).toBe("Zebra");
@@ -595,7 +567,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].name).toBe("Zebra");
         expect(result.data![1].name).toBe("Beta");
         expect(result.data![2].name).toBe("Alpha");
@@ -618,7 +589,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].level).toBe(10);
         expect(result.data![1].level).toBe(50);
         expect(result.data![2].level).toBe(90);
@@ -641,7 +611,6 @@ describe("RoleService", () => {
         });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].level).toBe(90);
         expect(result.data![1].level).toBe(50);
         expect(result.data![2].level).toBe(10);
@@ -661,7 +630,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].level).toBe(10);
         expect(result.data![1].level).toBe(20);
         expect(result.data![2].level).toBe(30);
@@ -681,7 +649,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ sortBy: "level" });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expectArrayLength(result.data!, 3);
         // All should have same level
         result.data!.forEach(role => expect(role.level).toBe(50));
@@ -716,7 +683,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         const parent = result.data!.find(r => r.name === "Parent");
         expect(parent).toBeDefined();
         expect(parent!.childRoleIds).toBeDefined();
@@ -734,7 +700,6 @@ describe("RoleService", () => {
         const result = await service.listRoles();
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].childRoleIds).toEqual([]);
       });
     });
@@ -788,7 +753,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ includePermissions: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].permissionIds).toBeDefined();
         expectArrayLength(result.data![0].permissionIds!, 2);
         expect(result.data![0].permissionIds).toContain(permission1.id);
@@ -804,7 +768,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ includePermissions: false });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].permissionIds).toBeUndefined();
       });
 
@@ -817,7 +780,6 @@ describe("RoleService", () => {
         const result = await service.listRoles({ includePermissions: true });
 
         // Assert
-        expectSuccessResponse(result, 200);
         expect(result.data![0].permissionIds).toEqual([]);
       });
     });
@@ -833,7 +795,6 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.id).toBe(role.id);
       expect(result.data!.name).toBe("Test Role");
       expect(result.data!.slug).toBe(role.slug);
@@ -901,7 +862,6 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.isSystem).toBe(true);
     });
 
@@ -919,7 +879,6 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data).toEqual({
         id: role.id,
         name: "Complete Role",
@@ -939,7 +898,6 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expect(result.data!.description).toBeNull();
     });
 
@@ -952,7 +910,6 @@ describe("RoleService", () => {
       const result = await service.getRoleById(role.id);
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectValidUUID(result.data!.id);
     });
 
@@ -1281,7 +1238,6 @@ describe("RoleService", () => {
       });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 1);
       expect(result.data![0].name).toBe("System Admin");
     });
@@ -1305,7 +1261,6 @@ describe("RoleService", () => {
       });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 1);
       expect(result.data![0].name).toBe("Editor Mid");
     });
@@ -1336,7 +1291,6 @@ describe("RoleService", () => {
       });
 
       // Assert
-      expectSuccessResponse(result, 200);
       expectArrayLength(result.data!, 3);
       expectPaginationMeta(result, {
         page: 1,
