@@ -31,7 +31,11 @@ import { nextlyTables } from "./_fixture-schema/unified";
  * named here is checked, so nothing can join it without deleting a line here.
  */
 const PREDATES_THIS_CHECK = new Set([
-  "users",
+  // `users` has LEFT this list: the exemption's premise stopped being true.
+  // It was safe while "no consumer reads the columns these tables declare",
+  // and `database/setup.test.ts` now inserts real rows through the adapter —
+  // which failed on `must_change_password`, a column the fixture had never
+  // grown. The exemption was hiding a table that was actively being written to.
   "permissions",
   "media",
   "dynamic_collections",
