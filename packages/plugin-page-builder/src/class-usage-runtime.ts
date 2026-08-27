@@ -245,46 +245,35 @@ async function readById(
     // stale.
     ...AS_THE_SYSTEM,
   });
-  return rowForSubject(row, subject);
+  return recordOf(row);
 }
 
 /**
- * The row a read answered, once it is confirmed to BE the document asked for.
+ * The record a read answered, or nothing when it answered no document.
  *
- * A predicate is a request, not a guarantee. `beforeOperation` and `beforeRead`
- * can replace the supplied filter or clear it outright, and the query service
- * honours that deliberately — returning `null` from `beforeRead` means "this
- * read has no filter" and is preserved as such
- * (`collection-query-service.ts:688-713`). Those hooks run regardless of
- * `overrideAccess`, so nothing this module passes can prevent it.
+ * It deliberately does NOT compare the returned `id` against the subject. The
+ * by-id read pins the entry in its own query — `eq(schema.id, entryId)` — so
+ * the identity is a property of what was ASKED, not of what came back, and
+ * re-deriving it from the response would only test the response.
  *
- * The first row of an unfiltered read is then simply some other document, and
- * taking it would derive that document's classes and file them under this
- * subject — while removing the rows the real document's references had earned.
- * A class the live page still renders would read as unused and become
- * deletable, which is the one direction that loses data.
+ * That distinction matters because `afterRead` legitimately REPLACES the
+ * document: a collection may reshape its public read and drop or rewrite `id`.
+ * Core hit this exact defect and removed its own id comparison for it —
+ * `runtime/routing/__tests__/content-route-by-id.test.ts:198` keeps the case,
+ * noting that "the old compare-the-id approach rejected a valid grant whenever
+ * a collection reshaped its public read". Comparing here would fail every
+ * maintenance pass on such a collection, and a class the save introduced would
+ * get no row at all.
  *
- * So a mismatch RAISES rather than resolving to nothing. Answering `undefined`
- * would be indistinguishable from an absent document, and absence deliberately
- * leaves a subject's rows alone — the caller would be told the subject was
- * reconciled when the read never reached it. A raised failure is reported to
- * the caller and says the index is stale.
- *
- * An empty result is NOT a mismatch: no row means no document, which is a
- * different and legitimate answer.
+ * The widening this once guarded against is a property of a LIST read, whose
+ * predicate `beforeOperation` and `beforeRead` may replace or clear. Nothing in
+ * this module reads a document that way any more; the index's own list reads
+ * still do, and `assertRowMatches` refuses a foreign row there — which is where
+ * that check belongs, because that is where a predicate can be widened.
  */
-function rowForSubject(
-  row: unknown,
-  subject: ClassUsageSubject
-): Record<string, unknown> | undefined {
+function recordOf(row: unknown): Record<string, unknown> | undefined {
   if (typeof row !== "object" || row === null) return undefined;
-  const record = row as Record<string, unknown>;
-  if (record.id === subject.entityKey) return record;
-  throw new Error(
-    `Class-usage read for ${subject.entity}:${subject.entityKey} answered ` +
-      `id="${String(record.id)}"; the read was widened past its predicate and ` +
-      `its document must not be filed under this subject.`
-  );
+  return row as Record<string, unknown>;
 }
 
 /**
