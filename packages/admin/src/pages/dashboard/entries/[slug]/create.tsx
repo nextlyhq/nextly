@@ -322,7 +322,7 @@ export default function CreateEntryPage({
   // form, not the header chrome.
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <MeasuredPageFrame contentCarriesMeasure>
+      <MeasuredPageFrame>
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           mode="create"

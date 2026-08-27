@@ -32,31 +32,3 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  */
 export const CONTENT_PAGE_MEASURE: NonNullable<PageContainerProps["width"]> =
   "wide";
-
-/**
- * The token each named measure resolves to, so a length can be derived from a
- * width rather than restated beside it.
- *
- * `full` has no token because it is the absence of a cap. Typed as a total
- * `Record`, so a measure added to the vocabulary cannot be forgotten here.
- */
-const MEASURE_TOKEN: Record<
-  NonNullable<PageContainerProps["width"]>,
-  string | null
-> = {
-  form: "--nx-measure-form",
-  wide: "--nx-measure-wide",
-  full: null,
-};
-
-/**
- * The content measure as a CSS length, for content that bounds its own column.
- *
- * A page whose content seats chrome beside it takes the whole panel, so the cap
- * moves inward onto the field column and needs to be expressed as a length
- * rather than as a page width. Derived from `CONTENT_PAGE_MEASURE` above so the
- * two cannot disagree: a page bounded one way and its fields bounded another is
- * the disagreement this module exists to prevent, and writing the token out
- * again by hand is how it would return.
- */
-export const CONTENT_MEASURE_LENGTH = `var(${MEASURE_TOKEN[CONTENT_PAGE_MEASURE] ?? "--nx-measure-wide"})`;
