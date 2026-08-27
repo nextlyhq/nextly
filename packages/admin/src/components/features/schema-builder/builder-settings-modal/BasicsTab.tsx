@@ -1,8 +1,12 @@
-// Why: Basics-tab fields for the BuilderSettingsModal. Renders only the
-// fields listed in the per-kind config (config-driven). Auto-derives the
-// slug from the singular name on each keystroke until the user explicitly
-// overrides it via SlugInput's Edit affordance — once `values.slug` differs
-// from the auto-derived form, we treat that as an override and stop tracking.
+// Basics-tab fields for the BuilderSettingsModal. Renders only the fields
+// listed in the per-kind config, so the tab is config-driven rather than
+// branching per entity kind.
+//
+// The slug auto-derives from the singular name on each keystroke, and stops as
+// soon as `values.slug` differs from the slug that name would derive. The
+// override is therefore recomputed from the values rather than recorded: there
+// is no flag to keep in step, and editing the slug back to the derived form
+// resumes tracking, which is the behaviour someone correcting a typo expects.
 // Slug case is per-kind: singles use kebab (the entry-form slug validator is
 // kebab-only); collections and components keep snake to match their backend
 // validators. This is the one place the shared modal needs a per-kind branch
@@ -95,10 +99,11 @@ export function BasicsTab({
 
   return (
     <div className="space-y-4 py-2">
-      {/* PR G feedback 2: when the per-kind config has NO pluralName
-          (singles, components), pack singular + slug + icon into a
-          single 3-col row. Collections still use the 2x2 layout
-          (singular+plural, slug+icon). Collapses sensibly on mobile. */}
+      {/* A kind with no plural name (singles, components) has three basics
+          rather than four, so they share one row instead of leaving a gap
+          where the plural would have been. Collections keep the 2x2 grid —
+          singular with plural, slug with icon — which pairs each field with
+          the one it relates to. Both collapse to a single column on mobile. */}
       {!hasPlural &&
         (fields.includes("singularName") ||
           fields.includes("slug") ||

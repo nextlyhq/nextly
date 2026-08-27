@@ -7,10 +7,15 @@
 // assert the refusal is a property of the rendered input rather than of a
 // wrapper that happens not to pass a handler.
 //
-// It is controlled, so every case drives it through a stateful wrapper — the
-// same shape a real consumer provides (BasicsTab, via react-hook-form). Testing
-// it uncontrolled would let a typed character appear on screen from React's own
-// DOM state and read as the component accepting input it never received.
+// It is fully controlled — it always renders `value={value}` — so every case
+// drives it through a stateful wrapper, which is the shape its real consumer
+// has: `BuilderSettingsModal` holds the values in `useState` and passes the
+// setter down through `BasicsTab`.
+//
+// The wrapper is not ceremony. Render it with a `value` and an inert handler
+// and the input silently refuses every keystroke, because React re-renders it
+// back to the prop — so a case that typed into it would be asserting against
+// the wrapper's own inertness rather than against anything the component did.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";

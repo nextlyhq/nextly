@@ -101,10 +101,13 @@ describe("BasicsTab", () => {
       />
     );
 
-    // Typed straight into the field, because the slug IS a plain input here.
-    // The edit has to be a real user edit rather than a programmatic set: what
-    // the assertion below turns on is that a user-supplied slug stops tracking
-    // the singular name, and only an actual edit sets the flag that stops it.
+    // The slug has to hold a value that is NOT what the singular name would
+    // derive, because that difference is the whole mechanism. `setSingular`
+    // keeps deriving only while `values.slug` still equals the slug its
+    // previous singular name produced; once the two differ it treats the slug
+    // as overridden and stops. No flag records the override — it is recomputed
+    // from the values on every keystroke — so any route to a differing slug,
+    // typed or programmatic, ends the tracking identically.
     const slugInput = screen.getByRole("textbox", { name: /slug/i });
     await user.clear(slugInput);
     await user.type(slugInput, "post");
@@ -161,7 +164,7 @@ describe("BasicsTab", () => {
   });
 });
 
-describe("BasicsTab -- 3-col layout for kinds without plural (PR G feedback 2)", () => {
+describe("BasicsTab -- 3-col layout for kinds without plural", () => {
   it("renders singular, slug, and icon when pluralName is omitted from fields", () => {
     render(
       <BasicsTab
