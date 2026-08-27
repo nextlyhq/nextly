@@ -242,6 +242,39 @@ describe("a subject that fails", () => {
     expect(report.reconciled).toBe(0);
   });
 
+  it("counts a WITHHELD read as a failure and not as an absence", async () => {
+    // The two outcomes licence opposite things, so they must not collapse.
+    // Absence deliberately leaves the subject's rows alone, which protects the
+    // classes already indexed — but a class this very save INTRODUCED has no
+    // row to protect, so reporting a withheld read as absence would leave it
+    // indexed nowhere and safe-delete would remove it.
+    //
+    // A withheld document is not silent here: the reader never sets
+    // `disableErrors`, so a document a hook narrowed away comes back as an
+    // unsuccessful result and is thrown rather than answered as nothing.
+    const { store } = recordingStore();
+
+    const report = await reconcileWrittenDocument({
+      store,
+      read: async () => {
+        throw new Error("hidden by a read hook");
+      },
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect(report.failures).toHaveLength(1);
+    // The discriminating half: it is NOT filed as an absence.
+    expect(report.absent).toBe(0);
+    expect(report.reconciled).toBe(0);
+  });
+
   it("does not stop the subjects after it", async () => {
     // Each subject's rows are independent. Stopping would leave every later
     // subject stale as well as the failed one, turning one recoverable

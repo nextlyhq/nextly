@@ -37,34 +37,26 @@ const documentUsing = (...classes: string[]) => ({
 function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
   const calls: Record<string, unknown>[] = [];
   const api: ClassUsageDirectApi = {
+    // The DOCUMENT reader for both variants. It carries no lifecycle filter for
+    // a trusted caller — `resolveStatusFilter` returns null when
+    // `overrideAccess` is set and no status is named — so it answers the row
+    // that exists whatever state that row is in. Only `draft` differs between
+    // the two subjects, and it selects the working-draft overlay.
     findByID: async args => {
       calls.push({ op: "findByID", ...args });
       return {
         id: "p1",
-        _isWorkingDraft: true,
+        title: "unrelated",
         content: documentUsing("hero"),
+        ...(args.draft === true ? { _isWorkingDraft: true } : {}),
       };
     },
+    // Serves the INDEX store only. The document reader stopped using it: an
+    // explicit `status` is a conjunction over the main row and the localized
+    // companion together, which drops documents legitimately in neither state.
     find: async args => {
       calls.push({ op: "find", ...args });
-      if (args.collection === "idx") {
-        return { items: [{ id: "r1" }], meta: { hasNext: false } };
-      }
-      // The LIFECYCLE FILTER is honoured, because it is the thing under test.
-      // A fake answering the same page whatever `status` asked for would agree
-      // with any reader, including one that never sent the filter at all. This
-      // models the ordinary document: published, with no draft variant.
-      if (args.status !== "published") {
-        return { items: [], meta: { hasNext: false } };
-      }
-      // A COLLECTION ROW, which is what the API answers: the block document
-      // sits under the field, beside everything else the record holds.
-      return {
-        items: [
-          { id: "p1", title: "unrelated", content: documentUsing("hero") },
-        ],
-        meta: { hasNext: false },
-      };
+      return { items: [{ id: "r1" }], meta: { hasNext: false } };
     },
     create: async args => {
       calls.push({ op: "create", ...args });
@@ -104,14 +96,20 @@ describe("resolving a subject to its document", () => {
     expect(calls[0]).toMatchObject({ op: "findByID", draft: true });
   });
 
-  it("reads PUBLISHED through the lifecycle filter, which only the list read carries", async () => {
-    // The by-id path has no lifecycle parameter, so a published subject read
-    // that way would accept a document whose only row is a draft.
+  it("reads PUBLISHED with NO lifecycle filter, and does not opt into the draft", async () => {
+    // `status: "published"` is a conjunction: listEntries constrains the main
+    // row AND hands the same value to the localized companion's `_status`
+    // (collection-query-service.ts:1143-1159). A translation unpublished under
+    // a published default matches neither state, and a collection whose draft
+    // split is ineligible enumerates only this subject — so filtering it drops
+    // the document's only row and indexes it nowhere.
     const { api, calls } = recordingApi();
 
     await classUsageDocumentReader(api)(subject({ variant: "published" }));
 
-    expect(calls[0]).toMatchObject({ op: "find", status: "published" });
+    expect(calls[0]).toMatchObject({ op: "findByID", id: "p1" });
+    expect(calls[0]).not.toHaveProperty("status");
+    expect(calls[0].draft).toBeUndefined();
   });
 
   it("REFUSES a live row answered to a draft request", async () => {
@@ -134,83 +132,61 @@ describe("resolving a subject to its document", () => {
     expect(document).toBeUndefined();
   });
 
-  it("reads a NEVER-PUBLISHED draft, which no marker can identify", async () => {
-    // Nothing was overlaid, so nothing set `_isWorkingDraft`: the main row is
-    // itself the draft. Requiring the marker read this document as absent while
-    // the published read excluded it by definition, so a class used only on a
-    // page still being written was recorded under neither subject and
-    // safe-delete reported no usage for it. The lifecycle filter names it.
-    // Ordered locally, because an override replaces the recording default and
-    // would otherwise leave the shared call log empty.
-    const asked: string[] = [];
-    const { api } = recordingApi({
-      findByID: async () => {
-        asked.push("findByID");
-        return { id: "p1", content: documentUsing("hero") };
-      },
-      find: async args => {
-        asked.push(`find:${String(args.status)}`);
-        return {
-          items:
-            args.status === "draft"
-              ? [{ id: "p1", content: documentUsing("hero") }]
-              : [],
-          meta: { hasNext: false },
-        };
-      },
-    });
-
-    const document = await classUsageDocumentReader(api)(
-      subject({ variant: "draft" })
-    );
-
-    expect(document).toEqual(documentUsing("hero"));
-    // The by-id read is asked FIRST, because a pending sidecar draft is the
-    // more current content and only that path can surface it. The lifecycle
-    // read answers only once the overlay declined.
-    expect(asked).toEqual(["findByID", "find:draft"]);
-  });
-
-  it("reads a LOCALE unpublished while the default stays published", async () => {
-    // Unpublishing a non-default translation moves the companion's `_status`
-    // to draft and deliberately LEAVES the main row published
-    // (domains/i18n/writes-status.integration.test.ts:157). So the entry's own
-    // status column reads "published" for a language whose draft this is:
-    // that column answers about the entry, not about the translation being
-    // asked for. Only the lifecycle filter constrains the companion.
+  it("records a NEVER-PUBLISHED document under its published subject", async () => {
+    // Its only row IS a draft, and no sidecar exists so nothing marks it. The
+    // published read carries no lifecycle filter, so it answers that row rather
+    // than excluding it — which is where a page still being written gets
+    // indexed at all. Filtering would leave a class used only there recorded
+    // nowhere, and safe-delete would report no usage for it.
     const { api } = recordingApi({
       findByID: async () => ({
         id: "p1",
-        status: "published",
+        status: "draft",
         content: documentUsing("hero"),
-      }),
-      find: async args => ({
-        items:
-          args.status === "draft" && args.locale === "de"
-            ? [{ id: "p1", content: documentUsing("hero") }]
-            : [],
-        meta: { hasNext: false },
       }),
     });
 
     const document = await classUsageDocumentReader(api)(
-      subject({ variant: "draft", locale: "de" })
+      subject({ variant: "published" })
     );
 
     expect(document).toEqual(documentUsing("hero"));
+  });
+
+  it("records a LOCALE unpublished while the default stays published", async () => {
+    // Unpublishing a non-default translation moves the companion's `_status` to
+    // draft and deliberately LEAVES the main row published
+    // (domains/i18n/writes-status.integration.test.ts:157). An explicit status
+    // matches neither state for that language, so the by-id read is what can
+    // still answer for it — and it is asked in the subject's own locale.
+    // The recording default answers a row whose MAIN status is published,
+    // which is exactly this document's state — the German companion is the
+    // part that is draft, and no status is sent at all.
+    const { api, calls } = recordingApi();
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "published", locale: "de" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
+    expect(calls[0]).toMatchObject({
+      op: "findByID",
+      locale: "de",
+      fallbackLocale: false,
+    });
+    expect(calls[0]).not.toHaveProperty("status");
   });
 
   it("REFUSES a row for a DIFFERENT document than the subject named", async () => {
     // A predicate is a request, not a guarantee: `beforeRead` may clear the
     // filter outright and the query service preserves that
-    // (collection-query-service.ts:688-713), so the first row of the page can
-    // belong to another document. Filing its classes here would also REMOVE
-    // the rows the real document earned, and a class it still renders would
-    // then read as unused.
+    // (collection-query-service.ts:688-713). Filing another document's classes
+    // here would also REMOVE the rows the real document earned, and a class it
+    // still renders would then read as unused.
     const { api } = recordingApi({
-      find: async () => ({
-        items: [{ id: "some-other-page", content: documentUsing("intruder") }],
-        meta: { hasNext: false },
+      findByID: async () => ({
+        id: "some-other-page",
+        content: documentUsing("intruder"),
       }),
     });
 
@@ -247,12 +223,15 @@ describe("resolving a subject to its document", () => {
     await classUsageDocumentReader(api)(subject());
 
     expect(calls[0]).toMatchObject({
+      op: "findByID",
       collection: "pages",
-      where: { id: { equals: "p1" } },
-      limit: 1,
+      id: "p1",
       depth: 0,
       overrideAccess: true,
     });
+    // Never suppressed: `disableErrors` converts EVERY unsuccessful result to
+    // null, so a failing read would be indistinguishable from an absent row.
+    expect(calls[0].disableErrors).toBeUndefined();
   });
 
   it("returns the FIELD's document, not the collection row", async () => {
@@ -270,7 +249,7 @@ describe("resolving a subject to its document", () => {
 
   it("answers nothing when the published row is absent", async () => {
     const { api } = recordingApi({
-      find: async () => ({ items: [], meta: { hasNext: false } }),
+      findByID: async () => null,
     });
 
     const document = await classUsageDocumentReader(api)(subject());
@@ -283,7 +262,7 @@ describe("resolving a subject to its document", () => {
     // missing row — so a failing `afterRead` hook read as ordinary absence and
     // the subject was reconciled to zero against a document nobody could read.
     const { api } = recordingApi({
-      find: async () => {
+      findByID: async () => {
         throw new Error("afterRead hook failed");
       },
     });

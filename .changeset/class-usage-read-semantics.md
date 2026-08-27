@@ -29,13 +29,20 @@
 The page builder now reads the document a class-usage subject names, in the lifecycle state and
 the language that subject is keyed by.
 
-A draft subject is resolved by asking twice, because two different stored things are both
-drafts and no single column distinguishes them. A document published and edited since keeps
-its main row published and its pending edits in a sidecar, and only the by-id read overlays
-that sidecar - so it is asked first, and its marker identifies the overlay. Everything else
-that is a draft is a stored row whose lifecycle state says so, and the list read's status
-filter is the only thing that can name it: it is authoritative and it also constrains a
-localized companion's own status, which is what makes a per-locale draft addressable at all.
+Neither variant is read through a lifecycle filter, and that is the correction at the centre of
+this change. An explicit status is a CONJUNCTION: the list service constrains the main row and
+then hands the same value to the localized companion's own status, so a document has to be in
+that state twice over to be returned. Three real states satisfy neither side of it - a
+translation unpublished while the default stays published, the inverse, and a collection with
+status enabled whose draft split is ineligible and whose single row happens to be a draft - and
+each of those was indexed nowhere.
+
+Both subjects are read by id instead, which applies no lifecycle filter for a trusted caller,
+and they differ only in whether they opt into the working draft. A draft subject takes the
+sidecar overlay when there is one, identified by its marker; the published subject takes
+whatever row exists. Where no sidecar exists both subjects see the same document and record the
+same classes, which over-counts - and that is the direction to fail in, because an over-count
+warns about a delete that was safe while an under-count permits one that was not.
 
 A subject with a real locale asks with FALLBACK OFF. Fallback is on by default, so a language
 with no translation resolved the field from its fallback chain, and the resulting classes were
@@ -63,15 +70,18 @@ so the class reads as unused, the safe-delete check permits it, and the pages th
 lose it. Only one of those is recoverable. Rows for a variant that has genuinely gone are
 removed by the rebuild's sweep, which walks the documents and can tell them apart.
 
-Two kinds of draft that no marker can identify now record their classes. A document that has
-never been published has no sidecar to overlay, so its main row is itself the draft and
-nothing marks it. A non-default language that was explicitly unpublished while the default
-stays published moves the companion's status to draft and deliberately leaves the main row
-published, so the entry's own status column answers about the entry rather than about the
-translation being asked for. Both were refused, and the published read excludes both by
-definition, so a class used only on a page still being written - or only on an unpublished
-translation - was recorded under neither subject and the safe-delete check reported no usage
-for it.
+A document that has never been published, and a translation unpublished while its default stays
+published, both record their classes now. Neither can be named by a marker or by a status
+column: the first has no sidecar to overlay so nothing marks it, and the second leaves the main
+row published on purpose, so the entry's status column answers about the entry rather than
+about the language being asked for. Both are answered by the by-id read, which asks in the
+subject's own locale and filters on nothing.
+
+A withheld document is reported rather than read as absence. Errors are never suppressed, so a
+document a read hook narrowed away comes back as an unsuccessful result and is raised. This
+matters because absence deliberately leaves a subject's rows alone, which protects the classes
+already indexed but does nothing for a class the current save introduced - it would have no row
+to protect, and would be indexed nowhere.
 
 A read that answers with a different document than the one asked for is refused. A predicate
 is a request rather than a guarantee: a beforeOperation or beforeRead hook may replace the
