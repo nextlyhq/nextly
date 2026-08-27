@@ -216,6 +216,63 @@ describe("the empty-container appender", () => {
   });
 });
 
+describe("the accessible name it announces", () => {
+  it("prefers the author's own instance name over the block's label", () => {
+    // Two containers of the SAME type, one the author has named. A label
+    // taken from the type alone would give both the identical name, which is
+    // exactly what makes them impossible to tell apart by ear.
+    const namedBox = {
+      id: "box-named",
+      type: "core/box",
+      version: 1,
+      props: {},
+      name: "Header slot",
+    };
+    render(
+      <EmptyContainerAppenders
+        document={doc([namedBox, emptyBox])}
+        slots={slots}
+        blocks={blocks}
+        onAppend={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Add a block to Header slot" })
+    ).toBeTruthy();
+    // The un-named sibling still falls back to the block's own label, proving
+    // the precedence runs one way: a name wins when given, and its absence
+    // does not disturb the existing fallback.
+    expect(
+      screen.getByRole("button", { name: "Add a block to Box" })
+    ).toBeTruthy();
+  });
+
+  it("ignores a name of only whitespace, the same way the Layers panel does", () => {
+    // `authoredName` trims and treats a blank result as absent; a control
+    // announcing "Add a block to    " would be no name at all.
+    const blankName = {
+      id: "box-blank",
+      type: "core/box",
+      version: 1,
+      props: {},
+      name: "   ",
+    };
+    render(
+      <EmptyContainerAppenders
+        document={doc([blankName])}
+        slots={slots}
+        blocks={blocks}
+        onAppend={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Add a block to Box" })
+    ).toBeTruthy();
+  });
+});
+
 /**
  * A stand-in for `ResizeObserver`, which jsdom does not implement.
  *

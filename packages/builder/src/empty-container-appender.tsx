@@ -100,7 +100,11 @@
  * @module empty-container-appender
  */
 
-import { walkNodes, type BlockDocument } from "@nextlyhq/blocks-engine";
+import {
+  walkNodes,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import { Plus } from "lucide-react";
 import {
   useCallback,
@@ -126,6 +130,7 @@ import {
   clippedByAncestorRect,
 } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
+import { authoredName } from "./layers";
 
 /**
  * The one property this component ever reads off a block's definition.
@@ -167,19 +172,32 @@ interface EmptyContainer {
 /**
  * The name this control announces for the block it would fill.
  *
- * `editor.label` when the block declares one. Otherwise the block's raw TYPE —
- * not a humanised guess — because this is an accessible NAME rather than a
- * palette entry: a control an author cannot name is one they cannot find, and
- * the type string names the missing block truthfully even when no definition
- * is registered to describe it at all.
+ * The AUTHORED instance name wins when the node has one — via
+ * `authoredName`, the same precedence `layerLabel` gives the Layers panel, so
+ * two empty containers of the same type an author has told apart by name are
+ * told apart here too rather than announcing as one indistinguishable
+ * control. Without one, `editor.label` when the block declares it. Otherwise
+ * the block's raw TYPE — not a humanised guess — because this is an
+ * accessible NAME rather than a palette entry: a control an author cannot
+ * name is one they cannot find, and the type string names the missing block
+ * truthfully even when no definition is registered to describe it at all.
+ *
+ * `layerLabel` itself is not called directly: it resolves the type-level
+ * fallback through the GLOBAL registry (`blockLabel`), where this component
+ * takes an injected {@link BlockLookup} so its tests need not register
+ * anything there. `authoredName` is the part of `layerLabel` that does not
+ * depend on the registry, and it is exported from `layers.ts` for exactly
+ * this reuse.
  *
  * An empty string is treated the same as an absent label: a block declaring
  * `editor: { label: "" }` has not actually named itself, and announcing an
  * empty string would leave the control with no accessible name at all.
  */
-function nameOf(type: string, blocks: BlockLookup): string {
-  const declared = blocks.get(type)?.editor?.label;
-  return declared !== undefined && declared !== "" ? declared : type;
+function nameOf(node: BlockNode, blocks: BlockLookup): string {
+  const named = authoredName(node);
+  if (named !== undefined) return named;
+  const declared = blocks.get(node.type)?.editor?.label;
+  return declared !== undefined && declared !== "" ? declared : node.type;
 }
 
 /**
@@ -201,7 +219,7 @@ function emptyContainersIn(
   const found: EmptyContainer[] = [];
   walkNodes(document.nodes, node => {
     if (emptySlotOf(node, slots) !== null) {
-      found.push({ id: node.id, label: nameOf(node.type, blocks) });
+      found.push({ id: node.id, label: nameOf(node, blocks) });
     }
   });
   return found;
