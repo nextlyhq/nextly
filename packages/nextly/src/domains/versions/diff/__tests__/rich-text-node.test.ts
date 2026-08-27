@@ -51,6 +51,47 @@ function doc(paragraphs: string[]) {
 
 const meta = { name: "content", label: "Content", type: "richText" };
 
+/** Lexical's canonical empty document: a root with no children at all. */
+function emptyDoc() {
+  return {
+    root: {
+      type: "root",
+      version: 1,
+      format: "",
+      indent: 0,
+      direction: "ltr",
+      children: [],
+    },
+  };
+}
+
+/**
+ * The OTHER canonical empty document — what Lexical actually emits once an
+ * author deletes the last content, which is a single paragraph with nothing
+ * in it rather than a bare root.
+ */
+function emptyParagraphDoc() {
+  return {
+    root: {
+      type: "root",
+      version: 1,
+      format: "",
+      indent: 0,
+      direction: "ltr",
+      children: [
+        {
+          type: "paragraph",
+          version: 1,
+          format: "",
+          indent: 0,
+          direction: "ltr",
+          children: [],
+        },
+      ],
+    },
+  };
+}
+
 describe("richTextNode — structure", () => {
   it("reports an added paragraph as one added block, leaving the rest alone", () => {
     const node = richTextNode(meta, doc(["A"]), doc(["A", "B"]));
@@ -442,5 +483,71 @@ describe("richTextNode — blocks that read alike", () => {
   it("IDEMPOTENCE: three blocks that read alike compare equal to themselves", () => {
     const same = links(["/a", "/b", "/c"]);
     expect(richTextNode(meta, same, same).status).toBe("unchanged");
+  });
+});
+
+describe("richTextNode — an empty document is an absence, not content", () => {
+  /**
+   * An optional rich-text field has two ways of holding nothing. It stores
+   * `null` when it was never filled in, and it stores one of Lexical's
+   * canonical empty documents once an author has typed and then deleted
+   * everything. Both mean "there is nothing here", and only the first used to
+   * be read that way — so moving between them reported a field ADDED or
+   * REMOVED, and rendered an added blank block, for an edit that changed
+   * nothing a reader can see.
+   *
+   * Asserted in both directions, because presence is asymmetric: the bug
+   * produces `added` one way and `removed` the other, and a test fixing only
+   * one leaves the mirror image live.
+   */
+  for (const [label, empty] of [
+    ["a root with no children", emptyDoc],
+    ["a single empty paragraph", emptyParagraphDoc],
+  ] as const) {
+    it(`treats ${label} and null as the same absence`, () => {
+      const filled = richTextNode(meta, null, empty());
+      const emptied = richTextNode(meta, empty(), null);
+      expect(filled.status).toBe("unchanged");
+      expect(emptied.status).toBe("unchanged");
+      // The other half of the defect. A status of `unchanged` with a blank
+      // block still in the list renders an empty added row, so the field
+      // reports no change while showing one.
+      expect(filled.blocks).toEqual([]);
+      expect(emptied.blocks).toEqual([]);
+    });
+
+    it(`reports filling ${label} as added, not changed`, () => {
+      const node = richTextNode(meta, empty(), doc(["First"]));
+      expect(node.status).toBe("added");
+    });
+
+    it(`reports emptying a field to ${label} as removed, not changed`, () => {
+      const node = richTextNode(meta, doc(["First"]), empty());
+      expect(node.status).toBe("removed");
+    });
+  }
+
+  /**
+   * The control, and the reason the emptiness test is defined over PARSED
+   * blocks rather than over the raw JSON. `isRichTextEmpty` in the admin
+   * package treats any object without a `root` as empty, which is right for a
+   * required-field gate and wrong here: a present but malformed document is
+   * not an absence, it is something this diff cannot read, and collapsing the
+   * two would take the refusal off the screen.
+   */
+  it("still refuses a malformed document rather than calling it absent", () => {
+    const node = richTextNode(meta, { not: "a document" }, doc(["First"]));
+    expect(node.status).toBe("changed");
+    expect(node.blocks.some(b => b.status === "unsupported")).toBe(true);
+  });
+
+  /**
+   * The other control. A paragraph that holds even one character is content,
+   * so the emptiness test must not swallow it — otherwise a real edit between
+   * two short documents would report as unchanged and vanish from the view.
+   */
+  it("does not treat a paragraph with text as empty", () => {
+    expect(richTextNode(meta, null, doc(["x"])).status).toBe("added");
+    expect(richTextNode(meta, doc(["x"]), doc(["y"])).status).toBe("changed");
   });
 });

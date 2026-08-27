@@ -226,23 +226,85 @@ function compareBlocks(
   });
 }
 
+/**
+ * Whether a parsed document carries anything a reader would see.
+ *
+ * The two shapes Lexical calls empty: a root with no children, and the single
+ * childless paragraph it leaves behind when the last content is deleted. A
+ * paragraph is only empty when it holds no text, no attributes and nothing
+ * unsupported — anything richer is content, and treating it as an absence
+ * would make a real edit report unchanged and drop it from the view.
+ */
+function carriesNoContent(value: unknown, blocks: ComparableBlock[]): boolean {
+  if (blocks.length === 0) return true;
+  if (blocks.length > 1) return false;
+  return isSingleEmptyParagraph(value);
+}
+
+/**
+ * The document Lexical leaves behind when the last content is deleted.
+ *
+ * Read from the document rather than from the walked block, and the difference
+ * matters. Every paragraph walks to the same structural attributes — `.type`,
+ * `.format`, `.indent` — so "no attributes" is never true, and the looser test
+ * that remains, an empty `text`, is also true of a paragraph holding only an
+ * image. That would report a real edit as unchanged and drop it from the view.
+ * Emptiness here is the absence of CHILDREN, which is the same shape the
+ * admin package's `isRichTextEmpty` recognises.
+ */
+function isSingleEmptyParagraph(value: unknown): boolean {
+  const root = (value as { root?: { children?: unknown[] } } | null | undefined)
+    ?.root;
+  const children = root?.children;
+  if (!Array.isArray(children) || children.length !== 1) return false;
+  const only = children[0] as
+    | { type?: string; children?: unknown[] }
+    | null
+    | undefined;
+  return (
+    only?.type === "paragraph" &&
+    Array.isArray(only.children) &&
+    only.children.length === 0
+  );
+}
+
 export function richTextNode(
   meta: NodeMeta,
   before: unknown,
   after: unknown
 ): RichTextFieldDiff {
-  // A field never filled in stores null. That is an absence with a known
-  // meaning rather than something unreadable, so it projects as an empty
-  // document and the other side reads as an addition or a removal.
-  const beforeAbsent = before == null;
-  const afterAbsent = after == null;
-  const beforeBlocks = beforeAbsent ? [] : toComparableBlocks(before);
-  const afterBlocks = afterAbsent ? [] : toComparableBlocks(after);
+  // A field holding nothing has two spellings. It stores null when it was
+  // never filled in, and one of Lexical's canonical empty documents once an
+  // author has typed and then deleted everything. Both are absences, and
+  // reading only the first that way reported a field added or removed — and
+  // rendered an added blank block — for an edit a reader cannot see.
+  const beforeBlocks = before == null ? [] : toComparableBlocks(before);
+  const afterBlocks = after == null ? [] : toComparableBlocks(after);
+  // Asked of the PARSED blocks rather than the raw value, which is what keeps
+  // a malformed document out of it. `toComparableBlocks` answers null for
+  // anything it cannot read, and null is not absent: the field is present and
+  // holds something this diff cannot project, which the refusal below states.
+  // The admin package's `isRichTextEmpty` treats any object without a `root`
+  // as empty — correct for a required-field gate, wrong here, because it
+  // would take the refusal off the screen.
+  const beforeAbsent =
+    beforeBlocks !== null && carriesNoContent(before, beforeBlocks);
+  const afterAbsent =
+    afterBlocks !== null && carriesNoContent(after, afterBlocks);
 
   // A side that is PRESENT but not a rich-text document at all. Its content
   // cannot be projected, but which sides held anything still can be.
   if (beforeBlocks === null || afterBlocks === null) {
     return refuse(meta, presenceStatus(beforeAbsent, afterAbsent, "changed"));
+  }
+
+  // Both sides hold nothing, so there is nothing to show and nothing changed.
+  // Returned before the block comparison rather than after, because comparing
+  // `[]` against Lexical's empty paragraph yields one ADDED block — a blank
+  // row rendered into the diff for an edit that changed nothing a reader can
+  // see, which is the other half of reading an empty document as content.
+  if (beforeAbsent && afterAbsent) {
+    return { ...meta, kind: "richText", status: "unchanged", blocks: [] };
   }
 
   const blocks = compareBlocks(beforeBlocks, afterBlocks);
