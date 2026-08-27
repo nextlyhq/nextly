@@ -39,6 +39,7 @@ import {
   planWorklistFanOut,
   translatedFilter,
   worklistTotal,
+  worklistTotalPages,
   worklistId,
   worklistTitle,
   worklistUpdatedAt,
@@ -389,16 +390,22 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   //
   // `total` is each collection's OWN count of matching documents, summed, never
   // the number of rows this response happens to carry — see `worklistTotal`.
+  const total = worklistTotal(
+    perCollection.map(r => r.total),
+    merged.length
+  );
   return respondList(
     rows,
     {
-      total: worklistTotal(
-        perCollection.map(r => r.total),
-        merged.length
-      ),
+      total,
       page: 1,
       limit,
-      totalPages: 1,
+      // DERIVED from the total, never asserted as 1. Claiming a single page
+      // beside a total larger than `limit` says the rows in hand are all of
+      // them — the same lie the summed total was added to remove, one field
+      // along. See `worklistTotalPages` for why this sits beside `hasNext:
+      // false` rather than contradicting it.
+      totalPages: worklistTotalPages(total, limit),
       // FALSE, always. This endpoint takes no `page` and always returns the
       // same first slice, so a consumer following `hasNext` would request a
       // second page and receive the same rows forever. Incompleteness is a

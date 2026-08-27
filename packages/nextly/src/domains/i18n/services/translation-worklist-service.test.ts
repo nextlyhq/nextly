@@ -13,6 +13,7 @@ import {
   worklistId,
   worklistTitle,
   worklistTotal,
+  worklistTotalPages,
   worklistUpdatedAt,
   type TranslationWorkRow,
 } from "./translation-worklist-service";
@@ -345,5 +346,37 @@ describe("worklistTotal", () => {
 
   it("is zero for an empty worklist", () => {
     expect(worklistTotal([], 0)).toBe(0);
+  });
+});
+
+describe("worklistTotalPages", () => {
+  it("does not claim a backlog larger than the page fits on one page", () => {
+    // `total: 100` beside `totalPages: 1` at `limit: 50` asserts that a hundred
+    // documents fit in fifty — so a reader who believes the pair concludes the
+    // fifty rows in hand ARE the hundred. That is the truncation-as-census
+    // failure the summed total exists to end, moved one field along.
+    expect(worklistTotalPages(100, 50)).toBe(2);
+  });
+
+  it("rounds a partial page up", () => {
+    expect(worklistTotalPages(51, 50)).toBe(2);
+  });
+
+  it("is one page when the backlog fits", () => {
+    // The control: deriving must not inflate an answer that was already whole.
+    expect(worklistTotalPages(50, 50)).toBe(1);
+  });
+
+  it("is one empty page for an empty worklist, never zero", () => {
+    // Zero pages is not a thing a list can have, and a consumer dividing by it
+    // or rendering "page 1 of 0" is the reason to say so here.
+    expect(worklistTotalPages(0, 50)).toBe(1);
+  });
+
+  it("survives a limit of zero rather than answering Infinity", () => {
+    // `limit` is clamped upstream, which is exactly why this is cheap: the
+    // guard costs nothing while its branch never runs, and `Math.ceil(n / 0)`
+    // is Infinity — a number that would serialize into the envelope.
+    expect(worklistTotalPages(10, 0)).toBe(1);
   });
 });

@@ -100,6 +100,30 @@ export function worklistTotal(
 }
 
 /**
+ * How many pages the backlog would take, at this page size.
+ *
+ * Derived from `total` rather than stated beside it, because the two are one
+ * fact and a consumer checks them against each other. Saying `total: 100` next
+ * to `totalPages: 1` at `limit: 50` asserts that a hundred documents fit on one
+ * page of fifty — so a reader who believes the pair concludes the fifty rows in
+ * hand ARE the hundred, which is the truncation-as-census failure that summing
+ * the counts was meant to end, moved one field along.
+ *
+ * This endpoint still serves only the first page: it takes no `page`, and
+ * `hasNext` stays false so nothing requests a second and receives the first
+ * again. The pair is deliberate and says what is true — the backlog needs two
+ * pages, and this is page one of them, and there is no second page to ask for
+ * here. "More exists" and "here is how to get it" are different claims, and
+ * only the first one is ours to make.
+ *
+ * At least 1: a list with nothing in it is one empty page, not zero pages.
+ */
+export function worklistTotalPages(total: number, limit: number): number {
+  if (limit <= 0) return 1;
+  return Math.max(1, Math.ceil(total / limit));
+}
+
+/**
  * How many authorization decisions may be in flight at once.
  *
  * The cap above bounds QUERIES; this bounds the far cheaper decision that
