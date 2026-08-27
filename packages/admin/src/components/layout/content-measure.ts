@@ -30,5 +30,32 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  * is a compile error here rather than a silently ignored attribute at fifteen
  * call sites.
  */
-export const CONTENT_PAGE_MEASURE: NonNullable<PageContainerProps["width"]> =
-  "wide";
+export const CONTENT_PAGE_MEASURE: keyof typeof CAPPED_MEASURE_TOKEN = "wide";
+
+/**
+ * The token each CAPPED measure resolves to.
+ *
+ * `full` is deliberately absent rather than mapped to null. It is the absence
+ * of a cap, so it has no length to convert to, and an entry for it would need a
+ * fallback — which is a wrong answer waiting to be returned rather than a
+ * missing one. Leaving it out makes `CONTENT_PAGE_MEASURE` below unassignable
+ * from `full`, so the case cannot arise instead of being handled badly.
+ */
+const CAPPED_MEASURE_TOKEN = {
+  form: "--nx-measure-form",
+  wide: "--nx-measure-wide",
+} as const satisfies Partial<
+  Record<NonNullable<PageContainerProps["width"]>, string>
+>;
+
+/**
+ * The content measure as a CSS length, for content that bounds its own column.
+ *
+ * A page whose content seats chrome beside it takes the whole panel, so the cap
+ * moves inward onto the field column and needs to be expressed as a length
+ * rather than as a page width. Derived from `CONTENT_PAGE_MEASURE` above so the
+ * two cannot disagree: a page bounded one way and its fields bounded another is
+ * the disagreement this module exists to prevent, and writing the token out
+ * again by hand is how it would return.
+ */
+export const CONTENT_MEASURE_LENGTH = `var(${CAPPED_MEASURE_TOKEN[CONTENT_PAGE_MEASURE]})`;

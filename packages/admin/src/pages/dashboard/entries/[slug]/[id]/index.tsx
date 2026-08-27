@@ -19,7 +19,10 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import {
+  CONTENT_PAGE_MEASURE,
+  CONTENT_MEASURE_LENGTH,
+} from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -512,7 +515,7 @@ export default function EditEntryPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <MeasuredPageFrame>
+      <MeasuredPageFrame contentCarriesMeasure>
         {/* Each injection slot gets a box of its own. Under the measured
             frame these are direct children of a CSS grid, and the rule that
             puts a child in the content column can only place a generated
@@ -521,7 +524,15 @@ export default function EditEntryPage({
             instead. The registry imposes no root-element contract on a plugin,
             so the page provides the box rather than trusting it to. */}
         {beforeEditPath && (
-          <div>
+          <div
+            // Bounded here rather than inheriting the page, which no longer
+            // caps: the frame gives the panel to the form-and-rail row, and a
+            // slot outside that row would otherwise stretch the whole width.
+            // Plugin content keeps the measure it had before the row took the
+            // panel, so nothing a plugin renders changes shape.
+            className="mx-auto w-full"
+            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+          >
             <PluginSlot path={beforeEditPath} props={editInjectionProps} />
           </div>
         )}
@@ -545,7 +556,15 @@ export default function EditEntryPage({
           onCancel={handleCancel}
         />
         {afterEditPath && (
-          <div>
+          <div
+            // Bounded here rather than inheriting the page, which no longer
+            // caps: the frame gives the panel to the form-and-rail row, and a
+            // slot outside that row would otherwise stretch the whole width.
+            // Plugin content keeps the measure it had before the row took the
+            // panel, so nothing a plugin renders changes shape.
+            className="mx-auto w-full"
+            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+          >
             <PluginSlot path={afterEditPath} props={editInjectionProps} />
           </div>
         )}
