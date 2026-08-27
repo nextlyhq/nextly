@@ -36,6 +36,7 @@ export type NavigationCategory =
   | "collections"
   | "singles"
   | "media"
+  | "translations"
   | "plugins"
   | "settings"
   | "builder";
@@ -125,7 +126,7 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     title: "Translations",
     href: ROUTES.TRANSLATIONS,
     icon: Languages,
-    category: "main",
+    category: "translations",
   },
 
   // === USERS (now filed under the settings section — no standalone Users icon) ===

@@ -32,6 +32,7 @@ import {
 } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { LOCALE_PARAM, TRANSLATE_PARAM } from "@admin/constants/search-params";
+import { useBrandingStatus } from "@admin/context/providers/BrandingProvider";
 import { useTranslationWorklist } from "@admin/hooks/queries/useTranslationWorklist";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
@@ -83,9 +84,14 @@ function WorklistRow({
           {row.collectionLabel}
         </span>
       </div>
-      {/* Named for the document it opens. Read out of context — a screen
-          reader stepping through this list — fifty buttons all saying
-          "Translate" name nothing at all.
+      {/* Named for the document AND its collection. Read out of context — a
+          screen reader stepping through this list — fifty buttons all saying
+          "Translate" name nothing at all, and the title alone is not enough
+          either: titles are not unique, and this list deliberately spans
+          collections, so two rows reading "Translate Untitled" is the ordinary
+          case rather than the unlucky one. The collection is on screen beside
+          the title; the accessible name has to carry it too, because a button
+          reached by keyboard is read without its row.
 
           `navigateTo` rather than an anchor: this admin is a single page, and a
           real href would reload the whole application to reach a route the
@@ -96,7 +102,7 @@ function WorklistRow({
         variant="outline"
         size="sm"
         className="shrink-0"
-        aria-label={`Translate ${row.title}`}
+        aria-label={`Translate ${row.title} in ${row.collectionLabel}`}
         onClick={() => navigateTo(rowHref(row, target, source))}
       >
         Translate
@@ -110,19 +116,31 @@ function WorklistBody({
   target,
   source,
   stateLabel,
+  complete,
 }: {
   rows: readonly TranslationWorkRow[];
   target: string;
   source: string;
   stateLabel: string;
+  /** False when the server named collections it did not consult. */
+  complete: boolean;
 }) {
   if (rows.length === 0) {
     // Said, rather than shown as an empty list. A blank area under a filter
     // reads as "something failed" as easily as "nothing to do", and the two
     // deserve opposite reactions.
+    //
+    // And "nothing" is a claim about EVERYTHING, so it may only be made when
+    // everything was looked at. With collections left unconsulted, no rows is
+    // the one result that cannot be distinguished from work nobody checked
+    // for — the alert above warns that the answer is partial, but this
+    // sentence would still assert the opposite, and a reader takes the
+    // sentence in the table over the banner above it.
     return (
       <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-        Nothing {stateLabel.toLowerCase()} in this language.
+        {complete
+          ? `Nothing ${stateLabel.toLowerCase()} in this language.`
+          : `Nothing ${stateLabel.toLowerCase()} in the collections that could be checked.`}
       </p>
     );
   }
@@ -144,15 +162,28 @@ export function TranslationWorklist({
   locale,
   state,
   onLocaleChange,
+  onLocaleCorrected,
   onStateChange,
 }: {
   /** The language being worked on, or undefined before one is chosen. */
   locale: string | undefined;
   state: WorklistState;
+  /** The reader picked a language: a new history entry. */
   onLocaleChange: (code: string) => void;
+  /**
+   * The URL named a language this worklist cannot answer for.
+   *
+   * Separate from `onLocaleChange` because it must REPLACE the history entry
+   * rather than add one — see the effect below.
+   */
+  onLocaleCorrected: (code: string) => void;
   onStateChange: (state: WorklistState) => void;
 }) {
   const { enabled, locales, defaultLocale } = useLocalization();
+  // Consulted before any conclusion is drawn from missing locale metadata —
+  // the branding types say to, for exactly this reason.
+  const { isPending: brandingPending, isUnavailable: brandingUnavailable } =
+    useBrandingStatus();
   // The active language is resolved BEFORE the query, not after it.
   //
   // Arriving from the sidebar there is no `?locale=`, so asking with `undefined`
@@ -176,15 +207,55 @@ export function TranslationWorklist({
   // answer for, so the address bar keeps describing what is on screen and a
   // copied link reproduces it. Only when the URL NAMED one: arriving with no
   // `?locale=` is the ordinary path from the sidebar and must not be rewritten.
+  //
+  // A CORRECTION, not a choice — which is why it is a separate callback rather
+  // than the same one with a flag. The page is overwriting a URL nobody can
+  // act on, so it replaces the entry: pushing one would put the impossible
+  // locale in history, and Back would restore it, re-run this effect and push
+  // the correction again — a loop with no way past this page.
   useEffect(() => {
     if (locale !== undefined && active !== undefined && locale !== active) {
-      onLocaleChange(active);
+      onLocaleCorrected(active);
     }
-  }, [locale, active, onLocaleChange]);
+  }, [locale, active, onLocaleCorrected]);
+
+  // "No languages configured" is a conclusion about the app, and it may only be
+  // drawn once the app has answered. The locale config arrives with the
+  // workspace metadata, and `useLocalization` reports `enabled: false` while
+  // that is still in flight or after it failed — the same value it reports for
+  // a genuinely single-language install. Three different situations, one
+  // reading, and the wrong two are the ones a translator would act on: told
+  // their languages are gone, on a cold load of a link somebody shared.
+  if (brandingPending) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+    );
+  }
+
+  if (brandingUnavailable) {
+    // The worklist endpoint may be perfectly healthy; what failed is the
+    // metadata that names the languages. Saying which half is missing is the
+    // difference between an operator checking the right thing and a translator
+    // being told their configuration is empty.
+    return (
+      <Alert>
+        <AlertTitle>Couldn&rsquo;t load this app&rsquo;s languages</AlertTitle>
+        <AlertDescription>
+          The workspace settings didn&rsquo;t load, so there is nothing to list
+          a language&rsquo;s work against yet. Reloading usually resolves it.
+        </AlertDescription>
+      </Alert>
+    );
+  }
 
   if (!enabled) {
-    // A worklist on a site with one language is a list that can never have a
-    // row. Saying so beats an empty table that looks like a loading failure.
+    // Now a fact rather than an absence: the app answered, and it has fewer
+    // than two languages. A worklist there is a list that can never have a
+    // row, and saying so beats an empty table that looks like a failed load.
     return (
       <Alert>
         <AlertTitle>No languages configured</AlertTitle>
@@ -277,6 +348,7 @@ export function TranslationWorklist({
             target={active ?? ""}
             source={source}
             stateLabel={stateLabel}
+            complete={notConsulted.length === 0}
           />
         )}
       </div>

@@ -195,7 +195,11 @@ export const routeConfig: Record<string, RouteConfig> = {
     // a reader with access to one collection sees exactly that collection's
     // outstanding work, and one with access to none sees an empty list rather
     // than a refusal.
-    section: overridableBy("collections"),
+    //
+    // Its own rail section rather than Collections': the page exists to cross
+    // collection boundaries, so highlighting one collection's rail while
+    // showing every collection's work would point at the wrong thing.
+    section: overridableBy("translations"),
   },
 
   // ============================================================

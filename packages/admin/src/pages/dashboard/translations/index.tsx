@@ -58,6 +58,14 @@ export default function TranslationsPage() {
           locale={localeParam ?? undefined}
           state={state}
           onLocaleChange={code => setSearchParam(LOCALE_PARAM, code)}
+          // REPLACE, not push. This fires when the URL named a language the
+          // worklist cannot answer for, so the entry being overwritten is one
+          // nobody can act on. Pushing instead would keep the impossible
+          // locale in history, and Back would restore it, re-run the
+          // correction and push again — trapping the reader on this page.
+          onLocaleCorrected={code =>
+            setSearchParam(LOCALE_PARAM, code, { replace: true })
+          }
           onStateChange={next => setSearchParam(STATE_PARAM, next)}
         />
       </PageContainer>

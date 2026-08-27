@@ -10,8 +10,10 @@ import { render, screen } from "@admin/__tests__/utils";
 import { TranslationWorklist } from "../TranslationWorklist";
 
 const useBranding = vi.fn();
+const brandingStatus = vi.fn();
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => useBranding(),
+  useBrandingStatus: () => brandingStatus(),
 }));
 
 const worklistQuery = vi.fn();
@@ -67,6 +69,7 @@ function renderWorklist(props: Record<string, unknown> = {}) {
       locale="es"
       state="missing"
       onLocaleChange={vi.fn()}
+      onLocaleCorrected={vi.fn()}
       onStateChange={vi.fn()}
       {...props}
     />
@@ -77,6 +80,9 @@ describe("TranslationWorklist", () => {
   beforeEach(() => {
     navigateTo.mockReset();
     useBranding.mockReturnValue({ locales: LOCALES });
+    // Settled by default. Every case that is not ABOUT loading needs the
+    // metadata to have arrived, or it renders skeletons and asserts nothing.
+    brandingStatus.mockReturnValue({ isPending: false, isUnavailable: false });
     worklistQuery.mockReturnValue(settled());
   });
 
@@ -168,7 +174,7 @@ describe("TranslationWorklist", () => {
     // promised.
     renderWorklist();
     await userEvent.click(
-      screen.getByRole("button", { name: "Translate Ada Lovelace" })
+      screen.getByRole("button", { name: "Translate Ada Lovelace in Posts" })
     );
     expect(navigateTo).toHaveBeenCalledTimes(1);
     const path = navigateTo.mock.calls[0]?.[0] as string;
@@ -182,7 +188,7 @@ describe("TranslationWorklist", () => {
     // buttons all saying "Translate" name nothing at all.
     renderWorklist();
     expect(
-      screen.getByRole("button", { name: "Translate Ada Lovelace" })
+      screen.getByRole("button", { name: "Translate Ada Lovelace in Posts" })
     ).toBeInTheDocument();
   });
 
@@ -201,26 +207,31 @@ describe("TranslationWorklist", () => {
   it("puts the URL back in step with the language it actually answered for", () => {
     // Otherwise the address bar keeps naming a language the screen is not
     // showing, and a copied link reproduces the wrong view rather than this one.
+    const onLocaleCorrected = vi.fn();
     const onLocaleChange = vi.fn();
-    renderWorklist({ locale: "en", onLocaleChange });
-    expect(onLocaleChange).toHaveBeenCalledWith("es");
+    renderWorklist({ locale: "en", onLocaleCorrected, onLocaleChange });
+    expect(onLocaleCorrected).toHaveBeenCalledWith("es");
+    // And NOT through the reader's own callback, which pushes a history entry.
+    // Pushing here keeps the impossible locale in history: Back restores it,
+    // the correction fires again, and the reader cannot leave the page.
+    expect(onLocaleChange).not.toHaveBeenCalled();
   });
 
   it("does not write a language into a URL that deliberately named none", () => {
     // Arriving from the sidebar with no `?locale=` is the ordinary path, not a
     // mistake to correct. Rewriting it there would push a history entry on
     // every visit to the page.
-    const onLocaleChange = vi.fn();
-    renderWorklist({ locale: undefined, onLocaleChange });
-    expect(onLocaleChange).not.toHaveBeenCalled();
+    const onLocaleCorrected = vi.fn();
+    renderWorklist({ locale: undefined, onLocaleCorrected });
+    expect(onLocaleCorrected).not.toHaveBeenCalled();
   });
 
   it("leaves a URL that names a real target exactly as it found it", () => {
     // The control: normalising must be triggered by an INVALID target, not by
     // every render, or the page rewrites its own URL in a loop.
-    const onLocaleChange = vi.fn();
-    renderWorklist({ locale: "ar", onLocaleChange });
-    expect(onLocaleChange).not.toHaveBeenCalled();
+    const onLocaleCorrected = vi.fn();
+    renderWorklist({ locale: "ar", onLocaleCorrected });
+    expect(onLocaleCorrected).not.toHaveBeenCalled();
   });
 
   it("explains an unconsulted collection without naming a cause it cannot know", () => {
@@ -241,5 +252,89 @@ describe("TranslationWorklist", () => {
       screen.queryByText(/more collections than one request covers, so/i)
     ).toBeNull();
     expect(screen.getByText(/can.t be read just now/i)).toBeInTheDocument();
+  });
+
+  it("names the action by collection too, because titles repeat across them", () => {
+    // This list deliberately spans collections, so two rows reading "Translate
+    // Untitled" is the ordinary case. A button reached by keyboard is read
+    // without its row, so the visible collection label does not reach the
+    // person who most needs it.
+    worklistQuery.mockReturnValue(
+      settled({
+        data: {
+          items: [
+            ROW,
+            { ...ROW, collection: "pages", collectionLabel: "Pages", id: "p2" },
+          ],
+          meta: META,
+        },
+      })
+    );
+    renderWorklist();
+    expect(
+      screen.getByRole("button", { name: "Translate Ada Lovelace in Posts" })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Translate Ada Lovelace in Pages" })
+    ).toBeInTheDocument();
+  });
+
+  it("does not call an incomplete empty answer 'nothing'", () => {
+    // "Nothing" is a claim about EVERYTHING, and may only be made when
+    // everything was looked at. With no rows AND collections left unconsulted,
+    // this is the one result indistinguishable from work nobody checked for.
+    worklistQuery.mockReturnValue(
+      settled({
+        data: { items: [], meta: { ...META, notConsulted: ["orders"] } },
+      })
+    );
+    renderWorklist();
+    expect(
+      screen.getByText(/in the collections that could be checked/i)
+    ).toBeInTheDocument();
+  });
+
+  it("does say 'nothing in this language' when the answer WAS complete", () => {
+    // The control. Hedging every empty result would make the honest one
+    // unreadable, and "nothing to translate" is the answer a translator wants
+    // to be able to trust.
+    worklistQuery.mockReturnValue(settled({ data: { items: [], meta: META } }));
+    renderWorklist();
+    expect(
+      screen.getByText(/nothing .* in this language/i)
+    ).toBeInTheDocument();
+  });
+
+  it("waits for the workspace metadata before declaring the app single-language", () => {
+    // The locale config arrives with the workspace query, and `useLocalization`
+    // reports `enabled: false` while it is in flight — the same value a real
+    // single-language install produces. Announcing "no languages" here tells a
+    // translator on a cold load that their configuration is gone.
+    brandingStatus.mockReturnValue({ isPending: true, isUnavailable: false });
+    useBranding.mockReturnValue({ locales: undefined });
+    renderWorklist();
+    expect(screen.queryByText(/no languages configured/i)).toBeNull();
+  });
+
+  it("says the metadata failed rather than that the app has one language", () => {
+    // Different situations, opposite reactions: one is an operator's problem
+    // with the workspace request, the other is a configuration choice. The
+    // worklist endpoint may be perfectly healthy in the first.
+    brandingStatus.mockReturnValue({ isPending: false, isUnavailable: true });
+    useBranding.mockReturnValue({ locales: undefined });
+    renderWorklist();
+    expect(
+      screen.getByText(/couldn.t load this app.s languages/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/no languages configured/i)).toBeNull();
+  });
+
+  it("still says so when the app really does have one language", () => {
+    // The control for both cases above: once the metadata has SETTLED and says
+    // there is one language, that is a fact and the page should state it.
+    brandingStatus.mockReturnValue({ isPending: false, isUnavailable: false });
+    useBranding.mockReturnValue({ locales: undefined });
+    renderWorklist();
+    expect(screen.getByText(/no languages configured/i)).toBeInTheDocument();
   });
 });
