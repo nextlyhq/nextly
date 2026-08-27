@@ -32,6 +32,7 @@ import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
 
 import { blocksFieldsOf } from "./class-usage-blocks-fields";
+import { forgetDeletedDocument } from "./class-usage-maintenance";
 import {
   classUsageDocumentReader,
   classUsageIndexStore,
@@ -44,11 +45,20 @@ import { reconcileWrittenDocument } from "./class-usage-write";
  *
  * `afterCreate` and `afterUpdate` only. A publish, a draft save and a restore
  * all arrive as one of those two, so the pair covers every path that changes a
- * document's blocks. Deletion is deliberately absent: removing a document's
- * rows is a different reconciliation — there is no document left to derive
- * from — and it is built separately rather than bolted here.
+ * document's blocks. Deletion is not one of them: there is no document left to
+ * derive rows from, so it is not a reconciliation at all and runs its own
+ * handler below.
  */
 const MAINTAINED_PHASES = ["afterCreate", "afterUpdate"] as const;
+
+/**
+ * The phases that FORGET a document.
+ *
+ * Separate from maintenance because the two share nothing but their guards.
+ * Reconciliation reads a document and computes a difference; this one has no
+ * document to read and removes everything the id owned.
+ */
+const FORGOTTEN_PHASES = ["afterDelete"] as const;
 
 /** How core names a Single's hooks, so a wildcard registration can tell them apart. */
 const SINGLE_HOOK_NAMESPACE = "single:";
@@ -117,6 +127,11 @@ export function registerClassUsageMaintenance(args: {
   for (const phase of MAINTAINED_PHASES) {
     args.ctx.hooks.on(phase, "*", handler);
   }
+
+  const forgetHandler = (context: UnknownRecord) => forget(args, context);
+  for (const phase of FORGOTTEN_PHASES) {
+    args.ctx.hooks.on(phase, "*", forgetHandler);
+  }
 }
 
 /**
@@ -148,6 +163,61 @@ async function maintain(
       `"${work.collection.slug}" ${work.documentId}. The index disagrees with ` +
       `the document until a rebuild runs.`
   );
+}
+
+/**
+ * Drop the rows of a document that has just been deleted.
+ *
+ * Shares every guard a write goes through — `writeTargetOf` answers the
+ * transaction, the Single namespace, this plugin's own index and the missing
+ * Direct API identically here, and a delete is exactly as unable to run on a
+ * pre-commit transactional path as a save is.
+ *
+ * It does NOT consult the collection's configuration, and that is deliberate
+ * rather than an omission. Maintenance asks which blocks fields a collection
+ * has because it must derive rows for each; this has nothing to derive and
+ * removes by id. Asking anyway would be worse than wasteful: a blocks field
+ * REMOVED from a collection after its rows were written would make the
+ * collection look untracked, and every row that field ever owned would survive
+ * the delete with no document left to reconcile it against and no sweep that
+ * visits it. The class it referenced would then be undeletable for ever.
+ *
+ * Skipping the read also means an untracked collection pays one indexed query
+ * per delete instead of a registry read, which is the cheaper of the two.
+ */
+async function forget(
+  args: Parameters<typeof registerClassUsageMaintenance>[0],
+  context: UnknownRecord
+): Promise<void> {
+  const target = writeTargetOf(context, args.indexCollection);
+  if (target === null) return;
+
+  try {
+    await forgetDeletedDocument({
+      store: classUsageIndexStore(target.nextly, args.indexCollection),
+      scope: "collection",
+      entity: target.slug,
+      entityKey: target.documentId,
+    });
+  } catch (failure) {
+    // Raised for the same reason maintenance raises: `after*` is a side-effect
+    // phase whose throw the registry converts into a warning the caller
+    // receives, and the delete itself is already committed. Swallowing would
+    // report a clean deletion while the document's rows stay behind, counting
+    // towards classes nothing renders — and those rows name a document that no
+    // longer exists, so no later write reconciles them.
+    args.ctx.logger?.error?.(
+      "[page-builder] class-usage rows survived a deleted document; " +
+        "they count towards their classes until a rebuild runs",
+      { collection: target.slug, documentId: target.documentId, error: failure }
+    );
+    throw new Error(
+      `[page-builder] class-usage could not forget "${target.slug}" ` +
+        `${target.documentId}. Its rows still count towards their classes ` +
+        `until a rebuild runs.`,
+      { cause: failure }
+    );
+  }
 }
 
 /**
