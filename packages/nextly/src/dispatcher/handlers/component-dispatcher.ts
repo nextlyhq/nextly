@@ -45,6 +45,7 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
+import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
@@ -396,15 +397,7 @@ export const COMPONENTS_METHODS: Record<
         }
       );
 
-      const renamed = pipelinePreview.candidates.map(c => ({
-        table: c.tableName,
-        from: c.fromColumn,
-        to: c.toColumn,
-        fromType: c.fromType,
-        toType: c.toType,
-        typesCompatible: c.typesCompatible,
-        defaultSuggestion: c.defaultSuggestion,
-      }));
+      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
 
       const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
       return respondData({

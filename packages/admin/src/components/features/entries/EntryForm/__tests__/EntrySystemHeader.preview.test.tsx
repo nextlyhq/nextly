@@ -113,6 +113,54 @@ describe("EntrySystemHeader preview control", () => {
     expect(screen.getByRole("button", { name: COPY_LABEL })).toBeDisabled();
   });
 
+  it("uses a declared label VERBATIM on the pane toggle", () => {
+    /*
+     * `previewLabel` is a complete button label, not a noun. Collections
+     * legitimately name one "View page" — the preview-link suite uses exactly
+     * that — and interpolating it produced "Show View page", which is not
+     * English. The state the prefix used to carry is reported by `aria-pressed`
+     * and by the variant, which is how a toggle button reports itself.
+     */
+    renderHeader({
+      previewLabel: "View page",
+      onTogglePreviewPane: () => {},
+      previewPaneOpen: false,
+    });
+
+    const toggle = screen.getByRole("button", { name: "View page" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByText(/Show View page/)).toBeNull();
+    expect(screen.queryByText(/Hide View page/)).toBeNull();
+  });
+
+  it("says what the click will do where no label was declared", () => {
+    /*
+     * The control. Dropping "Show"/"Hide" for every label would cost the
+     * default case its plainest affordance for no reason — there is no verb to
+     * collide with when the author supplied nothing.
+     */
+    renderHeader({ onTogglePreviewPane: () => {}, previewPaneOpen: false });
+
+    expect(
+      screen.getByRole("button", { name: "Show preview" })
+    ).toBeInTheDocument();
+  });
+
+  it("reports the open state on a declared label through aria-pressed", () => {
+    // Where the visible text no longer changes, this is the only thing that
+    // tells a screen-reader user the pane is open.
+    renderHeader({
+      previewLabel: "View page",
+      onTogglePreviewPane: () => {},
+      previewPaneOpen: true,
+    });
+
+    expect(screen.getByRole("button", { name: "View page" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  });
+
   it("renders nothing when neither action is available", () => {
     // A disabled control says "you cannot do this" without saying why, so the
     // header shows no preview affordance at all rather than a dead button.

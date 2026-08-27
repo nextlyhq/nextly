@@ -1519,6 +1519,201 @@ describe("where a control's value came from", () => {
     expect(text?.getAttribute("aria-hidden")).toBe("true");
   });
 
+  it("draws NOTHING while previewing and nobody has said which tier is live", () => {
+    /*
+     * Silence in this API is a CLAIM, which is what makes the obvious fix wrong.
+     *
+     * Under a preview compile the viewport tiers are container queries and a
+     * `matchMedia` caller cannot evaluate them, so the window-derived answer is
+     * the base context alone. Passed on, `liveBreakpoints: ["base"]` asserts
+     * that base is what the browser is applying — and a narrow preview box
+     * showing the mobile tier would have every mobile declaration excluded and
+     * the base value reported as the visible winner.
+     *
+     * No dot means "not asked", which is true until a caller observes the box.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry()],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).toBeNull();
+  });
+
+  it("draws one once the host SAYS which tier is live, which is the control", () => {
+    /*
+     * Without this, a panel that never drew a dot while previewing would satisfy
+     * the case above and the affordance would simply be gone rather than
+     * withheld — an absence proving nothing about the gate.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={["base"]}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry()],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).not.toBeNull();
+  });
+
+  it("still draws one when the compiler REFUSED the stated container name", () => {
+    /*
+     * A stated name is not an active preview, and the two must not be conflated
+     * because the compile does not conflate them either.
+     *
+     * `previewContainerName` refuses an empty, reserved, malformed or oversized
+     * string, and a refused name makes the compile PUBLISHED — viewport tiers
+     * emit ordinary `@media`, which `matchMedia` can evaluate. So the window's
+     * answer is authoritative here, and withholding the indicator would remove
+     * a correct affordance from every surface that passed a name the compiler
+     * threw away.
+     *
+     * Driven through the refusals the compiler actually enumerates rather than
+     * one representative, because each reaches a different branch of it: a
+     * length bound read before trimming, a reserved CSS-wide keyword, and a
+     * character the identifier grammar excludes.
+     */
+    // Registered ONCE: the block registry outlives `cleanup`, which unmounts
+    // the tree and leaves registrations in place, so a second call inside the
+    // loop is a redefinition and the registry refuses it.
+    register({ color: true });
+
+    for (const refused of ["", "   ", "none", "has space"]) {
+      cleanup();
+      const editor = editorFor(documentOf());
+
+      render(
+        <StyleInspectorPanel
+          editor={editor}
+          breakpoints={
+            {
+              viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+              container: [],
+            } as never
+          }
+          previewContainer={refused}
+          cascade={
+            {
+              nodes: editor.document.nodes,
+              entries: [entry()],
+            } as never
+          }
+        />
+      );
+
+      expect(dotIn("color")).not.toBeNull();
+    }
+  });
+
+  it("IGNORES a host's live set when the compiler refused the container name", () => {
+    /*
+     * The two halves of one question, which were briefly two answers.
+     *
+     * A refused name makes the compile PUBLISHED — viewport tiers emit ordinary
+     * `@media`, which the window decides. A host that forwards both canvas
+     * props unconditionally then supplies a box-derived set for a sheet the box
+     * is not deciding, and provenance gets judged against a tier the browser is
+     * not displaying.
+     *
+     * `liveBreakpoints` is deliberately a set that would change the verdict if
+     * it were consulted: the entry writes at `mobile`, so believing the host
+     * would report the control as set, while the window here matches nothing
+     * beyond the base context and the honest answer is that it is not.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="none"
+        liveBreakpoints={["base", "mobile"]}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry({ breakpoint: "mobile" })],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).toBeNull();
+  });
+
+  it("USES the host's live set when the name was accepted, which is the control", () => {
+    /*
+     * Without this, a panel that ignored `liveBreakpoints` under every
+     * circumstance would satisfy the case above — the assertion there is
+     * satisfied by absence, so its meaning depends on this one.
+     *
+     * Same entry, same host set; only the container name differs, and it is the
+     * difference between a compile the window decides and one the box does.
+     */
+    register({ color: true });
+    const editor = editorFor(documentOf());
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "mobile", label: "Mobile", maxWidth: 575 }],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={["base", "mobile"]}
+        cascade={
+          {
+            nodes: editor.document.nodes,
+            entries: [entry({ breakpoint: "mobile" })],
+          } as never
+        }
+      />
+    );
+
+    expect(dotIn("color")).not.toBeNull();
+  });
+
   it("draws NOTHING for a property no tier set", () => {
     // Eight empty dots per section is the shape that trains an author to stop
     // reading the panel.
@@ -1877,5 +2072,345 @@ describe("naming the place a value came from", () => {
       )
     ).toBeNull();
     expect(describeProvenance(undefined, editing as never)).toBeNull();
+  });
+});
+
+describe("the action a control's breakpoint provenance earns", () => {
+  const SITE = {
+    viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+    container: [],
+  } as never;
+
+  const action = (kind: "reset" | "jump") =>
+    document.querySelector(
+      `[data-property="color"] [data-action="${kind}"]`
+    ) as HTMLElement | null;
+
+  const entryAt = (breakpoint: string) =>
+    ({
+      origin: { kind: "node", id: "a" },
+      property: "color",
+      value: "#111",
+      state: "base",
+      breakpoint,
+    }) as never;
+
+  function mount(opts: {
+    stored: string;
+    entries: readonly unknown[];
+    onJump?: (breakpoint: string) => void;
+    /** Which tier the panel is editing; base unless a case needs otherwise. */
+    editing?: string;
+  }) {
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [opts.stored]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        {...(opts.editing === undefined
+          ? {}
+          : { breakpoint: opts.editing as never })}
+        /*
+         * PREVIEWING, which is what makes the host's live set authoritative.
+         * Published, the window decides and a supplied set is ignored — so
+         * without this the panel asks jsdom's absent `matchMedia`, gets the
+         * base context alone, and every control reads as unset. The real mount
+         * previews whenever the site defines a viewport tier.
+         */
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "tablet"] as never}
+        cascade={
+          { entries: opts.entries, nodes: editor.document.nodes } as never
+        }
+        {...(opts.onJump === undefined
+          ? {}
+          : { onJumpToBreakpoint: opts.onJump as never })}
+      />
+    );
+    return editor;
+  }
+
+  it("offers NOTHING on a control the author has not touched", () => {
+    /*
+     * The bound the whole design rests on. `ProvenanceDot` refuses to be
+     * focusable because a stop per control would double the presses to cross a
+     * section of eight or more, and a button on every control would spend that
+     * same cost. Unset controls are the large majority of a panel, and they
+     * earn no action.
+     */
+    /*
+     * The jump handler IS supplied, so this asserts the absence for the reason
+     * it claims: the control earns no action, rather than the host merely being
+     * unable to honour one.
+     *
+     * Measured while break-verifying: the `none` early exit cannot be
+     * distinguished by any test, because the jump handler is bound per leaf and
+     * only for an `inherited` badge — so a `none` badge reaches the jump branch
+     * with nothing to call and returns anyway. The guard is a readable exit
+     * rather than a load-bearing one, and this case does not pretend to cover
+     * it.
+     */
+    mount({ stored: BASE_BREAKPOINT, entries: [], onJump: () => {} });
+
+    expect(action("reset")).toBeNull();
+    expect(action("jump")).toBeNull();
+  });
+
+  it("offers a RESET for a value authored at the tier being edited", () => {
+    mount({ stored: BASE_BREAKPOINT, entries: [entryAt(BASE_BREAKPOINT)] });
+
+    expect(action("reset")).not.toBeNull();
+    expect(action("jump")).toBeNull();
+  });
+
+  it("names what the reset will REVEAL, rather than only that it clears", () => {
+    /*
+     * "Reset" alone asks an author to guess whether the control becomes unset
+     * or falls back to a wider tier's value. In a desktop-first cascade it is
+     * usually the second, and not always base.
+     */
+    /*
+     * Editing the NARROW tier, which is the only arrangement where a control is
+     * authored here AND something wider shows through. At base the narrower
+     * entry wins the cascade instead, so the control reads as inherited and
+     * earns a jump rather than a reset.
+     */
+    mount({
+      stored: "tablet",
+      editing: "tablet",
+      entries: [entryAt(BASE_BREAKPOINT), entryAt("tablet")],
+    });
+
+    const label = action("reset")?.getAttribute("aria-label");
+    /*
+     * Named by the PROPERTY, not the leaf alone. `margin` and `padding` both
+     * have a block start, so two controls would offer buttons called "Reset
+     * Block start" and a screen-reader user could not tell which style each
+     * removes — the same reason the panel computes an action name for `Clear`.
+     */
+    expect(label).toContain("Color");
+    /*
+     * The tier a reset falls back to is NAMED, not left to be guessed. The
+     * unconditional tier has no authored definition to take a label from, so it
+     * is called by its id here — the same name every other sentence in this
+     * panel gives it, which is the point: one naming, not a second one invented
+     * for this button.
+     */
+    expect(label).toContain("from base");
+  });
+
+  it("names the action by its PROPERTY, not by the leaf alone", () => {
+    /*
+     * `margin` and `padding` both have a block start, so a button named from
+     * the leaf alone reads "Reset Block start" on both and a screen-reader user
+     * cannot tell which style each removes. The panel already computes an
+     * action name for exactly this — `Clear` on a token value uses it — and a
+     * simple property like `color` cannot show the difference, because there
+     * the property label and the leaf label are the same word.
+     */
+    register({ spacing: true });
+    const editor = editorFor(
+      documentOf({
+        base: { [BASE_BREAKPOINT]: { padding: { blockStart: "8px" } } },
+      })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={SITE}
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "padding-block-start",
+                value: "8px",
+                state: "base",
+                breakpoint: BASE_BREAKPOINT,
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const label = document
+      .querySelector('[data-property="padding"] [data-action="reset"]')
+      ?.getAttribute("aria-label");
+
+    expect(label).toContain("Padding");
+    expect(label).toContain("Reset");
+  });
+
+  it("declares WHICH field it writes, so a picker does not write twice", () => {
+    /*
+     * The colour picker commits its draft when the popover closes, and pressing
+     * anything outside it closes the popover first. Without this declaration
+     * one Reset gesture writes twice — the draft the author was discarding,
+     * then the clear — and the first undo restores the very colour they pressed
+     * Reset to be rid of.
+     *
+     * The field is NAMED rather than the promise being made bare, because a
+     * bare one is made to every picker in the panel: a Reset on one control
+     * would then discard an unfinished gesture on another that it replaces
+     * nothing of.
+     *
+     * The MECHANISM is covered behaviourally in `style-colour-panel.test.tsx`,
+     * which drives a real picker against both a Reset on its own control and a
+     * Reset on a different one. What is only true here is that Reset names the
+     * control it is drawn beside.
+     */
+    mount({ stored: BASE_BREAKPOINT, entries: [entryAt(BASE_BREAKPOINT)] });
+
+    const field = document.querySelector(
+      '[data-property="color"] input'
+    ) as HTMLInputElement | null;
+    expect(field?.id).toBeTruthy();
+    expect(action("reset")?.getAttribute("data-nx-commits-for")).toBe(
+      field?.id
+    );
+  });
+
+  it("names the AXIS in the reset fallback, as the jump does", () => {
+    /*
+     * A container tier can share a label with a viewport one, which is why
+     * `BreakpointSource` carries the axis at all. A reset saying "showing the
+     * value from Tablet" beside a jump saying "Tablet (container)" leaves the
+     * author to work out that the two Tablets are different tiers.
+     */
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [{ id: "tablet", label: "Tablet", maxWidth: 991 }],
+            container: [{ id: "card", label: "Tablet", maxWidth: 400 }],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "card"] as never}
+        cascade={
+          {
+            /*
+             * The container entry FIRST and the base entry after it, so base
+             * wins the cascade and the control reads as authored here — which
+             * is the only state that offers a reset. Reversed, the container
+             * declaration wins, the control reads as inherited, and this case
+             * would assert against a button that is not drawn.
+             */
+            entries: [entryAt("card"), entryAt(BASE_BREAKPOINT)],
+            nodes: editor.document.nodes,
+          } as never
+        }
+      />
+    );
+
+    const label = action("reset")?.getAttribute("aria-label") ?? "";
+    /*
+     * Asserted unconditionally. A guard like `if (label.includes("Tablet"))`
+     * would pass whenever the reveal came out empty, which is the failure this
+     * case is meant to catch dressed as a pass.
+     */
+    expect(label).toContain("Tablet (container)");
+  });
+
+  it("offers a JUMP for a value that came from another tier", () => {
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: () => {},
+    });
+
+    expect(action("jump")).not.toBeNull();
+  });
+
+  it("withholds the jump for a tier the canvas cannot be taken to", () => {
+    /*
+     * Two ids can carry one bound, and only the winner is offered as a choice —
+     * but a declaration stored under the loser can still be what a control is
+     * showing. A jump there cannot be honoured: the width lookup answers
+     * `undefined`, which the host reads as the unconditional tier and RELEASES
+     * the canvas, so the value the author was chasing can disappear.
+     *
+     * Naming the tier stays right; travelling to it does not.
+     */
+    register({ color: true });
+    const editor = editorFor(
+      documentOf({ base: { [BASE_BREAKPOINT]: { color: "#111" } } })
+    );
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        breakpoints={
+          {
+            viewport: [
+              { id: "alpha", label: "Alpha", maxWidth: 991 },
+              { id: "beta", label: "Beta", maxWidth: 991 },
+            ],
+            container: [],
+          } as never
+        }
+        previewContainer="nx-preview-viewport"
+        liveBreakpoints={[BASE_BREAKPOINT, "alpha"] as never}
+        cascade={
+          {
+            entries: [
+              {
+                origin: { kind: "node", id: "a" },
+                property: "color",
+                value: "#111",
+                state: "base",
+                breakpoint: "alpha",
+              },
+            ],
+            nodes: editor.document.nodes,
+          } as never
+        }
+        onJumpToBreakpoint={(() => {}) as never}
+      />
+    );
+
+    // `beta` is the tier the compiler kept for 991, so `alpha` is unreachable.
+    expect(
+      document.querySelector('[data-property="color"] [data-action="jump"]')
+    ).toBeNull();
+  });
+
+  it("withholds the jump when the host cannot move the canvas", () => {
+    /*
+     * A button that does nothing reads as broken rather than as absent, and a
+     * host with no canvas width to move has no way to honour it.
+     */
+    mount({ stored: BASE_BREAKPOINT, entries: [entryAt("tablet")] });
+
+    expect(action("jump")).toBeNull();
+  });
+
+  it("jumps to the tier the VALUE came from, not to a fixed one", () => {
+    /*
+     * The target is this control's own source: a different control on the same
+     * panel jumps somewhere else, which is why the handler is bound per leaf
+     * rather than threaded as one prop.
+     */
+    const jumped: string[] = [];
+    mount({
+      stored: BASE_BREAKPOINT,
+      entries: [entryAt("tablet")],
+      onJump: id => jumped.push(id),
+    });
+
+    fireEvent.click(action("jump") as HTMLElement);
+
+    expect(jumped).toEqual(["tablet"]);
   });
 });

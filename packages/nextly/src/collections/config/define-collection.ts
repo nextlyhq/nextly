@@ -34,6 +34,7 @@
 import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
+import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
@@ -157,6 +158,28 @@ export interface CollectionPreviewConfig {
    * @default "Preview"
    */
   label?: string;
+
+  /**
+   * The viewport widths the preview pane offers, as a list or as a function.
+   *
+   * Declared rather than inferred: nothing in this system can know the widths a
+   * site's CSS actually breaks at, so a shipped phone/tablet/desktop list would
+   * be a claim about somebody else's stylesheet.
+   *
+   * The function form is evaluated per mint, on the server, so a source that
+   * CHANGES — a site's stored breakpoints, edited in the page builder — stays
+   * current instead of being captured once at boot. Only the resolved list ever
+   * reaches the browser.
+   *
+   * @example
+   * ```typescript
+   * breakpoints: [
+   *   { label: "Phone", width: 390 },
+   *   { label: "Desktop", width: 1280 },
+   * ]
+   * ```
+   */
+  breakpoints?: PreviewViewportsDeclaration;
 }
 
 /**

@@ -1,8 +1,13 @@
 import {
+  DEFAULT_LIMITS,
   type DocumentLimits,
   type RemotePattern,
 } from "@nextlyhq/blocks-engine";
-import { definePlugin } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  resolvedCollectionDraftSplit,
+} from "@nextlyhq/plugin-sdk";
+import type { PreviewViewportsDeclaration } from "nextly/config";
 
 // Imported rather than read at runtime so it can never drift from the published
 // package: a hardcoded literal had fallen eight releases behind, and
@@ -18,12 +23,87 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { resolvedCollectionView } from "./class-usage-collection-view";
+import { registerClassUsageMaintenance } from "./class-usage-hook";
+import {
+  CLASS_USAGE_INDEX_SLUG,
+  classUsageIndexCollection,
+} from "./collections/class-usage-index";
+import type { PagesCollectionOptions } from "./collections/pages";
 import { pagesCollection } from "./collections/pages";
 import { blocksFieldType } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
+import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
 import type { SiteStyleData } from "./site-style";
 import { siteStyleSingle } from "./site-style-storage";
+
+/**
+ * What the plugin-owned `pages` collection is built with, resolved from the
+ * host's options.
+ *
+ * Separated from the factory because it is a decision rather than an assembly
+ * step: it is where "a page-builder site's default presets are its own
+ * breakpoints" is stated, and reading it beside the collection list would
+ * scatter that across the contribution block.
+ */
+function pagesOptions(
+  opts: PageBuilderOptions,
+  configStyle: SiteStyleData
+): PagesCollectionOptions {
+  return {
+    ...(opts.pagePreviewPath === undefined
+      ? {}
+      : { previewPath: opts.pagePreviewPath }),
+    ...(opts.limits === undefined ? {} : { limits: opts.limits }),
+    ...(pagePreviewBreakpoints(opts, configStyle) ?? {}),
+  };
+}
+
+/**
+ * The viewport declaration the pages preview carries, or nothing.
+ *
+ * Answers with a whole `{ breakpoints }` fragment rather than a value, so the
+ * "offer none" case is an ABSENT key instead of an explicit `undefined`:
+ * `resolvePreviewViewports` reads an absent declaration as "offer nothing", and
+ * the pane then falls back to Responsive and a custom width.
+ */
+function pagePreviewBreakpoints(
+  opts: PageBuilderOptions,
+  configStyle: SiteStyleData
+): { breakpoints: PreviewViewportsDeclaration } | undefined {
+  if (opts.pagePreviewBreakpoints === false) return undefined;
+  if (opts.pagePreviewBreakpoints !== undefined) {
+    return { breakpoints: opts.pagePreviewBreakpoints };
+  }
+
+  /*
+   * The default, and the reason this option exists at all: a page-builder
+   * site's breakpoints ARE the widths its stylesheet changes at, so they are
+   * the only widths a preset can name without making a claim about somebody
+   * else's CSS.
+   *
+   * Read per mint rather than captured here, because an author edits them in
+   * the page builder — a list read once at construction would size the frame to
+   * a tier the site no longer has.
+   */
+  return {
+    breakpoints: previewViewportsFromSiteStyle({
+      /*
+       * Imported at call time, not at module scope. This runs per mint on the
+       * server, and a static import would pull the Direct API graph into every
+       * consumer of this plugin — including the browser bundle the canvas ships
+       * in, which has no use for it and cannot run it.
+       */
+      reader: async () => {
+        const { getCachedNextly } = await import("nextly");
+        const nextly = await getCachedNextly();
+        return { findSingle: args => nextly.findSingle(args) };
+      },
+      ...(opts.siteStyle === undefined ? {} : { defaults: configStyle }),
+    }),
+  };
+}
 
 export interface PageBuilderOptions {
   /** Disable behavior while still applying schema. Default true. */
@@ -149,6 +229,29 @@ export interface PageBuilderOptions {
    * to nothing, while declaring nothing gets them an explanation instead.
    */
   pagePreviewPath?: string;
+
+  /**
+   * The viewport widths the pages preview offers.
+   *
+   * Defaults to **this site's own breakpoints**, read from the `site-style`
+   * single at the moment a preview link is minted. That default is the whole
+   * point: a page-builder site's breakpoints ARE the widths its stylesheet
+   * changes at, so they are the only widths a preset can name without making a
+   * claim about somebody else's CSS — and requiring every host to wire that up
+   * by hand would leave the feature switched off for the workflow it was built
+   * for.
+   *
+   * Read per mint rather than captured here, because an author edits those
+   * breakpoints in the page builder: a list read once at boot would size the
+   * frame to a tier the site no longer has.
+   *
+   * Pass a list or a function of your own to override it, or `false` to offer
+   * none — the pane then falls back to Responsive and a custom width, which is
+   * everything it can offer honestly without inventing numbers.
+   *
+   * Ignored without a `pagePreviewPath`: there is no preview to offer them on.
+   */
+  pagePreviewBreakpoints?: PreviewViewportsDeclaration | false;
 }
 
 /**
@@ -161,6 +264,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   // the defaults tier. The stored tier reaches the published route through
   // `loadSiteStyle`, which reads per request.
   const configStyle = resolveSiteStyle(opts.siteStyle);
+
   return definePlugin({
     name: "@nextlyhq/plugin-page-builder",
     version: PLUGIN_VERSION,
@@ -210,6 +314,36 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
     init: ctx => {
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
+      // Class-usage maintenance. Registered here rather than beside the
+      // collection, because it is a property of the plugin being INSTALLED: the
+      // index table exists whether or not anything maintains it, and a host
+      // that installs the plugin is asking for both.
+      registerClassUsageMaintenance({
+        ctx,
+        // The RESOLVED slug, not the declared one. An integrator may
+        // `.rename({ nx_pb_class_usage: "..." })`, and the schema then creates
+        // only the renamed collection — so a hook holding the literal would
+        // write every row to a table that does not exist, and would also fail
+        // to recognise its own writes and recurse.
+        indexCollection:
+          ctx.self.collections[CLASS_USAGE_INDEX_SLUG] ??
+          CLASS_USAGE_INDEX_SLUG,
+        // The registry record, projected. `getCollection` is declared to
+        // return a shape that promises none of the properties this question
+        // reads, while returning an object that carries all of them.
+        draftSplit: (collection: unknown) =>
+          resolvedCollectionDraftSplit(resolvedCollectionView(collection)),
+        // Read per call, not captured: a host can reconfigure either, and a
+        // value captured at install would keep deriving rows under bounds the
+        // renderer no longer applies.
+        locales: () =>
+          ctx.config.localization?.locales.map(locale => locale.code) ?? [],
+        // The SAME bounds the pages collection and the renderer use. Deriving
+        // the index under different ones records a different document than the
+        // page serves: raised bounds leave classes on the extra nodes
+        // unindexed, so a class the page renders reads as unused.
+        limits: () => opts.limits ?? DEFAULT_LIMITS,
+      });
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no
@@ -219,7 +353,14 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       services: {
         [BLOCK_SERVICE]: () => createBlockRegistrationService(),
       },
-      collections: [pagesCollection(opts.pagePreviewPath, opts.limits)],
+      // The index is contributed unconditionally, alongside the pages it
+      // describes. Its table existing is what lets the maintenance path write
+      // to it without a first-run branch, exactly as the site style single is
+      // registered whether or not the host stated any defaults.
+      collections: [
+        pagesCollection(pagesOptions(opts, configStyle)),
+        classUsageIndexCollection(),
+      ],
       // The Site Style global: one versioned, access-controlled document the
       // stored style tier lives in. Registered whether or not the host stated
       // defaults, because the storage existing is what the style studios and

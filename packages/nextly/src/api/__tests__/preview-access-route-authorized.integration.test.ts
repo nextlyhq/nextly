@@ -59,9 +59,20 @@ describe("assertEntryPreviewable and the gate that may or may not have run", () 
   it("does not re-ask that gate for a caller the route already authorized", async () => {
     const id = await seed();
 
-    await expect(
-      assertEntryPreviewable("pages", id, DENIED, { routeAuthorized: true })
-    ).resolves.toBeUndefined();
+    /*
+     * RESOLVING is the property. `DENIED` cannot pass the coarse gate, so a
+     * gate that re-asked it would throw — and the assertion used to be
+     * `toBeUndefined`, which pinned the return TYPE rather than that. It broke
+     * the moment the gate began returning the preview grant it had just
+     * established, even though the behaviour it names was unchanged.
+     */
+    const grant = await assertEntryPreviewable("pages", id, DENIED, {
+      routeAuthorized: true,
+    });
+
+    // And the grant is what the gate now produces, so a caller cannot assemble
+    // one without having passed exactly these checks for this document.
+    expect(grant).toBeDefined();
   });
 
   // The control that makes the pair mean something: the SAME rule, reached

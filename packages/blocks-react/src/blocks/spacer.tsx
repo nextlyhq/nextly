@@ -41,6 +41,7 @@ export const spacer = defineBlock<SpacerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Spacer",
+    icon: "spacer",
     category: LAYOUT,
     keywords: ["gap", "space", "whitespace"],
   },

@@ -468,6 +468,7 @@ describe("PushSchemaPipeline (Option E flow) - prompt + resolution flow", () => 
       fromType: "text",
       toType: "text",
       typesCompatible: true,
+      preservesValues: true,
       defaultSuggestion: "rename",
     };
     const renameDetector = {

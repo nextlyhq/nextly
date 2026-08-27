@@ -19,6 +19,11 @@ import {
   respondDoc,
   respondList,
 } from "../../api/response-shapes";
+import {
+  formAvailability,
+  NO_SUCH_FORM,
+  type FormAvailabilityInput,
+} from "../../domains/forms/form-availability";
 import { NextlyError } from "../../errors";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -85,34 +90,60 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Form slug");
 
+      // Fetched by slug alone, then judged here. A status filter would answer
+      // 404 for a CLOSED form as readily as for one that never existed, and
+      // those are different answers: a visitor following a link to a closed
+      // form is owed the reason the author wrote.
       const result = await svc.collectionsHandler.listEntries({
         collectionName: "forms",
         limit: 1,
-        where: {
-          and: [
-            { slug: { equals: slug } },
-            { status: { equals: "published" } },
-          ],
-        },
+        where: { slug: { equals: slug } },
       });
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         scope: "forms-get-by-slug",
         slug,
       });
 
-      const docs = paginated.docs;
-      if (!docs || docs.length === 0) {
+      const doc = paginated.docs?.[0] as FormAvailabilityInput | undefined;
+
+      // A form that has never been public answers exactly as an unused address
+      // does. Only one that HAS been public explains itself: telling a caller
+      // who already holds the slug why it stopped accepting submissions
+      // discloses nothing they did not have, while answering the same way from
+      // the listing would let anyone enumerate slugs by probing. The listing
+      // above is unchanged and still shows published forms only.
+      const availability = formAvailability(doc);
+      if (availability.kind === "absent") {
         // §13.8: identifier (slug) belongs in logContext only.
         throw NextlyError.notFound({
-          logContext: {
-            entity: "form",
-            slug,
-            reason: "not-found-or-unpublished",
-          },
+          // The same sentence the Direct API and the plugin handler give. The
+          // canonical "Not found." would make what a visitor is told depend on
+          // whether their client spoke HTTP.
+          message: NO_SUCH_FORM,
+          logContext: { entity: "form", slug, reason: availability.reason },
         });
       }
 
-      return respondDoc(docs[0]);
+      if (availability.kind === "closed") {
+        // Only what a visitor at this address needs. The author wrote the
+        // message FOR them; nothing else on the row is theirs. A published
+        // form must return its fields because a client renders them, and a
+        // closed one renders a sentence — so returning the row was disclosure
+        // the feature never needed.
+        //
+        // That also bounds what the publication stamp can be asked to prove.
+        // It says the FORM was once public: not that THIS slug was, since a
+        // closed form can be renamed afterwards, and not that the fields and
+        // settings added since ever were. Answering with the message alone
+        // makes both questions moot rather than answering them wrongly.
+        return respondDoc({
+          slug,
+          status: "closed",
+          closedMessage: availability.message,
+        });
+      }
+
+      return respondDoc(doc as Record<string, unknown>);
     },
   },
 
@@ -141,38 +172,52 @@ const FORMS_METHODS: Record<string, MethodHandler<FormsServices>> = {
         });
       }
 
-      // Validate the form exists and is published.
+      // Fetched by slug alone, then judged. Filtering on `published` in the
+      // query answered 404 for a closed form as readily as for one that never
+      // existed, so the author's explanation never reached the visitor who
+      // most needed it — the one trying to submit.
       const formResult = await svc.collectionsHandler.listEntries({
         collectionName: "forms",
         limit: 1,
-        where: {
-          and: [
-            { slug: { equals: slug } },
-            { status: { equals: "published" } },
-          ],
-        },
+        where: { slug: { equals: slug } },
       });
       const formPaginated = unwrapServiceResult<PaginatedShape>(formResult, {
         scope: "forms-submit-lookup",
         slug,
       });
 
-      const forms = formPaginated.docs;
-      if (!forms || forms.length === 0) {
+      const candidate = formPaginated.docs?.[0] as
+        | (FormRecord & FormAvailabilityInput)
+        | undefined;
+      const availability = formAvailability(candidate);
+      if (availability.kind === "absent") {
         throw NextlyError.notFound({
-          logContext: {
-            entity: "form",
-            slug,
-            reason: "not-found-or-unpublished",
-          },
+          // The same sentence the Direct API and the plugin handler give. The
+          // canonical "Not found." would make what a visitor is told depend on
+          // whether their client spoke HTTP.
+          message: NO_SUCH_FORM,
+          logContext: { entity: "form", slug, reason: availability.reason },
+        });
+      }
+      if (availability.kind === "closed") {
+        // A state conflict, not a validation failure. `validation` fixes the
+        // canonical `error.message` to "Validation failed." and nests the real
+        // one under `error.data.errors[0]`, so a client reading the documented
+        // envelope would be handed the explanation the author wrote and never
+        // show it. `conflict` carries a domain message at the top level, which
+        // is what its own contract describes it as being for: an endpoint that
+        // is deliberately not accepting this request.
+        throw NextlyError.conflict({
+          reason: "state",
+          message: availability.message,
+          logContext: { entity: "form", slug, reason: "closed" },
         });
       }
 
-      const form = forms[0] as FormRecord;
+      const form = candidate as FormRecord;
 
       // Validate required fields.
-      const errors: Array<{ path: string; code: string; message: string }> =
-        [];
+      const errors: Array<{ path: string; code: string; message: string }> = [];
       for (const field of form.fields || []) {
         const value = submissionData.data[field.name];
         if (

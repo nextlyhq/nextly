@@ -31,6 +31,7 @@ import type {
 import { evaluateSingleCondition } from "./utils/evaluate-conditions";
 import { exportToCSV, generateExportFilename } from "./utils/export-formats";
 import { parseFieldRef } from "./utils/field-references";
+import { normalizeRedirectRelationships } from "./utils/redirect-target";
 
 export type NextlyPlugin = PluginDefinition;
 
@@ -96,7 +97,13 @@ function resolveConfig(
       hidden: options.fields?.hidden ?? true,
     },
 
-    redirectRelationships: options.redirectRelationships || [],
+    redirectRelationships: normalizeRedirectRelationships(
+      options.redirectRelationships
+    ),
+    // Filled at `init` from each collection's own metadata. Empty until then,
+    // and a slug that stays absent reads as unknown rather than as not
+    // localized — see `ResolvedFormBuilderConfig`.
+    redirectTargetLocalization: {},
     beforeEmail: options.beforeEmail,
 
     notifications: {
@@ -356,6 +363,12 @@ export function formBuilder(
                 // Runtime-resolved collection slugs (through ctx.self, so a
                 // framework .rename() is honored too) — admin components
                 // never hardcode "forms"/"form-submissions".
+                // Names only. A pattern may be a function, which does not
+                // survive JSON and which the browser has no use for — the
+                // admin picks a document, the server builds the URL.
+                redirectCollections: Object.keys(
+                  resolvedConfig.redirectRelationships
+                ),
                 slugs: {
                   forms:
                     ctx.self.collections[resolvedConfig.formOverrides.slug] ??
@@ -389,7 +402,7 @@ export function formBuilder(
 
     // -- Init ----------------------------------------------------------------
     // Registers an afterCreate hook on submissions to send email notifications.
-    init(nextly: NextlyInstance) {
+    async init(nextly: NextlyInstance) {
       // Resolve our OWN submissions slug through ctx.self, so the hook
       // follows a framework `.rename()` as well as our formSubmissionOverrides
       // option. The declared slug is the key; ctx.self maps it to the resolved
@@ -410,6 +423,57 @@ export function formBuilder(
           .filter(([, on]) => on)
           .map(([name]) => name),
       });
+
+      // Ask each redirect target collection whether it is localized. The save
+      // rule and the submission path both need it and neither can reach the
+      // registry themselves: a collection hook is handed `req.nextly`, which
+      // is the Direct API and carries no metadata accessor. Resolved once here
+      // and written onto the config both of them already close over.
+      //
+      // Per collection rather than in one call: a slug that cannot be read
+      // must stay ABSENT from the map, and a single failing lookup would
+      // otherwise take its readable siblings with it.
+      // Emptied first. `init` runs again on HMR and re-registration against the
+      // SAME config object, so a lookup that succeeded on the previous boot and
+      // fails on this one would leave its old answer standing while the catch
+      // below believes it left the slug absent. A stale `false` then reads a
+      // localized target as unreachable and drops its redirect; a stale `true`
+      // lets a plain draft target through.
+      for (const slug of Object.keys(
+        resolvedConfig.redirectTargetLocalization
+      )) {
+        delete resolvedConfig.redirectTargetLocalization[slug];
+      }
+
+      // AWAITED, not fired and forgotten: a write reaching the save rule before
+      // this resolves would find the map empty and read every target as
+      // undecided, which is the refusal silently not happening.
+      await Promise.all(
+        Object.keys(resolvedConfig.redirectRelationships).map(
+          async declared => {
+            const slug = nextly.self.collections[declared] ?? declared;
+            try {
+              // `getCollection` reads registered metadata and does not consult
+              // the context — its parameter is declared for a future ACL hook
+              // and is unused today — so an empty context is the honest
+              // argument rather than a fabricated user.
+              const collection =
+                await nextly.services.collections.getCollection(slug, {});
+              const localized = (collection as { localized?: unknown })
+                ?.localized;
+              if (typeof localized === "boolean") {
+                resolvedConfig.redirectTargetLocalization[declared] = localized;
+              }
+            } catch {
+              // Left absent on purpose: unknown, not "not localized".
+              nextly.logger.debug?.(
+                "Redirect target localization could not be read",
+                { collection: slug }
+              );
+            }
+          }
+        )
+      );
 
       (nextly as NextlyWithFormBuilderConfig).__formBuilderConfig =
         resolvedConfig;

@@ -67,14 +67,38 @@ export type {
   TokenKind,
 } from "@nextlyhq/blocks-engine";
 
+/**
+ * How this renderer reconciles a route context and a stored site tier.
+ *
+ * Published because a surface deciding anything from "the breakpoints this page
+ * compiles against" must read the SAME answer the render will use, and the
+ * precedences are not guessable from the inputs: the site tier wins for
+ * `breakpoints` and `blockBases`, the route wins for `namedClasses` and
+ * `previewContainer`, and each skips only `undefined` — so a stored `null`
+ * survives and means something.
+ *
+ * A parallel implementation of a reconciliation is a second answer that agrees
+ * until the day it does not, and this rule offers three separate ways to
+ * disagree — an inverted precedence, a wrong fallthrough, and a stated `null`
+ * discarded by a nullish coalesce. None of them is visible from the inputs, so
+ * a caller that reads the rule carefully and rewrites it is no safer than one
+ * that guesses.
+ */
+export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
+
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the
 // attribute must not hard-code its spelling, or the renderer and the editor hold
 // two copies of one string and the editor breaks silently when it moves.
+//
+// `SLOTS_ATTRIBUTE` is public for the same reason: an editor looking for a
+// container to draw an affordance on asks this attribute rather than keeping
+// its own copy of the string the renderer emits.
 export {
   EDITOR_NAMESPACE,
   NODE_ID_ATTRIBUTE,
   PROP_ATTRIBUTE,
+  SLOTS_ATTRIBUTE,
 } from "./block-boundary";
 // The render-safe attribute rule, public so an editor asks it instead of
 // keeping a second copy that would accept names the renderer drops.
@@ -200,6 +224,7 @@ export type {
   BlockDocument,
   BlockEditorMeta,
   BlockExample,
+  BlockIcon,
   BlockMigrationInfo,
   BlockNode,
   BlockRenderResult,
@@ -232,6 +257,7 @@ export type {
   RemotePatternInput,
   SlotLock,
   SlotSpec,
+  BreakpointContextOptions,
   StyleCompileContext,
   StyleOrigin,
   StyleState,
@@ -241,3 +267,34 @@ export type {
   TokenRef,
   ValidationIssue,
 } from "@nextlyhq/blocks-engine";
+
+/**
+ * The container names a preview compile emits its breakpoints against.
+ *
+ * Re-exported beside {@link BreakpointContextOptions} because a consumer of this
+ * package does not depend on the engine directly: without them, the previewing
+ * surface would have to hard-code the same reserved identifiers in its own
+ * `container-name`, and a name spelled twice is a name that can be spelled
+ * differently.
+ */
+export {
+  PREVIEW_VIEWPORT_CONTAINER,
+  UNPREVIEWABLE_CONTAINER,
+  /*
+   * The FACTORY as well as the constants, because it is the only supplied way
+   * off the predictable default.
+   *
+   * `PREVIEW_VIEWPORT_CONTAINER` is a default rather than a reservation — an
+   * ancestor declaring the same name captures the viewport queries — so a
+   * surface rendering third-party blocks is meant to mint its own. Under pnpm
+   * an application declaring only this package cannot reliably import a
+   * transitive dependency, so omitting this left the collision-safe path
+   * reachable only by adding `@nextlyhq/blocks-engine` to its manifest or by
+   * reimplementing the name validation, and the second is the one people do.
+   */
+  previewContainerFor,
+} from "@nextlyhq/blocks-engine";
+export {
+  PREVIEW_CONTAINER_STYLE,
+  previewContainerStyle,
+} from "./preview-container";

@@ -105,6 +105,7 @@ export const accordion = defineBlock<ContainerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Accordion",
+    icon: "accordion",
     category: INTERACTIVE,
     keywords: ["disclosure", "faq", "collapse", "toggle"],
   },

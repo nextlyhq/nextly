@@ -31,7 +31,11 @@
 import { useCallback, useMemo } from "react";
 
 import type { ApiError } from "@admin/lib/api/parseApiError";
-import { previewLinkApi } from "@admin/services/previewLinkApi";
+import {
+  previewLinkApi,
+  type PreviewLinkRequest,
+  type PreviewViewport,
+} from "@admin/services/previewLinkApi";
 
 /**
  * How long a token minted for the editor's own preview stays valid.
@@ -56,6 +60,38 @@ const SELF_PREVIEW_TTL_SECONDS = 15 * 60;
  * `urlTemplate` is the server's resolution input, so neither belongs here.
  * What the panel needs is whether to draw a button and how to label it.
  */
+/**
+ * The label a declaration actually states, or nothing.
+ *
+ * One reader for the raw field, because the surfaces that need it disagree
+ * about the DEFAULT and must not disagree about anything else. A pane needs a
+ * word for its title; a button reads the label into its own sentence and would
+ * rather have nothing than a placeholder. Normalising in two places meant a
+ * whitespace-only label counted as declared for one and absent for the other,
+ * and a padded one arrived trimmed at one surface and raw at the other.
+ *
+ * Blank is undeclared. A label of spaces is a field an author left empty, and
+ * showing it would title a pane with nothing visible.
+ */
+export function declaredPreviewLabel(config?: {
+  label?: string;
+}): string | undefined {
+  const declared = config?.label?.trim();
+  return declared === undefined || declared === "" ? undefined : declared;
+}
+
+/**
+ * What to call the preview, on a button or a pane.
+ *
+ * Exported and shared rather than inlined at each surface: entries and Singles
+ * both need it, and a second `?? "Preview"` elsewhere would silently keep the
+ * default after someone changed this one. The fallback is the whole value here
+ * — a declaration that names no label is the common case.
+ */
+export function previewLabel(config?: { label?: string }): string {
+  return declaredPreviewLabel(config) ?? "Preview";
+}
+
 export interface PreviewConfig {
   /**
    * Whether this collection previews at all, decided when the config synced.
@@ -148,15 +184,37 @@ export type PreviewUnavailableReason =
  * Each names what the reader can do about it, because a reason they cannot act
  * on reads as the admin being broken.
  */
-export const PREVIEW_MESSAGES: Record<PreviewUnavailableReason, string> = {
-  unavailable:
-    "This entry cannot be previewed yet. Check that it has a slug and a status the site publishes.",
-  noSiteUrl:
-    "No site URL is configured, so there is nowhere to open. An administrator can set it in Settings.",
-  popupBlocked:
-    "Your browser blocked the preview tab. Allow pop-ups for this site and try again.",
-  failed: "Could not work out where this entry previews. Please try again.",
-};
+/** Which kind of document a message is about. */
+export type PreviewDocumentNoun = "entry" | "single";
+
+/**
+ * What to tell someone a preview refused, in the words of THEIR document.
+ *
+ * A function of the noun rather than two message maps, because the reasons are
+ * the same reasons and only the remedy's subject differs — and two maps drift
+ * the first time one is edited. The advice differs where it genuinely must: an
+ * entry that cannot be addressed usually has an empty slug, while a Single is
+ * addressed by a slug it always has, so what is missing there is the preview
+ * declaration. Sending a Single's editor to check a slug points them at the one
+ * field that cannot be the problem.
+ */
+export function previewMessage(
+  reason: PreviewUnavailableReason,
+  noun: PreviewDocumentNoun = "entry"
+): string {
+  switch (reason) {
+    case "unavailable":
+      return noun === "single"
+        ? "This single cannot be previewed yet. Check that it has a preview URL configured and a status the site publishes."
+        : "This entry cannot be previewed yet. Check that it has a slug and a status the site publishes.";
+    case "noSiteUrl":
+      return "No site URL is configured, so there is nowhere to open. An administrator can set it in Settings.";
+    case "popupBlocked":
+      return "Your browser blocked the preview tab. Allow pop-ups for this site and try again.";
+    case "failed":
+      return `Could not work out where this ${noun} previews. Please try again.`;
+  }
+}
 
 /**
  * What the server's answer means for the tab that has already been claimed.
@@ -166,8 +224,32 @@ export const PREVIEW_MESSAGES: Record<PreviewUnavailableReason, string> = {
  * opener and closing it again are all forced by how browsers treat a click,
  * while this is a mapping that can be read on its own.
  */
-type PreviewOutcome =
-  | { kind: "open"; url: string }
+export type PreviewOutcome =
+  | {
+      kind: "open";
+      url: string;
+      /**
+       * When the credential in that URL stops working.
+       *
+       * Carried even though opening a tab has no use for it, because the
+       * SURFACE decides what it needs and the mint is the only thing that
+       * knows. A pane that keeps the frame on screen has to re-mint before the
+       * token lapses; dropping the value here would make it ask again for
+       * something this call already learned.
+       */
+      expiresAt: string;
+      /**
+       * Whether the pane may frame this URL, or must offer a tab instead.
+       *
+       * Carried for the same reason `expiresAt` is: opening a tab has no use
+       * for it, and the mint is the only thing that knows. A surface that
+       * decides for itself would be guessing at a property of the preview
+       * cookie it cannot see.
+       */
+      embeddable: boolean;
+      /** The viewports this preview offers, resolved by the server. */
+      viewports: PreviewViewport[];
+    }
   | { kind: "report"; reason: PreviewUnavailableReason };
 
 /**
@@ -233,7 +315,51 @@ function reasonForRefusal(error: unknown): PreviewUnavailableReason {
 }
 
 /**
- * Mints the credential this preview opens with.
+ * Which document a self-preview is being minted for.
+ *
+ * A union, mirroring the mint API's own request type: an entry and a Single are
+ * different documents, so naming both is not a narrower request and naming
+ * neither is not a request at all. `?: never` on the absent half is what makes
+ * the compiler say so, rather than a runtime check discovering it later.
+ *
+ * Spread straight into the request, so a field added on one side of the API's
+ * union cannot be silently dropped on the way through.
+ */
+/**
+ * Which document a self-preview is being minted for.
+ *
+ * DERIVED from the mint API's own request type rather than restated, so a field
+ * or a variant added there reaches this without anyone remembering: a hand-kept
+ * copy compiles happily while the service moves underneath it, and spreading
+ * the narrower object would silently omit the new requirement.
+ *
+ * `Omit` does not distribute over a union — it would collapse both arms into
+ * their common keys and lose the `?: never` discrimination that makes "both"
+ * and "neither" unrepresentable — so the conditional distributes it first.
+ */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+  ? Omit<T, K>
+  : never;
+
+export type SelfPreviewScope = DistributiveOmit<
+  PreviewLinkRequest,
+  "ttlSeconds"
+>;
+
+/**
+ * Mints the credential a preview surface opens with.
+ *
+ * Exported because there is more than one surface — a tab and an in-admin
+ * pane, over two kinds of document — and "a self-preview credential for this
+ * document" is ONE question. A pane that minted its own would be a second
+ * implementation of the TTL, the refusal mapping and the null-url case, and the
+ * two would agree until one of them was edited.
+ *
+ * A SCOPE rather than positional arguments, for the reason the API's own
+ * request type is a union: a collection entry and a Single are different
+ * documents, and three optional strings would make "both" and "neither"
+ * representable and then have to validate them away. Taking the union means a
+ * caller cannot express a request the server would refuse.
  *
  * The mint is the ONLY question asked, and that is deliberate. It already
  * resolves the destination through the same function the preview route will
@@ -246,16 +372,12 @@ function reasonForRefusal(error: unknown): PreviewUnavailableReason {
  * locale travels with it: on a localized collection an unscoped token opens the
  * default language whichever one was being edited.
  */
-async function authorizedOutcome(
-  collection: string,
-  entryId: string,
-  locale: string | undefined
+export async function mintSelfPreview(
+  scope: SelfPreviewScope
 ): Promise<PreviewOutcome> {
   try {
     const link = await previewLinkApi.mint({
-      collection,
-      entryId,
-      ...(locale === undefined ? {} : { locale }),
+      ...scope,
       ttlSeconds: SELF_PREVIEW_TTL_SECONDS,
     });
 
@@ -264,7 +386,13 @@ async function authorizedOutcome(
     // missing, which is a thing an administrator can fix, so it is reported as
     // itself rather than as an opaque failure.
     if (link.url === null) return { kind: "report", reason: "noSiteUrl" };
-    return { kind: "open", url: link.url };
+    return {
+      kind: "open",
+      url: link.url,
+      expiresAt: link.expiresAt,
+      embeddable: link.embeddable,
+      viewports: link.viewports,
+    };
   } catch (error) {
     return { kind: "report", reason: reasonForRefusal(error) };
   }
@@ -305,8 +433,18 @@ export interface UseEntryPreviewResult {
   isPreviewAvailable: boolean;
   /** Resolve and open. Asynchronous: the URL comes from the server. */
   openPreview: () => Promise<void>;
-  /** Label for the preview button. */
+  /** Label for the preview button, defaulted where none was declared. */
   label: string;
+  /**
+   * The label the collection actually DECLARED, or nothing.
+   *
+   * Carried beside the defaulted one because the surfaces that show it default
+   * differently: a button is named "Preview", while a pane toggle reads its
+   * label into "Show ..." and wants the sentence instead. Handing the defaulted
+   * value to both made the toggle say "Preview" in either state, which is the
+   * one wording that reports nothing about what clicking does.
+   */
+  declaredLabel: string | undefined;
 }
 
 // ============================================================================
@@ -368,7 +506,11 @@ export function useEntryPreview({
 
     settle(
       claimed.target,
-      await authorizedOutcome(collection.name, target.entryId, locale),
+      await mintSelfPreview({
+        collection: collection.name,
+        entryId: target.entryId,
+        ...(locale === undefined ? {} : { locale }),
+      }),
       onUnavailable
     );
   }, [collection.name, entry, locale, onUnavailable, previewConfig]);
@@ -376,6 +518,7 @@ export function useEntryPreview({
   return {
     isPreviewAvailable,
     openPreview,
-    label: previewConfig?.label || "Preview",
+    label: previewLabel(previewConfig),
+    declaredLabel: declaredPreviewLabel(previewConfig),
   };
 }

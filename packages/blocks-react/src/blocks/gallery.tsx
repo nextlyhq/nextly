@@ -104,6 +104,7 @@ export const gallery = defineBlock<ContainerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Gallery",
+    icon: "gallery",
     category: MEDIA,
     keywords: ["images", "photos", "grid", "carousel"],
   },

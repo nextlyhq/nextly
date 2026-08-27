@@ -21,8 +21,9 @@ name: Code hygiene
 # attributed too and stays warn-tier, so it reports without failing.
 #
 # WHOLE-REPO scans the whole repository at the PR branch HEAD, providing
-# complete visibility into dead code and duplication across all packages
-# (excluding apps/playground) in the GitHub Step Summary.
+# complete visibility into dead code, duplication, and complexity across all
+# packages (excluding apps/playground) via GitHub Step Summary and a sticky
+# PR comment.
 #
 # `templates/` is left out of both. Those four are fragments with no
 # package.json of their own, composed into a project by create-nextly-app at
@@ -36,9 +37,6 @@ on:
 
 permissions:
   contents: read
-  # The sticky comment and inline annotations the gate posts.
-  pull-requests: write
-  checks: write
 
 concurrency:
   group: code-hygiene-${{ github.ref }}
@@ -49,6 +47,10 @@ jobs:
     name: Changed files
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
 
     steps:
       - name: Checkout
@@ -86,14 +88,214 @@ jobs:
           config: .fallowrc.jsonc
           gate: new-only
           fail-on-issues: true
-          comment: true
+          comment: false
           annotations: true
-          comment-id: code-hygiene
           # playground is a dev harness, not a published package. Excluding it
           # keeps the gate focused on the packages that ship to consumers and
           # prevents its intentional loose dependency declarations from
           # appearing as findings in unrelated pull requests.
           workspace: "!playground"
+      # Two runs of the same analysis, because they answer different questions
+      # and only the JSON one carries attribution. The envelope names WHERE each
+      # finding is (path, line, side, fingerprint) but not whether the change
+      # introduced it; the JSON `attribution` block counts introduced vs
+      # inherited. The posting step needs both.
+      #
+      # `audit` exits 1 on a fail verdict, which is a findings exit rather than a
+      # tooling failure, so 0 and 1 are both success here. Anything above 1 —
+      # a crash, a bad config, an unwritable output — is recorded rather than
+      # swallowed: a step that cannot produce an envelope must not read as a step
+      # that found nothing to say.
+      - name: Generate audit review envelope
+        id: envelope
+        if: always() && steps.audit.conclusion != 'skipped'
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          set +e
+          for format in review-github json; do
+            pnpm exec fallow audit \
+              --changed-since "origin/$BASE_REF" \
+              --gate new-only \
+              --workspace "!playground" \
+              --config .fallowrc.jsonc \
+              --format "$format" > "/tmp/audit-$format.json" 2> "/tmp/audit-$format.err"
+            code=$?
+            if [ "$code" -gt 1 ]; then
+              echo "envelope-failed=true" >> "$GITHUB_OUTPUT"
+              echo "::warning::fallow audit --format $format exited $code, so no review threads can be derived from it."
+              cat "/tmp/audit-$format.err" >&2
+            fi
+          done
+
+      - name: Post PR review comments for changed files
+        id: post-review
+        if: always() && steps.audit.conclusion != 'skipped' && github.event.pull_request.number != null
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const prNumber = context.issue.number;
+
+            const readJson = (path) => {
+              if (!fs.existsSync(path)) return null;
+              try {
+                return JSON.parse(fs.readFileSync(path, 'utf8'));
+              } catch (err) {
+                console.log(`Could not parse ${path}: ${err.message}`);
+                return null;
+              }
+            };
+
+            const review = readJson('/tmp/audit-review-github.json');
+            const audit = readJson('/tmp/audit-json.json');
+
+            if (!review || !review.comments || review.comments.length === 0) return;
+
+            // This job reports what the CHANGE introduced. Dependency findings
+            // are project-level, so they reach the envelope whatever the diff
+            // touched: measured on this repository, a branch with zero
+            // introduced findings still produced 27 inline comments, every one
+            // about a pre-existing unused dependency in a file the PR never
+            // opened. The gate already excludes those from the verdict, so
+            // posting them is noise that arrives again on every push.
+            //
+            // The filter is PER FINDING rather than a count, because the two
+            // differ exactly when it matters: one genuine new finding alongside
+            // inherited ones would otherwise re-admit the whole inherited set.
+            if (!audit) {
+              console.log('No audit JSON available, so introduced findings cannot be separated from inherited ones. Posting nothing rather than every inherited finding.');
+              return;
+            }
+
+            // Every finding fallow attributes carries `introduced`; walking for
+            // that key reaches all three analyses without naming their
+            // containers, which differ per analysis and change between
+            // versions. A finding locates itself either by `path` or, for one
+            // spanning several files (an import cycle), by `files[]`.
+            const attributed = [];
+            const walk = (node) => {
+              if (Array.isArray(node)) return node.forEach(walk);
+              if (!node || typeof node !== 'object') return;
+              if ('introduced' in node) attributed.push(node);
+              Object.values(node).forEach(walk);
+            };
+            walk(audit);
+
+            const locations = (finding) => {
+              const paths = finding.path ? [finding.path] : (finding.files || []);
+              return paths.map(p => `${p}:${finding.line}`);
+            };
+
+            const introducedKeys = new Set(
+              attributed.filter(f => f.introduced === true).flatMap(locations)
+            );
+
+            if (introducedKeys.size === 0) {
+              console.log(`The change introduced no findings (${attributed.length} inherited). Inherited findings are reported by the whole-repository job, not as review threads here.`);
+              return;
+            }
+
+            const introducedComments = review.comments.filter(
+              c => introducedKeys.has(`${c.path}:${c.line}`)
+            );
+
+            if (introducedComments.length === 0) {
+              console.log(`None of the ${review.comments.length} envelope comments matched an introduced finding. Posting nothing.`);
+              return;
+            }
+            console.log(`${introducedComments.length} of ${review.comments.length} envelope comments are attributed to this change.`);
+
+            // Fetch existing review comments on this PR to prevent duplicate threads
+            let existingComments = [];
+            let lookupSucceeded = false;
+            try {
+              existingComments = await github.paginate(
+                github.rest.pulls.listReviewComments,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                }
+              );
+              lookupSucceeded = true;
+            } catch (err) {
+              console.log('Warning: could not fetch existing review comments:', err.message);
+            }
+
+            if (!lookupSucceeded) {
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'dedup-lookup-failed=true\n');
+              console.log('Skipping PR review creation because existing review comments could not be verified.');
+              return;
+            }
+
+            // Deduplicate on the FINGERPRINT fallow embeds in each comment body,
+            // not on the body text. A fingerprint identifies the finding itself,
+            // so it survives a reworded message, a moved line and a rebase —
+            // where comparing bodies reposts the whole set as soon as any of
+            // those changes. The envelope carries the pattern that reads it, so
+            // this matches what produced the comment rather than a shape guessed
+            // here.
+            const markerRegex = new RegExp(
+              review.marker_regex || '<!-- fallow-fingerprint:v2: ([0-9a-f]{16}) -->',
+              review.marker_regex_flags || 'm'
+            );
+            const fingerprintOf = (body) => {
+              const match = markerRegex.exec(body || '');
+              return match && match[1];
+            };
+            const seen = new Set(
+              existingComments.map(c => fingerprintOf(c.body)).filter(Boolean)
+            );
+
+            const newComments = introducedComments.filter(c => {
+              const fingerprint = c.fingerprint || fingerprintOf(c.body);
+              // A finding with no fingerprint cannot be reconciled across runs,
+              // so it falls back to path and line rather than posting blind.
+              if (!fingerprint) {
+                return !existingComments.some(existing =>
+                  existing.path === c.path &&
+                  (existing.line === c.line || existing.original_line === c.line)
+                );
+              }
+              return !seen.has(fingerprint);
+            });
+
+            if (newComments.length === 0) {
+              console.log('Every introduced finding already has a thread on this PR. Skipping duplicate review creation.');
+              return;
+            }
+
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber,
+                commit_id: context.payload.pull_request.head.sha,
+                event: 'COMMENT',
+                body: review.body || '### Fallow audit: findings introduced by this change',
+                comments: newComments.map(c => ({
+                  path: c.path,
+                  line: c.line,
+                  // `side` defaults to RIGHT when omitted, which is correct for
+                  // an added line and wrong for a finding the envelope placed on
+                  // the base side, so it is forwarded rather than assumed.
+                  side: c.side || 'RIGHT',
+                  body: c.body,
+                })),
+              });
+              console.log(`Successfully posted ${newComments.length} new audit review comment(s).`);
+            } catch (err) {
+              // A stale diff position, a transient API failure or a read-only
+              // fork token all land here, and each leaves the promised threads
+              // absent. Logged alone that is invisible: the job stays green and
+              // reads exactly like a run that found nothing to say, which is
+              // the state this workflow's degraded check exists to refuse.
+              fs.appendFileSync(process.env.GITHUB_OUTPUT, 'post-failed=true\n');
+              console.log('Could not post PR review threads:', err.message);
+            }
 
       # A degraded run reports nothing and reads exactly like a clean one, so
       # the states the action exposes for that are read rather than trusted.
@@ -107,7 +309,9 @@ jobs:
         env:
           UNSCOPED: ${{ steps.audit.outputs.changed-files-unavailable }}
           POST_SKIPPED: ${{ steps.audit.outputs.post-skipped-reason }}
-          DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed }}
+          DEDUP_FAILED: ${{ steps.audit.outputs.dedup-lookup-failed || steps.post-review.outputs.dedup-lookup-failed }}
+          ENVELOPE_FAILED: ${{ steps.envelope.outputs.envelope-failed }}
+          POST_FAILED: ${{ steps.post-review.outputs.post-failed }}
           VERDICT: ${{ steps.audit.outputs.verdict }}
           GATE: ${{ steps.audit.outputs.gate }}
         run: |
@@ -118,6 +322,19 @@ jobs:
           fi
           if [ "$DEDUP_FAILED" = "true" ] || { [ -n "$POST_SKIPPED" ] && [ "$POST_SKIPPED" != "none" ]; }; then
             echo "::warning::fallow could not reconcile its own pull-request comment (dedup-lookup-failed=$DEDUP_FAILED, post-skipped-reason=$POST_SKIPPED). The verdict still stands; only the comment is unreliable."
+          fi
+          # The envelope drives the review threads only. The action above owns
+          # the verdict, so a crashed envelope costs the inline comments and not
+          # the gate — but it must say so rather than reading as nothing to say.
+          if [ "$ENVELOPE_FAILED" = "true" ]; then
+            echo "::warning::fallow could not produce a review envelope, so no inline threads were derived from this run. The verdict above still stands."
+          fi
+          # Posting can fail after a clean analysis — a stale diff position, a
+          # transient API error, a read-only fork token. The findings are real
+          # and simply did not arrive, so this says so rather than letting the
+          # job read as a run with nothing to report.
+          if [ "$POST_FAILED" = "true" ]; then
+            echo "::warning::the audit's review threads could not be posted, so the findings it selected are absent from this pull request. The verdict above still stands and the job log lists them."
           fi
           # An empty verdict is the gate never having produced one, which is not
           # a pass. Absence of a failure is not a verdict.
@@ -130,6 +347,13 @@ jobs:
     name: Whole repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      # Commenting on a pull request needs the pull-requests scope even though
+      # it goes through the issue-comments API, so issues:write alone made the
+      # post step 403 and the report never left the step summary.
+      pull-requests: write
 
     steps:
       - name: Checkout
@@ -157,47 +381,95 @@ jobs:
       # shown so the author can see the real picture, not just what their
       # change added.
 
-      # One run per analysis. `set +e` because a findings exit (code 1) would
-      # otherwise abort the step under GitHub's `bash -e`, taking the summary
-      # with it. Dead code, dupes, and health are all reported in the summary.
-      # Anything above 1 is a fallow crash, surfaced separately.
+      # One combined run: with no subcommand, fallow analyses dead-code, dupes,
+      # and health together and emits one JSON, which `fallow report` then
+      # renders as one summary carrying all three sections. `set +e` because a
+      # findings exit (code 1) would otherwise abort the step under GitHub's
+      # `bash -e`, taking the summary with it. Anything above 1 is a fallow
+      # crash, surfaced separately.
       - name: Analyse the whole repository
         id: analyse
         run: |
           set +e
+          pnpm exec fallow \
+            --workspace "!playground" \
+            --config .fallowrc.jsonc \
+            --format json > "/tmp/head-combined.json" 2> "/tmp/err-combined.txt"
+          code=$?
           crashed=""
-          for analysis in dead-code dupes health; do
-            pnpm exec fallow "$analysis" \
-              --workspace "!playground" \
-              --config .fallowrc.jsonc \
-              --format json > "/tmp/head-$analysis.json" 2> "/tmp/err-$analysis.txt"
-            code=$?
-            case "$code" in
-              0|1) ;;
-              # Anything above 1 is fallow failing to run (bad config, parse
-              # error). Surface stderr so the author knows it is tooling.
-              *) crashed="$crashed $analysis($code)"; cat "/tmp/err-$analysis.txt" >&2 ;;
-            esac
-          done
+          case "$code" in
+            0|1) ;;
+            # Anything above 1 is fallow failing to run (bad config, parse
+            # error). Surface stderr so the author knows it is tooling.
+            *) crashed="combined($code)"; cat "/tmp/err-combined.txt" >&2 ;;
+          esac
           echo "crashed=$crashed" >> "$GITHUB_OUTPUT"
 
-      # The job summary is where this job says what it found. The sticky comment
-      # and the inline annotations belong to the Changed files job above.
+      # The job summary is where this job writes its output.
       - name: Write the job summary
         if: always() && steps.analyse.conclusion != 'skipped'
         run: |
           {
-            echo "## Whole-repository scan — PR branch current state"
+            echo "## Whole-Repository Code Hygiene Summary"
             echo
-            echo "Full dead-code, duplication, and health/complexity report for the"
-            echo "PR branch as it stands now. Playground is excluded. Quality gate"
-            echo "enforcement on introduced issues is performed by the Changed files job."
+            echo "Full dead-code, duplication, and complexity report for the PR branch as it stands now. Playground is excluded. Quality gate enforcement on introduced issues is performed by the Changed files job."
             echo
-          } >> "$GITHUB_STEP_SUMMARY"
-          for analysis in dead-code dupes health; do
-            pnpm exec fallow report --from "/tmp/head-$analysis.json" \
-              --format github-summary >> "$GITHUB_STEP_SUMMARY"
-          done
+            pnpm exec fallow report --from "/tmp/head-combined.json" --format github-summary
+          } > "/tmp/whole-repo-summary.md"
+          cat "/tmp/whole-repo-summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or update whole-repo sticky comment
+        if: always() && steps.analyse.conclusion != 'skipped' && github.event.pull_request.number != null
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const prNumber = context.issue.number;
+            const commentMarker = '<!-- fallow:whole-repo-hygiene -->';
+
+            let summaryContent = '';
+            if (fs.existsSync('/tmp/whole-repo-summary.md')) {
+              summaryContent = fs.readFileSync('/tmp/whole-repo-summary.md', 'utf8');
+            }
+
+            if (!summaryContent.trim()) {
+              summaryContent = `## Whole-Repository Code Hygiene Summary\n\nFull scan completed for PR #${prNumber}.`;
+            }
+
+            const commentBody = `${commentMarker}\n${summaryContent}`;
+
+            try {
+              const comments = await github.paginate(
+                github.rest.issues.listComments,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  per_page: 100,
+                }
+              );
+
+              const existingComment = comments.find(c => c.body && c.body.includes(commentMarker));
+
+              if (existingComment) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body: commentBody,
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: prNumber,
+                  body: commentBody,
+                });
+              }
+            } catch (err) {
+              console.log('Could not post/update whole-repo sticky comment (e.g. read-only token on fork PR):', err.message);
+            }
 
       # Fails only if fallow encountered a tooling failure/crash.
       - name: Gate

@@ -26,6 +26,7 @@ import { isPluginFieldTypeOnSurface } from "nextly";
 
 import { BUILT_IN_FORM_FIELD_TYPES } from "../types";
 import type { FormConfig, FormField, FormFieldType } from "../types";
+import { parseRedirectReference } from "../utils/redirect-reference";
 
 // ============================================================
 // Validation Error Types
@@ -66,6 +67,7 @@ export type FormValidationErrorCode =
   // Settings errors
   | "SETTINGS_INVALID_TYPE"
   | "REDIRECT_URL_REQUIRED"
+  | "REDIRECT_PAGE_REQUIRED"
   // Access errors
   | "ACCESS_INVALID_TYPE"
   | "ACCESS_FUNCTION_INVALID";
@@ -605,6 +607,43 @@ function validateSettings(
       });
     }
   }
+
+  // A form set to redirect to a page needs the page. Without this the form
+  // saves, the admin shows it as redirecting, and every submission finishes
+  // with nowhere to go — the destination is missing at submit time, when
+  // there is no one to tell.
+  //
+  // The SHAPE, not truthiness. `{}` and `{ relationTo: "pages" }` are truthy
+  // and name no document, so a presence test admits precisely the values that
+  // resolve to nothing. `null` for the collection list because this entry
+  // point does not have the plugin config: a reference carrying its own
+  // `relationTo` is checkable without it, and a bare id is not — which is the
+  // honest limit of validating a form in isolation.
+  if (
+    s.confirmationType === "relationship" &&
+    !namesADocument(s.redirectPage)
+  ) {
+    errors.push({
+      path: "settings.redirectPage",
+      message: "A page is required when confirmation type is 'relationship'",
+      code: "REDIRECT_PAGE_REQUIRED",
+    });
+  }
+}
+
+/**
+ * Whether a stored redirect value names a document at all.
+ *
+ * Derived from the shared reader rather than restating its rules, with an
+ * empty collection list: that accepts every shape carrying its own
+ * `relationTo` and rejects the ones naming nothing. A bare id is the case this
+ * cannot judge here, since which collection it belongs to is plugin
+ * configuration this entry point never sees — so it is accepted rather than
+ * reported, because refusing a valid form is the worse error.
+ */
+function namesADocument(value: unknown): boolean {
+  if (typeof value === "string") return value.length > 0;
+  return parseRedirectReference(value, []) !== null;
 }
 
 /**

@@ -18,6 +18,7 @@ import SetupPage from "./(auth)/setup";
 import VerifyEmailPage from "./(auth)/verify-email";
 import CollectionsPage from "./dashboard/collection/index";
 import EditEntryPage from "./dashboard/entries/[slug]/[id]/index";
+import EntryVersionsPage from "./dashboard/entries/[slug]/[id]/versions";
 import APIPlaygroundPage from "./dashboard/entries/[slug]/api";
 import CreateEntryPage from "./dashboard/entries/[slug]/create";
 import CollectionEntriesPage from "./dashboard/entries/[slug]/index";
@@ -55,6 +56,7 @@ import EditWebhookPage from "./dashboard/settings/webhooks/edit/[id]";
 import WebhooksPage from "./dashboard/settings/webhooks/index";
 import SingleAPIPlaygroundPage from "./dashboard/singles/[slug]/api";
 import SingleEditPage from "./dashboard/singles/[slug]/index";
+import SingleVersionsPage from "./dashboard/singles/[slug]/versions";
 import SinglesPage from "./dashboard/singles/index";
 import CreateUserPage from "./dashboard/users/create";
 import EditUserPage from "./dashboard/users/edit";
@@ -253,6 +255,15 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     section: collectionContentSection,
   },
+  // Before the wildcard [id] route, matching the convention above. The
+  // matcher's patterns are anchored so a four-segment path cannot be taken by
+  // the two-segment edit route, but keeping the order makes that independent of
+  // how the matcher is written.
+  [ROUTES.COLLECTION_ENTRY_VERSIONS]: {
+    component: EntryVersionsPage,
+    type: "private",
+    section: collectionContentSection,
+  },
   [ROUTES.COLLECTION_ENTRY_EDIT]: {
     component: EditEntryPage,
     type: "private",
@@ -306,6 +317,11 @@ export const routeConfig: Record<string, RouteConfig> = {
   // IMPORTANT: literal segments like /api must be registered before the wildcard [slug].
   [ROUTES.SINGLE_API]: {
     component: SingleAPIPlaygroundPage,
+    type: "private",
+    section: overridableBy("singles"),
+  },
+  [ROUTES.SINGLE_VERSIONS]: {
+    component: SingleVersionsPage,
     type: "private",
     section: overridableBy("singles"),
   },

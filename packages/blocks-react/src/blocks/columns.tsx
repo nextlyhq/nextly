@@ -103,6 +103,7 @@ export const columns = defineBlock<ContainerProps, PageContext>({
   // let a search for a word the description never uses still find this.
   editor: {
     label: "Columns",
+    icon: "columns",
     category: LAYOUT,
     keywords: ["row", "grid", "split", "side by side"],
   },

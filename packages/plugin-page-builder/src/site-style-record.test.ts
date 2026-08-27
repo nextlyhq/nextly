@@ -44,6 +44,57 @@ describe("checkStoredTokens", () => {
     expect(result.value?.darkMode).toBe("media");
   });
 
+  it("carries both extension records through, because this shape is a WHITELIST", () => {
+    /*
+     * The narrowed token is rebuilt field by field, so a field this list omits
+     * is dropped by a save that reports success — the quietest way to lose
+     * data there is. `extensions` holds what another tool wrote and
+     * `unreadExtension` what a newer build of this one did, and both exist for
+     * the same reason: an export has to carry what this build cannot read.
+     *
+     * Shape only, as the rest of this list is: what is inside came from a
+     * design-token file and this layer has no opinion on it.
+     */
+    const result = checkStoredTokens({
+      tokens: [
+        {
+          ...token("color.primary", "#111111"),
+          extensions: { "com.figma": { anything: "at all" } },
+          unreadExtension: { future: "keep-me" },
+        },
+      ],
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.value?.tokens[0]?.extensions).toEqual({
+      "com.figma": { anything: "at all" },
+    });
+    expect(result.value?.tokens[0]?.unreadExtension).toEqual({
+      future: "keep-me",
+    });
+  });
+
+  it("REFUSES a malformed extension record rather than narrowing it away", () => {
+    /*
+     * Both fields hold data that exists to survive a round trip, and storage
+     * accepts a write whenever this reports no issues. Dropping a malformed one
+     * quietly would answer the author with a successful save that discarded
+     * exactly what they were trying to keep — the loudest possible failure
+     * reported as the quietest.
+     *
+     * Both fields, because the branch is the same one: a fix naming only the
+     * field a report happened to arrive about leaves the other saying nothing.
+     */
+    for (const field of ["extensions", "unreadExtension"]) {
+      const result = checkStoredTokens({
+        tokens: [
+          { ...token("color.primary", "#111111"), [field]: "not-a-record" },
+        ],
+      });
+      expect(result.issues, field).toHaveLength(1);
+      expect(result.value?.tokens ?? [], field).toEqual([]);
+    }
+  });
+
   it("reports a shape-broken entry AND excludes it from the narrowed value", () => {
     const result = checkStoredTokens({
       tokens: [token("color.primary", "#111111"), { name: "color.broken" }],

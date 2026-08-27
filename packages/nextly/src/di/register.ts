@@ -172,7 +172,11 @@ import type { UserService } from "../services/users/user-service";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { registerFieldFunctions } from "../shared/lib/field-level-registry";
-import type { AdminConfig, AuthConfig } from "../shared/types/config";
+import type {
+  AdminConfig,
+  AuthConfig,
+  SanitizedRateLimitingConfig,
+} from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
 import type { ImageProcessor } from "../storage/image-processor";
 import { initializeMediaStorage, type MediaStorage } from "../storage/storage";
@@ -303,6 +307,17 @@ export interface NextlyServiceConfig {
 
   /** Security configuration (headers, CORS, uploads, sanitization). */
   security?: SecurityConfig;
+
+  /**
+   * Rate limiting, with defaults applied.
+   *
+   * Carried through for the same reason `admin` and `auth` are: a handler that
+   * reads the DI "config" service can otherwise see no rate-limit block at all.
+   * It matters here specifically because `store` lives on it, and the auth
+   * limiter has no other way to reach a shared store — leaving it out means the
+   * credential paths silently stay per-process however the app is configured.
+   */
+  rateLimit?: SanitizedRateLimitingConfig;
 
   /**
    * Admin panel configuration (branding, plugin overrides, devAutoLogin).

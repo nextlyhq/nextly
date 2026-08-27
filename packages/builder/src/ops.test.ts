@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyOp,
+  applyOps,
   OpError,
   sameStoredValue,
   sameStyleValue,
@@ -2996,5 +2997,240 @@ describe("what the two value comparisons each treat as the same value", () => {
     right.self = right;
 
     expect(sameStoredValue(left, right)).toBe(false);
+  });
+});
+
+describe("a group of ops applied as one edit", () => {
+  /**
+   * A node whose single prop is `size` bytes of text, so a document's size can
+   * be steered precisely enough to sit either side of a cap.
+   */
+  function sized(id: string, size: number): BlockNode {
+    return {
+      id,
+      type: "core/box",
+      version: 1,
+      props: { text: "x".repeat(size) },
+    } as unknown as BlockNode;
+  }
+
+  /** An update that replaces one node's text with `size` bytes of it. */
+  function resize(id: string, size: number): BuilderOp {
+    return {
+      kind: "update",
+      id,
+      patch: { props: { text: "x".repeat(size) } },
+    } as BuilderOp;
+  }
+
+  it("still refuses a group whose RESULT crosses the cap", () => {
+    /*
+     * A group is refused exactly where one op is: each op in the fold is
+     * judged against the document as it stands when that op runs, so the op
+     * that crosses the cap is the one that throws — the group has no allowance
+     * of its own that a single call does not have.
+     */
+    const start = doc([sized("a", 200), sized("b", 200)]);
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+
+    expect(() =>
+      applyOps(start, [resize("a", 1_800), resize("b", 1_800)], limits)
+    ).toThrow(OpError);
+  });
+
+  it("is exactly `applyOp` for a group of one", () => {
+    /*
+     * A group of one answers exactly as the single call does, in BOTH
+     * directions: a document `applyOp` accepts comes back identical, and one it
+     * refuses is refused identically. Pinned rather than reasoned, because the
+     * editor routes every single-block edit through this path.
+     *
+     * Behavioural only. The shortcut `applyOps` takes for one op is not
+     * observable from here — it saves an endpoint comparison whose reader
+     * invokes no accessor — so this fixes the ANSWER and leaves the route to
+     * the comment on `applyOps`.
+     */
+    const start = doc([sized("a", 200)]);
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 3_000 };
+
+    const one = applyOp(start, resize("a", 400), limits);
+    const grouped = applyOps(start, [resize("a", 400)], limits);
+
+    expect(grouped.document).toEqual(one.document);
+    expect(grouped.inverses).toEqual([one.inverse]);
+
+    // And refusal agrees too, not just success.
+    expect(() => applyOp(start, resize("a", 9_000), limits)).toThrow(OpError);
+    expect(() => applyOps(start, [resize("a", 9_000)], limits)).toThrow(
+      OpError
+    );
+  });
+
+  it("returns inverses in UNDO order", () => {
+    /*
+     * Each inverse describes the document as it stood when its op ran, so
+     * replaying them forwards would meet a tree the later ops had already
+     * changed. The last op's inverse has to run first.
+     */
+    const start = doc([sized("a", 100), sized("b", 100)]);
+    const applied = applyOps(start, [resize("a", 150), resize("b", 250)], {
+      ...DEFAULT_LIMITS,
+      maxBytes: 10_000,
+    });
+
+    expect(applied.inverses).toHaveLength(2);
+    // Undoing in the order returned puts the document back exactly.
+    let undone = applied.document;
+    for (const inverse of applied.inverses) {
+      undone = applyOp(undone, inverse, DEFAULT_LIMITS).document;
+    }
+    expect(undone.nodes).toEqual(start.nodes);
+  });
+
+  it("keeps the per-op node bound, so a group cannot smuggle a huge subtree", () => {
+    /*
+     * `maxNodes` is not only a product cap. `assertNodeShape` refuses at
+     * `maxNodes + 1` precisely so the work stays proportional to what a
+     * document may HOLD rather than to what a caller sent — its own comment
+     * says so. Deferring it to the end of the group would let an op validate,
+     * snapshot, insert and scan a subtree of any size first, on the main
+     * thread, even if a later op removed it again.
+     *
+     * So this must be refused even though the group's FINAL document is empty
+     * of it.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 20 };
+    const start = doc([sized("a", 10)]);
+    const many = Array.from({ length: 200 }, (_, index) =>
+      sized(`n${index}`, 1)
+    );
+    const insert = {
+      kind: "insert",
+      node: { ...sized("big", 1), slots: { children: many } },
+      at: { index: 1 },
+    } as unknown as BuilderOp;
+    const remove = { kind: "remove", id: "big" } as BuilderOp;
+
+    expect(() => applyOps(start, [insert, remove], limits)).toThrow(OpError);
+  });
+
+  it("records the entry when the endpoints are too deep to compare", () => {
+    /*
+     * The boundary of the check above, pinned so it is a known limit rather
+     * than a surprise. The comparison is depth-bounded from wherever it starts,
+     * and rooting it at the DOCUMENT adds the envelope, forest and node levels
+     * that `applyOp` does not pay when it asks the same question of a field.
+     *
+     * A value stored near the limit therefore compares equal field-rooted and
+     * different document-rooted, so the group records an entry whose undo has
+     * no visible effect. The miss runs in the safe direction: an unnecessary
+     * entry costs an author one wasted press, where dropping one the comparison
+     * could not read costs them an edit they cannot take back.
+     */
+    const chain = (depth: number): unknown => {
+      let value: unknown = "leaf";
+      for (let level = 0; level < depth; level += 1) value = { next: value };
+      return value;
+    };
+
+    // Population first: the two values ARE equal by the predicate `applyOp`
+    // uses on a field, which is what makes the document-rooted answer a limit
+    // of the walk rather than a real difference.
+    expect(sameStoredValue(chain(510), chain(510))).toBe(true);
+
+    // DISTINCT objects holding equal content: two references to one value are
+    // settled by identity before the walk starts, so a shared fixture would
+    // report equal and prove nothing.
+    const deep = (): BlockDocument =>
+      doc([
+        { id: "a", type: "core/box", version: 1, props: { v: chain(510) } },
+      ] as unknown as BlockNode[]);
+    const shallow = (): BlockDocument =>
+      doc([
+        { id: "a", type: "core/box", version: 1, props: { v: chain(2) } },
+      ] as unknown as BlockNode[]);
+
+    // Document-rooted, an equal pair reads as different.
+    expect(sameStoredValue(deep(), deep())).toBe(false);
+    // The control: an ordinary pair still compares equal, so the assertion
+    // above is about depth and not about documents in general.
+    expect(sameStoredValue(shallow(), shallow())).toBe(true);
+  });
+
+  it("records nothing when the group leaves the document as it found it", () => {
+    /*
+     * Every op changed something and the net effect is still nothing, so the
+     * per-op no-op check cannot see it: each op is a real change when it runs.
+     * An entry recording the group would undo to no visible change, which is
+     * the failure the endpoint comparison exists to refuse.
+     */
+    const limits = { ...DEFAULT_LIMITS, maxBytes: 6_000 };
+    const start = doc([sized("a", 100)]);
+
+    const applied = applyOps(
+      start,
+      [resize("a", 2_000), resize("a", 100)],
+      limits
+    );
+
+    // The document really is back where it started...
+    expect(applied.document.nodes).toEqual(start.nodes);
+    // ...so there is nothing for the caller to record.
+    expect(applied.inverses).toEqual([]);
+  });
+
+  it("does not read the document before `applyOp` has checked it", () => {
+    /*
+     * A group reads NOTHING of the document before `applyOp` has checked it.
+     * Measuring the starting size here would read the document's own fields
+     * ahead of the guards that decide whether they are fields at all, invoking
+     * a `toJSON` accessor — document-supplied code run on input that is about
+     * to be rejected.
+     *
+     * `applyOp` rejects a computed field without invoking it, and a group must
+     * not be the path that does otherwise.
+     */
+    let calls = 0;
+    const hostile = doc([sized("a", 100)]) as unknown as Record<
+      string,
+      unknown
+    >;
+    Object.defineProperty(hostile, "toJSON", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        calls += 1;
+        return () => ({});
+      },
+    });
+
+    // Population: `applyOp` refuses this document and reads nothing from the
+    // accessor, which is the behaviour the group has to match.
+    expect(() =>
+      applyOp(
+        hostile as unknown as BlockDocument,
+        resize("a", 200),
+        DEFAULT_LIMITS
+      )
+    ).toThrow(OpError);
+    const afterSingle = calls;
+
+    expect(() =>
+      applyOps(hostile as unknown as BlockDocument, [
+        resize("a", 200),
+        resize("a", 300),
+      ])
+    ).toThrow(OpError);
+    expect(calls).toBe(afterSingle);
+  });
+
+  it("records nothing for an empty group", () => {
+    // No ops, no inverses, and the same document back — an empty group that
+    // produced a history entry would undo to no visible effect.
+    const start = doc([sized("a", 100)]);
+    const applied = applyOps(start, []);
+
+    expect(applied.document).toBe(start);
+    expect(applied.inverses).toEqual([]);
   });
 });

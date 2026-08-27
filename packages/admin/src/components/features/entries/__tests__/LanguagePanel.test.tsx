@@ -7,6 +7,8 @@ import {
   EntryLocaleProvider,
   type EntryLocaleContextValue,
 } from "../EntryLocaleContext";
+import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
+import { LANGUAGE_STATES, LANGUAGE_STATE_LABEL } from "../translation-meta";
 import { LanguagePanel, type LanguagePanelProps } from "../LanguagePanel";
 
 const useBranding = vi.fn();
@@ -26,9 +28,31 @@ const publishState = vi.fn();
 vi.mock("../usePublishAllLanguages", () => ({
   usePublishAllLanguages: () => publishState(),
 }));
+// Counted rather than stubbed to null: how MANY of these exist is the point of
+// one of the tests below, and a stub that renders nothing cannot answer it.
 vi.mock("../CopyFromLanguageDialog", () => ({
-  CopyFromLanguageDialog: () => null,
+  CopyFromLanguageDialog: () => <span data-testid="copy-dialog-mount" />,
 }));
+
+function dialogMounts(): number {
+  return screen.queryAllByTestId("copy-dialog-mount").length;
+}
+
+/**
+ * The panel drew nothing.
+ *
+ * Asserted on the panel's own output rather than on an empty container: the
+ * copy-from scope around it always mounts its confirm dialog, so "the container
+ * is empty" would be a claim about the harness. What matters is that no part of
+ * the panel — its list, its header, its legend — reached the screen.
+ */
+function expectPanelAbsent(): void {
+  expect(
+    screen.queryByRole("list", { name: "Languages in this document" })
+  ).toBeNull();
+  expect(screen.queryByText("Languages")).toBeNull();
+  expect(screen.queryByRole("group", { name: /language states/i })).toBeNull();
+}
 
 const LOCALES = {
   defaultLocale: "en",
@@ -79,7 +103,9 @@ function renderPanel(
 ) {
   return render(
     <EntryLocaleProvider value={ctx}>
-      <LanguagePanel {...props} />
+      <CopyFromLanguageScope>
+        <LanguagePanel {...props} />
+      </CopyFromLanguageScope>
     </EntryLocaleProvider>
   );
 }
@@ -100,10 +126,221 @@ describe("LanguagePanel", () => {
     publishState.mockReturnValue(PUBLISH_IDLE);
   });
 
+  describe("what the dots mean", () => {
+    /*
+     * The legend moved here from the header's language menu, which this step
+     * deletes. It is the ONE thing that menu carried which the panel did not
+     * duplicate, and without it the dots are decodable only by hovering — no
+     * help on a touch device and none at all to someone scanning.
+     *
+     * Asserted on the `<details>` element's OWN state rather than on
+     * visibility, deliberately. jsdom does not model `<details>`: a closed one
+     * keeps its content in the accessibility tree, so `queryByRole` finds the
+     * legend either way and a visibility assertion would pass whether the
+     * disclosure worked or not. The element's `open` property is the thing
+     * jsdom can actually answer for, and it is what a browser derives the
+     * hiding from.
+     */
+    function legend() {
+      return screen.getByText("What do these mean?").closest("details");
+    }
+
+    it("starts closed, so a narrow rail is not four rows heavier", () => {
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      expect(legend()).not.toBeNull();
+      expect(legend()?.open).toBe(false);
+    });
+
+    it("opens on the summary, and explains every state", async () => {
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.click(screen.getByText("What do these mean?"));
+
+      expect(legend()?.open).toBe(true);
+      const states = screen.getByRole("group", { name: /language states/i });
+      // The CANONICAL spellings from `translation-meta`, not capitalised
+      // copies: a legend with its own wording would be a second vocabulary for
+      // the states, which is the defect this step exists to remove. Case is a
+      // presentation concern and is handled in CSS.
+      for (const label of [
+        "published",
+        "translated",
+        "draft",
+        "not translated",
+      ]) {
+        expect(within(states).getByText(label)).toBeInTheDocument();
+      }
+    });
+
+    it("names every state the dots can encode, with none left undecodable", () => {
+      /*
+       * Counted against the CANONICAL vocabulary rather than a literal. A
+       * hard-coded 4 stays green for exactly the change it exists to catch: add
+       * a state, forget the legend, and both the list and the assertion keep
+       * agreeing with each other while the dot goes unexplained. Reading
+       * `LANGUAGE_STATES` here means the number cannot be right by accident.
+       */
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      const states = screen.getByRole("group", { name: /language states/i });
+      expect(within(states).getAllByText(/\S/)).toHaveLength(
+        LANGUAGE_STATES.length
+      );
+      for (const state of LANGUAGE_STATES) {
+        expect(
+          within(states).getByText(LANGUAGE_STATE_LABEL[state])
+        ).toBeInTheDocument();
+      }
+    });
+  });
+
+  /** A site with more languages than a person can scan at a glance. */
+  const MANY = {
+    defaultLocale: "en",
+    fallback: true,
+    locales: [
+      ["en", "English"],
+      ["de", "German"],
+      ["ar", "Arabic"],
+      ["es", "Spanish"],
+      ["fr", "French"],
+      ["it", "Italian"],
+      ["pt", "Portuguese"],
+      ["nl", "Dutch"],
+      ["pl", "Polish"],
+      ["sv", "Swedish"],
+      ["ja", "Japanese"],
+      ["ko", "Korean"],
+    ].map(([code, label]) => ({
+      code,
+      label,
+      rtl: code === "ar",
+      fallbackLocale: [],
+    })),
+  };
+
+  describe("finding one language among many", () => {
+    /*
+     * The panel is about to become the ONLY place a language is chosen, so it
+     * has to stay usable at the locale counts a real multilingual site has.
+     * Twelve identical rows is not a scrolling problem — it is a scanning one,
+     * and scanning is linear where a filter is not.
+     */
+    it("offers no filter for a handful of languages", () => {
+      // The common case must not pay for the uncommon one: three languages fit
+      // in a glance, and a search box over them is chrome that asks a question
+      // nobody had.
+      useBranding.mockReturnValue({ locales: LOCALES });
+      renderPanel({ translations: TRANSLATIONS });
+
+      expect(screen.queryByRole("searchbox")).toBeNull();
+      expect(rows()).toHaveLength(3);
+    });
+
+    it("offers a filter once the list is past scanning", () => {
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      expect(screen.getByRole("searchbox")).toBeInTheDocument();
+      expect(rows()).toHaveLength(12);
+    });
+
+    it("narrows the rows to what was typed", async () => {
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "ger");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("German");
+    });
+
+    it("matches the language CODE as well as its name", async () => {
+      /*
+       * The separating property against a plain label search. A translator
+       * working in Spanish types `es` far more readily than "Spanish", and on a
+       * site whose admin language differs from the content languages the code
+       * may be the only spelling they share.
+       */
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "pt");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("Portuguese");
+    });
+
+    it("ignores case and surrounding space", async () => {
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "  JAPAN ");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("Japanese");
+    });
+
+    it("says so when nothing matches, rather than showing an empty list", async () => {
+      // An empty list under a search box reads as "this document has no
+      // languages", which is alarming and untrue. The panel says what happened.
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS });
+
+      await user.type(screen.getByRole("searchbox"), "klingon");
+
+      expect(
+        screen.queryByRole("list", { name: "Languages in this document" })
+      ).toBeNull();
+      expect(screen.getByText(/no languages match/i)).toBeInTheDocument();
+    });
+
+    it("hides the language being edited too, rather than pinning it", async () => {
+      /*
+       * Deliberate, and the alternative was tried first. A row kept against a
+       * query it does not match READS as a match — and on a search for
+       * something absent it would leave one language on screen looking like the
+       * answer, which is worse than an honest empty state.
+       */
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS, activeLocale: "ko" });
+
+      await user.type(screen.getByRole("searchbox"), "ger");
+
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toHaveTextContent("German");
+    });
+
+    it("brings every language back when the filter is cleared", async () => {
+      // The property that makes hiding the active row safe: nothing is lost,
+      // and the way back is the control the author is already holding.
+      const user = userEvent.setup();
+      useBranding.mockReturnValue({ locales: MANY });
+      renderPanel({ translations: TRANSLATIONS, activeLocale: "ko" });
+
+      const box = screen.getByRole("searchbox");
+      await user.type(box, "ger");
+      expect(rows()).toHaveLength(1);
+
+      await user.clear(box);
+      expect(rows()).toHaveLength(12);
+    });
+  });
+
   it("renders nothing when localization is not configured", () => {
     useBranding.mockReturnValue({ locales: undefined });
-    const { container } = renderPanel();
-    expect(container).toBeEmptyDOMElement();
+    renderPanel();
+    expectPanelAbsent();
   });
 
   it("renders nothing on a document that is not localized", () => {
@@ -112,19 +349,19 @@ describe("LanguagePanel", () => {
     // Spanish is "not translated" for content that has no language dimension
     // at all — work that does not exist rather than work outstanding.
     useBranding.mockReturnValue({ locales: LOCALES });
-    const { container } = renderPanel(
+    renderPanel(
       { translations: TRANSLATIONS },
       { ...LOCALIZED_CTX, collectionLocalized: false }
     );
-    expect(container).toBeEmptyDOMElement();
+    expectPanelAbsent();
   });
 
   it("renders nothing with a single language, which has no workflow to show", () => {
     useBranding.mockReturnValue({
       locales: { ...LOCALES, locales: [LOCALES.locales[0]] },
     });
-    const { container } = renderPanel();
-    expect(container).toBeEmptyDOMElement();
+    renderPanel();
+    expectPanelAbsent();
   });
 
   it("gives every configured language a row carrying its state as text", () => {
@@ -150,7 +387,7 @@ describe("LanguagePanel", () => {
     // with the list's badge on the very same entry.
     useBranding.mockReturnValue({ locales: LOCALES });
     renderPanel({ translations: TRANSLATIONS });
-    expect(screen.getByText("1 of 2 translated")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
   });
 
   it("marks the language being edited instead of offering to open it", () => {
@@ -164,7 +401,11 @@ describe("LanguagePanel", () => {
     ).toBeNull();
   });
 
-  it("offers to seed only the languages that have nothing in them", () => {
+  it("offers to fill EVERY language, and the verb says which it is doing", () => {
+    // The panel is the only surface that offers this now, so a language it
+    // refuses to act on cannot be filled from anywhere. Both cases are here in
+    // one test because it is their DIFFERENCE that carries the meaning: the
+    // same action, named for the state it lands on.
     useBranding.mockReturnValue({ locales: LOCALES });
     renderPanel({
       translations: TRANSLATIONS,
@@ -173,19 +414,122 @@ describe("LanguagePanel", () => {
     });
 
     const [en, , ar] = rows();
-    // Arabic is empty, so seeding is the useful next step.
+    // Arabic is empty — a start.
     expect(
       within(ar).getByRole("button", {
         name: "Start Arabic from another language",
       })
     ).toBeInTheDocument();
-    // English already has content: seeding it is an overwrite, which stays in
-    // the Languages menu behind its confirm step rather than sitting here.
+    // English already has content — the same action, but it overwrites, and
+    // saying "start" about it would be untrue before the confirm step ever
+    // appears.
+    expect(
+      within(en).getByRole("button", {
+        name: "Replace English from another language",
+      })
+    ).toBeInTheDocument();
     expect(
       within(en).queryByRole("button", {
         name: "Start English from another language",
       })
     ).toBeNull();
+  });
+
+  it("routes an overwrite through the same one switch a start uses", async () => {
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const onSelect = vi.fn();
+    renderPanel({ translations: TRANSLATIONS, activeLocale: "de", onSelect });
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Replace English from another language",
+      })
+    );
+    // Target and source in one call, exactly as the empty case does it — the
+    // overwrite is not a second mechanism, only a second word for the button.
+    expect(onSelect).toHaveBeenCalledWith("en", { seedFrom: "de" });
+  });
+
+  it("lets the language being edited name its own source, from the header", async () => {
+    // The one target whose source cannot be implied: it IS where the author is
+    // standing. It lives in the HEADER rather than on the active row, because
+    // the row cannot hold it — a 100px control there drove the row's
+    // non-shrinking half 32px into it for a label as short as "English".
+    useBranding.mockReturnValue({ locales: LOCALES });
+    const onSelect = vi.fn();
+    renderPanel({ translations: TRANSLATIONS, activeLocale: "de", onSelect });
+
+    // Not on the row.
+    const [, de] = rows();
+    expect(
+      within(de).queryByRole("button", { name: /from another language/ })
+    ).toBeNull();
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Replace German from another language",
+      })
+    );
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "English" })
+    );
+
+    // Asked for directly, not routed through a switch: the editor is already
+    // showing the target, so switching would be a trip back to where it is.
+    expect(requestCopy).toHaveBeenCalledWith("en");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("will not call an unknown target a start", () => {
+    // With no `_translations` at all, every locale reads `missing` — which is a
+    // supported state for this panel, not a claim that the document is empty.
+    // Saying "Start from…" there promises a fill with nothing to lose, moments
+    // before the confirm step explains what it overwrites. Where we do not
+    // know, the destructive word is the honest one.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    renderPanel({ activeLocale: "de", onSelect: vi.fn() });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Replace Arabic from another language",
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", {
+        name: "Start Arabic from another language",
+      })
+    ).toBeNull();
+  });
+
+  it("opens ONE confirm dialog however many panels are mounted", async () => {
+    // The panel renders twice by design — rail and inline — and the inline one
+    // is hidden with CSS rather than unmounted, so at a wide width both are
+    // live. Two copy-from states would each observe the same seed and stack two
+    // confirmations for one action, and the author would answer twice.
+    useBranding.mockReturnValue({ locales: LOCALES });
+    render(
+      <EntryLocaleProvider value={LOCALIZED_CTX}>
+        <CopyFromLanguageScope>
+          <LanguagePanel
+            translations={TRANSLATIONS}
+            activeLocale="de"
+            onSelect={vi.fn()}
+          />
+          <LanguagePanel
+            translations={TRANSLATIONS}
+            activeLocale="de"
+            onSelect={vi.fn()}
+          />
+        </CopyFromLanguageScope>
+      </EntryLocaleProvider>
+    );
+
+    // Both panels rendered, so the test is about sharing rather than absence.
+    expect(
+      screen.getAllByRole("list", { name: "Languages in this document" })
+    ).toHaveLength(2);
+    // ...and exactly one dialog mount serves them.
+    expect(dialogMounts()).toBe(1);
   });
 
   it("withholds seeding entirely when copy-from does not apply", () => {
@@ -199,6 +543,12 @@ describe("LanguagePanel", () => {
     expect(
       screen.queryByRole("button", {
         name: "Start Arabic from another language",
+      })
+    ).toBeNull();
+    // Including the active row's source picker, which reads the same gate.
+    expect(
+      screen.queryByRole("button", {
+        name: "Replace German from another language",
       })
     ).toBeNull();
   });
@@ -249,6 +599,11 @@ describe("LanguagePanel", () => {
     expect(
       screen.getByRole("button", { name: "Start Arabic from another language" })
     ).toBeDisabled();
+    expect(
+      screen.getByRole("button", {
+        name: "Replace German from another language",
+      })
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Publish all" })).toBeDisabled();
     // Switching too: changing the document under the history banner would show
     // one language's history labelled as another's.
@@ -256,7 +611,7 @@ describe("LanguagePanel", () => {
 
     // Reading is not withheld — the panel is how the author sees where the
     // document stands, and that stays true while looking at history.
-    expect(screen.getByText("1 of 2 translated")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 languages translated")).toBeInTheDocument();
     expect(rows()[2]).toHaveTextContent("not translated");
   });
 

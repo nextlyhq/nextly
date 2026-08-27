@@ -178,12 +178,105 @@ export interface UnknownFieldDiff {
   status: DiffStatus;
 }
 
+/**
+ * The label triple every emitted node carries, computed once with a real name.
+ * Exported so the per-kind builders that live in their own modules take the
+ * same shape rather than each declaring one: three declarations of one shape
+ * agree today and drift silently afterwards.
+ */
+export interface NodeMeta {
+  name: string;
+  label: string;
+  type: string;
+}
+
+/**
+ * Whether a unit could be compared at all.
+ *
+ * `"unsupported"` sits beside the ordinary four because "these are the same"
+ * and "I could not compare these" are different answers, and folding them
+ * together lets an unreadable block read as an unchanged one to someone
+ * deciding whether to restore a version.
+ */
+export type ComparableStatus = DiffStatus | "unsupported";
+
+/**
+ * One block of a rich-text comparison.
+ *
+ * A block's text is diffed word-wise into `segments`; every other property it
+ * carries is compared for equality, so a change that leaves the text identical
+ * — a swapped image, a repointed link, an un-bolded phrase — still reports.
+ */
+/**
+ * One property of a rich-text block that differs between two versions.
+ *
+ * Carried so a reader is told WHAT changed when the words did not: a heading
+ * demoted, a link repointed, a phrase un-bolded. `name` identifies the property
+ * in the terms an editor would recognise (`heading.tag`, `link.url`), not by
+ * the internal path the engine walked to reach it. Either side is absent when
+ * the property existed on only one of them.
+ */
+export interface RichTextAttrChange {
+  name: string;
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface RichTextBlockDiff {
+  /** The block's node type: paragraph, heading, quote, list, ... */
+  blockType: string;
+  status: ComparableStatus;
+  /** Word-level runs. Absent when the block could not be compared. */
+  segments?: TextSegment[];
+  /**
+   * Properties that differ, when any do. Absent rather than empty when nothing
+   * but the text changed, so a consumer can tell "no property changed" from
+   * "properties were not examined".
+   */
+  attrChanges?: RichTextAttrChange[];
+}
+
+/**
+ * A rich-text field, as a sequence of aligned blocks.
+ *
+ * The field's own `status` is `changed` whenever any block is unsupported: the
+ * dispatcher filters unchanged fields out of a "modified only" comparison, so a
+ * field reporting `unchanged` would take its own refusal off the screen.
+ */
+export interface RichTextFieldDiff extends FieldDiffBase {
+  kind: "richText";
+  blocks: RichTextBlockDiff[];
+}
+
+/** One line of a source (json or code) comparison. */
+export interface SourceLineDiff {
+  status: ComparableStatus;
+  /** Line number on the "before" side, when the line exists there. */
+  fromLine?: number;
+  /** Line number on the "after" side, when the line exists there. */
+  toLine?: number;
+  /** Word-level runs. Absent when the line could not be compared. */
+  segments?: TextSegment[];
+}
+
+/**
+ * A json or code field, as a sequence of aligned lines. Carries the language so
+ * the renderer knows which grammar to highlight with.
+ */
+export interface SourceFieldDiff extends FieldDiffBase {
+  kind: "source";
+  language: string;
+  lines: SourceLineDiff[];
+}
+
 export type FieldDiff =
   | TextFieldDiff
   | ValueFieldDiff
   | GroupFieldDiff
   | SetFieldDiff
   | ListFieldDiff
+  | RichTextFieldDiff
+  | SourceFieldDiff
   | UnknownFieldDiff;
 
 /** The full comparison of version `from` against version `to`. */

@@ -91,40 +91,132 @@ function fromStoredValue(field: FieldConfig, existingValue: unknown): unknown {
   return coerce ? coerce(existingValue, field) : existingValue;
 }
 
-/** A select or radio's seed, which depends on whether it holds one value or many. */
-function fromSelectDefault(field: FieldConfig): unknown {
-  // The declared default may be a single value or, for hasMany, an array
-  // (`defaultValue: ["technology", "design"]`). Treating an array default as a
-  // scalar would wrap it again and hand the field [["technology", "design"]],
-  // which renders as one nonsense badge and fails array validation.
-  const selectField = field as {
-    defaultValue?: string | string[];
-    hasMany?: boolean;
-  };
-  const { defaultValue } = selectField;
+/**
+ * The seed for a field whose multiplicity is decided by `hasMany`.
+ *
+ * `select`, `radio`, `relationship` and `upload` all ask the same question —
+ * does this hold one value or a list — so they answer it here rather than four
+ * times. The declared default may be written either way round: a list field may
+ * declare a scalar (`defaultValue: "design"`) and a single field may declare an
+ * array, and each is coerced toward the shape its own schema validates.
+ *
+ * Treating an array default as a scalar would wrap it again and hand the field
+ * [["technology", "design"]], which renders as one nonsense badge and fails
+ * array validation.
+ */
+function fromMultiplicityDefault(
+  field: FieldConfig,
+  declared: unknown
+): unknown {
+  const { hasMany } = field as { hasMany?: boolean };
 
-  if (selectField.hasMany) {
-    if (Array.isArray(defaultValue)) return defaultValue;
-    return defaultValue ? [defaultValue] : [];
+  if (hasMany) {
+    if (Array.isArray(declared)) return declared;
+    // Absence is the empty list. Tested for explicitly rather than by
+    // truthiness, so an id of `0` seeds `[0]` instead of dropping out.
+    return declared === undefined || declared === null || declared === ""
+      ? []
+      : [declared];
   }
-  // A single-value select given an array default takes its first entry rather
+  // A single-value field given an array default takes its first entry rather
   // than stringifying the whole array into the control.
-  return Array.isArray(defaultValue)
-    ? (defaultValue[0] ?? null)
-    : (defaultValue ?? null);
+  return Array.isArray(declared) ? (declared[0] ?? null) : (declared ?? null);
+}
+
+/**
+ * A text field's seed, which depends on whether it holds one value or many.
+ *
+ * `convertTextFieldToZod` builds an ARRAY schema for `hasMany`, so seeding the
+ * empty string there hands the validator a value of the wrong shape and the row
+ * is rejected before anyone edits it.
+ */
+function fromTextDefault(field: FieldConfig, declared: unknown): unknown {
+  if (!(field as { hasMany?: boolean }).hasMany) return declared ?? "";
+  if (Array.isArray(declared)) return declared;
+  return declared === undefined || declared === null || declared === ""
+    ? []
+    : [declared];
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A private copy of a structured default.
+ *
+ * The declared value lives on the field definition, which outlives every row
+ * seeded from it — the same definition fills every repeater row and every entry
+ * created from that collection. Handing it out directly would give all of them
+ * one shared object, so editing one row would reach into the others and into
+ * the config itself. `field-defaults.ts` guards the write path the same way.
+ */
+function cloneDeclared(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    // Only a value that cannot be stored at all fails to clone, and validation
+    // rejects that with a message about the value rather than about the copy.
+    return value;
+  }
+}
+
+/**
+ * A declared container merged with the defaults of the fields inside it.
+ *
+ * The declared keys win and the rest are seeded, which is what the write path
+ * arrives at from the other direction: `applyFieldDefaults` writes the declared
+ * value first, then fills each child only where the value is absent.
+ */
+function seedContainer(
+  declared: unknown,
+  fields: FieldConfig[] | undefined
+): Record<string, unknown> {
+  const copy = isPlainObject(declared)
+    ? (cloneDeclared(declared) as Record<string, unknown>)
+    : undefined;
+
+  // The container is its OWN evaluation context, which is why it is passed
+  // down rather than the defaults being computed once and reused: a child's
+  // functional default may read a sibling the container supplies
+  // (`data => data.isUrgent ? "express" : "standard"` beside
+  // `isUrgent: true`), and a seed computed before seeing the container reads
+  // that sibling as absent. `fillRepeaterRows` copies each row and fills
+  // against the copy for the same reason.
+  const seeded = fields ? getDefaultValues(fields, copy) : {};
+
+  // Declared keys win, and keys the schema does not name survive — a
+  // dynamic-zone row carries its `_componentType` discriminator, and seeding
+  // from the field list alone would drop it.
+  return copy ? { ...seeded, ...copy } : seeded;
+}
+
+/** Each declared row, with any sub-field it leaves unset seeded from the schema. */
+function fromRowsDefault(
+  declared: unknown,
+  fields: FieldConfig[] | undefined
+): unknown[] {
+  // Rows are never invented: how many a new row starts with is the schema
+  // author's declaration, and `minRows` is a validation rule rather than an
+  // instruction to fabricate content — the same rule `fillRepeaterRows` states.
+  if (!Array.isArray(declared)) return [];
+  return declared.map(row =>
+    isPlainObject(row) ? seedContainer(row, fields) : row
+  );
 }
 
 /** A component's seed: a list when repeatable, its nested defaults when not. */
-function fromComponentDefault(field: FieldConfig): unknown {
-  const componentField = field as {
+function fromComponentDefault(field: FieldConfig, declared: unknown): unknown {
+  const { componentFields, repeatable } = field as {
     componentFields?: FieldConfig[];
     repeatable?: boolean;
   };
-  if (componentField.repeatable) return [];
-  if (componentField.componentFields) {
-    return getDefaultValues(componentField.componentFields);
-  }
-  return null;
+  if (repeatable) return fromRowsDefault(declared, componentFields);
+  if (componentFields) return seedContainer(declared, componentFields);
+  // With no nested schema there is nothing to seed, so a declared value is the
+  // only thing that can fill it.
+  return isPlainObject(declared) ? cloneDeclared(declared) : null;
 }
 
 /**
@@ -143,20 +235,21 @@ const DECLARED_DEFAULT: Record<
   string,
   (field: FieldConfig, declared: unknown) => unknown
 > = {
-  text: (_f, d) => d ?? "",
+  text: (f, d) => fromTextDefault(f, d),
   textarea: (_f, d) => d ?? "",
   email: (_f, d) => d ?? "",
   password: (_f, d) => d ?? "",
   code: (_f, d) => d ?? "",
   checkbox: (_f, d) => d ?? false,
-  select: f => fromSelectDefault(f),
-  radio: f => fromSelectDefault(f),
-  relationship: f => ((f as { hasMany?: boolean }).hasMany ? [] : null),
-  upload: f => ((f as { hasMany?: boolean }).hasMany ? [] : null),
-  repeater: () => [],
+  select: fromMultiplicityDefault,
+  radio: fromMultiplicityDefault,
+  relationship: fromMultiplicityDefault,
+  upload: fromMultiplicityDefault,
+  repeater: (f, d) =>
+    fromRowsDefault(d, (f as { fields?: FieldConfig[] }).fields),
   chips: (_f, d) => d ?? [],
-  group: f => getDefaultValues((f as { fields: FieldConfig[] }).fields),
-  component: f => fromComponentDefault(f),
+  group: (f, d) => seedContainer(d, (f as { fields?: FieldConfig[] }).fields),
+  component: fromComponentDefault,
 };
 
 /**
@@ -169,8 +262,26 @@ const DECLARED_DEFAULT: Record<
  * what lets a plugin field open a create form with the value its schema author
  * chose.
  */
-function fromDeclaredDefault(field: FieldConfig): unknown {
-  const declared = (field as { defaultValue?: unknown }).defaultValue;
+function fromDeclaredDefault(
+  field: FieldConfig,
+  soFar: Record<string, unknown>
+): unknown {
+  // A schema author may declare the default as a function to compute it per
+  // document. It is resolved here, before the table dispatches, so every type
+  // sees a value rather than each entry having to unwrap it — and so the form
+  // never holds the function object itself.
+  //
+  // It receives the values seeded so far, which is what the write path's
+  // `applyFieldDefaults` passes: a documented default may read its siblings
+  // (`data => data.isUrgent ? "express" : "standard"`), and resolving it
+  // against an empty object instead would seed the branch the document does
+  // not take. The admin submits that value explicitly, so the server never
+  // recomputes it and the divergence reaches the row.
+  const raw = (field as { defaultValue?: unknown }).defaultValue;
+  const declared =
+    typeof raw === "function"
+      ? (raw as (data: Record<string, unknown>) => unknown)(soFar)
+      : raw;
   const seed = DECLARED_DEFAULT[field.type as string];
   return seed ? seed(field, declared) : (declared ?? null);
 }
@@ -188,14 +299,30 @@ export function getDefaultValues(
 ): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};
 
+  // The entry API may return DB column names (snake_case) while field configs
+  // use camelCase. Try camelCase first, then the snake_case column.
+  const storedValue = (name: string) =>
+    existingData?.[name] ?? existingData?.[toSnakeCase(name)];
+
+  // What a functional default reads. It starts as the whole stored document
+  // rather than filling up field by field, because declaration ORDER is not the
+  // document: a default reading a sibling declared after it would otherwise see
+  // that sibling as absent and take the wrong branch on an entry that plainly
+  // has it. The write path has no such gap — `applyFieldDefaults` receives the
+  // supplied document whole — and the admin then submits the value it computed,
+  // so the server never recomputes it and the divergence would reach the row.
+  const context: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (!("name" in field) || !field.name) continue;
+    const stored = storedValue(field.name);
+    if (stored !== undefined) context[field.name] = stored;
+  }
+
   for (const field of fields) {
     if (!("name" in field) || !field.name) continue;
     const fieldName = field.name;
 
-    // The entry API may return DB column names (snake_case) while field configs
-    // use camelCase. Try camelCase first, then the snake_case column.
-    const existingValue =
-      existingData?.[fieldName] ?? existingData?.[toSnakeCase(fieldName)];
+    const existingValue = storedValue(fieldName);
 
     // A STORED NULL for a structural field is not a value to keep. The field's
     // own inputs materialise the shape as they register — `seo: null` becomes
@@ -211,7 +338,12 @@ export function getDefaultValues(
     defaults[fieldName] =
       existingValue !== undefined && !nullStructural
         ? fromStoredValue(field, existingValue)
-        : fromDeclaredDefault(field);
+        : fromDeclaredDefault(field, context);
+
+    // A later default reads the value this one settled on, coerced, rather than
+    // the raw stored one — the same progression `applyFieldDefaults` makes as it
+    // fills the document it was handed.
+    context[fieldName] = defaults[fieldName];
   }
 
   return defaults;

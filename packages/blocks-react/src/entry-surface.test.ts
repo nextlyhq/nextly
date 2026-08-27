@@ -28,6 +28,7 @@ import * as richTextModule from "./rich-text";
 import * as pageRendererModule from "./page-renderer";
 import * as pageStyleTraceModule from "./page-style-trace";
 import * as placeholderModule from "./placeholder";
+import * as previewContainerModule from "./preview-container";
 import * as prepareModule from "./prepare-document";
 import * as readPageModule from "./read-page";
 import * as resolverModule from "./resolver";
@@ -45,6 +46,7 @@ import type {
   PageContext,
   QueryBudget,
   ReactBlockDefinition,
+  ReconciledStyleInputs,
 } from "./index";
 
 /**
@@ -221,30 +223,44 @@ const SOURCE_MODULES: ReadonlyArray<{
   },
   { name: "placeholder", module: placeholderModule, internal: [] },
   {
+    name: "preview-container",
+    module: previewContainerModule,
+    internal: [],
+  },
+  {
     name: "page-renderer",
     module: pageRendererModule,
-    // Crosses a module boundary inside this package and is not a consumer
-    // surface, the same case `prepare-document` records below: exported to
-    // DELETE a copy rather than to offer an API.
+    // `sharedStyleInputs` is PUBLISHED, so it is absent from the list below.
     //
-    // `sharedStyleInputs` reconciles the site tier with the route's context —
-    // named classes, block bases, the token prefix — and a THIRD compile needs
-    // the same answer: `pageStyleTrace` asks for the cascade behind the page so
-    // an editor can say where a value came from. Assembled separately there, the
-    // trace carries no named classes at all and every value from a class reports
-    // as set by nobody. Published instead of shared, it would be a second public
-    // way to build a compile context, which is what `compileContextFor` exists
-    // to prevent.
+    // It reconciles the site tier with the route's context — named classes,
+    // block bases, the token prefix — and the callers needing that answer are
+    // not all inside this package. A surface that decides anything from "the
+    // breakpoints this page compiles against" has to read the same answer the
+    // render will use, and a compile assembled independently is a second answer
+    // to one question. Publishing the RECONCILIATION is not publishing a way to
+    // build a compile context: `compileContextFor` remains the only one of
+    // those, and this returns a patch of already-reconciled inputs.
     //
-    // `pruneRenderedPlaceholders` is the same shape and the same third caller.
-    // It answers "which tree does this page's sheet describe" for the nodes a
-    // placeholder replaced, and the editor's cascade read has to ask exactly
-    // that: pruned harder, the trace withholds an account of markup that is on
-    // the page; pruned less, it names a source for markup that is not. Rebuilt
-    // there from `rendersOwnMarkup` it would be a second implementation of one
-    // pass, which is the drift the pass's own docblock argues against. An
-    // internal derivation, not something a host composes with.
-    internal: ["pruneRenderedPlaceholders", "sharedStyleInputs"],
+    // `withoutStatedNulls` stays internal for the same reason: it crosses a
+    // module boundary so `page-style-trace` and this module do not each decide
+    // what a stated null means at a compile boundary, and a host composing a
+    // context has no use for it — it exists to DELETE a copy rather than to
+    // offer an API.
+    //
+    // `pruneRenderedPlaceholders` is the case that stays internal, and the
+    // contrast is the point. It answers "which tree does this page's sheet
+    // describe" for the nodes a placeholder replaced, and the editor's cascade
+    // read has to ask exactly that: pruned harder, the trace withholds an
+    // account of markup that is on the page; pruned less, it names a source for
+    // markup that is not. Rebuilt from `rendersOwnMarkup` it would be a second
+    // implementation of one pass, which is the drift the pass's own docblock
+    // argues against — but it is an internal derivation rather than something a
+    // host composes with, so it crosses a module boundary and stops there.
+    internal: [
+      "pruneRenderedPlaceholders",
+      "statedBreakpoints",
+      "withoutStatedNulls",
+    ],
   },
   {
     name: "prepare-document",
@@ -253,10 +269,15 @@ const SOURCE_MODULES: ReadonlyArray<{
     // surface, and each was exported to DELETE a copy rather than to offer an
     // API.
     //
-    // `rendersOwnMarkup` and `pruneKnownPlaceholders` were defined a second time
-    // in `page-renderer`. Two implementations of one pass agree the day they are
-    // written and drift after, and this pair decides what a stored stylesheet may
-    // still describe — so the drift ships rules for markup that is gone.
+    // `rendersOwnMarkup` is NOT among them any more: it is published, because
+    // the editor asks it whether a node draws its own markup before reserving a
+    // dom id the page will never render. That is a question about this
+    // renderer's behaviour, which only this renderer can answer.
+    //
+    // `pruneKnownPlaceholders` was defined a second time in `page-renderer`.
+    // Two implementations of one pass agree the day they are written and drift
+    // after, and this one decides what a stored stylesheet may still describe —
+    // so the drift ships rules for markup that is gone.
     //
     // `prepareDocumentReadStages` is the pipeline reporting the states it passed
     // through, which one caller needs because it compares them by reference to
@@ -273,7 +294,6 @@ const SOURCE_MODULES: ReadonlyArray<{
       "prepareDocumentReadStages",
       "pruneKnownPlaceholders",
       "readingViewOf",
-      "rendersOwnMarkup",
     ],
   },
   {
@@ -303,9 +323,22 @@ describe("the root entry", () => {
       // renderer would drop rather than keeping a list beside it.
       "EDITOR_NAMESPACE",
       "NODE_ID_ATTRIBUTE",
+      // The container names a preview compile aims its breakpoints at. Public
+      // because the surface doing the previewing must put the same identifier
+      // in its own `container-name`, and a name spelled twice can be spelled
+      // differently.
+      // The style a previewing surface puts on its own box: the container name
+      // AND the `container-type` that makes it a size-query container, in one
+      // value so neither can be applied without the other.
+      "PREVIEW_CONTAINER_STYLE",
+      "PREVIEW_VIEWPORT_CONTAINER",
       "PROP_ATTRIBUTE",
       "PageRenderer",
       "RichText",
+      // The container marker. Public so an editor asks whether a block declares
+      // slots instead of keeping a hardcoded list of container type names.
+      "SLOTS_ATTRIBUTE",
+      "UNPREVIEWABLE_CONTAINER",
       "createBlockResolver",
       "createStandaloneContext",
       "defineBlock",
@@ -318,11 +351,14 @@ describe("the root entry", () => {
       "pageStyleTrace",
       "prepareDocumentForRead",
       "preparePageForRead",
+      "previewContainerFor",
+      "previewContainerStyle",
       "pruneHiddenNodes",
       "registeredBlocks",
       "rendersOwnMarkup",
       "resolvePageStyles",
       "resolvePageStylesWithTrace",
+      "sharedStyleInputs",
       "styleTextForInjection",
     ]);
   });
@@ -363,6 +399,33 @@ describe("the root entry", () => {
         missing,
         `${source.name}.ts exports ${missing.join(", ")} but the entry does not. ` +
           `Re-export it, or add it to that module's \`internal\` list with a reason.`
+      ).toEqual([]);
+    }
+  });
+
+  it("keeps every `internal` classification TRUE", () => {
+    /*
+     * The other direction of the same claim, and the one that was missing.
+     *
+     * The case above asks whether a module export reached the entry, and takes
+     * `internal` as the reason it did not have to. Nothing asked whether a name
+     * on that list is still absent from the entry — so publishing a symbol left
+     * its own rationale standing, arguing in the file that publishing it would
+     * be a mistake. Measured: adding an exported name to `internal` changed no
+     * assertion, because the list is only ever read as an exemption.
+     *
+     * A classification nothing checks is a comment wearing a data structure's
+     * clothes, and it drifts in the direction that reads as deliberate.
+     */
+    const exported = new Set(Object.keys(rootEntry));
+
+    for (const source of SOURCE_MODULES) {
+      const stale = source.internal.filter(name => exported.has(name));
+
+      expect(
+        stale,
+        `${source.name}.ts lists ${stale.join(", ")} as internal, but the entry ` +
+          `publishes it. Remove it from that list and say why it is public.`
       ).toEqual([]);
     }
   });
@@ -473,5 +536,30 @@ describe("the next entry", () => {
       "createPublicSinglePage",
       "createSinglePage",
     ]);
+  });
+});
+
+describe("the type published beside `sharedStyleInputs`", () => {
+  it("is the one that function returns", () => {
+    /*
+     * Two properties, and they are checked by different mechanisms.
+     *
+     * The ANNOTATION is the type half, and the TESTS PROJECT compiling this
+     * file is what asserts it — so this case going green is not the evidence
+     * for it; `check-types` is. A name published beside a function but
+     * describing something else leaves a consumer able to read the type and
+     * unable to use it, which no runtime assertion can observe. This package
+     * held two types under one name, and the exported one required
+     * `breakpoints` while the function may resolve nothing.
+     *
+     * The VALUE is the runtime half: `{}` is what "may resolve nothing" means,
+     * and it is the case the required field would have rejected.
+     */
+    const resolved: ReconciledStyleInputs = rootEntry.sharedStyleInputs(
+      undefined,
+      undefined
+    );
+
+    expect(resolved).toEqual({});
   });
 });

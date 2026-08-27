@@ -29,11 +29,13 @@ function setApplyingFlag(applying: boolean): void {
 
 export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
   const [preview, setPreview] = useState<SchemaPreviewResponse | null>(null);
+  const [previewId, setPreviewId] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
 
   const request = useCallback((next: SchemaPreviewResponse) => {
     setPreview(next);
+    setPreviewId(n => n + 1);
     setIsOpen(true);
   }, []);
 
@@ -66,6 +68,7 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
   return useMemo(
     () => ({
       preview,
+      previewId,
       isOpen,
       isApplying,
       request,
@@ -76,6 +79,7 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
     }),
     [
       preview,
+      previewId,
       isOpen,
       isApplying,
       request,

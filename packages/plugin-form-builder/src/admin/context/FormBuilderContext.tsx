@@ -66,6 +66,8 @@ export interface FormBuilderState {
     slug: string;
     description?: string;
     status: "draft" | "published" | "closed";
+    /** What a closed form tells a visitor who reaches it. */
+    closedMessage?: string;
   };
   /** Form settings */
   settings: FormSettings;
@@ -122,6 +124,7 @@ export interface FormBuilderProviderProps {
     slug?: string;
     description?: string;
     status?: "draft" | "published" | "closed";
+    closedMessage?: string;
     fields?: AnyFormField[];
     settings?: Partial<FormSettings>;
     notifications?: FormNotification[];
@@ -313,6 +316,7 @@ export function FormBuilderProvider({
     slug: initialData?.slug || "",
     description: initialData?.description,
     status: initialData?.status || "draft",
+    closedMessage: initialData?.closedMessage,
   });
   // Stored settings may carry legacy keys from earlier builder versions —
   // the normalizer migrates them on read (nothing rewrites until save).

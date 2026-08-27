@@ -1,7 +1,8 @@
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { rateLimiter } from "../middleware/rate-limiter";
+import { authRateLimiter } from "../middleware/rate-limiter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { AuthStrategy } from "../pipeline/types";
@@ -89,6 +90,12 @@ export interface AuthRouterDeps {
   authRateLimit: {
     requestsPerHour: number;
     windowMs: number;
+    /**
+     * Where the window lives. Absent means this process's memory, which is
+     * correct for one instance and wrong by a factor of the instance count
+     * anywhere else — see `auth/middleware/rate-limiter`.
+     */
+    store?: RateLimitStore;
   };
   /**
    * Writer for security-sensitive auth events. Handlers call
@@ -252,7 +259,7 @@ async function dispatchAuthRequest(
 
   if (method === "POST") {
     if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
-      const limited = checkAuthIpRateLimit(request, deps);
+      const limited = await checkAuthIpRateLimit(request, deps);
       if (limited) return limited;
     }
     return auditCsrfFailure(request, authPath, deps, () => {
@@ -373,10 +380,10 @@ async function auditCsrfFailure(
  * intentional, since the alternative (skip the limiter) leaves the
  * deployment open to credential-stuffing.
  */
-function checkAuthIpRateLimit(
+async function checkAuthIpRateLimit(
   request: Request,
   deps: AuthRouterDeps
-): Response | null {
+): Promise<Response | null> {
   const limit = deps.authRateLimit.requestsPerHour;
   if (limit <= 0) return null; // explicitly disabled
 
@@ -386,7 +393,7 @@ function checkAuthIpRateLimit(
       trustedProxyIps: deps.trustedProxyIps,
     }) ?? "unknown";
 
-  const result = rateLimiter.check(
+  const result = await authRateLimiter(deps.authRateLimit.store).check(
     `auth-ip:${ip}`,
     limit,
     deps.authRateLimit.windowMs

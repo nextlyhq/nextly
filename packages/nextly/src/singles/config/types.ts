@@ -17,6 +17,7 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import type { SingleAccessControl } from "../../domains/auth/services/access-control-types";
+import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import type { HookHandler } from "../../hooks/types";
 import type { RevalidateConfig } from "../../revalidation/types";
 // Builder-facing content-versioning options surfaced on the Single config.
@@ -102,6 +103,32 @@ export interface SinglePreviewConfig {
    * @default "Preview"
    */
   label?: string;
+
+  /**
+   * The viewport widths the preview pane offers, as a list or as a function.
+   *
+   * The same declaration a collection's preview takes, and read by the same
+   * mint path — `resolvePreviewViewports` is given whichever declaration the
+   * document has, and does not know which kind of document it came from.
+   *
+   * Declared rather than inferred: nothing in this system can know the widths a
+   * site's CSS actually breaks at, so a shipped phone/tablet/desktop list would
+   * be a claim about somebody else's stylesheet.
+   *
+   * The function form is evaluated per mint, on the server, so a source that
+   * CHANGES — a site's stored breakpoints, edited in the page builder — stays
+   * current instead of being captured once at boot. Only the resolved list ever
+   * reaches the browser.
+   *
+   * @example
+   * ```typescript
+   * breakpoints: [
+   *   { label: "Phone", width: 390 },
+   *   { label: "Desktop", width: 1280 },
+   * ]
+   * ```
+   */
+  breakpoints?: PreviewViewportsDeclaration;
 }
 
 export interface SingleAdminOptions {

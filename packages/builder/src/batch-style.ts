@@ -103,6 +103,25 @@ export interface BatchStyleWrite {
   /**
    * The ops to apply as ONE group, in selection order.
    *
+   * Pair an op with the node it NAMES rather than with the position it
+   * arrived in: there is one op per block that needs writing, so a selection
+   * where some blocks already hold the value yields fewer ops than nodes.
+   *
+   * Deliberately NOT ordered by what each op costs the document, though there
+   * is a reason to want that. The editor folds a group and judges every step
+   * against the byte cap, so a selection sitting at that cap — where one block
+   * grows to the shared value and another shrinks by more — is refused when
+   * the growing block comes first and accepted when it comes second, for the
+   * same resulting document. Writing the reductions first would fix it.
+   *
+   * Knowing which block shrinks means measuring what each one currently holds,
+   * and `measureBytes` invokes a value's own `toJSON` — measured, once per
+   * call — on data no guard has accepted yet. Ordering is an optimisation of
+   * the peak, never a gate, and running author code to obtain one is not a
+   * trade worth making; a measurement that avoided it would be a second
+   * implementation of a walk the engine already owns. Left to the surface
+   * that can reach a multi-selection, which does not exist yet.
+   *
    * Empty when every selected block already holds the value. That is not a
    * failure and must not be reported as one — it is the ordinary result of
    * setting a value half the selection already had, and applying an empty group

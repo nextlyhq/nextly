@@ -25,6 +25,10 @@
 
 import { getService } from "../di";
 import {
+  previewCallerAuthorized,
+  type AuthorizedPreviewCaller,
+} from "../domains/collections/services/preview-redirect-resolver";
+import {
   singleDocumentEditable,
   singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
@@ -95,7 +99,7 @@ export async function assertEntryPreviewable(
      */
     routeAuthorized: boolean;
   }
-): Promise<void> {
+): Promise<AuthorizedPreviewCaller> {
   const collections = getService("collectionsHandler");
 
   // Enforced and as the caller, which is the same evaluation the bearer's read
@@ -164,6 +168,14 @@ export async function assertEntryPreviewable(
       },
     });
   }
+
+  /*
+   * The grant is PRODUCED by the check, and that is the point of returning one.
+   * A caller assembling its own would be asserting the very thing this function
+   * exists to establish; minted here it cannot exist unless every refusal above
+   * was passed for THIS document.
+   */
+  return previewCallerAuthorized(user, { collection, entryId });
 }
 
 /**
@@ -199,7 +211,7 @@ export async function assertSinglePreviewable(
      */
     routeAuthorized: boolean;
   }
-): Promise<void> {
+): Promise<AuthorizedPreviewCaller> {
   const identity = {
     user,
     // No `actor`. It carried an API KEY's own stamped grants, and both mints
@@ -243,4 +255,12 @@ export async function assertSinglePreviewable(
       logContext: { reason: "preview-link-single-not-editable", single },
     });
   }
+
+  // See {@link assertEntryPreviewable}: the check produces the grant.
+  return previewCallerAuthorized(user, {
+    single,
+    // The locale this check was run FOR. Omitting it would grant every
+    // translation on the strength of one having been checked.
+    ...(locale === undefined ? {} : { locale }),
+  });
 }

@@ -42,6 +42,7 @@
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 
 import { classUsageOf } from "./class-usage";
+import { walkPages } from "./paged-walk";
 import { readStoredJson } from "./stored-json";
 
 /** How many pages one query asks for. */
@@ -164,7 +165,7 @@ type PageVerdict = "undetermined" | "repaired" | "agreed";
 async function repairPage(
   item: StoredPage,
   collection: string,
-  args: { store: PageUsageStore; limits?: DocumentLimits }
+  args: { store: PageUsageStore; limits: DocumentLimits }
 ): Promise<PageVerdict> {
   const usage = classUsageOf(item.content, args.limits);
   if (!usage.complete) {
@@ -198,7 +199,7 @@ async function repairPage(
 async function scanOnePage(
   items: readonly unknown[],
   collection: string,
-  args: { store: PageUsageStore; limits?: DocumentLimits }
+  args: { store: PageUsageStore; limits: DocumentLimits }
 ): Promise<{ scanned: number; repaired: number; undetermined: number }> {
   let scanned = 0;
   let repaired = 0;
@@ -241,49 +242,24 @@ export async function rebuildClassUsage(args: {
    * list the hook then disagrees with, and the two would take turns correcting
    * each other on every save.
    */
-  limits?: DocumentLimits;
+  limits: DocumentLimits;
 }): Promise<RebuildReport> {
   const collection = args.collection ?? "pages";
   let scanned = 0;
   let repaired = 0;
   let undetermined = 0;
-  let reachedTheEnd = false;
-
-  for (let page = 1; page <= MAX_PAGES; page++) {
-    const result = await args.store.find({
-      collection,
-      limit: PAGE_SIZE,
-      page,
-      sort: "id",
-    });
-
-    const tally = await scanOnePage(result.items, collection, args);
-    scanned += tally.scanned;
-    repaired += tally.repaired;
-    undetermined += tally.undetermined;
-
-    if (!result.meta.hasNext) {
-      reachedTheEnd = true;
-      break;
-    }
-  }
-
-  if (!reachedTheEnd) {
-    // The loop ended because its own guard ran out, not because the store said
-    // there was nothing left — so pages after this point were never read, and
-    // whatever stale records they hold are still there.
-    //
-    // Thrown rather than returned as a flag on the report. A `RebuildReport`
-    // reads as a completed pass, and the two numbers on it are the same numbers
-    // a genuinely complete run would produce; a caller doing the obvious thing
-    // with the result would record a successful rebuild over a site it had only
-    // partly scanned. The whole point of the report is to say the records can
-    // now be trusted, and after this they cannot.
-    throw new Error(
-      `Class-usage rebuild stopped after ${MAX_PAGES} pages of ${PAGE_SIZE} with more reported; ` +
-        `${scanned} page(s) scanned and ${repaired} repaired, and the rest were not read.`
-    );
-  }
+  await walkPages({
+    maxPages: MAX_PAGES,
+    describe: `${collection}.usedClasses`,
+    fetchPage: page =>
+      args.store.find({ collection, limit: PAGE_SIZE, page, sort: "id" }),
+    onPage: async items => {
+      const tally = await scanOnePage(items, collection, args);
+      scanned += tally.scanned;
+      repaired += tally.repaired;
+      undetermined += tally.undetermined;
+    },
+  });
 
   return { scanned, repaired, undetermined };
 }

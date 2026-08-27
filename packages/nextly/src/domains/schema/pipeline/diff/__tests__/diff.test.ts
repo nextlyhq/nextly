@@ -13,6 +13,7 @@ function snap(
       type: string;
       nullable: boolean;
       default?: string;
+      typeModifier?: string;
     }>;
   }>
 ): NextlySchemaSnapshot {
@@ -104,6 +105,69 @@ describe("diffSnapshots - column-level diff within existing table", () => {
     ]);
   });
 
+  it("reports a dropped PostgreSQL column with its modifier restored", () => {
+    // PG introspection reads `udt_name`, which spells `numeric(10,2)` as a
+    // bare `numeric` with the precision recorded separately. A drop that
+    // reports `type` alone describes the column as unbounded, and the rename
+    // detector then reads a narrowing conversion as a move between two
+    // identical types.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        { name: "id", type: "int4", nullable: false },
+        {
+          name: "amount",
+          type: "numeric",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "id", type: "int4", nullable: false }],
+    });
+    const ops = diffSnapshots(prev, cur);
+    expect(ops).toEqual([
+      {
+        type: "drop_column",
+        tableName: "dc_orders",
+        columnName: "amount",
+        columnType: "numeric(10,2)",
+      },
+    ]);
+  });
+
+  it("does not append a modifier the type already spells out", () => {
+    // MySQL and SQLite report the declaration itself, so `type` already
+    // carries the size. Appending the modifier there yields `numeric(10,2)(10,2)`.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        { name: "id", type: "int4", nullable: false },
+        {
+          name: "amount",
+          type: "numeric(10,2)",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "id", type: "int4", nullable: false }],
+    });
+    const ops = diffSnapshots(prev, cur);
+    expect(ops).toEqual([
+      {
+        type: "drop_column",
+        tableName: "dc_orders",
+        columnName: "amount",
+        columnType: "numeric(10,2)",
+      },
+    ]);
+  });
+
   it("changing column type yields change_column_type", () => {
     const prev = snap({
       name: "dc_posts",
@@ -121,6 +185,10 @@ describe("diffSnapshots - column-level diff within existing table", () => {
         columnName: "title",
         fromType: "varchar",
         toType: "text",
+        // MySQL's MODIFY COLUMN restates the whole definition, so the
+        // nullability travels with the type or the column loses it.
+        nullable: false,
+        fromNullable: false,
       },
     ]);
   });
@@ -350,5 +418,120 @@ describe("diffSnapshots - deterministic ordering", () => {
     // Order: add_table (dc_new_table), then add_column (dc_posts.name)
     expect(ops[0].type).toBe("add_table");
     expect(ops[1].type).toBe("add_column");
+  });
+});
+
+describe("diffSnapshots - a column resized but not retyped", () => {
+  it("emits the change, and states the size it is moving to", () => {
+    // Measured through the diff rather than the comparator: the defect was
+    // that NO operation reached the migration, so a test of the judgement
+    // alone would have passed while the pipeline stayed silent.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        {
+          name: "amount",
+          type: "numeric",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "amount", type: "numeric(5,1)", nullable: true }],
+    });
+    expect(diffSnapshots(prev, cur)).toEqual([
+      {
+        type: "change_column_type",
+        tableName: "dc_orders",
+        columnName: "amount",
+        fromType: "numeric(10,2)",
+        toType: "numeric(5,1)",
+        nullable: true,
+        fromNullable: true,
+      },
+    ]);
+  });
+
+  it("carries the nullability and default through the change", () => {
+    // MySQL spells a type change as `MODIFY COLUMN`, which restates the whole
+    // definition and drops whatever it does not restate. A generated migration
+    // has no schema push behind it to put them back, so a NOT NULL DEFAULT '0'
+    // column comes out of a resize nullable and defaultless — and its DOWN
+    // cannot recover them unless the previous pair travels too.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        {
+          name: "amount",
+          type: "decimal(10,2)",
+          nullable: false,
+          default: "'0'",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [
+        {
+          name: "amount",
+          type: "decimal(12,4)",
+          nullable: false,
+          default: "'0'",
+        },
+      ],
+    });
+    expect(diffSnapshots(prev, cur)[0]).toMatchObject({
+      type: "change_column_type",
+      nullable: false,
+      columnDefault: "'0'",
+      fromNullable: false,
+      fromColumnDefault: "'0'",
+    });
+  });
+
+  it("states a column that has no default as having none", () => {
+    // The control: the attributes must describe the column, not be filled in
+    // with whatever keeps the assertion above true. A default invented here
+    // would be written into every resized column that never had one.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [{ name: "amount", type: "decimal(10,2)", nullable: true }],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "amount", type: "decimal(12,4)", nullable: true }],
+    });
+    const op = diffSnapshots(prev, cur)[0] as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(op.nullable).toBe(true);
+    expect(op).not.toHaveProperty("columnDefault");
+    expect(op).not.toHaveProperty("fromColumnDefault");
+  });
+
+  it("emits nothing when the same size is spelled two ways", () => {
+    // The control, and the failure this must not trade itself for: the
+    // desired side writes `numeric(10, 2)` and the live side reports `10,2`,
+    // so a literal compare would report a change on every decimal column in
+    // every PostgreSQL database, on every apply.
+    const prev = snap({
+      name: "dc_orders",
+      columns: [
+        {
+          name: "amount",
+          type: "numeric",
+          nullable: true,
+          typeModifier: "10,2",
+        },
+      ],
+    });
+    const cur = snap({
+      name: "dc_orders",
+      columns: [{ name: "amount", type: "numeric(10, 2)", nullable: true }],
+    });
+    expect(diffSnapshots(prev, cur)).toEqual([]);
   });
 });

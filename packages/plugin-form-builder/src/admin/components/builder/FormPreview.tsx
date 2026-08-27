@@ -18,6 +18,7 @@ import {
   Button,
   Checkbox,
   Input,
+  Card,
   Label,
   RadioGroup,
   RadioGroupItem,
@@ -38,6 +39,8 @@ import type { AnyFormField, CustomFormField, FormField } from "../../../types";
 import { isKnownFormField } from "../../../types";
 import { evaluateConditions } from "../../../utils/evaluate-conditions";
 import { useFormBuilder } from "../../context/FormBuilderContext";
+
+import { hasStoredRedirectPage } from "./FormSettingsTab";
 
 // ---------------------------------------------------------------------------
 // Field rendering
@@ -212,6 +215,60 @@ export interface FormPreviewProps {
   };
 }
 
+/**
+ * What the visitor is told after a successful submission.
+ *
+ * Its own component because the fall-through belongs to the MESSAGE branch: a
+ * confirmation this does not name is previewed as a thank-you note, which is
+ * how the page redirect came to be previewed as something it is not. Each
+ * confirmation that is not a message has to be named here.
+ */
+function Confirmation({
+  settings,
+}: {
+  settings: {
+    confirmationType?: string;
+    redirectUrl?: string;
+    successMessage?: string;
+    redirectPage?: unknown;
+  };
+}) {
+  const panel = "border border-border bg-muted/40 p-4 text-sm text-foreground";
+
+  if (settings.confirmationType === "redirect") {
+    return (
+      <p className={panel}>
+        The visitor would now be redirected to{" "}
+        <span className="font-mono">
+          {settings.redirectUrl || "(no redirect URL set)"}
+        </span>
+        .
+      </p>
+    );
+  }
+
+  if (settings.confirmationType === "relationship") {
+    // Whether a page is actually named, not merely that this confirmation is
+    // chosen. Claiming a redirect with no page saved describes something that
+    // cannot happen: the save is refused, and a form that reached this state
+    // another way resolves to no redirect at all.
+    const named = hasStoredRedirectPage(settings);
+    return (
+      <p className={panel}>
+        {named
+          ? "The visitor would now be redirected to the linked page. Its URL is built when the form is submitted, from the pattern the site configured for that collection."
+          : "No page is selected yet, so this form has no destination. Choose one under Settings, or pick a different confirmation."}
+      </p>
+    );
+  }
+
+  return (
+    <p className={panel}>
+      {settings.successMessage || "Thank you for your submission!"}
+    </p>
+  );
+}
+
 export function FormPreview({ fields, formData }: FormPreviewProps) {
   const { settings } = useFormBuilder();
   const [values, setValues] = useState<Record<string, unknown>>({});
@@ -274,14 +331,22 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
   };
 
   return (
-    <div className="space-y-4">
+    // One surface for the whole tab. The chrome and the stage are the same
+    // panel seen twice, and leaving the chrome unbacked put it on the page's
+    // grey while the stage below it had a frame — reading as a control strip
+    // that had lost its box.
+    <Card className="overflow-hidden p-0">
       {/* Preview chrome: honest framing + device toggle + reset */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 border-b border-border px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Eye className="h-4 w-4" aria-hidden="true" />
           Preview — a simulation of this form. Nothing here submits anywhere.
         </div>
-        <div className="flex items-center gap-2">
+        {/* Wraps rather than holding one row. The card around this clips, and
+            at a ~360px panel the inset leaves less width than the device
+            toggle and Reset need side by side — so an unwrapped row loses its
+            right edge instead of overflowing visibly. */}
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <Tabs
             value={device}
             onValueChange={value => setDevice(value as "desktop" | "mobile")}
@@ -306,8 +371,10 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
         </div>
       </div>
 
-      {/* The simulated form */}
-      <div className="flex justify-center border border-border bg-muted/30 p-6">
+      {/* The simulated form, on a tinted stage so the sheet inside reads as a
+          page rather than as more of this panel. The stage draws no border of
+          its own — the card around it already does. */}
+      <div className="flex justify-center bg-muted/30 p-6">
         <div
           className={`w-full space-y-5 border border-border bg-background p-6 ${
             device === "mobile" ? "max-w-95" : "max-w-2xl"
@@ -326,19 +393,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
 
           {confirmed ? (
             <div className="space-y-4">
-              {settings.confirmationType === "redirect" ? (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  The visitor would now be redirected to{" "}
-                  <span className="font-mono">
-                    {settings.redirectUrl || "(no redirect URL set)"}
-                  </span>
-                  .
-                </p>
-              ) : (
-                <p className="border border-border bg-muted/40 p-4 text-sm text-foreground">
-                  {settings.successMessage || "Thank you for your submission!"}
-                </p>
-              )}
+              <Confirmation settings={settings} />
               <Button type="button" variant="outline" onClick={reset}>
                 Fill again
               </Button>
@@ -429,7 +484,7 @@ export function FormPreview({ fields, formData }: FormPreviewProps) {
           )}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }
 

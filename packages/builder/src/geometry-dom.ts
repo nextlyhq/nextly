@@ -28,7 +28,7 @@ import {
   scaleCornerRadii,
   usedCornerRadii,
 } from "./border-radii";
-import type { FrameInset, Point, Rect } from "./geometry";
+import type { FrameInset, Point, Rect, Scale } from "./geometry";
 
 /**
  * How far a frame's content viewport sits inside its border box.
@@ -54,6 +54,37 @@ export function frameInsetOf(frame: HTMLIFrameElement): FrameInset {
 }
 
 /**
+ * How much smaller the canvas is PAINTED than it is laid out, per axis.
+ *
+ * The editor scales the canvas so a tier wider than the region can still be
+ * edited, and a transform is paint-time: the root stays its requested width to
+ * layout — which is what keeps the container queries resolving at the tier the
+ * author asked for — while `getBoundingClientRect` answers in painted pixels.
+ * A distance taken from client rectangles is therefore in a different unit from
+ * the content coordinates the chrome is placed in, and the two agree only at
+ * 100%. That is the shape this module's own header warns about: an error of
+ * `(1 - scale)` times the distance, exactly zero while nothing is scaled and
+ * growing as the canvas zooms out, so every test at default scale passes.
+ *
+ * Measured from the ROOT rather than read from its `transform`, because the
+ * scale may be applied by an ancestor the canvas does not own and a declaration
+ * read off one element cannot see that. The ratio is true wherever it came
+ * from.
+ *
+ * `1` when nothing has been laid out — jsdom, or a root not yet in the
+ * document — which is the identity the callers below already assume, so an
+ * unmeasurable canvas behaves exactly as it did before there was a scale.
+ */
+function paintedScale(root: HTMLElement, painted: DOMRect): Scale {
+  const width = root.offsetWidth;
+  const height = root.offsetHeight;
+  return {
+    x: width > 0 && painted.width > 0 ? painted.width / width : 1,
+    y: height > 0 && painted.height > 0 ? painted.height / height : 1,
+  };
+}
+
+/**
  * A rectangle in the canvas's own CONTENT coordinates.
  *
  * The space the editor's chrome is drawn in: the origin is the canvas root's
@@ -72,11 +103,16 @@ export function frameInsetOf(frame: HTMLIFrameElement): FrameInset {
 export function canvasContentRect(element: Element, root: HTMLElement): Rect {
   const box = element.getBoundingClientRect();
   const rootBox = root.getBoundingClientRect();
+  const scale = paintedScale(root, rootBox);
   return {
-    x: box.x - rootBox.x + root.scrollLeft,
-    y: box.y - rootBox.y + root.scrollTop,
-    width: box.width,
-    height: box.height,
+    // The SCROLL is added after the division, not inside it. A scroll offset is
+    // already in content pixels — it counts the element's own laid-out content,
+    // which a transform never touches — so dividing it would shrink a real
+    // offset by the zoom and drift the whole overlay as the page is scrolled.
+    x: (box.x - rootBox.x) / scale.x + root.scrollLeft,
+    y: (box.y - rootBox.y) / scale.y + root.scrollTop,
+    width: box.width / scale.x,
+    height: box.height / scale.y,
   };
 }
 
@@ -94,10 +130,42 @@ export function canvasContentPoint(
   root: HTMLElement
 ): Point {
   const rootBox = root.getBoundingClientRect();
+  const scale = paintedScale(root, rootBox);
   return {
-    x: clientX - rootBox.x + root.scrollLeft,
-    y: clientY - rootBox.y + root.scrollTop,
+    x: (clientX - rootBox.x) / scale.x + root.scrollLeft,
+    y: (clientY - rootBox.y) / scale.y + root.scrollTop,
   };
+}
+
+/**
+ * A viewport point relative to the canvas's PAINTED top-left corner.
+ *
+ * A third space, and it exists because the other two each lose one of the two
+ * things a drag's hysteresis has to see.
+ *
+ * CLIENT coordinates are hand-scale — 8px of them is 8px of real movement,
+ * whatever the canvas is painted at — but they do not move when the page
+ * scrolls under a stationary pointer, which is exactly what autoscroll does.
+ * Measured there, a rival target's distance from its anchor stays zero however
+ * far the page travels, so the committed target never advances and the
+ * indicator stays on a position that has scrolled off screen.
+ *
+ * CANVAS CONTENT coordinates move with the scroll but are divided by the canvas
+ * scale, so the same threshold asks for less hand movement the further the
+ * canvas is zoomed out.
+ *
+ * This one moves with the scroll — the root's own painted rectangle travels —
+ * and is not divided, so a threshold in it stays a threshold about the hand.
+ * It is NOT interchangeable with {@link canvasContentRect}: nothing may be
+ * drawn from it, because it does not survive a scroll.
+ */
+export function canvasPaintedPoint(
+  clientX: number,
+  clientY: number,
+  root: HTMLElement
+): Point {
+  const rootBox = root.getBoundingClientRect();
+  return { x: clientX - rootBox.x, y: clientY - rootBox.y };
 }
 
 /**
@@ -819,7 +887,53 @@ function cutByAncestor(
    * visibly cuts — measured, the real padding edge sat at 40 while this
    * arithmetic answered 20 and a child at exactly 20 was let through.
    */
-  const scale = renderedScale(node, root);
+  /*
+   * Composed with the ROOT's own painted scale, which `renderedScale` stops
+   * below on purpose.
+   *
+   * That exclusion is right for the overlay, which is a child of the root and
+   * is drawn through the root's scale already. It is wrong here, because the
+   * two readings this compares live on opposite sides of it: `outer` comes from
+   * `getBoundingClientRect` and is post-zoom, while a computed border width is
+   * unscaled CSS pixels. Left uncomposed, the canvas's own scale is applied to
+   * one and not the other.
+   *
+   * Measured at a canvas painted to half size: a 20px border renders 10px, the
+   * inset is computed as 20, and a child sitting flush against the real padding
+   * edge is classified as clipped — which suppresses every spacing band on it,
+   * so the symptom is an overlay that silently stops drawing rather than one
+   * that draws wrongly.
+   */
+  const realm = root.ownerDocument.defaultView;
+  const painted =
+    realm !== null && root instanceof realm.HTMLElement
+      ? paintedScale(root, root.getBoundingClientRect())
+      : /*
+         * Identity for a root this cannot measure.
+         *
+         * Asked against the root's OWN realm, as {@link canvasRootFrom} already
+         * does. A canvas portalled into a same-origin iframe has a root built
+         * by that document's constructor, so the ambient `HTMLElement` is a
+         * different function object and a plain `instanceof` is false for an
+         * ordinary div — substituting an identity scale on a canvas that really
+         * is scaled, which is the very case this composition exists for.
+         *
+         * `offsetWidth` is an HTML property, so a genuinely foreign root — an
+         * SVG element, or one with no window at all — cannot be asked how much
+         * smaller it is painted. Answering 1 leaves the arithmetic exactly as it
+         * was before there was a canvas scale.
+         */
+        { x: 1, y: 1 };
+  const own = renderedScale(node, root);
+  const scale: RenderedScale = {
+    ...own,
+    x: own.x * painted.x,
+    y: own.y * painted.y,
+    ancestor: {
+      x: own.ancestor.x * painted.x,
+      y: own.ancestor.y * painted.y,
+    },
+  };
   /*
    * A clipping ancestor that is not axis-aligned is DECLINED rather than
    * measured, because neither reading survives its transform: `a` and `d` are
@@ -844,11 +958,26 @@ function cutByAncestor(
    * describe.
    */
   if (!scale.describable) return true;
+  /*
+   * The BLOCK's radii are composed here too, and for the same reason the
+   * ancestor's geometry is.
+   *
+   * The caller scales them by the block's own composition, which stops below
+   * the root — so the outer curve below carries the canvas scale and the inner
+   * one does not. Compared across that difference, an oversized inner curve
+   * reads as fitting inside the outer one, and a block whose visible corner IS
+   * clipped keeps its bands and draws them over clipped pixels.
+   *
+   * Done at the comparison rather than at the call site: this is the only place
+   * that holds both curves, and asking the caller to pre-compose one of them
+   * puts half a decision somewhere that cannot see the other half.
+   */
+  const inner = scaleCornerRadii(radii, painted);
   const clip = clipEdges(outer, style, scale);
   if (cutByEdges(box, clip, clipsX, clipsY)) return true;
   return cutByCorner(
     box,
-    radii,
+    inner,
     clip,
     style,
     scale,

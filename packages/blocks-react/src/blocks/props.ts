@@ -10,7 +10,8 @@
  *
  * @module blocks/props
  */
-import { normalizeUrl } from "@nextlyhq/blocks-engine";
+import { isFetchableUrl, normalizeUrl } from "@nextlyhq/blocks-engine";
+import type { RemotePatternInput } from "@nextlyhq/blocks-engine";
 
 /** A string prop, or the fallback when the stored value is not usable text. */
 /**
@@ -236,4 +237,33 @@ function originOf(value: unknown): string | undefined {
   // among others. Treating that as a matchable value would let two unrelated
   // opaque origins compare equal.
   return parsed.origin === "null" ? undefined : parsed.origin;
+}
+
+/**
+ * A stored URL this page is willing to turn into a REQUEST.
+ *
+ * TWO filters, both asked, in this order. `url()` refuses a scheme that could
+ * execute and applies whether or not an operator configured anything, because a
+ * `javascript:` value is not a site setting. `remotePatterns` is the site's own
+ * list of hosts it will fetch from, and an ABSENT list means unasked rather than
+ * allowed-nothing — the semantics {@link BlockHostPolicy} states for the field,
+ * and the reason an existing site does not lose its images the day it upgrades.
+ *
+ * ONE implementation, because three surfaces ask it: an image block, an embed,
+ * and the rich-text renderer's media. Each had its own copy, and a copy is not a
+ * policy — a change to the accepted schemes, to normalisation, or to the order
+ * the two filters run in would have moved one and left the others agreeing with
+ * a rule that no longer existed, with every local version still looking correct.
+ *
+ * `undefined` where either filter refuses, so a caller decides what to draw in
+ * its place rather than being handed a URL it must not request.
+ */
+export function fetchableUrl(
+  value: unknown,
+  patterns: readonly RemotePatternInput[] | undefined
+): string | undefined {
+  const safe = url(value);
+  if (safe === undefined) return undefined;
+  if (patterns === undefined) return safe;
+  return isFetchableUrl(safe, patterns) ? safe : undefined;
 }

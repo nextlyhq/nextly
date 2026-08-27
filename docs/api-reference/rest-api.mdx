@@ -675,11 +675,19 @@ Relationship population depth. `0` returns only IDs; `1+` populates referenced d
 
 ### select
 
-Comma-separated whitelist of fields to include:
+Whitelist of fields to include. Two spellings, both accepted:
 
 ```
-?select=id,title,publishedAt
+?select=id,title,publishedAt          # comma-separated
+?select={"id":true,"title":true}      # JSON object (URL-encode it)
 ```
+
+The `id` and the system timestamps come back whether or not they are named.
+
+A `select` the API cannot read is a `400`, rather than a response carrying every
+field — a projection that is silently discarded looks exactly like one that was
+never asked for. Naming no fields at all is unreadable for the same reason; omit
+the parameter to get every field.
 
 ### richTextFormat
 

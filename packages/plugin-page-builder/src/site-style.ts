@@ -242,7 +242,13 @@ function sameSiteToken(a: SiteToken, b: SiteToken): boolean {
     // in extensions reads as identical to the config default — so the next edit
     // anywhere in the table filters it out of the payload and the vendor data is
     // gone, silently, from a save the author made about a different token.
-    sameJsonValue(a.extensions, b.extensions)
+    sameJsonValue(a.extensions, b.extensions) &&
+    // The same argument for the half of this system's own extension key that
+    // this build does not read. It is preserved for exactly one reason — that
+    // an export written by an older build still carries what a newer one wrote
+    // — and a comparison blind to it would drop it on the next unrelated edit,
+    // which is the loss it exists to prevent.
+    sameJsonValue(a.unreadExtension, b.unreadExtension)
   );
 }
 

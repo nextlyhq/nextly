@@ -86,3 +86,37 @@ describe("classifyForMode", () => {
     }
   });
 });
+
+describe("what a resize tells the author", () => {
+  // A narrowing reaches this classifier for the first time — until the diff
+  // compared declared sizes, `numeric(10,2) -> numeric(5,1)` produced no
+  // operation at all. It arrives already destructive, so the surfaces that
+  // gate on that need no new rule; what they had to gain was a reason that
+  // names what is changing.
+  const narrowing: Operation = {
+    type: "change_column_type",
+    tableName: "dc_orders",
+    columnName: "amount",
+    fromType: "numeric(10,2)",
+    toType: "numeric(5,1)",
+  };
+
+  it("refuses it in production-strict, as it does any type change", () => {
+    expect(
+      classifyForMode([narrowing], "postgresql", "production-strict").verdict
+    ).toBe("refuse");
+  });
+
+  it("names both sizes in the reason", () => {
+    // The op used to be built from the bare type token, so had one ever been
+    // emitted its reason would have read "from 'numeric' to 'numeric'" — a
+    // destructive change the author is asked to confirm without being told
+    // what it does.
+    const r = classifyForMode([narrowing], "postgresql", "production-strict");
+    expect(r.verdict).toBe("refuse");
+    if (r.verdict === "refuse") {
+      expect(r.reasons.join(" ")).toContain("numeric(10,2)");
+      expect(r.reasons.join(" ")).toContain("numeric(5,1)");
+    }
+  });
+});

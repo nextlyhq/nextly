@@ -33,8 +33,6 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { useEntryLocale } from "../EntryLocaleContext";
-import { LanguageControl } from "../LanguageControl";
-import { LanguagesMenu } from "../LanguagesMenu";
 import { translationCounts } from "../translation-meta";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
@@ -95,7 +93,6 @@ export interface EntrySystemHeaderProps {
   locale?: string;
   /** Called when the user switches the active content language (i18n M7). When omitted, the
    *  language switcher is not rendered. */
-  onLocaleChange?: (locale: string) => void;
   /** Whether the entity is localized. Forwarded to the version-history panel as
    *  the authoritative signal for its locale filter (shared writes can produce
    *  null-locale versions, so the rows alone are not conclusive). */
@@ -113,8 +110,32 @@ export interface EntrySystemHeaderProps {
   isPreviewAvailable?: boolean;
   /** Opens the preview using the editor's own session. May be asynchronous. */
   onPreview?: () => void | Promise<void>;
-  /** Label for the preview action. Defaults to "Preview". */
+  /**
+   * What this entry's preview is called, where it is not called "Preview".
+   *
+   * Names BOTH controls below — the open-in-a-tab action and the pane toggle —
+   * because they are one thing to an author, and a second prop for the second
+   * control is a second thing to keep in step. Absent rather than defaulted, so
+   * each control can apply the default its own sentence needs: "Preview" as a
+   * button's name, "preview" as a noun inside "Show preview".
+   */
   previewLabel?: string;
+  /**
+   * Opens and closes the preview PANE, which is a different action from opening
+   * the preview in a tab.
+   *
+   * Two controls rather than one with a mode, because they answer different
+   * questions: a tab is for looking at the page on its own — on a phone, on a
+   * second monitor, to send to someone standing beside you — and the pane is
+   * for watching it while you edit. A single control would have to guess which,
+   * and the wrong guess costs a page load and the editor's place on screen.
+   *
+   * Absent means the surface offers no pane at all, which is what an embedded
+   * editor in a modal does.
+   */
+  onTogglePreviewPane?: () => void;
+  /** Whether that pane is currently open, for the control's pressed state. */
+  previewPaneOpen?: boolean;
   /**
    * Whether there is a saved document for a link to name.
    *
@@ -233,7 +254,6 @@ export function EntrySystemHeader({
   entry,
   collectionSlug,
   locale,
-  onLocaleChange,
   onSaveDraft,
   onPublish,
   onSaveChanges,
@@ -256,6 +276,8 @@ export function EntrySystemHeader({
   isPreviewAvailable = false,
   onPreview,
   previewLabel,
+  onTogglePreviewPane,
+  previewPaneOpen = false,
   isLinkAvailable = false,
   onCopyLink,
   isCopyingLink = false,
@@ -271,6 +293,22 @@ export function EntrySystemHeader({
     getLocale,
   } = useLocalization();
   const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
+  /*
+   * A declared label is used VERBATIM, not built into a sentence.
+   *
+   * `previewLabel` is a complete button label, not a noun: collections
+   * legitimately name one "View page", and "Show View page" is not English.
+   * Where the author supplied nothing there is no such risk and the control
+   * keeps its own wording, which says what the click will do.
+   *
+   * Losing "Show"/"Hide" for a declared label costs nothing that is not carried
+   * elsewhere — `aria-pressed` states it for assistive technology and the
+   * variant states it visually, which is how a toggle button reports itself.
+   */
+  const previewToggleLabel =
+    previewLabel ?? (previewPaneOpen ? "Hide preview" : "Show preview");
+  const previewToggleTitle =
+    previewLabel ?? (previewPaneOpen ? "Hide the preview" : "Show the preview");
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -491,6 +529,30 @@ export function EntrySystemHeader({
             isCopyingLink={isCopyingLink}
             disabled={isSubmitting}
           />
+          {/* The pane toggle, beside the preview actions rather than inside
+              them: `PreviewActions` decides its own shape from which of OPEN
+              and COPY are available, and a third action would make that a
+              three-way decision for a control whose whole design is that it
+              collapses to one button when only one thing can be done.
+
+              Offered only where a pane exists to open — an embedded editor in
+              a modal passes no handler and gets no control. */}
+          {onTogglePreviewPane !== undefined && (
+            <Button
+              type="button"
+              variant={previewPaneOpen ? "secondary" : "ghost"}
+              size="sm"
+              onClick={onTogglePreviewPane}
+              disabled={isSubmitting}
+              aria-pressed={previewPaneOpen}
+              title={previewToggleTitle}
+            >
+              <PanelRight className="h-4 w-4" aria-hidden="true" />
+              <ToolbarLabel priority="secondary">
+                {previewToggleLabel}
+              </ToolbarLabel>
+            </Button>
+          )}
           {/* Sits with the actions rather than beside the title: it reports on
             the same work the save buttons act on, and reads as status for that
             cluster.
@@ -774,42 +836,26 @@ export function EntrySystemHeader({
           While a past version is on screen, switching language or running a
           language action would act on the live document under a banner saying
           the page cannot be edited — so both are withheld, and only there. */}
-      {localizationEnabled && (mode === "create" || onLocaleChange) && (
-        <div className="px-6 py-2 border-t border-border flex items-center gap-3 flex-wrap">
-          {mode === "create" ? (
-            <span className="text-xs text-muted-foreground inline-flex items-center gap-1.5">
-              <Globe className="h-3.5 w-3.5" aria-hidden="true" />
-              Creating in {defaultLocaleLabel} — other languages can be added
-              after the first save
-            </span>
-          ) : (
-            <>
-              {onLocaleChange && (
-                <LanguageControl
-                  {...(entryTranslations === undefined
-                    ? {}
-                    : { translations: entryTranslations })}
-                  {...(locale === undefined ? {} : { activeLocale: locale })}
-                  onSelect={onLocaleChange}
-                  disabled={isReadingHistory}
-                />
-              )}
-              {counts.total > 0 && counts.translated < counts.total && (
-                <span className="text-xs text-muted-foreground whitespace-nowrap tabular-nums">
-                  {counts.total - counts.translated}{" "}
-                  {counts.total - counts.translated === 1
-                    ? "language"
-                    : "languages"}{" "}
-                  untranslated
-                </span>
-              )}
-            </>
-          )}
-          <span className="flex-1" />
-          <LanguagesMenu
-            hasStatus={hasStatus}
-            actionsDisabled={isReadingHistory || mode === "create"}
-          />
+      {/* Create mode ONLY. A document that does not exist yet has no
+          translations to report and no language to switch to, so the one thing
+          worth saying is which language this first save will be in.
+
+          Everything else this row used to carry — the language pills, the
+          untranslated count and the language actions menu — is gone. The
+          document rail's language panel says all three, and saying them twice
+          in different words on one screen is what made the feature hard to
+          read: the pills and the panel reported the SAME number from the same
+          function, one as what was done and one as what was left. The pills
+          could not be fixed in place either; past six languages they overflowed
+          a clipped row, so a fourteen-language site could not reach eight of
+          them at all. */}
+      {localizationEnabled && mode === "create" && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-border px-6 py-2">
+          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Globe className="h-3.5 w-3.5" aria-hidden="true" />
+            Creating in {defaultLocaleLabel} — other languages can be added
+            after the first save
+          </span>
         </div>
       )}
 

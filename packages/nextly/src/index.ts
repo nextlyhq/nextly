@@ -547,6 +547,71 @@ export type {
 // shared service types above.
 export type { BatchOperationResult } from "./domains/collections/services/collection-types";
 
+// Whether a collection stores a working draft beside its published row.
+//
+// Exported because a plugin cannot answer it and cannot safely guess. The split
+// resolves from five conditions together — versioning resolving
+// `drafts.enabled`, `status: true`, no reachable password field, every
+// reachable component schema resolving, and no component carrying one — and
+// `status: true` alone, the obvious flag, is true for collections that store no
+// draft at all. A plugin keying data by published/draft therefore writes rows
+// against a document that does not exist, and nothing downstream can tell those
+// rows from real ones.
+//
+// The reason travels with the verdict rather than being reduced to a boolean,
+// so a caller can say WHY a collection it expected to draft does not.
+//
+// `collectionDraftSplit` takes the collection AS AUTHORED. The two functions
+// beside it do not: one wants component schemas already resolved, the other
+// wants `versions` in the `{ drafts: { enabled } }` shape that only exists
+// after config load. An author writes `versions: true`, and handing that to
+// either is rejected by the checker — or, from untyped code, silently answers
+// `false` for a collection whose drafts are on.
+//
+// Root entry, not `nextly/config`: this reaches the component registry through
+// the DI container, and `config` is a CLIENT entry — publishing it there would
+// pull the server graph into a browser bundle.
+export { collectionDraftSplit } from "./domains/versions/draft-split-eligibility";
+export type {
+  AuthoredDraftSplitCollection,
+  DraftSplitEligibility,
+  DraftSplitDisabledReason,
+} from "./domains/versions/draft-split-eligibility";
+
+// What a form answers a visitor who reaches it. Exported because the plugin
+// that contributes the forms collection refuses submissions too, and a second
+// implementation of this is how the four public paths came to disagree.
+export {
+  formAvailability,
+  GENERIC_REFUSAL,
+  NO_SUCH_FORM,
+  type FormAvailability,
+  type FormAvailabilityInput,
+} from "./domains/forms/form-availability";
+
+// The same question asked of a collection the SCHEMA BUILDER created, whose
+// record is not authored config.
+//
+// A Builder collection lives in the dynamic registry, and that registry stores
+// `versions` already RESOLVED — `dynamic_collections.versions` holds a
+// `ResolvedVersionsConfig`. So the authored form above is the one shape it can
+// never take: the checker rejects it, and untyped code gets `false` for a
+// collection whose drafts are on, because nothing named `drafts.enabled` is
+// read. A caller holding a registry record needs this one.
+//
+// Two functions rather than one accepting either, because the two inputs
+// overlap in neither direction and a single function would have to GUESS which
+// it was handed. `versions: true` and `{ drafts: { enabled: true } }` are both
+// objects-or-booleans that a runtime check can misread, and guessing wrong
+// fails silently in the direction that disables drafts.
+//
+// Renamed at this boundary. `schemaDraftSplit` is named for the caller it was
+// written for — the schema-read path — and a public name has to say what it
+// TAKES, because that is the only thing a plugin author choosing between the
+// two can see.
+export { schemaDraftSplit as resolvedCollectionDraftSplit } from "./domains/versions/draft-split-eligibility";
+export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
+
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
   EventBus,

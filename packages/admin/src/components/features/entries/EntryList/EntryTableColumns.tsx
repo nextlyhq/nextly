@@ -16,6 +16,7 @@ import type { FieldConfig, DataFieldConfig } from "nextly/config";
 
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { fieldLabel } from "@admin/lib/field-label";
 
 import { EntryTableCell } from "./EntryTableCell";
 import { LanguageDots } from "./LanguageDots";
@@ -263,18 +264,6 @@ export function getDefaultVisibleColumns(
   ];
 }
 
-function formatFieldName(name: string): string {
-  return (
-    name
-      // Handle camelCase
-      .replace(/([a-z])([A-Z])/g, "$1 $2")
-      // Handle snake_case
-      .replace(/_/g, " ")
-      // Capitalize first letter of each word
-      .replace(/\b\w/g, char => char.toUpperCase())
-  );
-}
-
 /**
  * Finds a field configuration by name, handling nested fields in layout wrappers.
  *
@@ -490,7 +479,7 @@ export function buildEntryColumns(
     // Data field — reuse EntryTableCell so field rendering stays identical.
     cols.push({
       name: field.name,
-      header: field.label || formatFieldName(field.name),
+      header: fieldLabel(field),
       sortable: isSortableField(field),
       hidden,
       fieldType: field.type,

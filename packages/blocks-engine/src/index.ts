@@ -163,11 +163,12 @@ export type {
   ValidationMode,
 } from "./validation";
 
-export { defineBlock } from "./block";
+export { BLOCK_ICONS, defineBlock } from "./block";
 export type {
   AnyBlockDefinition,
   BlockDefinition,
   BlockEditorMeta,
+  BlockIcon,
   BlockExample,
   BlockSeoContribution,
   BlockSeoImage,
@@ -368,6 +369,23 @@ export {
   relativeLuminance,
 } from "./style/contrast";
 export type { ContrastLevel, ContrastResult, Rgb } from "./style/contrast";
+// The one CSS-colour policy. Both surfaces that put a stored colour on a page
+// read it from here: the React renderer, which may not import the CMS, and the
+// CMS's own serializer, which lives where the renderer cannot reach.
+export {
+  cssColor,
+  hasCssInjection,
+  normalizeCssValue,
+} from "./style/css-color";
+// One reading of a rich-text inline style. The CMS serializer, the React
+// renderer and the versions differ all ask this module rather than each other.
+export {
+  formatsDrawnByStyle,
+  INLINE_STYLE_PROPERTIES,
+  isInlineStyleProperty,
+  readInlineStyle,
+  sanitizeInlineStyle,
+} from "./style/inline-style";
 export type {
   CompiledPageCss,
   StyleCompileContext,
@@ -464,6 +482,16 @@ export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet } from "./style/site-sheet";
 export { styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
+/*
+ * What a stored breakpoint set MEANS, which the type does not say.
+ *
+ * Exported because more than one package now asks: the editor reads them to
+ * build its dialog and its switcher, and a preview surface outside the builder
+ * derives device presets from the same set. Reimplemented on either side, the
+ * two would agree about what a breakpoint IS and disagree about which rows an
+ * author defined and in what order they apply.
+ */
+export { authoredBreakpoints, inCascadeOrder } from "./style/breakpoint-set";
 
 // The remote-host policy: which hosts a compiled page may fetch from. Exported
 // so the React renderer applies the SAME matcher the style compiler does.
@@ -503,3 +531,15 @@ export {
   type RichTextNode,
   type RichTextValue,
 } from "./rich-text";
+
+/**
+ * Emitting a page's breakpoints for a surface that is not the published page.
+ */
+export {
+  MAX_PREVIEW_CONTAINER_LENGTH,
+  PREVIEW_VIEWPORT_CONTAINER,
+  UNPREVIEWABLE_CONTAINER,
+  previewContainerFor,
+  previewContainerName,
+  type BreakpointContextOptions,
+} from "./style/compile-page";

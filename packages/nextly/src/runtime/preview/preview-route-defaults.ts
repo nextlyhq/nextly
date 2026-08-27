@@ -23,6 +23,8 @@ import {
 } from "../../auth/preview/preview-token";
 import { container, getService } from "../../di";
 import {
+  readFromEnvelope,
+  readOrReport,
   resolvePreviewRedirect,
   resolveSinglePreviewRedirect,
 } from "../../domains/collections/services/preview-redirect-resolver";
@@ -123,7 +125,11 @@ export async function defaultRedirectTo(
         ...(scope.locale === undefined ? {} : { locale: scope.locale }),
       },
       {
-        loadSingle: loadSingleForPreview,
+        // `findSingle` reports failure by THROWING, so the translation is
+        // shared rather than written twice — the route flattens both refusals
+        // to one 404 anyway, but an untranslated throw would escape as a 500.
+        loadSingle: (slug, singleLocale) =>
+          readOrReport(() => loadSingleForPreview(slug, singleLocale)),
         loadDeclaration: singlePreviewDeclarationFor,
         loadSiteUrl: async () =>
           resolvePreviewSiteUrl(
@@ -169,8 +175,15 @@ export async function defaultRedirectTo(
           includeWorkingDraft: true,
         });
 
-        if (!read.success || read.data === null) return null;
-        return read.data as Record<string, unknown>;
+        /*
+         * The route flattens every refusal to one 404 regardless, so the
+         * distinction changes nothing it will say here. It is drawn anyway, and
+         * by the SAME translator the mint uses, because a second copy of "which
+         * envelope means absent" would agree only until one was edited — and
+         * the two would then disagree about the same entry, minting a link the
+         * route refuses.
+         */
+        return readFromEnvelope(read);
       },
       loadDeclaration: previewDeclarationFor,
       loadSiteUrl: async () =>

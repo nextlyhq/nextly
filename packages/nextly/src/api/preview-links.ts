@@ -27,19 +27,29 @@ import { buildUserContext } from "../auth/user-context";
 import { container, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import {
-  resolvePreviewRedirect,
-  resolveSinglePreviewRedirect,
+  buildAuditLogWriter,
+  type AuditLogWriter,
+} from "../domains/audit/audit-log-writer";
+import {
+  explainPreviewRedirect,
+  explainSinglePreviewRedirect,
+  readFromEnvelope,
+  readOrReport,
+  type PreviewPathOutcome,
+  type PreviewRefusalCause,
 } from "../domains/collections/services/preview-redirect-resolver";
 import {
   hasPreviewConfigured,
   type PreviewDeclaration,
 } from "../domains/collections/services/preview-url-resolver";
+import { resolvePreviewViewports } from "../domains/collections/services/preview-viewports";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
+import { previewSessionReachesFrame } from "../runtime/preview/preview-frame-policy";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
@@ -191,7 +201,7 @@ function sharedRedirectDeps(declaration: PreviewDeclaration | undefined): {
 }
 
 /**
- * The one refusal both mint paths make, and the two causes it distinguishes.
+ * The one refusal both mint paths make, and the causes it distinguishes.
  *
  * Written once because the DECISION is one decision — "there is nowhere for
  * this link to open" — while only the noun and the remedy differ. Two copies
@@ -199,44 +209,235 @@ function sharedRedirectDeps(declaration: PreviewDeclaration | undefined): {
  * the message an editor reads instead of finding out from a reviewer that the
  * link 404s.
  *
- * The two causes are kept apart because they name different people. An
- * unconfigured collection or Single is a developer's job; a document whose
- * address cannot be built yet is usually one empty field the editor can fill.
- * Telling an editor to "ask a developer" about their own unfilled slug sends
- * them to the wrong person.
+ * The causes are kept apart because they name DIFFERENT PEOPLE. An unconfigured
+ * collection or Single is a developer's job; a document whose address cannot be
+ * built yet is usually one empty field the editor can fill; a declaration
+ * pointing at another origin is neither, and no field on the entry will ever
+ * change it. Telling an editor to fill in a slug that is already correct sends
+ * them to look at the one thing that is not the problem.
+ *
+ * A `Record` rather than a chain of ternaries, so a new
+ * {@link PreviewRefusalCause} is a type error here rather than silently taking
+ * whichever branch happened to be last.
  */
+/**
+ * The word for the DOCUMENT, as against the word for the thing that DECLARES
+ * the preview.
+ *
+ * Two messages need it and an inline copy in each would drift, which for a
+ * one-word difference is the drift nobody notices: `noun` elsewhere in this map
+ * is the declaring object — a collection or a Single — and that is correct for
+ * a message about configuration. It is wrong for a message about a value on the
+ * document, because an entry's data belongs to the entry rather than to its
+ * collection, and a reader sent to look at "this collection" for a field goes
+ * to the wrong screen.
+ */
+function documentNoun(subject: "collection" | "single"): "entry" | "single" {
+  return subject === "single" ? "single" : "entry";
+}
+
+const REFUSALS: Record<
+  PreviewRefusalCause,
+  {
+    message: (subject: "collection" | "single", noun: string) => string;
+    reason: string;
+    remedy: string;
+  }
+> = {
+  documentUnreadable: {
+    /*
+     * The DOCUMENT, not the collection. What failed is the trusted read of one
+     * entry; the collection and its declaration were both read successfully a
+     * moment earlier. Naming the collection sends the editor to look at the
+     * wrong scope, which is the same misdirection this cause was added to stop.
+     */
+    message: subject =>
+      `This ${subject === "single" ? "single" : "entry"} could not be read ` +
+      "just now, so a shared link would have nowhere to open. Nothing is " +
+      "known to be wrong with it — please try again in a moment.",
+    reason: "document-read-failed",
+    /*
+     * Deliberately NOT the deletion remedy. The read failed, which establishes
+     * nothing about whether the document exists, and an operator sent looking
+     * for a deletion that never happened is worse off than one told the read
+     * failed.
+     */
+    /*
+     * Deliberately NOT "a non-404 failure". A 404 CARRYING A CODE lands here
+     * too, because a thrown not-found — an `afterRead` hook refusing a
+     * dependent lookup — cannot be told apart from the document itself being
+     * absent. Describing this as necessarily non-404 sends an operator looking
+     * anywhere but the hook path that produced it.
+     */
+    remedy:
+      "The trusted read failed without establishing that the previewed " +
+      "document is absent. Look at the read path — a transient database " +
+      "error, a rate limit, or a read hook raising not-found for something " +
+      "the document merely references all arrive this way.",
+  },
+  documentGone: {
+    message: subject =>
+      `This ${subject === "single" ? "single" : "entry"} could not be read, so ` +
+      "a shared link would have nowhere to open. It may have been deleted.",
+    reason: "has-no-readable-document",
+    /*
+     * The REQUEST, never "the token" — nothing has been signed at this point.
+     * This refusal is thrown before `respondWithPreviewLink`, so a log line
+     * saying a token names something would record a credential that was never
+     * issued, and an incident reader would go looking for it.
+     */
+    remedy:
+      "The mint request named a document the resolver could not load. For an " +
+      "entry that usually means it was deleted between the authorization read " +
+      "and the resolver's own; for a Single, that it was removed from the " +
+      "configuration.",
+  },
+  notConfigured: {
+    message: (_subject, noun) =>
+      `This ${noun} has no preview URL configured, so a shared link would ` +
+      "have nowhere to open. A developer can add one before links can be " +
+      "shared.",
+    reason: "has-no-preview-url",
+    remedy:
+      "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
+      "(UI-created). It answers where the document is served on the site, " +
+      "which nothing outside the application can know.",
+  },
+  unavailable: {
+    message: subject =>
+      `This ${documentNoun(subject)} has no preview ` +
+      "address yet, so a shared link would have nowhere to open. Filling in " +
+      "the fields its preview URL is built from — usually the slug — makes " +
+      "it shareable.",
+    reason: "has-no-preview-target",
+    remedy:
+      "The preview declaration DECLINED to name an address for this document. " +
+      "A `url` function answering null, or a `urlTemplate` whose placeholder " +
+      "field is empty, both mean 'not previewable yet'. A declaration that " +
+      "threw or produced an unusable address is `declarationFailed` instead.",
+  },
+  /*
+   * Deliberately neutral, and neutral in BOTH directions.
+   *
+   * A caught error cannot identify whether the declaration or this document's
+   * data caused it, so this names neither. Saying it is a developer's to
+   * investigate would be wrong whenever a field on this document is the cause,
+   * and it would send the one person who can fix it away from the fix.
+   *
+   * The DOCUMENT noun rather than `noun`: `noun` is the thing that DECLARES the
+   * preview — a collection or a Single — which is right for a message about
+   * configuration and wrong here, because an entry's data belongs to the entry
+   * rather than to its collection.
+   */
+  declarationFailed: {
+    message: subject =>
+      `This ${documentNoun(subject)}'s preview URL could not be built: the ` +
+      "preview declaration failed while producing an address. That can be a " +
+      "fault in the declaration, or a value on this " +
+      `${documentNoun(subject)} it did not expect — the error does not say ` +
+      "which, so it is worth checking this " +
+      `${documentNoun(subject)}'s fields as well as raising it with a ` +
+      "developer.",
+    reason: "preview-declaration-failed",
+    remedy:
+      "The declaration threw while running, or returned pieces that do not " +
+      "compose into a URL under the site. Whether it fails for EVERY document " +
+      "or only for this one is NOT observable from a caught throw — a " +
+      "declaration reading a field this document never filled in raises the " +
+      "same error a broken one does — so this names neither. Check " +
+      "`admin.preview.url` / `admin.preview.urlTemplate` and the fields it " +
+      "reads.",
+  },
+  foreignOrigin: {
+    message: (_subject, noun) =>
+      `This ${noun}'s preview URL points at a different site than this one, ` +
+      "so a shared link would leave the preview behind. A developer can " +
+      "align the preview URL with the configured site URL.",
+    reason: "preview-url-names-another-origin",
+    remedy:
+      "The declaration resolved to an absolute URL whose origin differs from " +
+      "the configured site URL (or, with none set, from the origin serving " +
+      "the request). Filling in fields on the document cannot change this — " +
+      "either the declaration or the site URL setting has to move.",
+  },
+  unresolvable: {
+    message: (_subject, noun) =>
+      `This ${noun}'s preview URL could not be turned into an address on ` +
+      "this site, so a shared link would have nowhere to open. A developer " +
+      "can check the preview URL and the site URL setting.",
+    reason: "preview-url-does-not-resolve",
+    remedy:
+      "Either the preview URL or the configured site URL did not parse, or " +
+      "the declaration produced a path that leaves this origin. Note that " +
+      "`//host` and `/\\host` are absolute despite the leading slash.",
+  },
+};
+
 function refuseUnservableLink(args: {
   subject: "collection" | "single";
   name: string;
-  declared: boolean;
+  cause: PreviewRefusalCause;
 }): never {
-  const { subject, name, declared } = args;
+  const { subject, name, cause } = args;
   const noun = subject === "single" ? "single" : "collection";
+  const refusal = REFUSALS[cause];
 
   throw NextlyError.conflict({
     reason: "state",
-    message: declared
-      ? `This ${subject === "single" ? "single" : "entry"} has no preview ` +
-        "address yet, so a shared link would have nowhere to open. Filling in " +
-        "the fields its preview URL is built from — usually the slug — makes " +
-        "it shareable."
-      : `This ${noun} has no preview URL configured, so a shared link would ` +
-        "have nowhere to open. A developer can add one before links can be " +
-        "shared.",
+    message: refusal.message(subject, noun),
     logContext: {
-      reason: declared
-        ? `preview-link-${subject}-has-no-preview-target`
-        : `preview-link-${subject}-has-no-preview-url`,
-      remedy: declared
-        ? "The preview declaration returned no address for this document. A " +
-          "`url` function answering null, or a `urlTemplate` whose placeholder " +
-          "field is empty, both mean 'not previewable yet'."
-        : "Add `admin.preview.url` (code-first) or `admin.preview.urlTemplate` " +
-          "(UI-created). It answers where the document is served on the site, " +
-          "which nothing outside the application can know.",
+      reason: `preview-link-${subject}-${refusal.reason}`,
+      remedy: refusal.remedy,
       [noun]: name,
     },
   });
+}
+
+/**
+ * The audit writer, resolved the way the auth router resolves it.
+ *
+ * The container's `getService` is keyed on `ServiceMap`, and the writer takes
+ * the loose form because it is shared with callers outside that map. The widen
+ * is the same one `route-handler/auth-handler.ts` performs at its own call
+ * site; it lives in one function here so the two recording sites below cannot
+ * drift into widening it differently.
+ *
+ * Built per call rather than once at module load: the adapter it reaches is
+ * registered by whichever container is live, and a writer captured at import
+ * time would outlast a reload and write through a connection nobody is using.
+ */
+function auditWriter(): AuditLogWriter {
+  return buildAuditLogWriter(getService as (name: string) => unknown);
+}
+
+/**
+ * What a scope looks like in an audit row.
+ *
+ * Its own function because the trail asks a narrower question than the token
+ * does: WHICH DOCUMENT was opened up, in terms that stay readable years later
+ * and identify no person. The scope's discriminant is projected to an explicit
+ * `scope` key rather than left to the reader to infer from which of
+ * `collection` or `single` is present — an audit row is read by someone who was
+ * not there, and a shape they have to deduce is one they can deduce wrongly.
+ *
+ * The TOKEN never enters. It is the credential itself, so a trail carrying it
+ * would hand its reader the access it exists to record — and an audit table is
+ * readable by exactly the operators a preview link is meant to be scoped away
+ * from. What is recorded is what the credential was FOR, never the credential.
+ */
+function auditScope(scope: PreviewTokenScope): Record<string, unknown> {
+  const locale =
+    "locale" in scope && scope.locale !== undefined
+      ? { locale: scope.locale }
+      : {};
+  return "single" in scope
+    ? { scope: "single", single: scope.single, ...locale }
+    : {
+        scope: "collection",
+        collection: scope.collection,
+        entryId: scope.entryId,
+        ...locale,
+      };
 }
 
 /**
@@ -245,6 +446,11 @@ function refuseUnservableLink(args: {
  * The generation is read here rather than by each caller, so a link minted for
  * a Single and one minted for an entry cannot end up recorded against different
  * revocation generations — which would make "revoke everything" miss one kind.
+ *
+ * The audit row is written here for that same reason. Both mints funnel through
+ * this function, so recording at each call site instead would be one rule with
+ * two implementations — and the one that was forgotten would issue credentials
+ * silently, which is precisely the state this replaces.
  */
 async function respondWithPreviewLink(
   scope: PreviewTokenScope,
@@ -257,6 +463,24 @@ async function respondWithPreviewLink(
    * forgot it would render under none at all.
    */
   minter: string,
+  /**
+   * The origin the admin is being served from, taken from THIS request rather
+   * than from anything the caller sent.
+   *
+   * The mint route is served by the admin, so its own URL names the admin's
+   * origin — no header to trust and nothing for a caller to assert. It decides
+   * only whether the pane is offered a frame or a new tab, so a wrong value
+   * costs a fallback rather than access to anything.
+   */
+  adminOrigin: string,
+  /**
+   * The collection's or Single's own preview declaration.
+   *
+   * Passed in rather than re-read: both call sites already loaded it to decide
+   * whether a link could be built at all, and reading it twice would let the
+   * link and the viewports it offers come from two different reads.
+   */
+  declaration: PreviewDeclaration | undefined,
   ttlSeconds?: number
 ): Promise<Response> {
   const generation = await (
@@ -278,17 +502,71 @@ async function respondWithPreviewLink(
   );
 
   const settings = await (await settingsService()).getSettings();
+  const url = previewLinkUrl({
+    siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
+    route: resolvePreviewRoute(
+      container.get<NextlyServiceConfig>("config")?.preview
+    ),
+    token,
+  });
+
+  /*
+   * Recorded LAST, after everything that can still fail has succeeded.
+   *
+   * Signing is not the moment a credential exists for anyone — the settings
+   * read and the link assembly come after it, and a failure in either returns
+   * an error while the token never leaves the process. A row written before
+   * them would durably assert that draft access was handed out on a request
+   * that handed out nothing, and an investigator reading the trail would be
+   * hunting a link nobody holds.
+   *
+   * The writer never throws, deliberately, and that direction is right here for
+   * the same reason it is right for a login: an unreachable audit table must
+   * not be what stops an editor previewing their own draft. The cost is the
+   * opposite gap — a database failure loses the row while the link works — and
+   * the writer logs it. Fail-closed would convert a reporting outage into an
+   * outage of the feature being reported on.
+   *
+   * No IP or user agent. Capturing them honestly needs the `trustProxy` and
+   * `trustedProxyIps` configuration that decides which forwarded address may be
+   * believed, and that read lives behind the auth handlers' own bridge; no
+   * route in this layer captures either today. Recording the proxy's address as
+   * the caller's would put a confidently wrong value in an audit field, which
+   * is worse than an absent one — the actor, which is the load-bearing fact
+   * here, is recorded either way.
+   */
+  await auditWriter().write({
+    kind: "preview-link-minted",
+    actorUserId: minter,
+    metadata: {
+      ...auditScope(scope),
+      generation,
+      expiresAt: expiresAt.toISOString(),
+    },
+  });
 
   return respondMutation("Preview link created", {
     token,
-    url: previewLinkUrl({
-      siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
-      route: resolvePreviewRoute(
-        container.get<NextlyServiceConfig>("config")?.preview
-      ),
-      token,
-    }),
+    url,
     expiresAt: expiresAt.toISOString(),
+    /*
+     * Answered HERE because this is where both halves are known: the site's
+     * address, and the policy the preview cookie is set with. The admin used to
+     * compare the two origins itself, which was a second implementation of a
+     * question the cookie already settles — correct only while nobody changed
+     * the cookie, and wrong silently when someone did.
+     *
+     * It says the SESSION reaches a frame, not that the frame will load: an
+     * application's own `frame-ancestors` is invisible from here.
+     */
+    embeddable: previewSessionReachesFrame(url, adminOrigin),
+    /*
+     * Resolved HERE because the declaration may be a FUNCTION, and a function
+     * cannot be stored or sent. The browser receives the list it produced, so
+     * the admin never needs to know where a site keeps its breakpoints — which
+     * is what lets a plugin supply them without the admin depending on it.
+     */
+    viewports: await resolvePreviewViewports(declaration?.breakpoints),
   });
 }
 
@@ -463,7 +741,7 @@ async function mintForSingle(
   // read below, so a refused caller reaches neither.
   refuseApiKeyMint(auth);
   const { user } = await callerFor(auth);
-  await assertSinglePreviewable(single, locale, user, {
+  const singleGrant = await assertSinglePreviewable(single, locale, user, {
     // The route above ran the coarse gate for `update` on this Single, so
     // repeating it here would ask a question already answered. The preview
     // RENDER passes `false`: it has no route gate at all.
@@ -476,27 +754,42 @@ async function mintForSingle(
   // same reason the entry path does it: a `url` answering null means "not
   // previewable yet", and minting on the strength of a declaration alone hands
   // out a link that 404s at the redirect.
-  const target = hasPreviewConfigured(declaration)
-    ? await resolveSinglePreviewRedirect(
+  // The undeclared case is stated HERE rather than resolved, because the guard
+  // exists to skip the document read: asking the resolver would load a Single
+  // only to be told what the missing declaration already says.
+  const outcome: PreviewPathOutcome = hasPreviewConfigured(declaration)
+    ? await explainSinglePreviewRedirect(
         { single, ...(locale === undefined ? {} : { locale }) },
         {
-          loadSingle: loadSingleForPreview,
+          // `findSingle` reports failure by THROWING rather than by returning
+          // an envelope, so checking for `null` here saw neither absence nor a
+          // failed read — the throw simply travelled past, and the endpoint
+          // answered with a raw internal error instead of this refusal.
+          loadSingle: (slug, singleLocale) =>
+            readOrReport(() => loadSingleForPreview(slug, singleLocale)),
           ...sharedRedirectDeps(declaration),
-        }
+        },
+        // The grant the gate above RETURNED, rather than one assembled here:
+        // a witness built at the call site would assert the very thing the gate
+        // exists to establish, and would be accepted by a comparison against
+        // that same self-asserted value.
+        singleGrant
       )
-    : null;
+    : { kind: "refused", cause: "notConfigured" };
 
-  if (target === null) {
+  if (outcome.kind === "refused") {
     refuseUnservableLink({
       subject: "single",
       name: single,
-      declared: hasPreviewConfigured(declaration),
+      cause: outcome.cause,
     });
   }
 
   return respondWithPreviewLink(
     { kind: "single", single, ...(locale === undefined ? {} : { locale }) },
     auth.userId,
+    new URL(req.url).origin,
+    declaration,
     ttlSeconds
   );
 }
@@ -565,7 +858,7 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // visible at all INCLUDING one never published, and whether this caller may
   // edit it — which is what the draft overlay requires before surfacing the
   // working draft the token hands out.
-  await assertEntryPreviewable(collection, entryId, user, {
+  const entryGrant = await assertEntryPreviewable(collection, entryId, user, {
     // The route above ran the coarse gate for `update` on this collection, so
     // repeating it here would ask a question already answered. The preview
     // RENDER passes `false`: it has no route gate at all.
@@ -599,8 +892,8 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // Resolved through the SAME function the preview route will call, so the
   // answer here and the answer the reviewer gets cannot disagree. The entry is
   // already authorized at this point, which is why a trusted read is correct.
-  const target = hasPreviewConfigured(declaration)
-    ? await resolvePreviewRedirect(
+  const outcome: PreviewPathOutcome = hasPreviewConfigured(declaration)
+    ? await explainPreviewRedirect(
         { collection, entryId, ...(locale === undefined ? {} : { locale }) },
         {
           loadEntry: async (name, id, entryLocale) => {
@@ -613,29 +906,42 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
               ...(entryLocale === undefined ? {} : { locale: entryLocale }),
               includeWorkingDraft: true,
             });
-            return read.success && read.data !== null
-              ? (read.data as Record<string, unknown>)
-              : null;
+            /*
+             * A FAILED read is not an absent entry: a transient database error,
+             * a rate limit or a throwing read hook would otherwise arrive as
+             * "this may have been deleted", telling an editor their work is
+             * gone while it sits there intact. Which envelope means absence is
+             * decided in ONE place, so this loader and the anonymous route's
+             * cannot come to disagree about the same entry.
+             */
+            return readFromEnvelope(read);
           },
           // Already resolved above, so this hands back the value rather than
           // fetching it again — the resolver takes a loader and this call site
           // happens to have the answer.
           ...sharedRedirectDeps(declaration),
-        }
+        },
+        // The grant `assertEntryPreviewable` returned. See the Single path:
+        // it cannot exist unless that gate passed for this exact document.
+        entryGrant
       )
-    : null;
+    : // Stated rather than resolved, so an undeclared collection costs no entry
+      // read to learn what the absent declaration already says.
+      { kind: "refused", cause: "notConfigured" };
 
-  if (target === null) {
+  if (outcome.kind === "refused") {
     refuseUnservableLink({
       subject: "collection",
       name: collection,
-      declared: hasPreviewConfigured(declaration),
+      cause: outcome.cause,
     });
   }
 
   return respondWithPreviewLink(
     { collection, entryId, ...(locale === undefined ? {} : { locale }) },
     auth.userId,
+    new URL(req.url).origin,
+    declaration,
     ttlSeconds
   );
 });
@@ -647,7 +953,55 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
  * flight. Auth: `manage settings`, because the generation is site-wide.
  */
 export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
-  await requireRoutePermission(req, "manage", "settings");
+  const auth = await requireRoutePermission(req, "manage", "settings");
   const generation = await (await settingsService()).revokeAllPreviewTokens();
+
+  /*
+   * The counterpart to the mint row, and the one an incident actually starts
+   * from: revocation is site-wide and cuts every reader off mid-session, so the
+   * question afterwards is who did it and when — which nothing could answer.
+   *
+   * The new generation is recorded because it is what makes the two kinds of
+   * row relate: every `preview-link-minted` carrying a lower generation is
+   * covered by this revocation, so the trail can say which credentials a given
+   * revocation actually killed rather than only that one happened.
+   *
+   * That correlation holds for revocations that do not overlap, which is what
+   * a site-wide break-glass action normally looks like, and NOT for concurrent
+   * ones. `revokeAllPreviewTokens` increments atomically and then reads the
+   * counter back in a separate statement, so two revocations racing can both
+   * observe the later value and record it — the increments are all applied, but
+   * one actor's row names a generation another actor produced. The value is
+   * recorded rather than withheld because it is the only thing that relates the
+   * two kinds of row at all, and stated here rather than left to be inferred
+   * because a reader correlating an incident needs to know which of those two
+   * cases they are in.
+   */
+  await auditWriter().write({
+    kind: "preview-links-revoked",
+    actorUserId: auth.userId,
+    metadata: {
+      generation,
+      /*
+       * WHICH CREDENTIAL acted, not only whose account it belongs to.
+       *
+       * Unlike minting, this route accepts an API key: a key holding
+       * `manage settings` can already change the settings this generation
+       * lives in, so refusing it here would remove an automation capability
+       * without closing anything. But `userId` on an api-key request is the
+       * key's OWNER, and recording that alone would state that a person
+       * personally revoked every link on the site when a delegated key did —
+       * which is exactly backwards in the case this trail exists for, where a
+       * key is the thing under suspicion.
+       *
+       * `apiKeyId` is present only on an api-key request, so `authMethod` is
+       * recorded beside it rather than inferred from its absence: a session row
+       * and a row whose key id failed to resolve would otherwise read alike.
+       */
+      authMethod: auth.authMethod,
+      ...(auth.apiKeyId === undefined ? {} : { apiKeyId: auth.apiKeyId }),
+    },
+  });
+
   return respondMutation("Preview links revoked", { generation });
 });

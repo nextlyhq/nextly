@@ -3200,3 +3200,99 @@ export function applyOp(
     }
   }
 }
+
+/**
+ * A GROUP of ops applied as one edit.
+ *
+ * The caps are the caller's throughout: every step is judged as `applyOp` judges
+ * it, because a document that transiently breaks its own invariant is a document
+ * whose UNDO may not be applicable. `undo` pops its entry before replaying it
+ * and does not put it back, so an inverse group the caps refuse on the way out
+ * loses the edit it was meant to take back.
+ *
+ * Suspending the cap for the span of a group cannot be made safe. The inverses
+ * it would then hold have to be bounded, or one group keeps hundreds of
+ * megabytes alive in a single history entry; bounding them makes an accepted
+ * group's own undo refusable; and establishing that the undo is applicable
+ * requires the same question of the undo's redo, which does not terminate.
+ *
+ * The cost is that a group's outcome can depend on the ORDER its ops arrive in.
+ * A group at the byte cap whose first op grows the document is refused, while
+ * the same ops with a reduction first are not, for the same resulting document.
+ * A caller that knows its ops are independent may order them; this function
+ * cannot know that of an arbitrary group.
+ *
+ * Inverses come back in UNDO order — the last op's inverse first — because each
+ * one describes the document as it stood when that op ran, and replaying them
+ * forwards would meet a tree the later ops had already changed.
+ */
+export interface AppliedOps {
+  readonly document: BlockDocument;
+  /**
+   * The inverses to record, in undo order.
+   *
+   * EMPTY when the group left the document as it found it, which is not a
+   * failure: the ops were legitimate and each changed something, and the net
+   * effect is still nothing to undo.
+   */
+  readonly inverses: readonly BuilderOp[];
+}
+
+export function applyOps(
+  document: BlockDocument,
+  ops: readonly BuilderOp[],
+  limits: DocumentLimits = DEFAULT_LIMITS
+): AppliedOps {
+  // The LIMITS are `applyOp`'s to judge, and it judges them on every op it
+  // applies. Reading them here as well would observe a caller's accessor or
+  // proxy twice for a single edit, and make the one-op path behave unlike the
+  // single call it is supposed to be.
+  //
+  // A group with no ops therefore judges no limits, because it judges no edit:
+  // nothing is measured against a cap that nothing is applied to.
+  //
+  // No branch for that empty group either. The fold runs no times, so the
+  // endpoints are the same object and the comparison below already answers with
+  // the document unchanged and nothing to record. A branch saying that again
+  // would be a second statement of it, waiting to disagree.
+  //
+  // A group of one IS the single call. `applyOp` has already refused an op that
+  // changes nothing, so the endpoint comparison below would walk two documents
+  // to re-answer a question it just answered — on the commonest edit in the
+  // builder, since the editor routes every single-block edit through here.
+  if (ops.length === 1) {
+    const only = applyOp(document, ops[0], limits);
+    return { document: only.document, inverses: [only.inverse] };
+  }
+
+  let working = document;
+  const inverses: BuilderOp[] = [];
+  for (const op of ops) {
+    const applied = applyOp(working, op, limits);
+    working = applied.document;
+    // Front, so undoing the group runs the LAST op's inverse first: each
+    // inverse describes the document as it stood when its op ran.
+    inverses.unshift(applied.inverse);
+  }
+
+  // ENDPOINTS, not ops. `applyOp` refuses an op that changes nothing, because a
+  // history entry whose undo has no visible effect reads as the history being
+  // broken — and a GROUP reaches the same place while every op in it changed
+  // something: grow a value, then restore it. Compared with the predicate
+  // `applyOp` uses for its own no-op check, rather than a second opinion about
+  // what changing nothing means.
+  //
+  // Rooted at the DOCUMENT, where `applyOp` roots the same question at the
+  // field, and the difference has a boundary worth naming: the comparison is
+  // depth-bounded from wherever it starts, so the envelope and forest levels
+  // this walk adds bring a value stored near the depth limit past it. Measured
+  // — a value 510 levels deep compares equal field-rooted and different
+  // document-rooted.
+  //
+  // Past that bound the comparison answers "different" and the group is
+  // recorded. That is the safe direction: recording an entry that undoes to
+  // nothing visible costs an author one wasted press, while dropping one the
+  // comparison could not read costs them an edit they cannot take back.
+  if (sameStoredValue(document, working)) return { document, inverses: [] };
+  return { document: working, inverses };
+}

@@ -1,6 +1,7 @@
 import { isPlainRecord } from "@nextlyhq/blocks-engine";
 import type { DocumentLimits } from "@nextlyhq/blocks-engine";
 import type { HookContext } from "nextly";
+import type { PreviewViewportsDeclaration } from "nextly/config";
 import {
   defineCollection,
   json,
@@ -106,21 +107,43 @@ function record(
   data.usedClasses = usage.complete ? usage.ids : null;
 }
 
-export function pagesCollection(
-  previewPath?: string,
-  // The limits the PAGE is rendered under, when the host raised them.
-  //
-  // `PageRenderer` takes `limits`, falling back to `styleContext.limits` and
-  // then to the engine defaults, so a host can render more of a document than
-  // the defaults select. The usage record has to select the SAME nodes or a
-  // class applied to a node the page renders is absent from the record a
-  // safe-delete check reads — the two now share one selection, and this is what
-  // stops them invoking it with different bounds.
-  //
-  // Positional because `previewPath` already is; a third argument here is the
-  // point to convert both into one options object.
-  limits?: DocumentLimits
-) {
+/** What the plugin-owned `pages` collection is built with. */
+export interface PagesCollectionOptions {
+  /** The path a page previews at, as a `{field}` template. */
+  previewPath?: string;
+
+  /**
+   * The limits the PAGE is rendered under, when the host raised them.
+   *
+   * `PageRenderer` takes `limits`, falling back to `styleContext.limits` and
+   * then to the engine defaults, so a host can render more of a document than
+   * the defaults select. The usage record has to select the SAME nodes or a
+   * class applied to a node the page renders is absent from the record a
+   * safe-delete check reads — the two share one selection, and this is what
+   * stops them invoking it with different bounds.
+   */
+  limits?: DocumentLimits;
+
+  /**
+   * The viewport widths this collection's preview offers.
+   *
+   * Ignored without a `previewPath`, because there is no preview to offer them
+   * on.
+   */
+  breakpoints?: PreviewViewportsDeclaration;
+}
+
+/*
+ * One options object rather than a third positional argument, which is what the
+ * two positional ones said to do as soon as a third arrived. `previewPath` and
+ * `limits` are both optional and unrelated, so a caller wanting only the later
+ * one had to write `pagesCollection(undefined, limits)` — and a fourth would
+ * make the call site unreadable at exactly the point it starts carrying a
+ * preview declaration.
+ */
+export function pagesCollection(options: PagesCollectionOptions = {}) {
+  const { previewPath, limits, breakpoints } = options;
+
   return defineCollection({
     slug: "pages",
     labels: { singular: "Page", plural: "Pages" },
@@ -177,7 +200,16 @@ export function pagesCollection(
       // to two different addresses.
       ...(previewPath === undefined
         ? {}
-        : { preview: { url: previewUrlFromTemplate(previewPath) } }),
+        : {
+            preview: {
+              url: previewUrlFromTemplate(previewPath),
+              // Spread rather than set to `undefined`, so a collection that
+              // declares none has no `breakpoints` key at all — which is what
+              // `resolvePreviewViewports` reads as "offer nothing" without
+              // having to tell an absent declaration from a broken one.
+              ...(breakpoints === undefined ? {} : { breakpoints }),
+            },
+          }),
     },
 
     hooks: {

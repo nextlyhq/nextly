@@ -31,11 +31,29 @@
  * stored). Both are optional here because this type is the union the resolver
  * sees, not either authoring surface.
  */
+import type { PreviewViewportsDeclaration } from "./preview-viewports";
+
 export interface PreviewDeclaration {
   /** Code-first: computes the URL from the entry, or declines by returning null. */
   url?: (entry: Record<string, unknown>) => string | null;
   /** UI-created: a path with `{fieldName}` placeholders. */
   urlTemplate?: string;
+  /**
+   * The viewport widths this preview offers, as a list or as a function of
+   * whatever state holds them.
+   *
+   * Declared rather than inferred, for the reason the URL is: nothing here can
+   * know the widths a site's CSS actually breaks at. A page may be built with
+   * the page builder, with Tailwind, or with hand-written media queries, and
+   * only the first is data this system holds — so a shipped phone/tablet/desktop
+   * list would be a claim about somebody else's stylesheet.
+   *
+   * The function form exists because a site's breakpoints are stored data an
+   * author edits: a value captured at boot goes stale, and this is evaluated per
+   * mint on the server where the current one is readable. Neither form reaches
+   * the browser; the resolved list does.
+   */
+  breakpoints?: PreviewViewportsDeclaration;
 }
 
 /**
@@ -73,7 +91,29 @@ export type PreviewUrlResolution =
    * returned. Both share one remedy: an administrator sets a real site URL. They
    * are merged for that reason and not because they are the same event.
    */
-  | { status: "noSiteUrl"; path: string };
+  | { status: "noSiteUrl"; path: string }
+  /**
+   * The declaration itself could not produce an address: the authored `url`
+   * function threw, or the pieces it returned do not compose into a URL under
+   * the site.
+   *
+   * Kept apart from `unavailable` because the two are different EVENTS, and the
+   * separation is deliberately not a claim about the remedy. `unavailable` is
+   * the declaration DECLINING — it returned null, or a placeholder has no value
+   * — which is a definite statement that there is no address yet. This one is
+   * the declaration FAILING, and a caught throw does not say whether the fault
+   * is in the declaration or in a value on this document that it did not
+   * expect: `entry.slug.toUpperCase()` raises the same `TypeError` on a
+   * declaration reading the wrong field name as it does on a document whose
+   * `slug` was never filled in. (Note what the example is NOT — an EMPTY slug
+   * does not throw, since `"".toUpperCase()` is `""`. The data-dependent case
+   * is a MISSING value, not a blank one, and getting that wrong makes the
+   * whole distinction sound hypothetical when it is not.)
+   *
+   * So a caller may say the declaration failed. It may not say which document
+   * that is true for.
+   */
+  | { status: "declarationFailed" };
 
 /**
  * True when a collection declares a preview by either route.
@@ -223,13 +263,15 @@ export function resolvePreviewUrl({
 
   if (typeof preview?.url === "function") {
     // The authored function is user code running inside a request. It may throw,
-    // and a throw here is the collection declining to preview rather than a
-    // server fault, so it is reported as `unavailable` — the same answer as a
-    // deliberate `return null` — instead of failing the request.
+    // and a throw here is the declaration failing rather than the server
+    // failing, so it is reported rather than escaping the request — and
+    // reported as its own status, because a deliberate `return null` states
+    // that there is no address yet while a throw states only that producing one
+    // did not work.
     try {
       path = preview.url(entry);
     } catch {
-      return { status: "unavailable" };
+      return { status: "declarationFailed" };
     }
   } else if (preview?.urlTemplate) {
     path = interpolate(preview.urlTemplate, entry);
@@ -258,7 +300,13 @@ export function resolvePreviewUrl({
   const joined = joinUnderSite(`${basePath}${suffix}`, base);
   // The pieces parsed separately and not together, which is a declaration this
   // resolver cannot turn into an address.
-  if (joined === null) return { status: "unavailable" };
+  //
+  // DEFENSIVE: the candidate is built from an origin and path this function
+  // already parsed, so nothing an author can return reaches it today. It is
+  // held because that is a property of the composition above rather than of
+  // `joinUnderSite`, and an assertion over a value already in hand costs
+  // nothing while its rejection branch never runs.
+  if (joined === null) return { status: "declarationFailed" };
   return { status: "resolved", url: joined };
 }
 

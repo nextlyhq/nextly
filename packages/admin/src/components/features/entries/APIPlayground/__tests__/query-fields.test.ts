@@ -156,10 +156,13 @@ describe("parseSelect", () => {
     expect(parseSelect('{"title":true,"slug":false}')).toEqual(["title"]);
   });
 
-  // The API accepts `select=title` and then returns every field, so reading it
-  // as a selection would show a state the request does not have.
-  it("treats the bare form the API ignores as no selection", () => {
-    expect(parseSelect("title")).toEqual([]);
+  // The comma-separated form is what the REST reference documents, and it now
+  // does what it says. This screen reads it the same way the server does, so a
+  // URL a caller pasted in shows the selection it will actually get — where
+  // before it showed nothing and the request returned every field.
+  it("reads the documented comma-separated form", () => {
+    expect(parseSelect("title")).toEqual(["title"]);
+    expect(parseSelect("id,title")).toEqual(["id", "title"]);
   });
 
   it("treats malformed or empty input as no selection", () => {

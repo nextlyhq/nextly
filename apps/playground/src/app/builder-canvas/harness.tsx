@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  hasBlock,
-  registerBlocks,
-  registryNestingSource,
-} from "@nextlyhq/blocks-engine";
-import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import { registryNestingSource } from "@nextlyhq/blocks-engine";
 import { registrySlotSource } from "@nextlyhq/builder";
 import {
   Canvas,
@@ -22,6 +17,8 @@ import { useMemo } from "react";
 // both and a second copy would make the result depend on which one won.
 import "@nextlyhq/ui/styles.css";
 import "@nextlyhq/builder/styles.css";
+
+import { useCoreBlocks } from "@/lib/use-core-blocks";
 
 import { canvasHarnessDocument } from "./seed";
 
@@ -50,18 +47,7 @@ const HARNESS_SOURCE = "e2e-canvas-harness";
  * test. A harness that positioned its own indicator would certify itself.
  */
 export function BuilderCanvasHarness() {
-  /*
-   * Register the core blocks before anything reads the registry.
-   *
-   * Only the ones missing, and through the same guarded call the production
-   * host uses: the registry is process-wide, so a second unconditional
-   * registration throws on a dev-server hot reload where the module is
-   * re-evaluated but the registry survives.
-   */
-  useMemo(() => {
-    const missing = coreBlocks.filter(block => !hasBlock(block.name));
-    if (missing.length > 0) registerBlocks(missing, { source: HARNESS_SOURCE });
-  }, []);
+  useCoreBlocks(HARNESS_SOURCE);
 
   const initialDocument = useMemo(() => canvasHarnessDocument(), []);
   const editor = useEditorState({ initialDocument });

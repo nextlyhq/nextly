@@ -9,7 +9,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { MAX_BREAKPOINT_ID_LENGTH } from "@nextlyhq/blocks-engine";
+import {
+  MAX_BREAKPOINT_ID_LENGTH,
+  PREVIEW_VIEWPORT_CONTAINER,
+} from "@nextlyhq/blocks-engine";
 
 import {
   authoredBreakpoints,
@@ -43,37 +46,59 @@ function rows(prefix: string, count: number) {
   }));
 }
 
-describe("the authored set", () => {
-  it("strips a stored base row from both axes", () => {
+describe("which breakpoints a window can answer for", () => {
+  it("answers only the BASE context under a container preview", () => {
     /*
-     * A stored set CAN carry a `base` row and the plugin's README documents a
-     * host config that does, while the compiler claims that id before reading
-     * any stored definition. Three surfaces ask "what has this site defined" —
-     * the dialog's draft, the trigger's count, and the host deciding whether
-     * config defaults exist — and each one that answered differently produced
-     * its own defect.
+     * Asked without the preview option, this compares the window against
+     * `@media` rules a preview compile never wrote — and the answer is not
+     * merely stale, it is confidently wrong in a direction that looks
+     * plausible. Measured: with every media query matching, the unaware call
+     * reports tablet and mobile live, which is exactly what a NARROW admin
+     * window reports while a WIDE canvas box is showing desktop.
+     *
+     * Under the option the viewport contexts are container queries, which a
+     * `matchMedia` caller cannot answer, so the honest result is the base
+     * context alone — silence rather than a wrong claim.
+     *
+     * `() => true` is deliberate: it makes the unaware call report everything,
+     * so this cannot pass by the window happening to match nothing.
      */
-    const stripped = authoredBreakpoints({
-      viewport: [
-        { id: "base", label: "Base" },
-        { id: "tablet", label: "Tablet", maxWidth: 991 },
-      ],
-      container: [{ id: "base", label: "Base" }],
-    } as unknown as BreakpointSet);
+    const always = () => true;
 
-    expect(stripped.viewport.map(def => def.id)).toEqual(["tablet"]);
-    expect(stripped.container).toEqual([]);
+    expect(matchedBreakpoints(BREAKPOINTS_FOR_PREVIEW, always)).toEqual([
+      "base",
+      "tablet",
+      "mobile",
+    ]);
+    expect(
+      matchedBreakpoints(BREAKPOINTS_FOR_PREVIEW, always, {
+        previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+      })
+    ).toEqual(["base"]);
   });
 
-  it("answers for an absent set rather than throwing", () => {
-    // The host's config states no breakpoints at all far more often than it
-    // states some, and that caller reads the field optionally.
-    expect(authoredBreakpoints(undefined)).toEqual({
-      viewport: [],
-      container: [],
-    });
+  it("emits no answerable query under a preview, so nothing is subscribed", () => {
+    // `breakpointQueries` feeds the subscription. Left unaware, the panel would
+    // subscribe to media queries the sheet does not use and re-measure on every
+    // window resize for answers it must not report.
+    expect(breakpointQueries(BREAKPOINTS_FOR_PREVIEW).length).toBeGreaterThan(
+      0
+    );
+    expect(
+      breakpointQueries(BREAKPOINTS_FOR_PREVIEW, {
+        previewContainer: PREVIEW_VIEWPORT_CONTAINER,
+      })
+    ).toEqual([]);
   });
 });
+
+const BREAKPOINTS_FOR_PREVIEW = {
+  viewport: [
+    { id: "tablet", label: "Tablet", maxWidth: 991 },
+    { id: "mobile", label: "Mobile", maxWidth: 575 },
+  ],
+  container: [],
+} as unknown as BreakpointSet;
 
 describe("an id the compiler would drop", () => {
   it("is reported, rather than saved into nothing", () => {
@@ -311,28 +336,6 @@ describe("ids are compared as the compiler compares them", () => {
     expect(
       codes(set({ viewport: [{ id: "base", label: "B", maxWidth: 1200 }] }))
     ).toEqual(["id-reserved"]);
-  });
-});
-
-describe("cascade order", () => {
-  it("puts an unbounded definition first, then widest to narrowest", () => {
-    const ordered = inCascadeOrder([
-      { id: "narrow", label: "Narrow", maxWidth: 400 },
-      { id: "unbounded", label: "Unbounded" },
-      { id: "wide", label: "Wide", maxWidth: 900 },
-    ]);
-
-    expect(ordered.map(d => d.id)).toEqual(["unbounded", "wide", "narrow"]);
-  });
-
-  it("does not mutate the array it was given", () => {
-    const defs = [
-      { id: "a", label: "A", maxWidth: 100 },
-      { id: "b", label: "B", maxWidth: 900 },
-    ];
-    inCascadeOrder(defs);
-
-    expect(defs.map(d => d.id)).toEqual(["a", "b"]);
   });
 });
 

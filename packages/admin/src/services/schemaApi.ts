@@ -46,6 +46,13 @@ export interface SchemaPreviewRenameCandidate {
   fromType: string;
   toType: string;
   typesCompatible: boolean;
+  /**
+   * Whether the rename leaves every stored value unchanged. Distinct from
+   * `typesCompatible`, which only says the pair can be read as a rename.
+   */
+  preservesValues: boolean;
+  /** What happens to the values when `preservesValues` is false. */
+  valueChangeReason?: string;
   defaultSuggestion: "rename" | "drop_and_add";
 }
 

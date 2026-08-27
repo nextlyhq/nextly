@@ -78,6 +78,63 @@ describe("applying edits", () => {
   });
 });
 
+describe("an empty group", () => {
+  it("changes nothing and records nothing", () => {
+    /*
+     * One question — is there anything to record — answered in one place. An
+     * entry for a group with no ops would undo to no visible effect, which is
+     * the same refusal a group whose ops cancel out already gets.
+     */
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    let returned: BlockDocument | null = null;
+    act(() => {
+      returned = result.current.applyAll([]);
+    });
+
+    expect(returned).not.toBeNull();
+    expect(ids(result.current.document)).toEqual(["a"]);
+    // The property: no history entry, so undo stays unavailable.
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("judges no limit, because it judges no edit", () => {
+    /*
+     * The limits belong to the op that is applied, and an empty group applies
+     * none — so nothing is measured against a cap that nothing is judged by.
+     * `maxBytes: 0` is unusable rather than merely small (every cap is a `>`
+     * comparison, so a limit below 1 decides nothing), and it still does not
+     * turn "no edit" into a refusal.
+     *
+     * The same limits DO refuse a real edit, which is the control: without it
+     * this would pass just as well on limits that were never consulted at all.
+     */
+    const limits = { maxDepth: 10, maxNodes: 10, maxBytes: 0 };
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]), limits })
+    );
+
+    let empty: BlockDocument | null = null;
+    act(() => {
+      empty = result.current.applyAll([]);
+    });
+    expect(empty).not.toBeNull();
+    expect(result.current.undoDepth).toBe(0);
+
+    let real: BlockDocument | null = null;
+    act(() => {
+      real = result.current.applyAll([
+        { kind: "insert", node: node("b"), at: { index: 1 } },
+      ]);
+    });
+    expect(real).toBeNull();
+    expect(result.current.undoDepth).toBe(0);
+  });
+});
+
 describe("a group of ONE", () => {
   /*
    * The property the style panel now depends on. Every style edit in the

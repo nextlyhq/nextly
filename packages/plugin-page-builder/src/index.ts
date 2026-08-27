@@ -38,6 +38,21 @@ export type {
   BlockNode,
   DocumentKind,
 } from "@nextlyhq/blocks-engine";
+
+// The bounds a rebuild derives under, for the same reason and by the same rule.
+// They are REQUIRED arguments on this package's rebuild entry points, so a host
+// running the engine defaults has to name a value — and the only correct value
+// lived in a package it has no guarantee of resolving. Without this the two
+// available moves are both wrong: take a direct dependency on the engine to
+// obtain one constant, or copy the numbers and let them drift silently away
+// from the bounds the renderer actually applies.
+//
+// Re-exported rather than redeclared. A second definition of these numbers is
+// the drift itself, and `public-limits-export.test.ts` asserts by REFERENCE
+// identity that this is the engine's own object rather than a copy that happens
+// to agree today.
+export { DEFAULT_LIMITS } from "@nextlyhq/blocks-engine";
+export type { DocumentLimits } from "@nextlyhq/blocks-engine";
 export {
   BLOCKS_FIELD_TYPE,
   BLOCKS_TYPE,
@@ -69,6 +84,10 @@ export { pagesCollection } from "./collections/pages";
 export { resolveSiteStyle, siteBreakpoints, siteSheet } from "./site-style";
 export type { SiteStyleData } from "./site-style";
 export { SITE_STYLE_SLUG, loadSiteStyle } from "./site-style-storage";
+export {
+  previewViewportsFromSiteStyle,
+  siteStyleViewports,
+} from "./preview-viewports";
 export type { SiteStyleReader } from "./site-style-storage";
 
 // The class-usage record and the walk that repairs it. Both are public because
@@ -79,6 +98,16 @@ export type { SiteStyleReader } from "./site-style-storage";
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
 export { rebuildClassUsage } from "./class-usage-rebuild";
+export {
+  rebuildClassUsageIndex,
+  type ClassUsageDocumentStore,
+  type ClassUsageRebuildReport,
+} from "./class-usage-index-rebuild";
+export type { ClassUsageIndexStore } from "./class-usage-maintenance";
+// Exported because a caller cannot implement `ClassUsageDocumentStore` or call
+// the rebuild without naming the variant, and a caller left to spell it as a
+// string can spell it wrong.
+export type { ClassUsageVariant } from "./collections/class-usage-index";
 export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.

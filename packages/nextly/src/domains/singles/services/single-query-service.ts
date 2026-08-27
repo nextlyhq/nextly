@@ -869,6 +869,10 @@ export class SingleQueryService extends BaseService {
       componentSchemas: view.componentSchemas,
       hasSlug: singleMeta.fields.some(f => f.name === "slug"),
       hasTitle: singleMeta.fields.some(f => f.name === "title"),
+      // A Single's live read normalizes its system timestamps to strings, so
+      // rehydrating them here would make a drafted Single disagree with a
+      // published one — the opposite of the parity this shaping exists for.
+      rehydrateSystemTimestampsToDate: false,
     }) as unknown as SingleDocument;
 
     // The snapshot REPLACES the assembled document, so every response-shaping

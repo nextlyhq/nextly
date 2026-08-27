@@ -30,7 +30,6 @@
  */
 
 import {
-  breakpointContexts,
   findNode,
   isTokenRef,
   trimCssWhitespace,
@@ -45,8 +44,10 @@ import {
   type StyleShape,
   type StyleOrigin,
   type StyleState,
+  type StyleSubject,
   type StyleTraceEntry,
   type StyleValue,
+  previewContainerName,
 } from "@nextlyhq/blocks-engine";
 import type { PageStyleCascade } from "@nextlyhq/blocks-react";
 import {
@@ -106,8 +107,12 @@ import {
   withUnit,
 } from "./style-numeric";
 import {
+  breakpointBadge,
+  breakpointSource,
   propertiesWriting,
   styleProvenance,
+  type BreakpointBadge,
+  type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
 import { styleSubjectFor } from "./style-subject";
@@ -128,7 +133,26 @@ import {
  *
  * `undefined` means nothing can answer, which is not the same as "unset".
  */
-type ProvenanceOf = (leaf: StyleLeaf) => StyleProvenance | undefined;
+/** What one control knows about where its value came from, and what to do. */
+interface ProvenanceAnswer {
+  provenance: StyleProvenance;
+  badge: BreakpointBadge;
+  /**
+   * Move the canvas to the tier this control's value came from.
+   *
+   * Carried per LEAF rather than threaded as its own prop, because the
+   * target is this control's own source: a different control on the same
+   * panel jumps somewhere else. Bundling it here also keeps three
+   * intermediate components from gaining a prop they only pass on.
+   *
+   * Absent when the host supplies no handler, which is a host that cannot
+   * move its canvas — and a button that does nothing reads as broken rather
+   * than as missing.
+   */
+  jump?: () => void;
+}
+
+type ProvenanceOf = (leaf: StyleLeaf) => ProvenanceAnswer | undefined;
 
 export interface StyleInspectorPanelProps {
   /**
@@ -196,6 +220,43 @@ export interface StyleInspectorPanelProps {
    * which of them counts as authored here.
    */
   breakpoints?: BreakpointSet;
+  /**
+   * The container the page's breakpoints were compiled against, when the canvas
+   * is previewing rather than rendering at the browser's own width.
+   *
+   * Carried because this panel decides which declarations are LIVE, and that is
+   * a question about the queries the sheet was EMITTED under. Given only the
+   * breakpoint set, it compares the window against `@media` rules a preview
+   * compile never wrote — a confident wrong answer rather than a stale one,
+   * since a narrow admin window then reports the small breakpoints live while a
+   * wide canvas box is showing the large ones.
+   */
+  previewContainer?: string;
+  /**
+   * Which breakpoints the canvas is ACTUALLY applying, when the host can say.
+   *
+   * Needed in preview and unnecessary otherwise. Rendering at the browser's own
+   * width, this panel asks `matchMedia` and answers for itself; previewing
+   * inside a box, the queries are about that box and only whoever owns it can
+   * observe them.
+   *
+   * Absent while previewing, no indicator is drawn at all. Reporting the
+   * window's answer there would name the wrong tier as the visible winner,
+   * which is worse than naming none.
+   */
+  liveBreakpoints?: readonly BreakpointId[];
+  /**
+   * Move the canvas to a breakpoint, for a control offering to go where its
+   * value was set.
+   *
+   * The panel cannot do this itself: which tier the canvas shows is a fact
+   * about the surface that OWNS the canvas width, and this panel sits several
+   * layers below it. Supplied, each control whose value came from another tier
+   * offers the jump; omitted, none does — a host with no canvas to move would
+   * otherwise draw a button that does nothing, which reads as broken rather
+   * than absent.
+   */
+  onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
 }
 
 export function StyleInspectorPanel({
@@ -206,6 +267,9 @@ export function StyleInspectorPanel({
   breakpoint,
   cascade,
   breakpoints,
+  previewContainer,
+  liveBreakpoints,
+  onJumpToBreakpoint,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -220,7 +284,22 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
-  const matched = useMatchedBreakpoints(breakpoints);
+  /*
+   * What the browser is applying, or `undefined` when nobody can say.
+   *
+   * ONE call, because the component must not hold the two inputs separately.
+   * It did, and they disagreed: the decision to draw an indicator asked whether
+   * a preview name was STATED while the set being judged asked whether the host
+   * had supplied one, so a refused name arriving beside a live set had the
+   * box-derived tiers used against a published compile. Fixing either half
+   * alone left the other standing, which is the tell that the two questions
+   * were one question with two answers.
+   */
+  const live = useLiveBreakpoints(
+    breakpoints,
+    previewContainer,
+    liveBreakpoints
+  );
 
   // Recomputed each render rather than memoised, as the content tab is: an
   // inspection is only valid against the document it was read from, and an edit
@@ -320,20 +399,7 @@ export function StyleInspectorPanel({
    * is: both are only valid against the document they were read from, and an
    * edit anywhere changes the document and the values shown together.
    */
-  const subject =
-    editor.selectedId === null
-      ? undefined
-      : styleSubjectFor(
-          /*
-           * The cascade's OWN tree where there is one. Asking the raw document
-           * instead would answer about a node the declarations may not describe,
-           * and the fallback below is only for a panel with no cascade at all —
-           * where no indicator is drawn and the subject is read for the block
-           * type alone.
-           */
-          cascade?.nodes ?? editor.document.nodes,
-          editor.selectedId
-        );
+  const subject = selectedSubject(editor, cascade);
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -346,38 +412,15 @@ export function StyleInspectorPanel({
     breakpoint: inspection.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
   };
-  const provenanceOf: ProvenanceOf = leaf => {
-    // Absent means the question was never asked. A host that supplies no cascade
-    // gets no indicators, which is the honest answer for a surface that cannot
-    // compile — and not the same as "nothing is inherited".
-    if (cascade === undefined || subject === undefined) return undefined;
-    return styleProvenance({
-      trace: cascade.entries,
-      subject,
-      // The control's own leaf, never the catalog key: two keys can write one
-      // CSS property, and the trace records what was WRITTEN.
-      cssProperty: leaf.cssProperty,
-      descendant: leaf.descendant,
-      state: inspection.state,
-      breakpoint: inspection.breakpoint,
-      /*
-       * What the BROWSER is applying, and ONLY that. The edited breakpoint is a
-       * different fact and travels separately in `breakpoint`: it says where a
-       * write lands, not what is on screen.
-       *
-       * An earlier version forced the edited breakpoint into this set so a value
-       * authored there could be called "authored here". That inverted the
-       * premise — a host editing `mobile` while the canvas sits at desktop width
-       * would have the mobile declaration reported as the visible winner, which
-       * is a value the browser is not showing.
-       *
-       * The consequence is deliberate: editing a breakpoint whose query does not
-       * match reports its controls as unset. That is the honest answer, because
-       * the dot describes what is DISPLAYED rather than what is stored.
-       */
-      liveBreakpoints: matched,
-    });
-  };
+  const provenanceOf = provenanceReader({
+    cascade,
+    subject,
+    live,
+    state: inspection.state,
+    breakpoint: inspection.breakpoint,
+    breakpoints,
+    onJumpToBreakpoint,
+  });
 
   const groups = inspection.sections.map(section => section.group);
   // Held rather than left to the accordion, so the open section survives a
@@ -475,12 +518,35 @@ function usePrefersDark(): boolean {
  * one frame reporting fewer origins than apply; the alternative is a hydration
  * mismatch.
  */
-function useMatchedBreakpoints(
-  breakpoints: BreakpointSet | undefined
-): readonly BreakpointId[] {
+function useLiveBreakpoints(
+  breakpoints: BreakpointSet | undefined,
+  previewContainer: string | undefined,
+  stated: readonly BreakpointId[] | undefined
+): readonly BreakpointId[] | undefined {
+  /*
+   * NORMALISED here, so no caller decides for itself whether a name counts.
+   *
+   * A stated name is not an active preview: `previewContainerName` refuses an
+   * empty, reserved, malformed or oversized string, and a refused name makes
+   * the compile published — viewport tiers emit ordinary `@media`, which the
+   * window can answer for. Read raw, every indicator was withheld from surfaces
+   * that were not previewing at all.
+   */
+  const preview = previewContainerName(previewContainer);
+  /*
+   * The emission the sheet was compiled under, carried so this asks the SAME
+   * queries. Without it the window is compared against `@media` rules a preview
+   * compile never wrote, which is not a stale answer but a confident wrong one:
+   * a narrow admin window reports the small breakpoints live while a wide canvas
+   * box is showing the large ones.
+   */
+  const options = React.useMemo(
+    () => (preview === undefined ? undefined : { previewContainer: preview }),
+    [preview]
+  );
   const never = React.useCallback(() => false, []);
   const [matches, setMatches] = React.useState<readonly BreakpointId[]>(() =>
-    matchedBreakpoints(breakpoints, never)
+    matchedBreakpoints(breakpoints, never, options)
   );
   React.useEffect(() => {
     // Detected by CALLABILITY rather than presence, the lesson `usePrefersDark`
@@ -493,22 +559,36 @@ function useMatchedBreakpoints(
       return;
     }
     const ask = (query: string): boolean => window.matchMedia(query).matches;
-    const read = (): void => setMatches(matchedBreakpoints(breakpoints, ask));
+    const read = (): void =>
+      setMatches(matchedBreakpoints(breakpoints, ask, options));
     read();
     /*
      * Subscribed to every emitted query, not to a resize. A resize fires
      * continuously and would re-measure on each frame of a drag, while a media
      * query change event fires exactly when an answer here would differ.
      */
-    const lists = breakpointQueries(breakpoints).map(query =>
+    const lists = breakpointQueries(breakpoints, options).map(query =>
       window.matchMedia(query)
     );
     for (const list of lists) list.addEventListener("change", read);
     return () => {
       for (const list of lists) list.removeEventListener("change", read);
     };
-  }, [breakpoints]);
-  return matches;
+  }, [breakpoints, options]);
+  /*
+   * Previewing, the window is not the authority and the host is.
+   *
+   * A `matchMedia` caller cannot evaluate a container query, so under a preview
+   * compile `matches` reduces to the base context alone — which is not silence
+   * but the claim that base is what the browser applies. Whoever owns the box
+   * is the only one that can observe it, so `undefined` there means nobody has
+   * looked yet and the caller must say nothing rather than guess.
+   *
+   * Published, the window IS the authority, and a set the host offers describes
+   * a box that is not deciding anything — so it is ignored rather than
+   * preferred.
+   */
+  return preview === undefined ? matches : stated;
 }
 
 /** One catalog group, as a section that opens onto its properties. */
@@ -918,6 +998,11 @@ function StyleControlField({
 
   const commit = (value: StyleValue | null): CommitOutcome =>
     writeStyleValue({ editor, nodeId, address, policy, value, setIssue });
+  /*
+   * The provenance and its breakpoint reading, from ONE ranking of the trace.
+   * The dot and the action are two readings of one answer, not two answers.
+   */
+  const answer = provenanceOf(control.leaf);
 
   const readOnly = showsNoField(control, stored, clearOnly);
   const labelId = `${id}-label`;
@@ -945,7 +1030,7 @@ function StyleControlField({
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
         {label}
         <ProvenanceDot
-          provenance={provenanceOf(control.leaf)}
+          answer={answer}
           editing={editing}
           descendant={control.leaf.descendant}
         />
@@ -964,12 +1049,415 @@ function StyleControlField({
         describedBy={describedBy}
         onCommit={commit}
       />
+      <BreakpointAction
+        answer={answer}
+        label={actionName}
+        editing={editing}
+        fieldId={id}
+        onReset={() => commit(null)}
+      />
       {issue === null ? null : (
         <p className="nx-inspector__error" id={errorId} role="alert">
           {issue}
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The node the declarations describe, or `undefined` with nothing selected.
+ *
+ * Read from the CASCADE's own tree where there is one. Asking the raw document
+ * instead would answer about a node the declarations may not describe — read
+ * time repair can drop or replace one — and the fallback is only for a panel
+ * with no cascade at all, where no indicator is drawn and the subject is read
+ * for the block type alone.
+ */
+function selectedSubject(
+  editor: EditorState,
+  cascade: PageStyleCascade | undefined
+): StyleSubject | undefined {
+  if (editor.selectedId === null) return undefined;
+  return styleSubjectFor(
+    cascade?.nodes ?? editor.document.nodes,
+    editor.selectedId
+  );
+}
+
+/**
+ * The reader that answers, per control, where its value came from.
+ *
+ * Built OUTSIDE the panel because nothing in it is React: it is a pure function
+ * of inputs the panel has already resolved — one subject, one live set, one
+ * trace — and closing over them inside the component put the whole derivation
+ * into a body that also renders.
+ */
+function provenanceReader({
+  cascade,
+  subject,
+  live,
+  state,
+  breakpoint,
+  breakpoints,
+  onJumpToBreakpoint,
+}: {
+  cascade: PageStyleCascade | undefined;
+  subject: StyleSubject | undefined;
+  live: readonly BreakpointId[] | undefined;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  breakpoints: BreakpointSet | undefined;
+  onJumpToBreakpoint: ((breakpoint: BreakpointId) => void) | undefined;
+}): ProvenanceOf {
+  return leaf => {
+    // Absent means the question was never asked. A host that supplies no cascade
+    // gets no indicators, which is the honest answer for a surface that cannot
+    // compile — and not the same as "nothing is inherited".
+    if (cascade === undefined || subject === undefined) return undefined;
+    /*
+     * The same answer while the canvas is previewing and nobody has said which
+     * tier the preview BOX is showing.
+     *
+     * Under a preview compile the viewport tiers are container queries, and a
+     * `matchMedia` caller cannot evaluate them — so the window-derived set is
+     * the base context alone. Passed on, that is not silence: `["base"]` is the
+     * CLAIM that base is what the browser is applying, and a narrow box showing
+     * the mobile tier would have every mobile declaration excluded and the base
+     * value reported as the visible winner.
+     *
+     * No dot says "not asked", which is true until a caller observes the box.
+     */
+    if (live === undefined) return undefined;
+    const query = {
+      trace: cascade.entries,
+      subject,
+      // The control's own leaf, never the catalog key: two keys can write one
+      // CSS property, and the trace records what was WRITTEN.
+      cssProperty: leaf.cssProperty,
+      descendant: leaf.descendant,
+      state: state,
+      breakpoint: breakpoint,
+      /*
+       * What the BROWSER is applying, and ONLY that. The edited breakpoint is a
+       * different fact and travels separately in `breakpoint`: it says where a
+       * write lands, not what is on screen.
+       *
+       * An earlier version forced the edited breakpoint into this set so a value
+       * authored there could be called "authored here". That inverted the
+       * premise — a host editing `mobile` while the canvas sits at desktop width
+       * would have the mobile declaration reported as the visible winner, which
+       * is a value the browser is not showing.
+       *
+       * The consequence is deliberate: editing a breakpoint whose query does not
+       * match reports its controls as unset. That is the honest answer, because
+       * the dot describes what is DISPLAYED rather than what is stored.
+       */
+      liveBreakpoints: live,
+    };
+    /*
+     * ONE query, ONE ranking, read twice. The badge is the breakpoint dimension
+     * of the same answer rather than a second opinion about it — two rankings
+     * of one trace would first disagree at exactly the boundaries the trace
+     * exists to settle.
+     */
+    const provenance = styleProvenance(query);
+    const badge = breakpointBadge(query, provenance, breakpoints);
+    /*
+     * Offered only for a tier a canvas can actually be taken to. A declaration
+     * stored under an id that lost its bound still names a real tier — worth
+     * saying — but a jump to it cannot be honoured, and the host would read the
+     * absent width as the unconditional tier and release the canvas instead.
+     */
+    const target =
+      badge.kind === "inherited" && badge.source.selectable
+        ? badge.source.breakpoint
+        : undefined;
+    return {
+      provenance,
+      badge,
+      ...(onJumpToBreakpoint === undefined || target === undefined
+        ? {}
+        : { jump: () => onJumpToBreakpoint(target) }),
+    };
+  };
+}
+
+/**
+ * The action a control's breakpoint provenance earns, or nothing.
+ *
+ * Rendered ONLY where it means something: a Reset for a value authored at the
+ * tier being edited, a Jump for a value that arrived from another tier, and
+ * nothing at all for the unset controls that are the large majority of a panel.
+ *
+ * That bound is the whole design. {@link ProvenanceDot} refuses to be focusable
+ * because a stop per control would double the presses to cross a section of
+ * eight or more — and the same objection would apply here if every control
+ * carried a button. Tying the affordance to the state that makes it meaningful
+ * puts the cost only on controls the author has actually touched.
+ *
+ * AFTER the input in DOM order, so a keyboard user reaches the value first and
+ * the action second. Before it, every control would answer its own question in
+ * the wrong order: what to do about a value, then the value.
+ *
+ * Jump is withheld when no handler is supplied rather than rendered inert. A
+ * host that cannot move the canvas — one with no width to move — would
+ * otherwise offer a button that does nothing, which is worse than a missing
+ * affordance because it reads as a broken one.
+ */
+function BreakpointAction({
+  answer,
+  label,
+  editing,
+  fieldId,
+  onReset,
+}: {
+  answer: ProvenanceAnswer | undefined;
+  /**
+   * The control's ACTION NAME — the containing property and the leaf together.
+   *
+   * The leaf label alone is not unique: `margin` and `padding` both have a
+   * block start, so two controls would offer buttons called "Reset Block start"
+   * and a screen-reader user could not tell which style each removes. The panel
+   * already computes this for exactly that reason, and `Clear` on a token value
+   * uses it.
+   */
+  label: string;
+  editing: EditedAddress;
+  /** The field this control's actions write, passed on to {@link ResetAction}. */
+  fieldId: string;
+  onReset: () => void;
+}): React.JSX.Element | null {
+  const badge = answer?.badge;
+  // `none` is also refused below, by having no handler bound for it — this is
+  // the readable exit rather than the load-bearing one.
+  if (badge === undefined || badge.kind === "none") return null;
+  if (badge.kind === "authored") {
+    return (
+      <ResetAction
+        revealed={badge.revealed}
+        label={label}
+        editing={editing}
+        fieldId={fieldId}
+        onReset={onReset}
+      />
+    );
+  }
+  if (answer?.jump === undefined) return null;
+  return (
+    <JumpAction source={badge.source} label={label} onJump={answer.jump} />
+  );
+}
+
+/**
+ * What to call a breakpoint source in front of an author.
+ *
+ * ONE naming for both actions. `BreakpointSource` carries the axis precisely
+ * because a site defining both makes a bare tier name ambiguous — and a
+ * container tier may share its label with a viewport one — so a reset saying
+ * "showing the value from Tablet" while a jump says "Tablet (container)" leaves
+ * the author to work out that the two Tablets are different tiers.
+ */
+function sourceLabel(source: BreakpointSource): string {
+  return source.axis === "container"
+    ? `${source.label} (container)`
+    : source.label;
+}
+
+/**
+ * Clear this control at the tier being edited, saying what will show through.
+ *
+ * "Reset" alone asks an author to guess whether the control becomes unset or
+ * falls back to a wider tier's value. In a desktop-first cascade it is usually
+ * the second, and not always base — so the fallback is named, in the accessible
+ * name AND in visible text, because computing it exists to remove that guess
+ * for everybody rather than for screen-reader users alone.
+ */
+/**
+ * Whether Control held with a primary press means a CONTEXT MENU here.
+ *
+ * It does on macOS and nowhere else: there the platform opens a menu and no
+ * click follows, while on Windows and Linux a Control-click is an ordinary
+ * modified click and the button runs exactly as it always does.
+ *
+ * So this cannot be answered without asking the platform, and the platform is
+ * asked by NAME because nothing else decides it. There is no structural probe
+ * for "will a click follow this press" that can be run before the click either
+ * arrives or does not — which is the same reason the whole supersede is
+ * predicted at press time rather than confirmed.
+ *
+ * `userAgentData` first because `platform` is deprecated, and both because the
+ * modern one is Chromium-only. Neither present — a non-browser runtime —
+ * answers `false`, which is the ordinary-click reading and the one that keeps
+ * the two-write defect closed.
+ */
+function contextMenuModifier(): boolean {
+  const agent: { platform?: string } | undefined = (
+    navigator as Navigator & { userAgentData?: { platform?: string } }
+  ).userAgentData;
+  const name = agent?.platform ?? navigator.platform ?? "";
+  return /mac/i.test(name);
+}
+
+/**
+ * Whether a press can actually RUN the control it landed on.
+ *
+ * Only a press that will be followed by a click can, and two gestures report a
+ * pointer press while invoking nothing: a secondary press anywhere, and a
+ * Control-held primary press on macOS.
+ *
+ * Both directions cost something, which is why the platform is asked rather
+ * than the modifier alone. Reading a context menu as an activation discards the
+ * colour an author was composing on behalf of a button that never ran. Reading
+ * an ordinary Control-click as a context menu does the opposite: the picker
+ * commits its draft on dismissal AND the button's click writes, so one gesture
+ * becomes two edits and the first undo restores the colour they pressed Reset
+ * to be rid of — the defect the supersede exists to prevent, reintroduced.
+ *
+ * The remainder is stated rather than left to be discovered: a primary press
+ * that DRAGS OFF the control and releases elsewhere fires no click either, and
+ * is still read here as an activation. Closing that needs the write to confirm
+ * the discard instead of the press predicting it — either holding the draft for
+ * a later signal, which is the timer this module removed and whose cancellation
+ * cost a race, or routing the marked control's write back through this field,
+ * which the declaration exists to avoid.
+ */
+function activates(event: PointerEvent): boolean {
+  if (event.button !== 0) return false;
+  return !(event.ctrlKey && contextMenuModifier());
+}
+
+/**
+ * Which field a control writes the value of, when it is not that field.
+ *
+ * The colour picker commits its gesture when the popover closes, and pressing
+ * anything outside it closes the popover first. A control that writes the SAME
+ * value the picker is composing therefore has to say so, or one intent produces
+ * two edits and the first undo restores the value the author pressed the
+ * control to be rid of.
+ *
+ * Stated as the field's id rather than as a bare flag, because the question is
+ * not "does this control write" — every control does — but "does it write what
+ * this picker is holding". A bare flag makes Reset on `background-color`
+ * supersede an open picker on `color`, discarding a gesture nothing replaced.
+ *
+ * Declared on the element rather than handed down as a ref, because the
+ * controls making the promise live in components with no path to the picker:
+ * a breakpoint Reset is drawn beside the control, not inside it.
+ */
+const COMMITS_FOR = "data-nx-commits-for";
+
+/**
+ * How a picker's popover closed: with its gesture written, or superseded.
+ *
+ * Named rather than left as a boolean, because the two are not "did something
+ * happen" — both are outcomes the host must ACT on, and the discard is the one
+ * a boolean invites a caller to express by doing nothing.
+ */
+type PickerClose = "committed" | "superseded";
+
+/** The attributes marking a control as writing `fieldId`'s value itself. */
+function commitsFor(fieldId: string): Record<string, string> {
+  return { [COMMITS_FOR]: fieldId };
+}
+
+/**
+ * Whether an interaction outside the picker writes `fieldId`'s value itself.
+ *
+ * Asked of the ancestor chain rather than of the target alone: the press lands
+ * on whatever the control renders inside its button, and a control that puts a
+ * span or an icon in there would otherwise stop making the promise.
+ */
+function supersedes(target: EventTarget | null, fieldId: string): boolean {
+  if (!(target instanceof Element)) return false;
+  return (
+    target.closest(`[${COMMITS_FOR}]`)?.getAttribute(COMMITS_FOR) === fieldId
+  );
+}
+
+function ResetAction({
+  revealed,
+  label,
+  editing,
+  fieldId,
+  onReset,
+}: {
+  revealed: BreakpointSource | undefined;
+  label: string;
+  editing: EditedAddress;
+  /** The field whose value this press writes. See {@link commitsFor}. */
+  fieldId: string;
+  onReset: () => void;
+}): React.JSX.Element {
+  const reveals =
+    revealed === undefined
+      ? "leaving it unset"
+      : `showing the value from ${sourceLabel(revealed)}`;
+  return (
+    <button
+      type="button"
+      className="nx-style-inspector__breakpoint-action"
+      data-action="reset"
+      /*
+       * This press writes THIS field's value, which a picker mid-gesture on it
+       * needs to know.
+       *
+       * The colour picker commits its draft when the popover closes, and
+       * pressing anything outside it closes the popover first — so without this
+       * one Reset gesture writes twice: the draft the author was discarding,
+       * then the clear. The first undo would then restore the very colour they
+       * pressed Reset to be rid of.
+       *
+       * Declared on the element rather than held as a ref by each picker,
+       * because the rule is about what a CONTROL does, not about which specific
+       * button a particular field happens to know.
+       */
+      {...commitsFor(fieldId)}
+      onClick={onReset}
+      aria-label={`Reset ${label} at ${editing.labelOf(editing.breakpoint)}, ${reveals}`}
+    >
+      Reset
+      {/*
+       * `aria-hidden`, because the accessible name above already carries this
+       * sentence: read out twice it is a stutter rather than emphasis.
+       */}
+      <span
+        className="nx-style-inspector__breakpoint-reveals"
+        aria-hidden="true"
+      >
+        {revealed === undefined ? "to unset" : `to ${sourceLabel(revealed)}`}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Take the canvas to the tier this control's value was authored at.
+ *
+ * The AXIS is named beside the tier, since a site defining both makes a bare
+ * tier name ambiguous and the container axis is the one an author is least
+ * likely to be holding in mind.
+ */
+function JumpAction({
+  source,
+  label,
+  onJump,
+}: {
+  source: BreakpointSource;
+  label: string;
+  onJump: () => void;
+}): React.JSX.Element {
+  const where = sourceLabel(source);
+  return (
+    <button
+      type="button"
+      className="nx-style-inspector__breakpoint-action"
+      data-action="jump"
+      onClick={onJump}
+      aria-label={`Edit ${label} at ${where}, where its value was set`}
+    >
+      Go to {where}
+    </button>
   );
 }
 
@@ -1471,16 +1959,16 @@ function writeStyleValue({
  * reporting the case rather than guessing.
  */
 function ProvenanceDot({
-  provenance,
+  answer,
   editing,
   descendant,
 }: {
-  provenance: StyleProvenance | undefined;
+  answer: ProvenanceAnswer | undefined;
   editing: EditedAddress;
   /** The control's own descendant selector, to tell its rules from a sibling's. */
   descendant: string | undefined;
 }): React.JSX.Element | null {
-  const described = describeProvenance(provenance, editing, descendant);
+  const described = describeProvenance(answer?.provenance, editing, descendant);
   if (described === null) return null;
   return (
     <>
@@ -1644,18 +2132,10 @@ export function breakpointLabel(
   breakpoints: BreakpointSet | undefined,
   id: BreakpointId
 ): string {
-  const context = breakpointContexts(breakpoints).find(
-    found => found.id === id
-  );
-  if (context === undefined) return id;
-  const axis =
-    context.axis === "container"
-      ? breakpoints?.container
-      : breakpoints?.viewport;
-  const survivor = (axis ?? []).find(
-    def => def.id === id && def.maxWidth === context.maxWidth
-  );
-  return survivor?.label ?? id;
+  // One matcher, in `style-provenance`. The survivor is found by BOUND as well
+  // as id — among definitions sharing an id the compiler keeps one — and a
+  // second lookup here would be a second place to lose that.
+  return breakpointSource(id, breakpoints)?.label ?? id;
 }
 
 /**
@@ -1904,10 +2384,6 @@ function ColourField({
   // in state because the unmount flush below reads it from a cleanup that runs
   // once, where the closed-over `draft` would be the value at first render.
   const pending = React.useRef<string | null>(null);
-  // The clear beside a token reference. It sits OUTSIDE the popover, so pressing
-  // it dismisses the picker and then commits — two writes for one intent unless
-  // the close knows the press belongs to it.
-  const clear = React.useRef<HTMLButtonElement | null>(null);
   /*
    * A discrete choice, which SUPERSEDES anything the picker was mid-way through.
    *
@@ -1922,7 +2398,14 @@ function ColourField({
     onCommit(value);
   };
   /*
-   * The gesture, written when the picker closes.
+   * The picker closed, whichever outcome that close had.
+   *
+   * ONE handler for both, because the two differ only in whether the gesture is
+   * written — the pending value is dropped either way. Expressed as two
+   * handlers, the supersede path is the one that silently does nothing: it
+   * would leave the draft queued, and the unmount flush below would write it
+   * back OVER the edit that superseded it, as a later op with no gesture behind
+   * it.
    *
    * Synchronous, because an author can leave the editor entirely in the same
    * interaction that dismisses this popover: the page builder hands the current
@@ -1934,10 +2417,10 @@ function ColourField({
    * rather than by giving a later handler time to cancel a scheduled write. A
    * timer bought that cancellation and paid for it with this race.
    */
-  const commitDraft = (): void => {
+  const closed = (outcome: PickerClose): void => {
     const unwritten = pending.current;
     pending.current = null;
-    if (unwritten === null) return;
+    if (outcome === "superseded" || unwritten === null) return;
     if (onCommit(unwritten) === "unchanged") reset();
   };
   // The current writer, held so the teardown below depends on nothing. A
@@ -2034,13 +2517,15 @@ function ColourField({
             pending.current = value;
             setDraft(value);
           }}
-          // Committed when the picker CLOSES, which is where the gesture ends.
-          onClosed={commitDraft}
-          commitsItself={target =>
-            clear.current !== null &&
-            target instanceof Node &&
-            clear.current.contains(target)
-          }
+          // The gesture ends where the picker closes, whichever way it closed.
+          onClosed={closed}
+          /*
+           * Any control that writes THIS field's value for itself, declared on
+           * the element. The token clear beside this picker is one; a
+           * breakpoint Reset is another, and it lives in a different component
+           * that has no way to hand a ref down here.
+           */
+          supersededBy={target => supersedes(target, id)}
           // A preset is one discrete choice rather than a gesture, so it
           // commits immediately, exactly as the select and toggle controls do.
           onToken={identity => commitInstead({ $token: identity })}
@@ -2066,9 +2551,9 @@ function ColourField({
           />
         ) : (
           <TokenName
-            buttonRef={clear}
             label={storedLabel}
             actionName={actionName}
+            fieldId={id}
             onClear={() => commitInstead(null)}
           />
         )}
@@ -2101,7 +2586,7 @@ function ColourPicker({
   unrepresented,
   onColour,
   onClosed,
-  commitsItself,
+  supersededBy,
   onToken,
 }: {
   /** The resolved colour, or `undefined` when nothing here can resolve one. */
@@ -2116,19 +2601,29 @@ function ColourPicker({
   unrepresented: boolean;
   /** The picker moved. Fires on every pointer event during a drag. */
   onColour: (hex: string) => void;
-  /** The picker closed, which is where a gesture ends and a write belongs. */
-  onClosed: () => void;
   /**
-   * Whether an interaction outside the popover will write for itself.
+   * The picker closed, and how.
+   *
+   * The outcome is a value rather than the presence or absence of a call,
+   * because "superseded" is an instruction to DISCARD the gesture, not an
+   * absence of one — and a host given only the write path has nowhere to drop
+   * what it was holding.
+   */
+  onClosed: (outcome: PickerClose) => void;
+  /**
+   * Whether the control being PRESSED outside the popover writes THIS field's
+   * value itself.
    *
    * Asked before the dismissal is turned into a write, so a control that both
-   * closes this picker and commits something of its own does not produce two
-   * edits for one intent. `onInteractOutside` is the single callback Radix
-   * fires for EVERY cause it dismisses on — pointer, focus and the rest — which
-   * is why the question is asked here rather than by hooking the causes one at
-   * a time and missing whichever is added next.
+   * closes this picker and commits the same value does not produce two edits
+   * for one intent — the author would otherwise undo the reset and get back the
+   * colour they pressed it to be rid of.
+   *
+   * The target is a press rather than any interaction, because Radix dismisses
+   * on focus as well and a focused button has not written anything. See where
+   * this is bound.
    */
-  commitsItself: (target: EventTarget | null) => boolean;
+  supersededBy: (target: EventTarget | null) => boolean;
   onToken: (identity: string) => void;
 }): React.JSX.Element {
   // Whether the dismissal in progress belongs to a control that writes for
@@ -2141,7 +2636,7 @@ function ColourPicker({
         if (open) return;
         const own = superseded.current;
         superseded.current = false;
-        if (!own) onClosed();
+        onClosed(own ? "superseded" : "committed");
       }}
     >
       <PopoverTrigger asChild>
@@ -2165,8 +2660,26 @@ function ColourPicker({
       </PopoverTrigger>
       <PopoverContent
         className="nx-style-inspector__picker"
-        onInteractOutside={event => {
-          superseded.current = commitsItself(event.target);
+        /*
+         * A PRESS, not any dismissal whose target happens to be such a control.
+         *
+         * `onInteractOutside` also fires when focus merely LEAVES the popover —
+         * a keyboard author tabbing out lands on the Reset beside this control
+         * and dismisses it without activating anything. Read there, the gesture
+         * they were composing is discarded by a button they never pressed, and
+         * tabbing onward loses it silently.
+         *
+         * The question is not which cause dismissed the popover but whether a
+         * control is about to WRITE, and only a pointer press implies that: the
+         * press is followed by the click that runs the handler. Focus is not,
+         * so a focus dismissal falls through to the ordinary close and the
+         * gesture is committed — which is what leaving a control does
+         * everywhere else in this panel, the text fields included.
+         */
+        onPointerDownOutside={event => {
+          // Only a press that can RUN the control supersedes. See `activates`.
+          superseded.current =
+            activates(event.detail.originalEvent) && supersededBy(event.target);
         }}
       >
         {unrepresented ? (
@@ -2248,13 +2761,11 @@ function storedTokenLabel(
  * rather than an empty space.
  */
 function TokenName({
-  buttonRef,
   label,
   actionName,
+  fieldId,
   onClear,
 }: {
-  /** Handed up so the picker can tell its own clear from any other dismissal. */
-  buttonRef: React.RefObject<HTMLButtonElement | null>;
   /**
    * What to show: the token's current name, qualified with its identity where
    * another offered token shares that name, and the identity alone when the
@@ -2263,13 +2774,21 @@ function TokenName({
    */
   label: string;
   actionName: string;
+  /** The field whose value this clear writes. See {@link commitsFor}. */
+  fieldId: string;
   onClear: () => void;
 }): React.JSX.Element {
   return (
     <>
       <span className="nx-style-inspector__colour-token">{label}</span>
       <button
-        ref={buttonRef}
+        /*
+         * This press writes this field's value: it commits the clear, and the
+         * picker must not also write the draft its dismissal would otherwise
+         * flush. Declared rather than handed up as a ref, so any control making
+         * the same promise says so the same way.
+         */
+        {...commitsFor(fieldId)}
         type="button"
         onClick={onClear}
         aria-label={`Clear ${actionName}`}

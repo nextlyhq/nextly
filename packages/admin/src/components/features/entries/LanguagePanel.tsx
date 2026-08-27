@@ -8,11 +8,10 @@
  * beside it, and the actions lived in the document rail, which hides at
  * narrower widths. Each answered part of one question from a different place.
  *
- * This is that question's home — one row per language carrying its state, and
- * the action that row makes sense of: seed an untranslated language from
- * another, or open one that already has content. It renders in the rail where
- * there is room and inline where there is not, so it can never be the surface
- * that disappeared.
+ * This is that question's home — one row per language carrying its state, the
+ * action that row makes sense of, and a way to fill any language from any
+ * other. It renders in the rail where there is room and inline where there is
+ * not, so it can never be the surface that disappeared.
  *
  * The header keeps its compact switcher. This does not replace quick
  * switching; it is where the work is decided rather than where a language is
@@ -24,28 +23,29 @@
  * @module components/features/entries/LanguagePanel
  */
 
-import { Button } from "@nextlyhq/ui";
-import { useState } from "react";
+import { Button, Input } from "@nextlyhq/ui";
+import { useId, useState } from "react";
 
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 
 import { CompletenessMeter } from "./CompletenessMeter";
-import { CopyFromLanguageDialog } from "./CopyFromLanguageDialog";
+import { CopyFromLanguageMenu } from "./CopyFromLanguageMenu";
+import { useCopyFromLanguageScope } from "./CopyFromLanguageScope";
 import { useEntryLocale } from "./EntryLocaleContext";
+import { StateDot } from "./LanguageStateDot";
+import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
 import {
   languageState,
   languageStateLabel,
-  LANGUAGE_STATE_LABEL,
-  StateDot,
-  type LanguageState,
-} from "./LanguageControl";
-import { PublishAllConfirmDialog } from "./PublishAllConfirmDialog";
-import {
   translationCounts,
+  LANGUAGE_STATES,
+  LANGUAGE_STATE_LABEL,
+  type LanguageState,
   type LocaleTranslationMeta,
+  type TranslationCounts,
 } from "./translation-meta";
-import { useCopyFromLanguage } from "./useCopyFromLanguage";
+import type { CopyFromLanguage } from "./useCopyFromLanguage";
 import { usePublishAllLanguages } from "./usePublishAllLanguages";
 
 export interface LanguagePanelProps {
@@ -72,6 +72,361 @@ export interface LanguagePanelProps {
  * The completeness meter. `aria-hidden` because the count beside it states the
  * same fact in words — a reader would otherwise hear the progress twice.
  */
+/**
+ * How many languages the panel shows before it offers a filter.
+ *
+ * A judgement rather than a measurement, and worth saying so: nothing here
+ * derives it. Past roughly this many rows, finding one language stops being a
+ * glance and becomes a scan, and a scan over identical rows is linear work
+ * where a filter is not. Below it, a search box is chrome answering a question
+ * nobody asked — most sites run two or three languages and must not pay for
+ * the sites that run thirty.
+ *
+ * Deliberately NOT the entry list's `MAX_DOTS`. That answers a spatial
+ * question — how many dots fit a table cell — and this answers a cognitive one,
+ * so matching the numbers would tie two unrelated decisions together.
+ */
+const FILTER_THRESHOLD = 8;
+
+/** Whether a language answers to what was typed, by name or by code. */
+function matchesQuery(
+  locale: { code: string; label: string },
+  query: string
+): boolean {
+  // The CODE as well as the label: a translator working in Spanish types `es`
+  // more readily than "Spanish", and where the admin's language differs from
+  // the content languages the code can be the only spelling the two share.
+  return (
+    locale.label.toLowerCase().includes(query) ||
+    locale.code.toLowerCase().includes(query)
+  );
+}
+
+/**
+ * What the dots mean, on request.
+ *
+ * The dot encodes state by SHAPE, which is decodable once someone has been told
+ * the key and guessable by nobody. It previously lived in the header's language
+ * menu; that menu is gone, and this was the one thing in it the panel did not
+ * already carry.
+ *
+ * Closed by default because a ~320px rail cannot afford four permanent rows
+ * explaining four dots, and an author who has learned them never needs it
+ * again. `<details>` rather than a popover: it needs no positioning, works
+ * without JavaScript, and is keyboard-operable by construction.
+ *
+ * The labels are the CANONICAL ones from `translation-meta`. A legend with
+ * wording of its own would be a second vocabulary for the same states, which is
+ * the failure this panel exists to end; the capitalisation is CSS.
+ */
+function StateLegend() {
+  return (
+    <details className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+      <summary className="cursor-pointer select-none marker:content-none">
+        What do these mean?
+      </summary>
+      <div
+        role="group"
+        aria-label="Language states"
+        className="mt-2 flex flex-col gap-1"
+      >
+        {LANGUAGE_STATES.map(state => (
+          <span key={state} className="flex items-center gap-1.5">
+            <StateDot state={state} />
+            <span className="first-letter:uppercase">
+              {LANGUAGE_STATE_LABEL[state]}
+            </span>
+          </span>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+/**
+ * The panel's title row: what it is, how far along it is, and what can be done
+ * to every language at once.
+ *
+ * Wraps, because this row carries a label, a progress meter, a count and up to
+ * two actions inside a ~320px rail. Fixed on one line the actions ran past the
+ * card — measured, "Publish all" was drawn 47px beyond its edge while a
+ * non-default language was being edited, which is exactly when it is the
+ * control an author wants. The ROWS below solved the same squeeze by letting
+ * their describing half give way; there is no such half here, since every part
+ * of this row is either a number or a verb.
+ *
+ * Whether the translate action applies is decided by the caller and arrives as
+ * ONE boolean. Three conditions ANDed inside the JSX read as one long line and
+ * are three separate facts: a handler exists, this is not the source language,
+ * and there is a source to translate from.
+ */
+function PanelHeader({
+  counts,
+  actionsDisabled,
+  canPublishAll,
+  publishPending,
+  onPublishAll,
+  offersTranslate,
+  onTranslate,
+  copy,
+  activeLabel,
+  activeState,
+  metaKnown,
+}: {
+  counts: TranslationCounts;
+  /** The document's one copy-from state, or undefined where it does not apply. */
+  copy: CopyFromLanguage | undefined;
+  /** The language being edited — the target the header's picker fills. */
+  activeLabel: string;
+  /** Its state, which chooses the verb. */
+  activeState: LanguageState;
+  metaKnown: boolean;
+  actionsDisabled: boolean;
+  canPublishAll: boolean;
+  publishPending: boolean;
+  onPublishAll: () => void;
+  offersTranslate: boolean;
+  onTranslate: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border bg-muted/40 px-3 py-2">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Languages
+      </span>
+      <CompletenessMeter translated={counts.translated} total={counts.total} />
+      {/* The unit is stated, not left to the eyebrow above it. Every counter in
+          the admin reads "N of M <unit> translated", and this was the one that
+          did not: with three languages and two translatable fields the panel
+          said "0 of 2" about languages while translation mode said "0 of 2"
+          about fields, a few clicks apart. The numbers coincide exactly where a
+          person first meets them. */}
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {counts.translated} of {counts.total} languages translated
+      </span>
+      <span className="flex-1" />
+      {/* Filling the language being EDITED lives here rather than on its row.
+          Every other row implies its source — the author is standing in one
+          language and acting on another — but this one is where they are
+          standing, so the source has to be named. The header is where the
+          panel's document-scoped actions already are, and unlike the row it
+          wraps, so the control cannot be pushed out of reach. */}
+      {copy !== undefined && (
+        <CopyFromLanguageMenu
+          copy={copy}
+          verb={seedVerb(activeState, metaKnown)}
+          targetLabel={activeLabel}
+          disabled={actionsDisabled}
+        />
+      )}
+      {offersTranslate && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          disabled={actionsDisabled}
+          onClick={onTranslate}
+        >
+          Translate
+        </Button>
+      )}
+      {canPublishAll && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 px-2 text-xs"
+          disabled={actionsDisabled || publishPending}
+          onClick={onPublishAll}
+        >
+          {publishPending ? "Publishing…" : "Publish all"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The rows, or the sentence that replaces them.
+ *
+ * Its own component because the choice between the two is a whole branch around
+ * a list, and leaving it inline put a second nested ternary inside a JSX tree
+ * that already carries several — which is how a panel becomes hard to read
+ * without any one line being complicated.
+ */
+function LanguageRows({
+  shown,
+  filter,
+  translations,
+  defaultLocale,
+  active,
+  canSeed,
+  metaKnown,
+  actionsDisabled,
+  onSelect,
+}: {
+  shown: readonly { code: string; label: string; rtl: boolean }[];
+  filter: string;
+  /*
+   * Required-but-nullable rather than optional, which is not a style choice:
+   * under `exactOptionalPropertyTypes` an OPTIONAL prop cannot be handed a
+   * `T | undefined`, so every call site has to spread it conditionally — and
+   * each of those spreads is a branch in a component that already has several.
+   * This is internal, so widening the contract costs nothing and the caller
+   * passes the value it holds.
+   */
+  translations: Record<string, LocaleTranslationMeta> | undefined;
+  defaultLocale: string;
+  active: string;
+  canSeed: boolean;
+  /** Whether `translations` was supplied at all — see `seedVerb`. */
+  metaKnown: boolean;
+  actionsDisabled: boolean;
+  onSelect:
+    | ((code: string, options?: { seedFrom?: string }) => void)
+    | undefined;
+}) {
+  if (shown.length === 0) {
+    // Said rather than shown as an empty list. A list with no rows under a
+    // search box reads as "this document has no languages", which is both
+    // alarming and untrue — the query simply matched nothing.
+    return (
+      <p className="px-3 py-4 text-xs text-muted-foreground">
+        No languages match “{filter.trim()}”.
+      </p>
+    );
+  }
+
+  return (
+    <ul aria-label="Languages in this document">
+      {shown.map(locale => (
+        <LanguageRow
+          key={locale.code}
+          code={locale.code}
+          label={locale.label}
+          rtl={locale.rtl}
+          isDefault={locale.code === defaultLocale}
+          state={languageState(translations?.[locale.code])}
+          pendingChange={translations?.[locale.code]?.pendingChange}
+          isActive={locale.code === active}
+          canSeed={canSeed}
+          metaKnown={metaKnown}
+          {...(onSelect === undefined ? {} : { onSelect })}
+          onSeed={() => {
+            // The row clicked is the target and the language being edited is
+            // the source, and BOTH travel in the one switch call. Setting the
+            // source separately here does not work: the switch refetches the
+            // document and tears this panel down, so an intent recorded in it
+            // is gone before anything can act on it. Whoever owns `locale`
+            // carries the pair across, and the copy is offered on the far side
+            // once the target's editor is on screen.
+            onSelect?.(locale.code, { seedFrom: active });
+          }}
+          actionsDisabled={actionsDisabled}
+        />
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * Which languages the panel lists, and whether it offers a way to narrow them.
+ *
+ * One decision, answered once: the filter's visibility and the rows it produces
+ * are two views of the same question — is this list long enough to search —
+ * and computing them separately is how they come to disagree about the
+ * threshold.
+ *
+ * A plain filter: what does not match is hidden, INCLUDING the language being
+ * edited. Pinning the active row was tried and is worse — a row that survives a
+ * query it does not match READS as a match, and on a search for something
+ * absent it leaves one language on screen looking like the answer. The query is
+ * transient and self-inflicted, and clearing it brings everything back.
+ */
+/**
+ * One action, one word for it, and the state it acts on decides which word.
+ *
+ * "Start from…" on a language that already holds a translation says something
+ * untrue, and the overwrite is the part an author needs told BEFORE the confirm
+ * step rather than by it. Resolved here rather than at each trigger so the row
+ * button and the active row's source picker can never drift into two names for
+ * the same thing — which is the failure this whole panel exists to undo.
+ */
+/**
+ * What the header needs to know about the language being edited.
+ *
+ * Three readings of the same subject — its name, its state, and whether we were
+ * told anything about it — resolved together because they are one question and
+ * because the panel that renders them has no room left for three more
+ * expressions of its own.
+ */
+function activeLanguageView(
+  locales: readonly { code: string; label: string }[],
+  translations: Record<string, LocaleTranslationMeta> | undefined,
+  active: string
+): { label: string; state: LanguageState; metaKnown: boolean } {
+  return {
+    label: locales.find(l => l.code === active)?.label ?? active,
+    state: languageState(translations?.[active]),
+    // An absent map is not an empty document — see `seedVerb`.
+    metaKnown: translations !== undefined,
+  };
+}
+
+/**
+ * How many languages hold a saved change nobody has published.
+ *
+ * Stated in the publish-all confirm, because publishing every language is the
+ * one action in this panel that can put another person's held edit on the
+ * public site.
+ */
+function pendingLanguageCount(
+  locales: readonly { code: string }[],
+  translations: Record<string, LocaleTranslationMeta> | undefined
+): number {
+  return locales.filter(l => translations?.[l.code]?.pendingChange).length;
+}
+
+/**
+ * Whether entering translation mode applies to what is on screen.
+ *
+ * Three conditions that only mean something together: the editor must offer the
+ * mode at all, the language being edited must not be the source it would be
+ * translated from, and there has to BE a source. Named once so the header reads
+ * as one decision rather than three.
+ */
+function offersTranslateMode(
+  onEnterTranslationMode: ((source: string) => void) | undefined,
+  isNonDefaultLocale: boolean,
+  defaultLocale: string
+): boolean {
+  return (
+    onEnterTranslationMode !== undefined &&
+    isNonDefaultLocale &&
+    defaultLocale !== ""
+  );
+}
+
+function seedVerb(state: LanguageState, metaKnown: boolean): string {
+  // Unknown metadata is NOT an empty language. With no `_translations` map every
+  // locale reads `missing`, which is a supported state for this panel — and
+  // "Start from…" would then promise a fill with nothing to lose immediately
+  // before the confirm step explains what it overwrites. When we do not know,
+  // say the destructive thing.
+  if (!metaKnown) return "Replace";
+  return state === "missing" ? "Start" : "Replace";
+}
+
+function filteredLanguages<T extends { code: string; label: string }>(
+  locales: readonly T[],
+  filter: string
+): { offersFilter: boolean; shown: readonly T[] } {
+  const offersFilter = locales.length > FILTER_THRESHOLD;
+  const query = filter.trim().toLowerCase();
+  if (!offersFilter || query === "") return { offersFilter, shown: locales };
+  return { offersFilter, shown: locales.filter(l => matchesQuery(l, query)) };
+}
+
 function LanguageRow({
   code,
   label,
@@ -81,6 +436,7 @@ function LanguageRow({
   pendingChange,
   isActive,
   canSeed,
+  metaKnown,
   onSelect,
   onSeed,
   actionsDisabled,
@@ -94,6 +450,7 @@ function LanguageRow({
   pendingChange?: boolean;
   isActive: boolean;
   canSeed: boolean;
+  metaKnown: boolean;
   onSelect?: (code: string, options?: { seedFrom?: string }) => void;
   onSeed?: () => void;
   actionsDisabled: boolean;
@@ -146,17 +503,24 @@ function LanguageRow({
           {LANGUAGE_STATE_LABEL[state]}
         </span>
       </div>
+      {/* The active row carries NO action. Filling the language being edited is
+          offered from the panel header instead, because this row cannot hold
+          it: measured in a 277px rail, adding a 100px control here drove the
+          non-shrinking half of the row 32px into it for a label as short as
+          "English", and 120px for "Brazilian Portuguese". The row's describing
+          half is already the part that gives way, and it had no more to give. */}
       {isActive ? (
         <span className="shrink-0 text-xs text-muted-foreground">
           editing now
         </span>
       ) : (
         <div className="flex shrink-0 items-center gap-1.5">
-          {/* Offered only where it is the useful next step: a language with
-              nothing in it. Seeding one that already has content is the
-              overwrite the confirm step exists to warn about, and it stays
-              available from the Languages menu for that case. */}
-          {canSeed && state === "missing" && onSeed && (
+          {/* Offered on EVERY language, not only an empty one. Filling a
+              language that already has content is an overwrite rather than a
+              start, which is what the verb reports and what the confirm step
+              then spells out; refusing the action instead left it reachable
+              from nowhere. */}
+          {canSeed && onSeed && (
             <Button
               type="button"
               variant="outline"
@@ -166,10 +530,10 @@ function LanguageRow({
               // Named for the language it acts on. Read out of context — a
               // screen reader listing this panel's controls — three buttons
               // all saying "Start from…" name no language at all.
-              aria-label={`Start ${label} from another language`}
+              aria-label={`${seedVerb(state, metaKnown)} ${label} from another language`}
               onClick={onSeed}
             >
-              Start from…
+              {seedVerb(state, metaKnown)} from…
             </Button>
           )}
           {onSelect && (
@@ -204,10 +568,12 @@ export function LanguagePanel({
   className,
 }: LanguagePanelProps) {
   const [confirmPublishAll, setConfirmPublishAll] = useState(false);
+  const [filter, setFilter] = useState("");
+  const filterId = useId();
   const { enabled, locales, defaultLocale } = useLocalization();
   const { collectionLocalized, isNonDefaultLocale, onEnterTranslationMode } =
     useEntryLocale();
-  const copy = useCopyFromLanguage();
+  const copy = useCopyFromLanguageScope();
   const publish = usePublishAllLanguages(
     hasStatus === undefined ? {} : { hasStatus }
   );
@@ -221,64 +587,35 @@ export function LanguagePanel({
   if (!enabled || !collectionLocalized || locales.length < 2) return null;
 
   const active = activeLocale ?? defaultLocale;
-  // How many languages hold work nobody has published. Stated in the confirm
-  // below, because publishing all of them is the one action here that can put
-  // another person's held edit on the public site.
-  const pendingCount = locales.filter(
-    l => translations?.[l.code]?.pendingChange
-  ).length;
+  const pendingCount = pendingLanguageCount(locales, translations);
   const counts = translationCounts(
     translations,
     locales.map(l => l.code),
     defaultLocale
   );
 
+  const { offersFilter, shown } = filteredLanguages(locales, filter);
+  const activeLanguage = activeLanguageView(locales, translations, active);
+
   return (
     <div className={cn("rounded-md border border-border", className)}>
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/40">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Languages
-        </span>
-        <CompletenessMeter
-          translated={counts.translated}
-          total={counts.total}
-        />
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {counts.translated} of {counts.total} translated
-        </span>
-        <span className="flex-1" />
-        {/* Offered only while a NON-default language is being edited, because
-            that is the only time there is a translation to do: the default is
-            the language everything else is translated FROM, so pairing it with
-            itself is the one arrangement the mode cannot show. The source is the
-            default language — the overwhelmingly common pairing, and the URL
-            carries the source explicitly so a different one is addressable
-            without this control needing to grow a picker. */}
-        {onEnterTranslationMode && isNonDefaultLocale && defaultLocale && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            disabled={actionsDisabled}
-            onClick={() => onEnterTranslationMode(defaultLocale)}
-          >
-            Translate
-          </Button>
+      <PanelHeader
+        counts={counts}
+        copy={copy}
+        activeLabel={activeLanguage.label}
+        activeState={activeLanguage.state}
+        metaKnown={activeLanguage.metaKnown}
+        actionsDisabled={actionsDisabled}
+        canPublishAll={publish.available}
+        publishPending={publish.pending}
+        onPublishAll={() => setConfirmPublishAll(true)}
+        offersTranslate={offersTranslateMode(
+          onEnterTranslationMode,
+          isNonDefaultLocale,
+          defaultLocale
         )}
-        {publish.available && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            disabled={actionsDisabled || publish.pending}
-            onClick={() => setConfirmPublishAll(true)}
-          >
-            {publish.pending ? "Publishing…" : "Publish all"}
-          </Button>
-        )}
-      </div>
+        onTranslate={() => onEnterTranslationMode?.(defaultLocale)}
+      />
 
       <PublishAllConfirmDialog
         open={confirmPublishAll}
@@ -292,34 +629,34 @@ export function LanguagePanel({
         }}
       />
 
-      <ul aria-label="Languages in this document">
-        {locales.map(locale => (
-          <LanguageRow
-            key={locale.code}
-            code={locale.code}
-            label={locale.label}
-            rtl={locale.rtl}
-            isDefault={locale.code === defaultLocale}
-            state={languageState(translations?.[locale.code])}
-            pendingChange={translations?.[locale.code]?.pendingChange}
-            isActive={locale.code === active}
-            canSeed={copy.available}
-            {...(onSelect === undefined ? {} : { onSelect })}
-            onSeed={() => {
-              // The row clicked is the target and the language being edited is
-              // the source, and BOTH travel in the one switch call. Setting the
-              // source separately here does not work: the switch refetches the
-              // document and tears this panel down, so an intent recorded in it
-              // is gone before anything can act on it. Whoever owns `locale`
-              // carries the pair across, and the copy is offered on the far
-              // side once the target's editor is on screen.
-              onSelect?.(locale.code, { seedFrom: active });
-            }}
-            actionsDisabled={actionsDisabled}
+      {offersFilter && (
+        <div className="border-b border-border px-3 py-2">
+          <label className="sr-only" htmlFor={filterId}>
+            Filter languages
+          </label>
+          <Input
+            id={filterId}
+            type="search"
+            value={filter}
+            onChange={event => setFilter(event.target.value)}
+            placeholder="Filter languages…"
+            className="h-7 text-xs"
           />
-        ))}
-      </ul>
-      <CopyFromLanguageDialog copy={copy} />
+        </div>
+      )}
+
+      <LanguageRows
+        shown={shown}
+        filter={filter}
+        translations={translations}
+        defaultLocale={defaultLocale}
+        active={active}
+        canSeed={copy?.available ?? false}
+        metaKnown={activeLanguage.metaKnown}
+        actionsDisabled={actionsDisabled}
+        onSelect={onSelect}
+      />
+      <StateLegend />
     </div>
   );
 }

@@ -8,6 +8,7 @@
  * @since 0.1.0
  */
 
+import { formAvailability, NO_SUCH_FORM } from "nextly";
 import type { PluginContext } from "nextly";
 
 import { asFormDocument, asSubmissionDocument } from "../document-shapes";
@@ -23,6 +24,14 @@ import {
   transformFormData,
   getValidationErrors,
 } from "../utils/generate-schema";
+import {
+  applyRedirectPattern,
+  documentReachability,
+  parseRedirectReference,
+  pickedDocumentField,
+  type RedirectTargetDocument,
+  type RedirectUrlPattern,
+} from "../utils/redirect-target";
 
 import { checkSpam } from "./spam-detection";
 
@@ -142,21 +151,28 @@ export async function submitForm(
       logger.warn?.("Form submission attempted for non-existent form", {
         formSlug,
       });
-      return {
-        success: false,
-        error: "Form not found",
-      };
+      return { success: false, error: NO_SUCH_FORM };
     }
 
-    // 2. Check form status
-    if (form.status !== "published") {
-      logger.info?.("Form submission rejected - form not published", {
+    // 2. Check form status. The same reading the HTTP and Direct API paths do,
+    // so what a visitor is told does not depend on which entry point their
+    // client used.
+    const availability = formAvailability(form);
+    if (availability.kind !== "open") {
+      logger.info?.("Form submission rejected - form not accepting", {
         formSlug,
         status: form.status,
+        availability: availability.kind,
       });
+      // `absent` answers exactly as a slug nobody used does. Saying "not
+      // currently accepting submissions" here would confirm the form exists,
+      // which is the enumeration this whole reading exists to prevent — and it
+      // would disagree with the REST and Direct API paths, which is how the
+      // four came to give four different answers in the first place.
       return {
         success: false,
-        error: "This form is not currently accepting submissions",
+        error:
+          availability.kind === "closed" ? availability.message : NO_SUCH_FORM,
       };
     }
 
@@ -329,7 +345,11 @@ export async function submitForm(
 
     // 6. Determine redirect URL. Spam gets the same success shape as a real
     // submission (minus the stored row reference) so bots can't diff the two.
-    const redirect = determineRedirectUrl(form);
+    const redirect = await resolveRedirectUrl(
+      form,
+      pluginConfig,
+      pluginContext
+    );
 
     if (isContentSpam) {
       return { success: true, redirect };
@@ -394,38 +414,186 @@ export async function fetchFormBySlug(
 }
 
 /**
- * Determine the redirect URL based on form settings.
+ * Where a successful submission sends the visitor, or undefined for nowhere.
  *
- * @param form - Form document
- * @returns Redirect URL or undefined
+ * A destination is either TYPED as a URL or PICKED as a document, and the two
+ * are answered differently: a typed URL is returned verbatim, since it may
+ * legitimately point off-site, while a picked document has to be read and put
+ * through its collection's configured URL pattern.
+ *
+ * Two settings hold a picked document — `redirectPage` under the
+ * "Redirect to Page" option, and `redirectRelation` under the URL option —
+ * and both resolve through the same path, because they ask the same question.
+ *
+ * Every way of failing to produce a URL is logged. A form whose destination
+ * cannot be built behaves exactly like one configured to stay put, so without
+ * a line in the log the two are indistinguishable from the outside.
  */
-function determineRedirectUrl(form: FormDocument): string | undefined {
-  if (!form.settings) {
+async function resolveRedirectUrl(
+  form: FormDocument,
+  pluginConfig: ResolvedFormBuilderConfig,
+  pluginContext: PluginContext
+): Promise<string | undefined> {
+  const settings = form.settings;
+  if (!settings) return undefined;
+
+  // A typed URL is returned verbatim: it is the whole point of that option,
+  // and it may legitimately point off-site.
+  if (settings.confirmationType === "redirect" && settings.redirectUrl) {
+    return settings.redirectUrl;
+  }
+
+  // Otherwise whichever key names a document, read through the SAME function
+  // the save-time rule uses. Two readers here would let this path redirect to
+  // a document the rule never inspected — which it did: the rule matched only
+  // `relationship`, so a `redirect`-with-relation form was resolved here and
+  // guarded nowhere.
+  const field = pickedDocumentField(settings as Record<string, unknown>);
+  if (!field) return undefined;
+
+  return urlForPickedDocument(
+    (settings as Record<string, unknown>)[field],
+    form,
+    pluginConfig,
+    pluginContext
+  );
+}
+
+/**
+ * The URL for a picked document, or undefined with a reason in the log.
+ *
+ * Every branch reports. A form whose destination cannot be built behaves
+ * exactly like one configured to stay put, so without a line here the two are
+ * indistinguishable from outside — which is how a redirect that never fired
+ * went unnoticed.
+ */
+async function urlForPickedDocument(
+  stored: unknown,
+  form: FormDocument,
+  pluginConfig: ResolvedFormBuilderConfig,
+  pluginContext: PluginContext
+): Promise<string | undefined> {
+  const { logger } = pluginContext;
+  const patterns = pluginConfig.redirectRelationships;
+  const reference = parseRedirectReference(stored, Object.keys(patterns));
+
+  if (!reference) {
+    logger.warn?.("Form redirects to a page, but names no readable document", {
+      form: form.slug,
+    });
     return undefined;
   }
 
-  // Check confirmation type
-  if (form.settings.confirmationType !== "redirect") {
+  const pattern = patterns[reference.collection];
+  if (!pattern) {
+    logger.warn?.(
+      "Form redirects to a collection that is not in redirectRelationships",
+      { form: form.slug, collection: reference.collection }
+    );
     return undefined;
   }
 
-  // Direct URL redirect
-  if (form.settings.redirectUrl) {
-    return form.settings.redirectUrl;
+  const target = await readTarget(reference, form, pluginContext);
+  if (!target) return undefined;
+
+  // Reachability is re-decided HERE, not inherited from the save. Nothing runs
+  // a forms hook when the target itself changes, so a page that was published
+  // when the form was saved can be unpublished afterwards and the save-time
+  // rule never sees it. Sending a visitor there produces exactly the "page not
+  // found" that rule exists to prevent, so this degrades to no redirect — the
+  // submission is still stored and still succeeds.
+  // The target collection's own `localized` setting, resolved at plugin init.
+  // Absent means it could not be read, which reports as undecided rather than
+  // as "not localized" — dropping a redirect on that guess would strand a
+  // destination a translation is still serving.
+  if (
+    documentReachability(
+      target,
+      pluginConfig.redirectTargetLocalization[reference.collection]
+    ) === "unreachable"
+  ) {
+    logger.warn?.("Form redirects to a page that has never been published", {
+      form: form.slug,
+      collection: reference.collection,
+      target: reference.id,
+    });
+    return undefined;
   }
 
-  // Relationship-based redirect (requires additional lookup)
-  // Note: For relationship redirects, the admin UI should resolve
-  // the URL before saving to redirectUrl, or the frontend should
-  // handle the relationship lookup.
-  if (form.settings.redirectRelation) {
-    // Return a placeholder that the frontend can resolve
-    // Format: relationship://{collection}/{id}
-    const { relationTo, value } = form.settings.redirectRelation;
-    return `relationship://${relationTo}/${value}`;
+  return buildUrl(pattern, target, reference.collection, form, pluginContext);
+}
+
+/**
+ * The pattern applied, or undefined with the reason logged.
+ *
+ * Separate because a configured pattern may be a FUNCTION — host code, which
+ * can throw. Letting that escape would reach `submitForm`'s outer catch AFTER
+ * the submission row exists, reporting a failure the caller may retry into a
+ * duplicate of a submission that was already saved.
+ */
+function buildUrl(
+  pattern: RedirectUrlPattern,
+  target: RedirectTargetDocument,
+  collection: string,
+  form: FormDocument,
+  pluginContext: PluginContext
+): string | undefined {
+  const { logger } = pluginContext;
+  try {
+    const url = applyRedirectPattern(pattern, target);
+    if (!url) {
+      logger.warn?.(
+        "Form redirect pattern could not be filled from the target document",
+        { form: form.slug, collection }
+      );
+    }
+    return url;
+  } catch (error) {
+    logger.warn?.("Form redirect pattern threw while building a URL", {
+      form: form.slug,
+      collection,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+/** The target row, or undefined — a deleted target and a failed read differ. */
+async function readTarget(
+  reference: { collection: string; id: string },
+  form: FormDocument,
+  pluginContext: PluginContext
+): Promise<RedirectTargetDocument | undefined> {
+  const { logger } = pluginContext;
+  const context = {
+    form: form.slug,
+    collection: reference.collection,
+    id: reference.id,
+  };
+
+  let row: unknown;
+  try {
+    row = await pluginContext.services.collections.findEntryById(
+      reference.collection,
+      reference.id,
+      { as: "system" }
+    );
+  } catch (error) {
+    // The submission already succeeded, so this degrades to "no redirect"
+    // rather than failing the request — reported, because a broken read and a
+    // deleted target are different problems with the same symptom.
+    logger.warn?.("Form redirect target could not be read", {
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
   }
 
-  return undefined;
+  if (!row || typeof row !== "object") {
+    logger.warn?.("Form redirect target no longer exists", context);
+    return undefined;
+  }
+  return row as RedirectTargetDocument;
 }
 
 // ============================================================

@@ -342,6 +342,32 @@ describe("the ops that change a whole selection", () => {
     ).toEqual({ kind: "same", value: { blockStart: "1px", blockEnd: "2px" } });
   });
 
+  it("returns the ops in SELECTION order", () => {
+    /*
+     * The contract the interface states, pinned because there is a standing
+     * reason to want a different one: writing the shrinking blocks first would
+     * keep a batch at the byte cap from depending on the order its blocks were
+     * selected in.
+     *
+     * Selection order holds anyway, because knowing which block shrinks means
+     * measuring what each one currently holds — and `measureBytes` invokes a
+     * value's own `toJSON`, on nodes no guard has accepted yet. An ordering is
+     * an optimisation of the peak, never a gate, so running author code to
+     * obtain one is the wrong trade.
+     */
+    const first = padNode("first", { blockStart: "1px" });
+    const second = padNode("second", { blockStart: "1px" });
+
+    const { ops } = batchStyleWriteOps([first, second], PAD, {
+      blockStart: "2px",
+    } as never);
+
+    expect(ops.map(op => (op as { id: string }).id)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
   it("asks the SITE about a token once for the whole selection", () => {
     /*
      * `kindOf` is the site's own lookup and may be expensive — a table read, a

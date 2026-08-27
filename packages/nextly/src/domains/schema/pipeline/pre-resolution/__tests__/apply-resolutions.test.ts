@@ -190,3 +190,49 @@ describe("applyResolutionsToOperations - cross-table isolation", () => {
     expect(out).toHaveLength(2);
   });
 });
+
+describe("applyResolutionsToOperations - the type the rename records", () => {
+  const resolution: RenameResolution = {
+    tableName: "dc_orders",
+    fromColumn: "amount",
+    toColumn: "total",
+    choice: "rename",
+  };
+
+  it("records the target's declaration when its size is a separate field", () => {
+    // A ColumnSpec that came from PostgreSQL introspection spells
+    // `numeric(10,2)` as a bare `numeric` with the precision alongside.
+    // Recording `type` alone makes the rename describe an unbounded column,
+    // and the conversion it emits then casts away the declared size.
+    const out = applyResolutionsToOperations(
+      [
+        drop("dc_orders", "amount", "numeric(5,1)"),
+        {
+          type: "add_column",
+          tableName: "dc_orders",
+          column: {
+            name: "total",
+            type: "numeric",
+            nullable: true,
+            typeModifier: "10,2",
+          },
+        },
+      ],
+      [resolution]
+    );
+    const rename = out.find(op => op.type === "rename_column");
+    expect(rename).toMatchObject({ toType: "numeric(10,2)" });
+  });
+
+  it("leaves a declaration that already spells its own size alone", () => {
+    const out = applyResolutionsToOperations(
+      [
+        drop("dc_orders", "amount", "numeric(5,1)"),
+        add("dc_orders", "total", "numeric(10,2)"),
+      ],
+      [resolution]
+    );
+    const rename = out.find(op => op.type === "rename_column");
+    expect(rename).toMatchObject({ toType: "numeric(10,2)" });
+  });
+});
