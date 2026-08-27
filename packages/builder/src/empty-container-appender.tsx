@@ -120,18 +120,47 @@
  *
  * ## Identity is independent of geometry, and has to stay that way
  *
- * Which containers get a control comes from the DOCUMENT alone. Position is a
- * later, separate refinement of WHERE to draw something that already exists:
- * a control an author cannot yet see on screen — because the canvas root has
- * not mounted, or a resize has not settled — is still a control a screen
- * reader can reach, and a test asserting it exists must not depend on a
- * browser having laid anything out. So an unmeasured control here keeps its
- * geometry at `{ x: 0, y: 0, width: 0, height: 0 }` rather than being hidden:
- * hiding it would remove it from the accessibility tree, which is exactly the
- * state every test in `empty-container-appender.test.tsx` renders in — a
- * bare component with no canvas root at all — so a hidden-until-measured
- * design would make every one of those tests fail to find a control that,
- * mounted for real, is there all along.
+ * Which containers get a control comes from the DOCUMENT alone, and
+ * {@link emptyContainersIn} has to stay that way — it reads no DOM, so a
+ * component with no canvas root still knows its whole set. What a measurement
+ * pass concludes about one of those containers is a LATER, separate question,
+ * and it has three answers rather than two:
+ *
+ * - MEASURED — the pass found the element, accepted it, and holds a rectangle.
+ * - DECLINED — the pass found the element and refused it: the stylesheet drew
+ *   no box for it (see the section above), or an authored ancestor clips it
+ *   (see `measure`). Both are re-decided on every pass, so this is a refusal
+ *   for as long as the render keeps this shape, not a permanent one.
+ * - UNMEASURED — no pass has reached this container. The canvas root has not
+ *   mounted, a resize has not settled, or the element was not in the DOM when
+ *   the pass ran.
+ *
+ * An UNMEASURED control RENDERS, at `{ x: 0, y: 0, width: 0, height: 0 }`,
+ * which is the property this section exists to protect: a control an author
+ * cannot yet see on screen is still a control a screen reader can reach, and a
+ * test asserting it exists must not depend on a browser having laid anything
+ * out. Hiding it would remove it from the accessibility tree, which is exactly
+ * the state the bare-mount cases in `empty-container-appender.test.tsx` render
+ * in — a component with no canvas root at all — so a hidden-until-measured
+ * design would make every one of those fail to find a control that, mounted
+ * for real, is there all along.
+ *
+ * A DECLINED control renders NOTHING, which is the same argument read the
+ * other way. It is not a control waiting to be placed; it is one this
+ * component has decided not to offer, so keeping it in the accessibility tree
+ * leaves a zero-sized button in the tab order — reachable, announced by name,
+ * and invisible. `.nx-empty-container-appenders__button` is `display: flex`
+ * and `pointer-events: auto`, and its `:focus-visible` rule would draw an
+ * outline on a box with no area. A `core/accordion-item` whose `children` slot
+ * is empty reaches that state from its own `defaultProps`.
+ *
+ * The two used to share one representation — no entry in the measurement map —
+ * so "not yet" and "never" were the same value and the second inherited the
+ * first's behaviour. A pass therefore records a {@link RecordedPlacement} for
+ * every container it REACHED, a rectangle or a refusal, which leaves absence
+ * meaning the one thing it can still mean. {@link controlRectFor} is the only
+ * place those three become the two things a render can do, switched
+ * exhaustively so a fourth state cannot fall through a `default` arm.
  *
  * @module empty-container-appender
  */
@@ -266,12 +295,59 @@ function emptyContainersIn(
  *
  * Zero-sized rather than absent, so an unmeasured control still occupies a
  * point in the canvas's coordinate space instead of carrying no position at
- * all — see the module docblock for why it must render regardless.
+ * all — see the module docblock for why it must render regardless. It belongs
+ * to the UNMEASURED state alone: a declined container draws nothing, so it
+ * never reaches a rectangle at all.
  */
 const UNMEASURED_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
 
-/** No controls: the identity returned before the first measurement runs. */
-const NO_RECTS: ReadonlyMap<string, Rect> = new Map();
+/**
+ * What one measurement pass concluded about a container it REACHED.
+ *
+ * A refusal is a value here rather than the absence of one, because absence
+ * already means something else — see the module docblock's three states. Both
+ * members are recorded by `measure`, and a container it never got to is left
+ * out of the map entirely.
+ */
+type RecordedPlacement =
+  | { readonly kind: "measured"; readonly rect: Rect }
+  | { readonly kind: "declined" };
+
+/** A container's state, including the one a pass records by omission. */
+type Placement = RecordedPlacement | { readonly kind: "unmeasured" };
+
+/** The refusal, shared rather than allocated once per declined container. */
+const DECLINED: RecordedPlacement = { kind: "declined" };
+
+/** What a container absent from a pass's map is in. */
+const UNMEASURED: Placement = { kind: "unmeasured" };
+
+/** No container reached: the identity returned before any pass runs. */
+const NO_PLACEMENTS: ReadonlyMap<string, RecordedPlacement> = new Map();
+
+/**
+ * Where to draw a container's control, or `null` when it gets none.
+ *
+ * The single place a missing entry is given its meaning, so no caller has to
+ * agree with another about what one stands for. `switch` with no `default`: a
+ * fourth state would leave this able to return `undefined`, which the declared
+ * type refuses — the same property `rectCut` in `geometry-dom.ts` relies on,
+ * rather than a `default` arm that would silently absorb it.
+ */
+function controlRectFor(
+  placements: ReadonlyMap<string, RecordedPlacement>,
+  id: string
+): Rect | null {
+  const placement: Placement = placements.get(id) ?? UNMEASURED;
+  switch (placement.kind) {
+    case "measured":
+      return placement.rect;
+    case "declined":
+      return null;
+    case "unmeasured":
+      return UNMEASURED_RECT;
+  }
+}
 
 /**
  * The control's fixed side length, in the canvas's content pixels.
@@ -364,7 +440,8 @@ export function EmptyContainerAppenders({
     [document, slots, blocks]
   );
 
-  const [rects, setRects] = useState<ReadonlyMap<string, Rect>>(NO_RECTS);
+  const [placements, setPlacements] =
+    useState<ReadonlyMap<string, RecordedPlacement>>(NO_PLACEMENTS);
 
   /*
    * WHERE to draw each control, read through the same helper
@@ -378,13 +455,37 @@ export function EmptyContainerAppenders({
     const root =
       element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
     if (root === null) {
-      setRects(current => (current.size === 0 ? current : NO_RECTS));
+      setPlacements(current => (current.size === 0 ? current : NO_PLACEMENTS));
       return;
     }
-    const next = new Map<string, Rect>();
+    const next = new Map<string, RecordedPlacement>();
     for (const container of containers) {
       const target = nodeElement(root, container.id);
+      /*
+       * Left out of the map rather than declined. A container the document
+       * has and the canvas has not rendered yet is UNMEASURED — nothing has
+       * been decided about it — and its control still renders at the zero
+       * rectangle, which is the state the module docblock protects.
+       */
       if (target === null) continue;
+      /*
+       * The stylesheet's own condition, asked of the element the stylesheet
+       * would ask it of — not a second condition computed here.
+       *
+       * `emptySlotOf` decided WHICH containers this component knows about,
+       * from the document. That is a different population from the one
+       * `builder-chrome.css` draws its 44px box for, and the module docblock
+       * above depends on them being the same: a container the stylesheet
+       * declined has no box, so a control centred in its measured rectangle is
+       * centred in whatever that block happens to render instead. A closed
+       * `core/accordion-item` is the first-party case — an empty `children`
+       * slot inside a root that also renders a `<summary>`, so the root is not
+       * `:empty` and measures the summary's own height.
+       */
+      if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
+        next.set(container.id, DECLINED);
+        continue;
+      }
       /*
        * Excluded outright rather than measured. `clippedByAncestorRect`
        * answers "is this element's own rectangle cut by an authored ancestor
@@ -408,26 +509,17 @@ export function EmptyContainerAppenders({
        * question here would decline the control for exactly the composition
        * an author reaches for most.
        */
-      /*
-       * The stylesheet's own condition, asked of the element the stylesheet
-       * would ask it of — not a second condition computed here.
-       *
-       * `emptySlotOf` decided WHICH containers this component knows about,
-       * from the document. That is a different population from the one
-       * `builder-chrome.css` draws its 44px box for, and the module docblock
-       * above depends on them being the same: a container the stylesheet
-       * declined has no box, so a control centred in its measured rectangle is
-       * centred in whatever that block happens to render instead. A closed
-       * `core/accordion-item` is the first-party case — an empty `children`
-       * slot inside a root that also renders a `<summary>`, so the root is not
-       * `:empty` and measures the summary's own height.
-       */
-      if (!target.matches(EMPTY_CONTAINER_SELECTOR)) continue;
-      if (clippedByAncestorRect(target, root)) continue;
+      if (clippedByAncestorRect(target, root)) {
+        next.set(container.id, DECLINED);
+        continue;
+      }
       const measured = canvasContentRect(target, root);
-      next.set(container.id, centeredControlRect(measured, APPENDER_SIZE_PX));
+      next.set(container.id, {
+        kind: "measured",
+        rect: centeredControlRect(measured, APPENDER_SIZE_PX),
+      });
     }
-    setRects(next);
+    setPlacements(next);
   }, [containers]);
 
   // Measured before paint, matching `BlockToolbar` and `SpacingOverlay`: a
@@ -491,7 +583,11 @@ export function EmptyContainerAppenders({
       {...{ [CHROME_ATTRIBUTE]: "" }}
     >
       {containers.map(container => {
-        const rect = rects.get(container.id) ?? UNMEASURED_RECT;
+        const rect = controlRectFor(placements, container.id);
+        // A DECLINED container gets no button at all. A zero-sized one would
+        // still be reachable by keyboard and announced by name, which is a
+        // control an author can focus and never see — see the module docblock.
+        if (rect === null) return null;
         return (
           <button
             key={container.id}

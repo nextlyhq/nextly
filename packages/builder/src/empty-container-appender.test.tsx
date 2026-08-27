@@ -618,23 +618,95 @@ describe("which containers it actually draws a control on", () => {
   };
 
   /**
+   * A container nested inside another, so that the walk between a node's root
+   * and the canvas root has an ancestor to ask about.
+   *
+   * Every node in {@link SHAPES} is a direct child of the canvas root, and
+   * `clippedByAncestorRect` stops strictly BELOW the root — so no arrangement
+   * of those three rectangles can reach the clip refusal at all. `clipper`
+   * holds a child, so it is not an empty container itself and offers no
+   * control of its own.
+   */
+  const NESTED: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "wide",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Wide box",
+      },
+      {
+        id: "clipper",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Clipping wrapper",
+        slots: {
+          children: [
+            {
+              id: "clipped",
+              type: "acme/empty-container-appender-box",
+              version: 1,
+              props: {},
+              name: "Clipped box",
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  /**
+   * A document the overlay knows about and the canvas has not rendered.
+   *
+   * `ghost` is a perfectly ordinary empty container that no element in the DOM
+   * carries the id of, which is the state every container is in for the frame
+   * before the canvas mounts. The measurement pass finds no element for it and
+   * records nothing — leaving it UNMEASURED rather than declined.
+   */
+  const SHAPES_PLUS_UNRENDERED: BlockDocument = {
+    ...SHAPES,
+    nodes: [
+      ...SHAPES.nodes,
+      {
+        id: "ghost",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Ghost box",
+      },
+    ],
+  };
+
+  /**
    * Mount the canvas, give it a layout, and let the component re-measure.
    *
    * The stubs cannot be in place before mount — the elements do not exist yet
    * — so the resize the component already subscribes to is what drives the
    * second measurement, exactly as a breakpoint or a webfont swap would.
+   *
+   * `overlayDocument` defaults to the canvas's own, which is the ordinary
+   * case; a caller passes a different one to model a container the document
+   * holds and the render does not.
    */
-  function measuredCanvas(boxes: Record<string, Box>): void {
+  function measuredCanvas(
+    canvasDocument: BlockDocument,
+    boxes: Record<string, Box>,
+    overlayDocument: BlockDocument = canvasDocument
+  ): void {
     registerShapes();
     withFakeResizeObserver();
 
     const { container } = render(
       <Canvas
-        document={SHAPES}
+        document={canvasDocument}
         siteStyles={SITE_STYLES}
         overlay={
           <EmptyContainerAppenders
-            document={SHAPES}
+            document={overlayDocument}
             slots={registrySlotSource()}
             blocks={{ get: () => undefined }}
             onAppend={() => undefined}
@@ -649,7 +721,7 @@ describe("which containers it actually draws a control on", () => {
     act(() => observer.fire());
   }
 
-  it("declines a container whose root is not the one the stylesheet styles", () => {
+  it("draws NO control on a container whose root the stylesheet declines", () => {
     /*
      * `builder-chrome.css` gives its 44px box to `[data-nx-slots]:empty`, and
      * a closed `<details>` is not `:empty` — it holds its summary. So there is
@@ -657,17 +729,70 @@ describe("which containers it actually draws a control on", () => {
      * and a 44px control centred in it would start 12.5px ABOVE the container
      * and paint over the node laid out before it.
      *
-     * The wide box is the must-be-found control: it is measured in the same
-     * pass, so a zero rectangle on the details container means the container
-     * was declined rather than that nothing was measured at all.
+     * The wide box is the positive control, in the same render and measured in
+     * the same pass. Without it the absence below is satisfied by a component
+     * that rendered nothing at all; with it, the query is known to find a
+     * button here, so finding none for the details container is a statement
+     * about THAT container.
      */
-    measuredCanvas({
+    measuredCanvas(SHAPES, {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       "summary-bearing": { x: 0, y: 400, width: 400, height: 19 },
     });
 
     expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
-    expect(drawnAt("Closed section")).toEqual(["0px", "0px", "0px", "0px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Closed section" })
+    ).toBeNull();
+  });
+
+  it("draws NO control on a container an authored ancestor clips", () => {
+    /*
+     * The second permanent refusal, which has to be covered on its own: the
+     * two guards are separate branches, and a fix applied to one leaves the
+     * other returning whatever it returned before.
+     *
+     * `layout` gives every unnamed element the canvas's own 800x600 box, so
+     * the wrapper reports that and the nested container is stubbed a thousand
+     * pixels below it — outside the wrapper's rectangle on both vertical
+     * edges, which is a straight-edge cut no corner refinement is involved in.
+     * Same positive control as above, for the same reason.
+     */
+    measuredCanvas(NESTED, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 1000, width: 400, height: 200 },
+    });
+
+    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Clipped box" })
+    ).toBeNull();
+  });
+
+  it("tells a DECLINED container apart from one no pass has reached", () => {
+    /*
+     * The separating property between the two states, in one render: `ghost`
+     * is UNMEASURED — in the overlay's document, in no element's id — and
+     * `summary-bearing` is DECLINED. They must come out differently.
+     *
+     * A single representation for both gives them the SAME outcome whichever
+     * way it is spelled: hide the unmeasured one and neither button exists;
+     * draw the declined one at the zero rectangle and both do. Only two
+     * distinct states pass this pair of assertions.
+     */
+    measuredCanvas(
+      SHAPES,
+      {
+        wide: { x: 0, y: 0, width: 400, height: 200 },
+        "summary-bearing": { x: 0, y: 400, width: 400, height: 19 },
+      },
+      SHAPES_PLUS_UNRENDERED
+    );
+
+    expect(drawnAt("Ghost box")).toEqual(["0px", "0px", "0px", "0px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Closed section" })
+    ).toBeNull();
   });
 
   it("keeps the control inside a container narrower than it", () => {
@@ -678,12 +803,35 @@ describe("which containers it actually draws a control on", () => {
      * it starts at x = -12 and reaches 12px past its right edge, over both
      * neighbours.
      */
-    measuredCanvas({
+    measuredCanvas(SHAPES, {
       wide: { x: 0, y: 0, width: 400, height: 200 },
       narrow: { x: 0, y: 200, width: 20, height: 200 },
     });
 
     expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
     expect(drawnAt("Narrow column")).toEqual(["0px", "278px", "20px", "44px"]);
+  });
+});
+
+describe("a container no measurement pass has reached", () => {
+  it("renders its control anyway, at the zero rectangle", () => {
+    /*
+     * The property the module docblock's UNMEASURED state exists for, said
+     * outright rather than left to emerge from the bare-mount cases above.
+     * There is no canvas root here, so `measure` records nothing about any
+     * container — and the control is still in the accessibility tree, where a
+     * screen reader can reach it, because a control that has not been placed
+     * yet is not a control that has been refused.
+     */
+    render(
+      <EmptyContainerAppenders
+        document={doc([emptyBox])}
+        slots={slots}
+        blocks={blocks}
+        onAppend={() => undefined}
+      />
+    );
+
+    expect(drawnAt("Box")).toEqual(["0px", "0px", "0px", "0px"]);
   });
 });
