@@ -149,6 +149,7 @@ describe("richInlineTextOp", () => {
       "a",
       "content",
       passage("After"),
+      passage("Before"),
       passage("Before")
     );
 
@@ -177,7 +178,7 @@ describe("richInlineTextOp", () => {
     const document = withArticle({ content: stored });
 
     expect(
-      richInlineTextOp(document, "a", "content", normalised, normalised)
+      richInlineTextOp(document, "a", "content", normalised, normalised, stored)
     ).toBeNull();
   });
 
@@ -192,6 +193,7 @@ describe("richInlineTextOp", () => {
         "a",
         "content",
         "just a string",
+        passage("Before"),
         passage("Before")
       )
     ).toBeNull();
@@ -211,6 +213,7 @@ describe("richInlineTextOp", () => {
         "a",
         "content",
         passage("After"),
+        passage("Before"),
         passage("Before")
       )
     ).toBeNull();
@@ -224,5 +227,48 @@ describe("richInlineTarget", () => {
     expect(richInlineTarget(document, "a", "content")?.prop).toBe("content");
     // The plain value, asked of the rich surface.
     expect(richInlineTarget(document, "a", "caption")).toBeNull();
+  });
+});
+
+describe("a passage the document changed underneath the caret", () => {
+  it("refuses the write rather than patching over the newer value", () => {
+    /*
+     * Another builder surface, an undo, or an op applied from anywhere else can
+     * rewrite the same prop while a caret is open. The editor is holding a copy
+     * taken before that, so writing it back replaces the newer passage with the
+     * older one and the intervening change is gone with nothing raised.
+     *
+     * Refusing loses the author's own edit instead — which is the one still on
+     * their screen, and the one they can repeat.
+     */
+    const document = withArticle({ content: passage("CHANGED ELSEWHERE") });
+
+    expect(
+      richInlineTextOp(
+        document,
+        "a",
+        "content",
+        passage("What I typed"),
+        passage("What I opened"),
+        passage("What I opened")
+      )
+    ).toBeNull();
+  });
+
+  it("still writes when the stored passage is the one the session opened", () => {
+    // The control. A comparison that never matched would refuse every commit,
+    // which passes the case above while making inline editing write nothing.
+    const document = withArticle({ content: passage("What I opened") });
+
+    expect(
+      richInlineTextOp(
+        document,
+        "a",
+        "content",
+        passage("What I typed"),
+        passage("What I opened"),
+        passage("What I opened")
+      )
+    ).not.toBeNull();
   });
 });

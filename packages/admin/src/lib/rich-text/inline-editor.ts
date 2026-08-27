@@ -265,7 +265,7 @@ async function build(): Promise<InlineRichTextEditor> {
   const [
     { createEditor, $isDecoratorNode, $isElementNode, $isTextNode, $getRoot },
     { registerRichText },
-    { registerList },
+    { registerList, registerCheckList },
     history,
     kit,
   ] = await Promise.all([
@@ -426,6 +426,16 @@ async function build(): Promise<InlineRichTextEditor> {
        * this is that plugin's imperative half.
        */
       const stopList = registerList(editor);
+      /*
+       * And checklists respond to being clicked. Toggling one lives in its own
+       * behaviour, which the field editor mounts as `CheckListPlugin` — without
+       * it a checkbox in a stored passage renders and does nothing, so an
+       * author can see the item and cannot tick it.
+       *
+       * Registered rather than refused, unlike the decorator nodes: a checklist
+       * IS drawable and editable by this editor, it simply needed its handler.
+       */
+      const stopCheckList = registerCheckList(editor);
       const stopHistory = history.registerHistory(
         editor,
         history.createEmptyHistoryState(),
@@ -434,6 +444,7 @@ async function build(): Promise<InlineRichTextEditor> {
       release = () => {
         stopRichText();
         stopList();
+        stopCheckList();
         stopHistory();
         editor.setRootElement(null);
         unmarkRoot(element, marks);

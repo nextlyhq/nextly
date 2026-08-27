@@ -25,6 +25,7 @@ import {
 
 import type { EditorState } from "./editor-state";
 import { useInlineEditing } from "./use-inline-editing";
+import { useInlineRichText } from "./use-inline-rich-text";
 
 afterEach(() => {
   clearBlocks();
@@ -506,66 +507,78 @@ describe("where the caret lands in a passage", () => {
 });
 
 describe("a second passage begun before the first was released", () => {
-  it("writes each session's words to the passage it was opened for", async () => {
+  /** A block with TWO passages, so the two begins name different values. */
+  function registerTwoPassages(): void {
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: () => null,
+          name: "acme/two",
+          props: {
+            intro: { type: RICH_TEXT_PROP_TYPE, inline: true },
+            outro: { type: RICH_TEXT_PROP_TYPE, inline: true },
+          },
+        },
+      ] as never,
+      { source: "use-inline-editing-test" }
+    );
+  }
+
+  it("opens the new passage instead of cancelling it", async () => {
     /*
-     * `useInlineRichText` is exported on its own, and its `begin` does not
-     * require a caller to finish the open edit first. When one does not, the
-     * hook's current edit becomes B while A's session is still mounted — and a
-     * commit that read the hook's state would take A's live content and address
-     * it with B's node and prop, copying one block's words over another.
+     * Driven against `useInlineRichText` directly, because that is the hook
+     * exported on its own and its `begin` does not oblige a caller to finish
+     * first. `useInlineEditing` commits before re-targeting, so it can never
+     * reach this and a test routed through it proves nothing — which is exactly
+     * what the previous version of this case did.
      *
-     * The session records the passage it was opened for, so it can only write
-     * there. Asserted through the composed hook because that is the shipped
-     * path, and it must hold whether or not the caller sequences correctly.
+     * Without releasing first, the old edit's effect cleanup runs after the new
+     * state is installed and its commit clears `editing` — cancelling the
+     * passage just requested rather than the one it belonged to. The two begins
+     * therefore have to name DIFFERENT passages, or the final state looks the
+     * same whether the second one opened or the first one simply re-ran.
      */
-    const sessions: { read: ReturnType<typeof vi.fn> }[] = [];
-    const attach = vi.fn((_element: HTMLElement, _value: unknown) => {
-      const session = {
-        focus: vi.fn(),
-        read: vi
-          .fn()
-          .mockReturnValueOnce({ root: { type: "root", children: [] } })
-          .mockReturnValue({
-            root: {
-              type: "root",
-              children: [
-                {
-                  type: "paragraph",
-                  children: [
-                    { type: "text", text: `WORDS-${sessions.length}` },
-                  ],
-                },
-              ],
-            },
-          }),
-        detach: vi.fn(),
-      };
-      sessions.push(session);
-      return session;
-    });
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi.fn(() => undefined),
+      detach: vi.fn(),
+    }));
     const load = vi.fn(() => Promise.resolve({ attach }));
 
-    registerArticle();
-    paint();
-    const state = editorState();
-    const { result } = renderHook(() => useInlineEditing(state, load as never));
-
-    await act(async () => {
-      result.current.onDoubleClick(doubleClickOn("content"));
-    });
-    expect(sessions).toHaveLength(1);
-
-    await act(async () => {
-      result.current.commit();
-    });
-
-    // The op names the passage the session was opened for. A commit addressed
-    // from the hook's current state would name whatever is open NOW.
-    const written = JSON.stringify(
-      (state.apply as ReturnType<typeof vi.fn>).mock.calls[0]
+    registerTwoPassages();
+    document.body.innerHTML = `
+      <div data-nx-node="c">
+        <div data-nx-prop="intro"><p>first</p></div>
+        <div data-nx-prop="outro"><p>second</p></div>
+      </div>`;
+    const nodes = [
+      { id: "c", type: "acme/two", version: 1, props: {} } as BlockNode,
+    ];
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "c",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result } = renderHook(() =>
+      useInlineRichText(state, load as never)
     );
-    expect(written).toContain("content");
-    expect(written).toContain("WORDS-0");
+
+    await act(async () => {
+      result.current.begin("c", "intro");
+    });
+    expect(result.current.editing?.prop).toBe("intro");
+    expect(attach).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      result.current.begin("c", "outro");
+    });
+
+    expect(result.current.editing?.prop).toBe("outro");
+    // And it actually mounted, rather than being left as a state nobody served.
+    expect(attach).toHaveBeenCalledTimes(2);
   });
 });
 

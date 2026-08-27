@@ -132,11 +132,20 @@ export function richTextChanged(before: unknown, after: unknown): boolean {
  * action, or by another surface entirely, and writing then would either address
  * a node that is gone or defeat a lock applied after the caret went in.
  *
+ * `null` too when the STORED passage changed while the caret was open. Another
+ * surface, an undo, or an op applied from anywhere else can rewrite the same
+ * prop, and this editor has been holding a copy taken before that happened —
+ * writing it back would patch the older passage over the newer one and lose the
+ * intervening change with nothing raised. Refusing keeps what is in the
+ * document; the author's own edit is the one lost, but it is the one still on
+ * their screen.
+ *
  * @param document - the document as it stands NOW, not when the edit began
  * @param nodeId - the node being edited
  * @param prop - the passage being edited
  * @param next - what the editor read when the edit finished
  * @param before - what it read when the passage opened
+ * @param opened - the STORED passage the session was handed, or `undefined`
  * @returns one op, or `null`
  */
 export function richInlineTextOp(
@@ -144,10 +153,15 @@ export function richInlineTextOp(
   nodeId: string,
   prop: string,
   next: unknown,
-  before: unknown
+  before: unknown,
+  opened: RichTextValue | undefined
 ): BuilderOp | null {
   const target = richInlineTarget(document, nodeId, prop);
   if (target === null) return null;
+  // Compared as stored against stored — both sides come from the document, so
+  // the same producer wrote both and a difference is a real change rather than
+  // one serializer's normalisation against another's.
+  if (richTextChanged(opened, target.value)) return null;
   // Refused rather than stored. A value the editor could not produce as a
   // passage is not one, and writing it would put a shape into the document that
   // every reader of the format would then have to survive.

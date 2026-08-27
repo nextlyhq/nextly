@@ -35,7 +35,7 @@
  * @module use-inline-rich-text
  */
 
-import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, RichTextValue } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
@@ -169,6 +169,15 @@ export function useInlineRichText(
      * opened for.
      */
     editing: InlineRichTextEditing;
+    /**
+     * The STORED passage the session was handed.
+     *
+     * Kept so the write can refuse when the document's copy has moved on:
+     * another surface, an undo or an op from anywhere else can rewrite the same
+     * prop while the caret is open, and this editor is holding a copy from
+     * before that.
+     */
+    opened: RichTextValue | undefined;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
   } | null>(null);
@@ -201,7 +210,8 @@ export function useInlineRichText(
       live.editing.nodeId,
       live.editing.prop,
       next,
-      baseline
+      baseline,
+      live.opened
     );
     // `null` for an unchanged passage, for one the editor did not return as
     // rich text, and for a value that stopped being editable while the caret
@@ -221,11 +231,21 @@ export function useInlineRichText(
         prop
       );
       if (target === undefined) return false;
+      /*
+       * Finish the open passage FIRST, synchronously.
+       *
+       * Otherwise the old edit's effect cleanup runs after this one's state is
+       * installed, and its `commit` clears `editing` — cancelling the passage
+       * just requested instead of the one it belongs to. `useInlineEditing`
+       * sequences this correctly, but this hook is exported on its own and its
+       * `begin` does not oblige a caller to.
+       */
+      if (mounted.current !== null) commit();
       handed.current = element ?? null;
       setEditing({ nodeId: target.nodeId, prop: target.prop });
       return true;
     },
-    [load]
+    [commit, load]
   );
 
   /*
@@ -312,6 +332,7 @@ export function useInlineRichText(
           session,
           element,
           editing,
+          opened: value,
           // Taken AFTER the editor loaded the value, so it is the editor's own
           // reading of an untouched passage — which is what makes an unchanged
           // edit compare equal rather than differing by normalisation alone.
