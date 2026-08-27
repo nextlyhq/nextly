@@ -34,6 +34,8 @@ The stored shape, the format bits and the walk that draws them already existed a
 
 The editor is loaded on first edit rather than on mount, because its node classes carry a 630KB chunk an author who never edits a passage should never fetch. It is reached through `@nextlyhq/plugin-sdk/admin`, which now hands over the operations to edit one passage rather than the editor itself: a consumer that built its own would have to import Lexical, and a second copy of Lexical makes its node classes unrecognisable, with content saving and reading back as plain text.
 
+An edit no longer opens against part of the page that has since been replaced: if the canvas re-renders while the editor is still loading, the passage is left alone rather than handed to an element nobody is looking at.
+
 A page description no longer runs a button's label into the words after it: a passage reading "Before", a button, then "After" described the page as "Before Buy nowAfter", because the walk that flattens rich text to plain treated any node carrying its own text as inline. Block-like nodes now end a line, whether or not they hold their text directly.
 
 An author who double-clicks a passage while another one is holding unsaved text is now told why nothing opened, rather than finding the gesture silently do nothing.

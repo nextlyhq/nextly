@@ -287,6 +287,30 @@ describe("richTextToPlainText around a block-like leaf", () => {
     ).toBe("Before Buy now After");
   });
 
+  it("does not put a space between syntax tokens in a code block", () => {
+    /*
+     * `code-highlight` carries its own text, one node per token, and a code
+     * block's tokens are usually not separated by anything. Treating "carries
+     * text" as "ends a line" therefore rewrites the code: `foo(bar)` becomes
+     * `foo ( bar )`. Measured before this was written — that is what it did.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "code",
+            children: [
+              { type: "code-highlight", text: "foo" },
+              { type: "code-highlight", text: "(" },
+              { type: "code-highlight", text: "bar" },
+              { type: "code-highlight", text: ")" },
+            ],
+          },
+        ])
+      )
+    ).toBe("foo(bar)");
+  });
+
   it("still joins text leaves split only by formatting", () => {
     /*
      * The control, and the property the case above must not buy at its

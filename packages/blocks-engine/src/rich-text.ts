@@ -242,15 +242,31 @@ function pushChildren(
  * plain text has no other way to say so.
  */
 /**
+ * Leaves that carry their own text and are still drawn as BLOCKS.
+ *
+ * Named explicitly, and short on purpose. Carrying `text` is the norm for
+ * inline content and the exception for block content, so a type nobody has
+ * listed here keeps the behaviour it already had — which is what an unknown
+ * type from a future editor should get.
+ */
+const BLOCK_LEVEL_LEAVES: ReadonlySet<string> = new Set(["button-link"]);
+
+/**
  * Whether a node sits INSIDE a line rather than ending one.
  *
- * Text and line breaks are the two the walk meets constantly and neither ends a
- * block: a run split by formatting must join up, and a break already emits its
- * own space. Everything else is decided by type.
+ * A line break is inline because it already emits its own space. Beyond that
+ * the question splits on whether the node carries its own text:
+ *
+ * - It does: inline unless listed above. Deciding this by `type === "text"`
+ *   instead is too coarse and measurably wrong — `code-highlight` carries text
+ *   for every syntax token in a code block, so `foo(bar)` would flatten to
+ *   `foo ( bar )`. A run split by formatting has the same problem: `pre` plus
+ *   bold `fix` must not read as `pre fix`.
+ * - It does not: it is a container, and only a link stays inside the line.
  */
 function isInline(node: RichTextNode): boolean {
-  if (typeof node.text === "string" && node.type === "text") return true;
   if (node.type === "linebreak") return true;
+  if (typeof node.text === "string") return !BLOCK_LEVEL_LEAVES.has(node.type);
   return INLINE_CONTAINERS.has(node.type);
 }
 

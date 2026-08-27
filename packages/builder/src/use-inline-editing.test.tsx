@@ -1839,3 +1839,89 @@ describe("a re-render that is not an unmount", () => {
     expect(detach).toHaveBeenCalled();
   });
 });
+
+describe("the element the gesture measured", () => {
+  it("does not attach to one the page has since replaced", async () => {
+    /*
+     * The editor arrives asynchronously. If React re-renders the canvas in that
+     * window the marked element is swapped for a new node, and the one the
+     * gesture captured is detached — while the passage is still selected and
+     * still being edited, so nothing else notices.
+     */
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => ({ root: { type: "root", children: [] } })),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
+    let arrive: (() => void) | undefined;
+    const load = vi.fn(
+      () =>
+        new Promise<{ attach: typeof attach }>(resolve => {
+          arrive = () => resolve({ attach });
+        })
+    );
+
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(load).toHaveBeenCalled();
+
+    // The canvas re-renders and this subtree is replaced, exactly as React
+    // would when the document changes underneath it.
+    paint();
+
+    await act(async () => {
+      arrive?.();
+      await Promise.resolve();
+    });
+
+    expect(attach).not.toHaveBeenCalled();
+    expect(result.current.editingRich).toBeNull();
+  });
+
+  it("attaches normally when the element is still on the page", async () => {
+    // The control: refusing whenever the loader resolved late would stop every
+    // ordinary edit, since the loader is ALWAYS late.
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) =>
+      attachment({
+        focus: vi.fn(),
+        read: vi.fn(() => ({ root: { type: "root", children: [] } })),
+        detach: vi.fn(),
+        hold: vi.fn(),
+      })
+    );
+    let arrive: (() => void) | undefined;
+    const load = vi.fn(
+      () =>
+        new Promise<{ attach: typeof attach }>(resolve => {
+          arrive = () => resolve({ attach });
+        })
+    );
+
+    registerArticle();
+    paint();
+    const { result } = renderHook(() =>
+      useInlineEditing(editorState(), load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+
+    await act(async () => {
+      arrive?.();
+      await Promise.resolve();
+    });
+
+    expect(attach).toHaveBeenCalled();
+  });
+});

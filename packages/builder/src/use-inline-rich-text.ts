@@ -546,6 +546,22 @@ export function useInlineRichText(
         if (editingRef.current !== editing) return;
         if (editorRef.current.selectedId !== editing.nodeId) return;
         /*
+         * The ELEMENT can go while the chunk is in flight, without the edit
+         * being cancelled: React re-renders the canvas and replaces this
+         * subtree, and the node captured before the request is then detached
+         * while the passage is still selected and still being edited. None of
+         * the three checks above sees that — they ask about the edit, not about
+         * the element it was measured against.
+         *
+         * Attaching anyway puts the editor on a node nobody is looking at: no
+         * caret appears, typing goes nowhere visible, and the commit writes
+         * back whatever that orphan holds.
+         */
+        if (!element.isConnected) {
+          setEditing(null);
+          return;
+        }
+        /*
          * Read the passage NOW, not before the chunk was requested.
          *
          * An undo, a remote update or another surface can rewrite it while the
