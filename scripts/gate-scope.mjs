@@ -160,7 +160,8 @@ function classify(path, workspaces, roots, deleted) {
       ? { name: owner.name, missing: null }
       : { name: null, missing: owner.dir };
   const missing =
-    removedWorkspaceDir(path, deleted) ?? missingWorkspaceDir(path, roots);
+    removedWorkspaceDir(path, deleted, roots) ??
+    missingWorkspaceDir(path, roots);
   return { name: null, missing };
 }
 
@@ -191,17 +192,42 @@ function ownerOf(path, workspaces) {
  * Consulted only for a path no workspace claims, so a manifest nested inside a
  * live workspace — a fixture, say — is owned before it reaches here.
  */
-function removedWorkspaceDir(path, deleted) {
-  const suffix = "/package.json";
-  if (!path.endsWith(suffix)) return null;
-  // DELETED, not merely present in the diff. A manifest ADDED outside every
-  // workspace — `docs/example/package.json`, a fixture, a scaffold template —
-  // is an ordinary change, and reporting it as a removal refused a push that
-  // was perfectly valid.
-  if (!deleted.has(path)) return null;
-  const dir = path.slice(0, -suffix.length);
+function removedWorkspaceDir(path, deleted, roots) {
+  if (!deletedManifest(path, deleted)) return null;
+  if (!underDeclaredRoot(path, roots)) return null;
+  const dir = path.slice(0, -MANIFEST.length);
   return dir.length > 0 ? dir : null;
 }
+
+/** The file a workspace is declared by, wherever it sits. */
+const MANIFEST = "/package.json";
+
+/**
+ * Whether a path is a manifest this diff DELETED.
+ *
+ * Presence alone says nothing about direction: a manifest ADDED outside every
+ * workspace — a fixture, a scaffold template — looks identical to one removed
+ * from inside a workspace, and reporting the first as a removal refused a push
+ * that was perfectly valid.
+ */
+function deletedManifest(path, deleted) {
+  return path.endsWith(MANIFEST) && deleted.has(path);
+}
+
+/**
+ * Whether a path sits under a root pnpm STILL declares.
+ *
+ * Deletion does not say the directory was ever a workspace, so
+ * `docs/example/package.json` must not be read as one.
+ *
+ * A bare workspace removed outright is not lost by this. Its entry has to
+ * leave `pnpm-workspace.yaml` too, and that file redefines the graph — so the
+ * unfiltered path claims the diff before scope is narrowed at all.
+ */
+function underDeclaredRoot(path, roots) {
+  return roots.some(root => path.startsWith(`${root}/`));
+}
+
 
 /**
  * The workspace directory a path names but no workspace claims, or null.
@@ -331,15 +357,41 @@ function git(cwd, args) {
  * demonstrable — the exit status is what a hook acts on, and a hook is not a
  * thing a unit test can observe.
  */
-export function filtersRefusal(unreadable, rootWide = []) {
-  if (rootWide.length > 0) {
-    return (
-      "gate-scope: " +
-      rootWide.join(", ") +
-      " defines the workspace or task graph for every package — refusing to " +
-      "narrow. Run the root gates unfiltered."
-    );
-  }
+/**
+ * What `--filters` tells its caller, as an exit status.
+ *
+ * Three outcomes, not two. A caller that can only distinguish "worked" from
+ * "failed" has to treat "this change cannot be narrowed" as a failure, and
+ * that is what made a `pnpm-workspace.yaml` edit unpushable.
+ */
+export const EXIT = {
+  /** Filters on stdout, possibly none. Gate what they name. */
+  filters: 0,
+  /** A workspace could not be named. Do not gate; the scope would be wrong. */
+  refuse: 1,
+  /** The change redefines the graph. Gate everything, unfiltered. */
+  unfiltered: 2,
+};
+
+/** Why a caller should widen rather than narrow. */
+export function unfilteredReason(rootWide) {
+  return (
+    "gate-scope: " +
+    rootWide.join(", ") +
+    " defines the workspace or task graph for every package — run the root " +
+    "gates UNFILTERED rather than narrowing."
+  );
+}
+
+export function noWorkspacesRefusal(workspaces) {
+  if (workspaces.length > 0) return null;
+  return (
+    "gate-scope: pnpm reported no usable workspace — refusing to report an " +
+    "empty scope, which would run no gates at all."
+  );
+}
+
+export function filtersRefusal(unreadable) {
   if (unreadable.length === 0) return null;
   return (
     "gate-scope: no readable manifest for " +
@@ -357,14 +409,16 @@ function main() {
   const base = args.find(arg => !arg.startsWith("--")) ?? "origin/main";
   const cwd = process.cwd();
   const paths = changedPaths(cwd, base);
+  const workspaces = workspacesFrom(pnpmWorkspaces(cwd), cwd);
   const { filters, unreadable } = filtersFor(
     paths,
-    workspacesFrom(pnpmWorkspaces(cwd), cwd),
+    workspaces,
     new Set(deletedPaths(cwd, base))
   );
   const rootWide = rootWideChanges(paths);
 
-  if (args.includes("--filters")) emitFilters(filters, unreadable, rootWide);
+  if (args.includes("--filters"))
+    emitFilters(filters, unreadable, rootWide, workspaces);
   else
     console.log(
       report({ filters, unreadable, rootWide, scripts: touchesScripts(paths) })
@@ -436,14 +490,66 @@ function nulPaths(out) {
  * into a command, the other is read by a person — and so the refusal is not
  * buried in a branch of a function that mostly formats prose.
  */
-function emitFilters(filters, unreadable, rootWide = []) {
-  const line = filterArguments(filters);
-  if (line) console.log(line);
-  const refusal = filtersRefusal(unreadable, rootWide);
-  if (refusal === null) return;
-  console.error(refusal);
-  process.exitCode = 1;
+function emitFilters(filters, unreadable, rootWide, workspaces) {
+  const outcome = filtersOutcome({ filters, unreadable, rootWide, workspaces });
+  if (outcome.stdout) console.log(outcome.stdout);
+  if (outcome.stderr) console.error(outcome.stderr);
+  process.exitCode = outcome.status;
 }
+
+/**
+ * What `--filters` should print and exit with, as a value.
+ *
+ * Separated from printing it so the decision is assertable rather than only
+ * demonstrable: the exit status is what a hook acts on, and a hook is not a
+ * thing a unit test can observe.
+ *
+ * Ordered by how much it overrides. An unusable workspace list makes every
+ * later answer meaningless; a graph-defining change makes any narrowing wrong
+ * whatever the filters say.
+ */
+export function filtersOutcome({ filters, unreadable, rootWide, workspaces }) {
+  return (
+    refuseWithoutWorkspaces(workspaces) ??
+    widenForGraphChange(rootWide) ??
+    narrowToFilters(filters, unreadable)
+  );
+}
+
+/** Nothing later means anything if the workspace list itself is unusable. */
+function refuseWithoutWorkspaces(workspaces) {
+  const reason = noWorkspacesRefusal(workspaces);
+  if (reason === null) return null;
+  return { stdout: "", stderr: reason, status: EXIT.refuse };
+}
+
+/**
+ * A graph-defining change makes any narrowing wrong, whatever the filters say.
+ *
+ * Its own status rather than a refusal. Refusing made these files impossible
+ * to push: the hook runs under `set -e`, so it died before testing anything,
+ * and no retry could clear it because running the root gates by hand does not
+ * change the diff. The only escape was bypassing the hook, which is worse than
+ * the narrowing this guards against.
+ */
+function widenForGraphChange(rootWide) {
+  if (rootWide.length === 0) return null;
+  return {
+    stdout: "",
+    stderr: unfilteredReason(rootWide),
+    status: EXIT.unfiltered,
+  };
+}
+
+/** The ordinary answer: gate what the filters name, unless one cannot be named. */
+function narrowToFilters(filters, unreadable) {
+  const refusal = filtersRefusal(unreadable);
+  if (refusal !== null)
+    return { stdout: "", stderr: refusal, status: EXIT.refuse };
+  return { stdout: filterArguments(filters), stderr: "", status: EXIT.filters };
+}
+
+
 
 /**
  * Whether this module was the thing invoked, rather than imported.

@@ -10,10 +10,14 @@ import { describe, expect, it } from "vitest";
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "gate-scope.mjs");
 
 import {
+  EXIT,
   changedPaths,
   filterArguments,
+  noWorkspacesRefusal,
   rootWideChanges,
+  unfilteredReason,
   filtersFor,
+  filtersOutcome,
   filtersRefusal,
   report,
   touchesScripts,
@@ -157,7 +161,12 @@ describe("a change that redefines the graph for every package", () => {
     ]);
 
     expect(rootWide).toEqual(["pnpm-workspace.yaml"]);
-    expect(filtersRefusal([], rootWide)).toMatch(/refusing to narrow/);
+    // NOT a refusal. Refusing made these files impossible to push: the hook
+    // runs under `set -e`, so it died before testing anything, and no retry
+    // could clear it because running the gates by hand does not change the
+    // diff. It asks the caller to WIDEN instead, under its own status.
+    expect(EXIT.unfiltered).not.toBe(EXIT.refuse);
+    expect(unfilteredReason(rootWide)).toMatch(/UNFILTERED/);
   });
 
   it("refuses for the task graph too, not only the workspace list", () => {
@@ -178,6 +187,52 @@ describe("a change that redefines the graph for every package", () => {
         rootWide: ["pnpm-workspace.yaml"],
       })
     ).toMatch(/UNFILTERED/);
+  });
+
+  it("asks the caller to WIDEN, and never to fail, on a graph change", () => {
+    // The decision as a value, because the exit status is what the hook acts
+    // on and a hook is not a thing a unit test can observe.
+    const outcome = filtersOutcome({
+      filters: ["@nextlyhq/ui"],
+      unreadable: [],
+      rootWide: ["pnpm-workspace.yaml"],
+      workspaces: WS,
+    });
+
+    expect(outcome.status).toBe(EXIT.unfiltered);
+    expect(outcome.status).not.toBe(EXIT.refuse);
+    // No filters on stdout: emitting them beside a widen instruction would let
+    // a caller splice a narrower scope than the status just asked for.
+    expect(outcome.stdout).toBe("");
+  });
+
+  it("orders the outcomes so an unusable workspace list wins", () => {
+    // Nothing later means anything if the list itself is empty, so that answer
+    // must not be reachable only when the other two happen not to fire.
+    expect(
+      filtersOutcome({
+        filters: [],
+        unreadable: [],
+        rootWide: ["turbo.jsonc"],
+        workspaces: [],
+      }).status
+    ).toBe(EXIT.refuse);
+  });
+
+  it("keeps the three outcomes distinct, since a caller acts on the status", () => {
+    // Two statuses cannot express this. A caller that can only tell "worked"
+    // from "failed" must treat "cannot be narrowed" as a failure, which is
+    // exactly the bug: widen and refuse are opposite instructions.
+    expect(new Set(Object.values(EXIT)).size).toBe(3);
+    expect(EXIT.filters).toBe(0);
+  });
+
+  it("REFUSES when pnpm reports no usable workspace at all", () => {
+    // An empty list printed nothing and exited 0, which reads as "nothing to
+    // gate" — so a broken or unresolvable workspace response ran no tests and
+    // looked clean.
+    expect(noWorkspacesRefusal([])).toMatch(/refusing/);
+    expect(noWorkspacesRefusal([{ name: "x", dir: "packages/x" }])).toBeNull();
   });
 
   it("stays silent for an ordinary change", () => {
@@ -202,7 +257,7 @@ describe("a workspace the diff removed", () => {
     expect(unreadable).toEqual(["apps/gone", "packages/deleted-pkg"]);
   });
 
-  it("catches a workspace whose ROOT went with it", () => {
+  it("catches a removed workspace while its ROOT survives", () => {
     // The root-based check cannot see this. Roots are derived from the
     // workspaces pnpm currently lists, so removing the last workspace under a
     // root — or the bare `e2e` entry, which contributes no root at all — takes
@@ -218,20 +273,41 @@ describe("a workspace the diff removed", () => {
     );
 
     const { filters, unreadable } = filtersFor(
-      [
-        "e2e/tests/a.spec.ts",
-        "e2e/package.json",
-        "apps/playground/app/page.tsx",
-        "apps/playground/package.json",
-      ],
+      ["packages/gone/src/x.ts", "packages/gone/package.json"],
       survivors,
-      // Both manifests were DELETED, which is what makes them removals rather
-      // than ordinary manifests sitting outside every workspace.
-      new Set(["e2e/package.json", "apps/playground/package.json"])
+      // DELETED, which is what makes it a removal rather than an ordinary
+      // manifest sitting outside every workspace.
+      new Set(["packages/gone/package.json"])
     );
 
     expect(filters).toEqual([]);
-    expect(unreadable).toEqual(["apps/playground", "e2e"]);
+    expect(unreadable).toEqual(["packages/gone"]);
+  });
+
+  it("leaves a removal that took its root with it to the UNFILTERED path", () => {
+    // Removing the bare `e2e` workspace, or the last app, takes its root away
+    // too — so nothing here can recognise the directory as one that used to be
+    // a workspace, and guessing from a deleted manifest alone would refuse
+    // every deleted `docs/example/package.json` as well.
+    //
+    // Not a gap: a bare entry cannot leave without `pnpm-workspace.yaml`
+    // changing, and that file is graph-defining, so the unfiltered path claims
+    // the diff before scope is narrowed at all.
+    const survivors = workspacesFrom(
+      [{ name: "nextly-project-setup", path: "/repo" }],
+      "/repo"
+    );
+
+    expect(
+      filtersFor(
+        ["e2e/package.json", "pnpm-workspace.yaml"],
+        survivors,
+        new Set(["e2e/package.json"])
+      )
+    ).toEqual({ filters: [], unreadable: [] });
+    expect(rootWideChanges(["e2e/package.json", "pnpm-workspace.yaml"])).toEqual([
+      "pnpm-workspace.yaml",
+    ]);
   });
 
   it("does not mistake a manifest INSIDE a live workspace for a removal", () => {
@@ -250,16 +326,26 @@ describe("a workspace the diff removed", () => {
     const added = filtersFor(["docs/example/package.json"], WS, new Set());
     expect(added).toEqual({ filters: [], unreadable: [] });
 
-    const survivors = workspacesFrom(
-      [{ name: "nextly-project-setup", path: "/repo" }],
-      "/repo"
-    );
     const removed = filtersFor(
-      ["e2e/package.json"],
-      survivors,
-      new Set(["e2e/package.json"])
+      ["packages/gone/package.json"],
+      WS,
+      new Set(["packages/gone/package.json"])
     );
-    expect(removed.unreadable).toEqual(["e2e"]);
+    expect(removed.unreadable).toEqual(["packages/gone"]);
+  });
+
+  it("does not report a DELETED manifest that was never a workspace", () => {
+    // Deletion status alone does not say the directory was ever a workspace.
+    // `docs/example/package.json` sits under no declared root, so removing it
+    // is an ordinary change — refusing it blocked a valid push exactly as
+    // reporting an ADDED manifest did.
+    expect(
+      filtersFor(
+        ["docs/example/package.json"],
+        WS,
+        new Set(["docs/example/package.json"])
+      )
+    ).toEqual({ filters: [], unreadable: [] });
   });
 
   it("REFUSES a workspace whose manifest omits a name, rather than dropping it", () => {
