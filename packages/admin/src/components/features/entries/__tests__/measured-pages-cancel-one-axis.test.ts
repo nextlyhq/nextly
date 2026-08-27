@@ -44,7 +44,16 @@
  * belong in a named exclusion beside `THIS_FILE`, with its reason.
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, resolve, sep } from "node:path";
+
+/**
+ * A path spelled with `/` on every platform.
+ *
+ * `filesUnder` already appends with `/`, so only the roots `resolve` produces
+ * carry the platform separator — enough to fail a suffix check written with
+ * forward slashes on Windows while the file paths beneath them still match.
+ */
+const toPosix = (p: string): string => p.split(sep).join("/");
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -92,7 +101,7 @@ function scannedRoots(): string[] {
   return [
     ADMIN_SRC,
     ...declared.map(spec => resolve(dirname(GLOBALS_CSS), spec)),
-  ];
+  ].map(toPosix);
 }
 
 /** Every `.ts`/`.tsx` under `root`, as absolute paths. */

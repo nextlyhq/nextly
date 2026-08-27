@@ -40,7 +40,14 @@
  * anyone maintaining a list of them.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
+
+/**
+ * A repo-relative path spelled with `/` on every platform. The allowlists and
+ * messages below are written with forward slashes; `relative` answers with the
+ * platform separator, which on Windows matches none of them.
+ */
+const toPosix = (p: string): string => p.split(sep).join("/");
 import { fileURLToPath } from "node:url";
 
 import postcss from "postcss";
@@ -76,7 +83,7 @@ function walk(dir: string, found: string[] = []): string[] {
 }
 
 const sources = SCANNED.flatMap(root => walk(resolve(repo, root)))
-  .map(path => relative(repo, path))
+  .map(path => toPosix(relative(repo, path)))
   .filter(path => !isTestFile(path));
 
 /**

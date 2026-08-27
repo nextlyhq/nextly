@@ -14,7 +14,7 @@
  * it. Calling the storage hook directly re-opens that trap.
  */
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -53,7 +53,10 @@ describe("one columns mechanism", () => {
    * because a count passes on any set of the right size.
    */
   it("reads the admin source, including both hooks", () => {
-    const rel = files.map(f => f.replace(`${SRC}/`, ""));
+    // `relative`, not a prefix strip: the scan builds paths with the
+    // platform separator, so stripping a hardcoded `/` leaves every path
+    // absolute on Windows and the membership check below can never match.
+    const rel = files.map(f => relative(SRC, f));
     expect(rel).toContain(join("hooks", "useColumnVisibility.ts"));
     expect(rel).toContain(
       join("components", "ui", "table", "list-view", "useListColumns.ts")
@@ -64,7 +67,7 @@ describe("one columns mechanism", () => {
     const offenders = files
       .filter(file => !ALLOWED.some(allowed => file.endsWith(allowed)))
       .filter(file => /useColumnVisibility/.test(readFileSync(file, "utf8")))
-      .map(file => file.replace(`${SRC}/`, ""));
+      .map(file => relative(SRC, file));
 
     expect(
       offenders,
