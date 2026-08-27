@@ -132,7 +132,8 @@ export function filtersFor(paths, workspaces) {
     const owner = ownerOf(path, workspaces);
     if (owner !== undefined) names.add(owner.name);
     else {
-      const missing = missingWorkspaceDir(path, roots);
+      const missing =
+        removedWorkspaceDir(path) ?? missingWorkspaceDir(path, roots);
       if (missing !== null) unlisted.add(missing);
     }
   }
@@ -151,6 +152,30 @@ export function filtersFor(paths, workspaces) {
  */
 function ownerOf(path, workspaces) {
   return workspaces.find(w => path.startsWith(`${w.dir}/`));
+}
+
+/**
+ * The workspace a diff REMOVED, read from the manifest it deleted, or null.
+ *
+ * The root-based check below cannot see this one. Roots are derived from the
+ * workspaces pnpm currently lists, so removing the LAST workspace under a root
+ * — or the bare `e2e` entry, which contributes no root at all — takes the root
+ * away with it. The paths then match nothing, and a workspace-removal diff
+ * passes with neither a filter nor a refusal: precisely the diff the refusal
+ * exists for.
+ *
+ * A manifest survives that, because deleting a workspace deletes its
+ * `package.json` and the diff therefore names it. Rename detection is off, so
+ * a workspace MOVED reports its old manifest as a deletion too.
+ *
+ * Consulted only for a path no workspace claims, so a manifest nested inside a
+ * live workspace — a fixture, say — is owned before it reaches here.
+ */
+function removedWorkspaceDir(path) {
+  const suffix = "/package.json";
+  if (!path.endsWith(suffix)) return null;
+  const dir = path.slice(0, -suffix.length);
+  return dir.length > 0 ? dir : null;
 }
 
 /**

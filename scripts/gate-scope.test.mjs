@@ -150,6 +150,43 @@ describe("a workspace the diff removed", () => {
     expect(unreadable).toEqual(["apps/gone", "packages/deleted-pkg"]);
   });
 
+  it("catches a workspace whose ROOT went with it", () => {
+    // The root-based check cannot see this. Roots are derived from the
+    // workspaces pnpm currently lists, so removing the last workspace under a
+    // root — or the bare `e2e` entry, which contributes no root at all — takes
+    // the root away too. The paths then match nothing and the removal passes
+    // with neither a filter nor a refusal, which is the one diff the refusal
+    // exists for. The deleted manifest is what survives to name it.
+    const survivors = workspacesFrom(
+      [
+        { name: "nextly-project-setup", path: "/repo" },
+        { name: "@nextlyhq/ui", path: "/repo/packages/ui" },
+      ],
+      "/repo"
+    );
+
+    const { filters, unreadable } = filtersFor(
+      [
+        "e2e/tests/a.spec.ts",
+        "e2e/package.json",
+        "apps/playground/app/page.tsx",
+        "apps/playground/package.json",
+      ],
+      survivors
+    );
+
+    expect(filters).toEqual([]);
+    expect(unreadable).toEqual(["apps/playground", "e2e"]);
+  });
+
+  it("does not mistake a manifest INSIDE a live workspace for a removal", () => {
+    // A fixture or a nested example carries its own `package.json`. The
+    // workspace owns the path first, so it never reaches the removal check.
+    expect(
+      filtersFor(["packages/ui/fixtures/package.json"], WS)
+    ).toEqual({ filters: ["@nextlyhq/ui"], unreadable: [] });
+  });
+
   it("does NOT report a root-level path as a missing workspace", () => {
     // `scripts/` and `.github/` are under no workspace root, so there is
     // nothing missing — refusing here would refuse every tooling change.
