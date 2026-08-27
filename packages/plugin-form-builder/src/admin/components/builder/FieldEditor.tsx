@@ -44,6 +44,11 @@ import type {
   RadioFormField,
 } from "../../../types";
 import { isKnownFormField } from "../../../types";
+// From the metadata module rather than from `generate-schema`, which
+// implements it: the editor needs only to know WHICH rules bite for a
+// type, and importing that from the module that builds schemas pulls the
+// whole schema implementation and `zod` into every admin client bundle
+// before anyone opens a field.
 import { enforcedValidationRules } from "../../../utils/enforced-validation";
 
 import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
