@@ -35,11 +35,15 @@
  * @module use-inline-rich-text
  */
 
-import type { BlockDocument, RichTextValue } from "@nextlyhq/blocks-engine";
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
-import { richInlineTargets, richInlineTextOp } from "./inline-rich-text";
+import {
+  richInlineTargets,
+  richInlineTextOp,
+  richTextMovedOn,
+} from "./inline-rich-text";
 import { namedTarget } from "./inline-target";
 import { editableElement, EDITING_ATTRIBUTE } from "./use-inline-text";
 
@@ -238,7 +242,7 @@ export function useInlineRichText(
      * prop while the caret is open, and this editor is holding a copy from
      * before that.
      */
-    opened: RichTextValue | undefined;
+    opened: unknown;
     /** The editor's own reading of the passage when it opened. */
     baseline: unknown;
   } | null>(null);
@@ -262,9 +266,31 @@ export function useInlineRichText(
 
   const commit = useCallback(() => {
     const live = mounted.current;
-    const baseline = live?.baseline;
+    if (live === null) {
+      release();
+      return null;
+    }
+    /*
+     * Read BEFORE letting go, and let go only once the write is settled.
+     *
+     * A commit refused because the DOCUMENT moved on under the caret is the one
+     * case where releasing destroys something: the author's words exist only in
+     * the editor, so tearing it down loses them and puts the page's older copy
+     * back in their place, with nothing said. The passage stays open instead —
+     * their text is still on screen, and Escape still discards it deliberately.
+     */
+    if (
+      richTextMovedOn(
+        editorRef.current.document,
+        live.editing.nodeId,
+        live.editing.prop,
+        live.opened
+      )
+    ) {
+      return null;
+    }
+    const baseline = live.baseline;
     const next = release();
-    if (live === null) return null;
     // The passage this session was opened for, not whichever is current now.
     const op = richInlineTextOp(
       editorRef.current.document,
@@ -368,7 +394,11 @@ export function useInlineRichText(
       editorRef.current.document,
       editing.nodeId
     );
-    const value = targets.find(t => t.prop === editing.prop)?.value;
+    const target = targets.find(t => t.prop === editing.prop);
+    const value = target?.value;
+    // The RAW stored value, kept so the write can tell one unusable value from
+    // another — the narrowed form collapses every one of them to `undefined`.
+    const stored = target?.stored;
 
     void load().then(
       live => {
@@ -401,7 +431,7 @@ export function useInlineRichText(
           session,
           element,
           editing,
-          opened: value,
+          opened: stored,
           // Taken AFTER the editor loaded the value, so it is the editor's own
           // reading of an untouched passage — which is what makes an unchanged
           // edit compare equal rather than differing by normalisation alone.

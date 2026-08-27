@@ -630,6 +630,11 @@ function documentAfterFinishing(
   return inline.commit() ?? held;
 }
 
+/** Whether a key event is the save chord on this platform. */
+function isSaveChord(event: KeyboardEvent): boolean {
+  return event.key.toLowerCase() === "s" && (event.metaKey || event.ctrlKey);
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -1067,6 +1072,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * commits the document and makes the form dirty for real.
    */
   useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
+
+  /*
+   * Finish an open passage before the form is asked to save it.
+   *
+   * An inline edit lives in the element until it ends, so the field still holds
+   * the value from before it. Reporting the edit as unsaved work is what lets
+   * the form submit — and reporting cannot write to the form, by that context's
+   * own contract — so a save taken while a passage is open would send the
+   * previous value and report success.
+   *
+   * Capture phase, so this runs before the form's own handler sees the chord.
+   *
+   * This closes the SHORTCUT. A save started any other way — a button, a
+   * command palette — still leaves an open passage behind, because nothing lets
+   * a surface holding uncommitted work be asked to flush before submission.
+   * That is a contract the form does not have, not something this can reach.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isSaveChord(event)) return;
+      onCommit(documentAfterFinishing(inline, editor.document));
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [editor.document, inline, onCommit]);
 
   /*
    * Writing back on the way out rather than on every keystroke.

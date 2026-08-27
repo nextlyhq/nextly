@@ -266,12 +266,16 @@ async function build(): Promise<InlineRichTextEditor> {
     { createEditor, $isDecoratorNode, $isElementNode, $isTextNode, $getRoot },
     { registerRichText },
     { registerList, registerCheckList },
+    { registerTablePlugin, registerTableSelectionObserver },
+    { registerCodeHighlighting },
     history,
     kit,
   ] = await Promise.all([
     import("lexical"),
     import("@lexical/rich-text"),
     import("@lexical/list"),
+    import("@lexical/table"),
+    import("@lexical/code-prism"),
     import("@lexical/history"),
     import("@admin/components/features/entries/fields/special/rich-text-kit"),
   ]);
@@ -383,11 +387,6 @@ async function build(): Promise<InlineRichTextEditor> {
 
   return {
     attach(element, value) {
-      // Released first. Attaching over a live element leaves the previous one
-      // marked editable, styled by the editor and carrying listeners for an
-      // editor that has moved on.
-      detachCurrent();
-
       /*
        * Parsed BEFORE anything is touched, so a passage this editor cannot
        * represent leaves the element exactly as the page rendered it.
@@ -410,6 +409,18 @@ async function build(): Promise<InlineRichTextEditor> {
       reportedError = false;
       const parsed = editor.parseEditorState(json);
       if (reportedError || holdsDecorator(parsed)) return null;
+
+      /*
+       * Released only once the new passage is known to be acceptable.
+       *
+       * Detaching first would destroy a live edit on behalf of a passage this
+       * editor then refuses: the previous session goes stale, its `read()`
+       * answers nothing, and whatever the author had already typed into it is
+       * unrecoverable — spent on a request that was never going to succeed.
+       *
+       * Parsing does not touch the live editor, so asking first costs nothing.
+       */
+      detachCurrent();
 
       const token = {};
       owner = token;
@@ -436,6 +447,24 @@ async function build(): Promise<InlineRichTextEditor> {
        * IS drawable and editable by this editor, it simply needed its handler.
        */
       const stopCheckList = registerCheckList(editor);
+      /*
+       * A table needs its own two registrations, and the SELECTION OBSERVER is
+       * the one that matters here. It is what intercepts Tab and moves the
+       * caret to the next cell — without it Tab moves browser FOCUS out of the
+       * root, which blurs, and a blur commits. So an author tabbing between
+       * cells would find the passage closed and written instead of the caret
+       * one cell along.
+       */
+      const stopTable = registerTablePlugin(editor);
+      const stopTableSelection = registerTableSelectionObserver(editor);
+      /*
+       * And a code block retokenizes as it is edited. Its highlight classes are
+       * stored ON the nodes, so without this the old classification stays
+       * attached to changed text and `read()` persists it — a keyword edited
+       * into an identifier is saved still marked as a keyword, and the
+       * published page styles it that way.
+       */
+      const stopCodeHighlighting = registerCodeHighlighting(editor);
       const stopHistory = history.registerHistory(
         editor,
         history.createEmptyHistoryState(),
@@ -445,6 +474,9 @@ async function build(): Promise<InlineRichTextEditor> {
         stopRichText();
         stopList();
         stopCheckList();
+        stopTableSelection();
+        stopTable();
+        stopCodeHighlighting();
         stopHistory();
         editor.setRootElement(null);
         unmarkRoot(element, marks);

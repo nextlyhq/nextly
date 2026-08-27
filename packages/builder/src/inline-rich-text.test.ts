@@ -25,6 +25,7 @@ import {
   richInlineTargets,
   richInlineTextOp,
   richTextChanged,
+  richTextMovedOn,
 } from "./inline-rich-text";
 
 const base = {
@@ -270,5 +271,40 @@ describe("a passage the document changed underneath the caret", () => {
         passage("What I opened")
       )
     ).not.toBeNull();
+  });
+});
+
+describe("two stored values that are both unusable", () => {
+  it("sees a value arrive where the session found nothing", () => {
+    /*
+     * The case the narrowed comparison cannot answer. Everything unusable reads
+     * as `undefined` once narrowed, so a session that opened on an ABSENT
+     * passage compares its `undefined` against the narrowed form of whatever is
+     * there now — also `undefined` — and reports no change. The edit then
+     * overwrites a value another surface stored while the caret was open.
+     *
+     * Comparing raw against raw keeps them distinct: nothing is not a string.
+     */
+    const document = withArticle({ content: "stored by someone else" });
+
+    expect(richTextMovedOn(document, "a", "content", undefined)).toBe(true);
+  });
+
+  it("reports no move when the raw value is the one that was opened", () => {
+    // The control: a comparison that always reported a move would refuse every
+    // commit, which passes the case above while writing nothing ever again.
+    const document = withArticle({ content: "A" });
+
+    expect(richTextMovedOn(document, "a", "content", "A")).toBe(false);
+  });
+
+  it("says a passage that stopped being editable has not MOVED", () => {
+    // A lock is refused by the write for its own reason. Reporting it as a move
+    // would keep the edit open forever on a block that can never accept it.
+    const document = withArticle({ content: passage("Hi") }, { locked: true });
+
+    expect(richTextMovedOn(document, "a", "content", passage("Hi"))).toBe(
+      false
+    );
   });
 });

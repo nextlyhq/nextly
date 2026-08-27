@@ -32,6 +32,17 @@ export interface InlineRichTextTarget {
   readonly nodeId: string;
   readonly prop: string;
   /**
+   * The passage EXACTLY as the document holds it, before any narrowing.
+   *
+   * Kept beside {@link InlineRichTextTarget.value} because the narrowing loses
+   * the difference between two unusable values: a prop holding the string "A"
+   * and one holding the string "B" both read as `undefined`, so a comparison
+   * over the narrowed form reports no change between them. A passage opened on
+   * one and committed after another surface stored the other would overwrite it
+   * silently.
+   */
+  readonly stored: unknown;
+  /**
    * The passage as the document holds it, or `undefined` when it holds nothing
    * usable.
    *
@@ -47,6 +58,7 @@ function targetFor(node: BlockNode, prop: string): InlineRichTextTarget {
   return {
     nodeId: node.id,
     prop,
+    stored,
     // Narrowed with the engine's own predicate rather than trusted from the
     // schema: the schema says what an editor OFFERS, and the document holds
     // whatever a migration, an import or a hand-edited row left there.
@@ -124,6 +136,35 @@ export function richTextChanged(before: unknown, after: unknown): boolean {
 }
 
 /**
+ * Whether the document's copy of this passage changed since a session opened
+ * it.
+ *
+ * Asked separately from the write because the two `null`s a commit can produce
+ * mean opposite things to an author. "Nothing to write" is an edit that changed
+ * nothing, and letting go is right. "The document moved on" is an edit that
+ * cannot be written — and letting go there discards words the author typed,
+ * with the surface they were typing into gone before they could copy them.
+ *
+ * @param document - the document as it stands NOW
+ * @param nodeId - the node being edited
+ * @param prop - the passage being edited
+ * @param opened - the RAW stored value the session was handed
+ * @returns whether the stored value is no longer the one that was opened
+ */
+export function richTextMovedOn(
+  document: BlockDocument,
+  nodeId: string,
+  prop: string,
+  opened: unknown
+): boolean {
+  const target = richInlineTarget(document, nodeId, prop);
+  // A passage that stopped being editable is refused by the write for its own
+  // reasons; it has not "moved on" in the sense this question asks about.
+  if (target === null) return false;
+  return richTextChanged(opened, target.stored);
+}
+
+/**
  * The op a finished edit produces, or `null` when there is nothing to write.
  *
  * `null` for an unchanged passage, for one the editor did not return as rich
@@ -145,7 +186,7 @@ export function richTextChanged(before: unknown, after: unknown): boolean {
  * @param prop - the passage being edited
  * @param next - what the editor read when the edit finished
  * @param before - what it read when the passage opened
- * @param opened - the STORED passage the session was handed, or `undefined`
+ * @param opened - the RAW stored value the session was handed, before narrowing
  * @returns one op, or `null`
  */
 export function richInlineTextOp(
@@ -154,14 +195,15 @@ export function richInlineTextOp(
   prop: string,
   next: unknown,
   before: unknown,
-  opened: RichTextValue | undefined
+  opened: unknown
 ): BuilderOp | null {
   const target = richInlineTarget(document, nodeId, prop);
   if (target === null) return null;
-  // Compared as stored against stored — both sides come from the document, so
-  // the same producer wrote both and a difference is a real change rather than
-  // one serializer's normalisation against another's.
-  if (richTextChanged(opened, target.value)) return null;
+  // Compared RAW against raw: both sides come from the document untouched, so a
+  // difference is a real change rather than one serializer's normalisation
+  // against another's — and two values that merely fail to be passages stay
+  // distinguishable, which the narrowed form cannot manage.
+  if (richTextChanged(opened, target.stored)) return null;
   // Refused rather than stored. A value the editor could not produce as a
   // passage is not one, and writing it would put a shape into the document that
   // every reader of the format would then have to survive.

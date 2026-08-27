@@ -519,17 +519,16 @@ describe("a second passage begun before the first was released", () => {
 
   it("opens the new passage instead of cancelling it", async () => {
     /*
-     * Driven against `useInlineRichText` directly, because that is the hook
-     * exported on its own and its `begin` does not oblige a caller to finish
-     * first. `useInlineEditing` commits before re-targeting, so it can never
-     * reach this and a test routed through it proves nothing — which is exactly
-     * what the previous version of this case did.
+     * Driven against `useInlineRichText` directly: it is exported on its own,
+     * and its `begin` does not oblige a caller to finish the open edit first.
+     * `useInlineEditing` commits before re-targeting, so a case routed through
+     * it cannot reach this sequence at all.
      *
      * Without releasing first, the old edit's effect cleanup runs after the new
      * state is installed and its commit clears `editing` — cancelling the
      * passage just requested rather than the one it belonged to. The two begins
-     * therefore have to name DIFFERENT passages, or the final state looks the
-     * same whether the second one opened or the first one simply re-ran.
+     * name DIFFERENT passages, because otherwise the final state looks the same
+     * whether the second one opened or the first simply re-ran.
      */
     const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
       focus: vi.fn(),
@@ -630,5 +629,84 @@ describe("what a host gets back from finishing an edit", () => {
     );
 
     expect(result.current.commit()).toBeNull();
+  });
+});
+
+describe("a write the document refuses", () => {
+  it("keeps the passage open instead of discarding what was typed", async () => {
+    /*
+     * Another surface rewrites the same prop while the caret is open. The write
+     * is refused — correctly, because committing would replace the newer value
+     * with the older one the editor is holding.
+     *
+     * What must NOT happen is releasing anyway. The author's words exist only
+     * inside the editor, so tearing it down loses them AND puts the page's
+     * older copy back in their place, with nothing said. Leaving it open keeps
+     * their text on screen; Escape still discards it deliberately.
+     */
+    const detach = vi.fn();
+    const attach = vi.fn((_element: HTMLElement, _value: unknown) => ({
+      focus: vi.fn(),
+      read: vi.fn(() => ({
+        root: {
+          type: "root",
+          children: [
+            { type: "paragraph", children: [{ type: "text", text: "TYPED" }] },
+          ],
+        },
+      })),
+      detach,
+    }));
+    const load = vi.fn(() => Promise.resolve({ attach }));
+
+    registerArticle();
+    paint();
+    const nodes = [
+      {
+        id: "a",
+        type: "acme/article",
+        version: 1,
+        props: { content: { root: { type: "root", children: [] } } },
+      } as BlockNode,
+    ];
+    const state = {
+      document: { formatVersion: 1, kind: "page", nodes } as BlockDocument,
+      selectedId: "a",
+      apply: vi.fn(() => null),
+    } as unknown as EditorState;
+    const { result, rerender } = renderHook(() =>
+      useInlineEditing(state, load as never)
+    );
+
+    await act(async () => {
+      result.current.onDoubleClick(doubleClickOn("content"));
+    });
+    expect(attach).toHaveBeenCalled();
+
+    // Somebody else rewrites the passage while the caret is in it.
+    nodes[0]!.props = {
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              children: [{ type: "text", text: "SOMEONE ELSE" }],
+            },
+          ],
+        },
+      },
+    };
+    rerender();
+
+    await act(async () => {
+      result.current.commit();
+    });
+
+    expect(state.apply).not.toHaveBeenCalled();
+    // Still open, and still holding the editor — this is what makes the typed
+    // words recoverable rather than gone.
+    expect(result.current.editingRich?.prop).toBe("content");
+    expect(detach).not.toHaveBeenCalled();
   });
 });
