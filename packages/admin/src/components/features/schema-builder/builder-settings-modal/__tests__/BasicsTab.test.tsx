@@ -189,6 +189,10 @@ describe("BasicsTab", () => {
   });
 });
 
+// A kind with no plural name has three basics rather than four, and this group
+// covers what the tab renders for one: singular, slug and icon, each appearing
+// only when the per-kind config lists it. The arrangement is the shared
+// responsive grid, so these assert presence rather than layout classes.
 describe("BasicsTab -- the three basics a kind without a plural renders", () => {
   it("renders singular, slug, and icon when pluralName is omitted from fields", () => {
     render(

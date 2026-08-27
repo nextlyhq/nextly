@@ -1,9 +1,12 @@
 // Advanced-tab fields for the BuilderSettingsModal. Like BasicsTab, renders
 // only the fields listed in the per-kind config.
 //
-// Use as Title and Timestamps are deliberately absent: the system title is
-// always the display and timestamps are always emitted, so a control for
-// either would offer a choice that does not exist. The i18n switch is gated on
+// Use as Title and Timestamps are absent from THIS tab, not from the product.
+// Both remain code-first collection options — `admin.useAsTitle` is what the
+// entry table picks its title column from, and `timestamps` defaults to true
+// in `defineCollection`. What the Visual Builder declines to offer is a control
+// for them: a builder-made entity takes the defaults, and a reader who needs to
+// change either edits the collection config. The i18n switch is gated on
 // the app-level
 // `localization` config: enabling it without that config splits the entity's
 // storage into a shape the runtime cannot write to (the server rejects the
