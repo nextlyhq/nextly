@@ -12,13 +12,11 @@
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
-  Button,
   Checkbox,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
   DialogDescription,
   Input,
   Label,
@@ -41,13 +39,7 @@ import {
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
 
-import {
-  MousePointerClick,
-  AlertCircle,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-} from "@admin/components/icons";
+import { MousePointerClick } from "@admin/components/icons";
 
 import {
   $createButtonLinkNode,
@@ -57,6 +49,11 @@ import {
   type ButtonLinkSize,
   type ButtonAlignment,
 } from "./ButtonLinkNode";
+import {
+  useInsertDialogState,
+  InsertDialogFooter,
+  ButtonAlignmentControl,
+} from "./RichTextInsertDialog";
 
 // ============================================================
 // Commands
@@ -80,7 +77,6 @@ export function RichTextButtonLinkPlugin({
   disabled = false,
 }: RichTextButtonLinkPluginProps) {
   const [editor] = useLexicalComposerContext();
-  const [isOpen, setIsOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
   const [openInNewTab, setOpenInNewTab] = useState(true);
@@ -105,12 +101,6 @@ export function RichTextButtonLinkPlugin({
     setEditingNodeKey(null);
   }, []);
 
-  const openDialog = useCallback(() => {
-    if (disabled) return;
-    resetState();
-    setIsOpen(true);
-  }, [disabled, resetState]);
-
   const isValidUrl = useCallback((url: string): boolean => {
     if (!url.trim()) return false;
     // Allow relative URLs starting with /
@@ -122,6 +112,13 @@ export function RichTextButtonLinkPlugin({
       return false;
     }
   }, []);
+
+  const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
+    useInsertDialogState({
+      resetState,
+      onSubmit: () => insertButtonLink(),
+      disabled,
+    });
 
   const insertButtonLink = useCallback(() => {
     if (!text.trim()) {
@@ -203,29 +200,10 @@ export function RichTextButtonLinkPlugin({
     textColor,
     alignment,
     isValidUrl,
+    setIsOpen,
     resetState,
     editingNodeKey,
   ]);
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        resetState();
-      }
-      setIsOpen(open);
-    },
-    [resetState]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        insertButtonLink();
-      }
-    },
-    [insertButtonLink]
-  );
 
   // Register commands
   useEffect(() => {
@@ -288,7 +266,7 @@ export function RichTextButtonLinkPlugin({
     return () => {
       window.removeEventListener("edit-button-link", handleEditEvent);
     };
-  }, []);
+  }, [setIsOpen]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -375,41 +353,11 @@ export function RichTextButtonLinkPlugin({
           </div>
 
           {/* Alignment */}
-          <div className="space-y-2">
-            <Label>Alignment</Label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={alignment === "left" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("left")}
-              >
-                <AlignLeft className="h-4 w-4" />
-                Left
-              </Button>
-              <Button
-                type="button"
-                variant={alignment === "center" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("center")}
-              >
-                <AlignCenter className="h-4 w-4" />
-                Center
-              </Button>
-              <Button
-                type="button"
-                variant={alignment === "right" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("right")}
-              >
-                <AlignRight className="h-4 w-4" />
-                Right
-              </Button>
-            </div>
-          </div>
+          <ButtonAlignmentControl
+            value={alignment}
+            onChange={setAlignment}
+            disabled={disabled}
+          />
 
           {/* Colors */}
           <div className="grid grid-cols-2 gap-4">
@@ -495,32 +443,15 @@ export function RichTextButtonLinkPlugin({
               </div>
             </div>
           )}
-
-          {/* Error */}
-          {error && (
-            <div className="flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
-          )}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={insertButtonLink}
-            disabled={!text.trim() || !url.trim()}
-          >
-            {editingNodeKey ? "Update Button" : "Insert Button"}
-          </Button>
-        </DialogFooter>
+        <InsertDialogFooter
+          error={error}
+          onCancel={() => handleOpenChange(false)}
+          onConfirm={insertButtonLink}
+          confirmLabel={editingNodeKey ? "Update Button" : "Insert Button"}
+          confirmDisabled={!text.trim() || !url.trim()}
+        />
       </DialogContent>
     </Dialog>
   );
