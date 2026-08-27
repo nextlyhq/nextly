@@ -111,7 +111,7 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.listPermissions({ search: "users" });
 
       // Assert
-      expect(result.data!.length).toBeGreaterThanOrEqual(1);
+      expect(result.length).toBeGreaterThanOrEqual(1);
     });
 
     it("should handle empty database", async () => {
@@ -136,17 +136,18 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.getPermissionById(permission.id);
 
       // Assert
-      expect(result.data!.id).toBe(permission.id);
-      expect(result.data!.action).toBe("read");
-      expect(result.data!.resource).toBe("users");
+      expect(result.id).toBe(permission.id);
+      expect(result.action).toBe("read");
+      expect(result.resource).toBe("users");
     });
 
     it("should return 404 when permission does not exist", async () => {
       // Act
-      const result = await service.getPermissionById(randomUUID());
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      await expect(
+        service.getPermissionById(randomUUID())
+      ).rejects.toMatchObject({
+        statusCode: 404,
+      });
     });
   });
 
@@ -163,7 +164,7 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Assert
       expect(result.data).not.toBeNull();
-      expect(result.data!.id).toBeTruthy();
+      expect(result.id).toBeTruthy();
     });
 
     it("should return existing permission if it already exists", async () => {
@@ -184,7 +185,7 @@ describe("PermissionService - Smoke Tests", () => {
       );
 
       // Assert
-      expect(result.data!.id).toBe(permission.id);
+      expect(result.id).toBe(permission.id);
     });
   });
 
@@ -208,12 +209,13 @@ describe("PermissionService - Smoke Tests", () => {
 
     it("should return 404 when updating non-existent permission", async () => {
       // Act
-      const result = await service.updatePermission(randomUUID(), {
-        description: "Updated",
+      await expect(
+        service.updatePermission(randomUUID(), {
+          description: "Updated",
+        })
+      ).rejects.toMatchObject({
+        statusCode: 404,
       });
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
     });
 
     it("should return 200 when no changes are made", async () => {
@@ -254,10 +256,11 @@ describe("PermissionService - Smoke Tests", () => {
 
     it("should return 404 when deleting non-existent permission", async () => {
       // Act
-      const result = await service.deletePermissionById(randomUUID());
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      await expect(
+        service.deletePermissionById(randomUUID())
+      ).rejects.toMatchObject({
+        statusCode: 404,
+      });
     });
 
     it("should return 400 when deleting permission assigned to roles", async () => {
@@ -312,10 +315,11 @@ describe("PermissionService - Smoke Tests", () => {
 
     it("should return 404 when permission not found by action/resource", async () => {
       // Act: Try to delete non-existent permission
-      const result = await service.deletePermission("nonexistent", "action");
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      await expect(
+        service.deletePermission("nonexistent", "action")
+      ).rejects.toMatchObject({
+        statusCode: 404,
+      });
     });
 
     it("should return 400 when deleting permission assigned to roles", async () => {
@@ -607,7 +611,7 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expect(result.data!.length).toBeGreaterThanOrEqual(2);
+        expect(result.length).toBeGreaterThanOrEqual(2);
       });
 
       it("should combine action and resource filters", async () => {
@@ -650,7 +654,7 @@ describe("PermissionService - Smoke Tests", () => {
         });
 
         // Assert
-        expect(result.data!.length).toBeGreaterThanOrEqual(1);
+        expect(result.length).toBeGreaterThanOrEqual(1);
       });
 
       it("should handle unicode in permission names", async () => {
@@ -667,7 +671,7 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions({ search: "ユーザー" });
 
         // Assert
-        expect(result.data!.length).toBeGreaterThanOrEqual(0);
+        expect(result.length).toBeGreaterThanOrEqual(0);
       });
 
       it("should handle null descriptions", async () => {
@@ -680,7 +684,7 @@ describe("PermissionService - Smoke Tests", () => {
         const result = await service.listPermissions();
 
         // Assert
-        expect(result.data!.some(p => p.description === null)).toBe(true);
+        expect(result.some(p => p.description === null)).toBe(true);
       });
     });
 
@@ -719,27 +723,28 @@ describe("PermissionService - Smoke Tests", () => {
     it("should return 404 for null permission ID", async () => {
       // Act
 
-      const result = await service.getPermissionById(null as any);
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      await expect(
+        service.getPermissionById(null as any)
+      ).rejects.toMatchObject({
+        statusCode: 404,
+      });
     });
 
     it("should return 404 for undefined permission ID", async () => {
       // Act
 
-      const result = await service.getPermissionById(undefined as any);
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      await expect(
+        service.getPermissionById(undefined as any)
+      ).rejects.toMatchObject({
+        statusCode: 404,
+      });
     });
 
     it("should return 404 for empty string permission ID", async () => {
       // Act
-      const result = await service.getPermissionById("");
-
-      // Assert
-      expectErrorResponse(result, 404, "not found");
+      await expect(service.getPermissionById("")).rejects.toMatchObject({
+        statusCode: 404,
+      });
     });
 
     it("should return all fields correctly", async () => {
@@ -756,11 +761,11 @@ describe("PermissionService - Smoke Tests", () => {
       const result = await service.getPermissionById(permission.id);
 
       // Assert
-      expect(result.data!.id).toBe(permission.id);
-      expect(result.data!.action).toBe("create");
-      expect(result.data!.resource).toBe("articles");
-      expect(result.data!.name).toBe("Create Articles");
-      expect(result.data!.description).toBe("Allows creating new articles");
+      expect(result.id).toBe(permission.id);
+      expect(result.action).toBe("create");
+      expect(result.resource).toBe("articles");
+      expect(result.name).toBe("Create Articles");
+      expect(result.description).toBe("Allows creating new articles");
     });
   });
 
@@ -779,7 +784,7 @@ describe("PermissionService - Smoke Tests", () => {
       // Assert
       expect(result.success).toBe(true);
       expect(result.statusCode).toBe(201); // Should create new permission
-      expect(result.data!.id).toBeTruthy();
+      expect(result.id).toBeTruthy();
     });
 
     it("should be truly idempotent (multiple calls return same ID)", async () => {
@@ -827,10 +832,10 @@ describe("PermissionService - Smoke Tests", () => {
       expect(result.success).toBe(true);
       expect(result.statusCode).toBe(201); // Should create new permission
       expect(result.data).toBeTruthy();
-      expect(result.data!.id).toBeTruthy();
+      expect(result.id).toBeTruthy();
 
       // Verify it was created correctly
-      const permission = await service.getPermissionById(result.data!.id);
+      const permission = await service.getPermissionById(result.id);
       expect(permission.data!.action).toBe("read:sensitive");
     });
 
