@@ -749,7 +749,7 @@ describe("PermissionService - Smoke Tests", () => {
       await expect(
         service.getPermissionById(null as any)
       ).rejects.toMatchObject({
-        statusCode: 404,
+        code: "NOT_FOUND",
       });
     });
 
@@ -759,14 +759,14 @@ describe("PermissionService - Smoke Tests", () => {
       await expect(
         service.getPermissionById(undefined as any)
       ).rejects.toMatchObject({
-        statusCode: 404,
+        code: "NOT_FOUND",
       });
     });
 
     it("should return 404 for empty string permission ID", async () => {
       // Act
       await expect(service.getPermissionById("")).rejects.toMatchObject({
-        statusCode: 404,
+        code: "NOT_FOUND",
       });
     });
 
@@ -857,7 +857,7 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Verify it was created correctly
       const permission = await service.getPermissionById(result.id);
-      expect(permission.data!.action).toBe("read:sensitive");
+      expect(permission.action).toBe("read:sensitive");
     });
 
     it("should be case-insensitive for action and resource matching", async () => {
@@ -881,7 +881,7 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Assert: Should return the same existing permission (not create a duplicate)
       expect(result1.id).toBe(result2.id);
-      expect(result2.statusCode).toBe(200); // Should return existing, not create new
+      expect(result2.created).toBe(false);
       expect(result2.message).toContain("already exists");
     });
 
@@ -929,7 +929,7 @@ describe("PermissionService - Smoke Tests", () => {
 
       // Verify change
       const updated = await service.getPermissionById(permission.id);
-      expect(updated.data!.name).toBe("New Name");
+      expect(updated.name).toBe("New Name");
     });
 
     it("should reject invalid UUID", async () => {
@@ -976,12 +976,13 @@ describe("PermissionService - Smoke Tests", () => {
       await testDb.db.insert(testDb.schema.permissions).values(permission);
 
       // Act: Delete permission
-      const deleteResult = await service.deletePermissionById(permission.id);
-      expectSuccessResponseNoData(deleteResult, 200);
+      await service.deletePermissionById(permission.id);
 
-      // Assert: Verify deletion
-      const afterDelete = await service.getPermissionById(permission.id);
-      expectErrorResponse(afterDelete, 404, "not found");
+      // Assert: the row is gone, which is what "deleted" means when the method
+      // returns void — reading it back now raises NOT_FOUND.
+      await expect(
+        service.getPermissionById(permission.id)
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("should prevent deletion of in-use permissions", async () => {
@@ -998,14 +999,11 @@ describe("PermissionService - Smoke Tests", () => {
         createdAt: new Date(),
       });
 
-      // Act: Try to delete by ID
-      const deleteByIdResult = await service.deletePermissionById(
-        permission.id
-      );
-
-      // Assert: Should fail
-      expect(deleteByIdResult.success).toBe(false);
-      expect(deleteByIdResult.statusCode).toBe(400);
+      // Act + Assert: refused by id. The rule is the documented code, not a
+      // status: BUSINESS_RULE_VIOLATION is what the docblock promises.
+      await expect(
+        service.deletePermissionById(permission.id)
+      ).rejects.toMatchObject({ code: "BUSINESS_RULE_VIOLATION" });
 
       // Act: Try to delete by action/resource
       const deleteByActionResult = await service.deletePermission(
