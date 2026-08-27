@@ -102,6 +102,7 @@ import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
+  TRANSLATION_FILTER_STATES,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   populateTranslationStatus,
@@ -499,12 +500,7 @@ export class CollectionQueryService extends BaseService {
     const cleanedWhere =
       Object.keys(rest).length > 0 ? (rest as WhereFilter) : undefined;
     const f = _translated as { locale?: unknown; state?: unknown };
-    const states: TranslationFilterState[] = [
-      "missing",
-      "translated",
-      "draft",
-      "published",
-    ];
+    const states: readonly TranslationFilterState[] = TRANSLATION_FILTER_STATES;
     if (
       typeof f?.locale !== "string" ||
       typeof f?.state !== "string" ||

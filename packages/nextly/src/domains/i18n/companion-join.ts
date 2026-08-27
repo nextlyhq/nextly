@@ -442,11 +442,25 @@ export function buildCompanionExists(args: {
 }
 
 /** The translation states the list "language filter" can filter on (i18n M7). */
-export type TranslationFilterState =
-  | "missing"
-  | "translated"
-  | "draft"
-  | "published";
+/**
+ * Every translation state a filter may name, and the source the type is built
+ * from.
+ *
+ * A tuple rather than a union so there is something to READ at runtime. The
+ * query service and the worklist endpoint both have to decide whether an
+ * incoming string is a state, and while the union existed they each declared
+ * their own list of the same four words — so adding or renaming one could make
+ * the endpoint accept a value the query layer silently drops, or refuse one it
+ * supports.
+ */
+export const TRANSLATION_FILTER_STATES = [
+  "missing",
+  "translated",
+  "draft",
+  "published",
+] as const;
+
+export type TranslationFilterState = (typeof TRANSLATION_FILTER_STATES)[number];
 
 export interface TranslationStatusFilter {
   /** Target locale code. */

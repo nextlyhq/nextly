@@ -28,6 +28,7 @@ export type ServiceType =
   | "previewUrl"
   | "imageSizes"
   | "dashboard"
+  | "translations"
   | "email"
   | "schema";
 
