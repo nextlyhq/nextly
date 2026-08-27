@@ -31,11 +31,14 @@ import {
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
 import {
+  authorizationGroups,
   byMostRecentlyUpdated,
   eligibleCollections,
+  hasTranslatableFields,
   notConsultedSources,
   planWorklistFanOut,
   translatedFilter,
+  worklistTotal,
   worklistId,
   worklistTitle,
   worklistUpdatedAt,
@@ -112,13 +115,31 @@ async function readableCollections(
     permissions: auth.permissions,
     roles: caller.user.roles ?? [],
   };
-  const verdicts = await Promise.all(
-    slugs.map(async slug => ({
-      slug,
-      allowed: await canReadEntity(slug, readCaller),
-    }))
-  );
-  return new Set(verdicts.filter(v => v.allowed).map(v => v.slug));
+  // One decision, then bounded groups — never one flat `Promise.all` over every
+  // localized collection. `canReadEntity` resolves a session caller through the
+  // per-user super-admin cache, and a simultaneous cold start makes every call
+  // miss it at once, turning one question into N permission reads issued in
+  // parallel against the pool. See `authorizationGroups` for why the first runs
+  // alone.
+  //
+  // Every candidate is still decided. Bounding the COUNT rather than the
+  // concurrency would leave collections with no verdict, and there is nothing
+  // safe to do with one: naming it as unconsulted discloses a collection the
+  // caller may not read, and dropping it silently is the "nothing to do there"
+  // lie this endpoint exists to prevent.
+  const allowed = new Set<string>();
+  for (const group of authorizationGroups(slugs)) {
+    const verdicts = await Promise.all(
+      group.map(async slug => ({
+        slug,
+        allowed: await canReadEntity(slug, readCaller),
+      }))
+    );
+    for (const verdict of verdicts) {
+      if (verdict.allowed) allowed.add(verdict.slug);
+    }
+  }
+  return allowed;
 }
 
 /**
@@ -170,7 +191,30 @@ function assertConfiguredLocale(locale: string): void {
   }
 }
 
-/** Every collection that HAS a language dimension, with what the list needs to name it. */
+/**
+ * Every collection that can actually ANSWER this question, with what the list
+ * needs to name it.
+ *
+ * `localized: true` is not sufficient, and the gap is not hypothetical: a
+ * collection may carry the flag while every field on it is non-localizable (a
+ * numbers-only collection) or explicitly `localized: false`. No companion table
+ * is generated for such a collection, so `buildTranslationStatusCondition` is
+ * never reached — the caller returns `undefined` for a missing companion — and
+ * a filter that produces NO condition does not narrow the query. Every document
+ * in it would come back and be reported as outstanding work in whichever state
+ * was asked for.
+ *
+ * That is the same failure shape `assertConfiguredLocale` guards one door up: a
+ * predicate that silently matches everything, presented as a backlog. Both are
+ * refused before the query rather than explained after it.
+ *
+ * The test is `resolveLocalizedFieldNames(...).length > 0`, which is not merely
+ * a similar rule — it is the SAME expression `buildCompanionSchema` evaluates
+ * before returning `null`. Eligibility here and companion existence there
+ * therefore cannot drift apart into two answers. Asking costs nothing: the
+ * fields are already on the registry record, so this narrows the candidate set
+ * before any authorization or query work is done.
+ */
 async function localizedCollections(): Promise<
   (LocalizedCollectionRef & {
     useAsTitle: string | undefined;
@@ -182,7 +226,7 @@ async function localizedCollections(): Promise<
   );
   const all = await registry.getAllCollections();
   return all
-    .filter(c => c.localized === true)
+    .filter(c => c.localized === true && hasTranslatableFields(c.fields ?? []))
     .map(c => ({
       slug: c.slug,
       label: c.labels?.plural ?? c.slug,
@@ -259,6 +303,20 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
         ...(caller.authenticatedScope === undefined
           ? {}
           : { authenticatedScope: caller.authenticatedScope }),
+        // The coarse read gate was already decided for this collection, by
+        // `canReadEntity` above — the canonical decision, and the reason this
+        // collection is in `queried` at all. Attesting it here elides ONLY that
+        // redundant re-check: `checkCollectionAccess` skips the RBAC/code-access
+        // gate under `routeAuthorized` and still evaluates the stored rules
+        // (owner-only, role-based, custom) against the real user, which is what
+        // keeps another author's titles out of this list.
+        //
+        // Not merely wasted work. A code-defined `access.read` callback may do
+        // asynchronous external work, so running it twice per collection doubles
+        // that load — and a transient failure on the second call would refuse a
+        // collection the first call allowed, reporting it as unconsulted for no
+        // reason the operator could see.
+        routeAuthorized: true,
         // The reserved key is not part of `WhereFilter`'s published shape — the
         // list extractor pulls it off the top level before the clause is typed —
         // so the cast is at the ONE call site that knows that, not in the helper.
@@ -288,7 +346,7 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // instead, and one failure does not empty the screen for every collection
       // that answered.
       if (result?.success !== true || result.data === null) {
-        return { slug: coll.slug, rows: [] as TranslationWorkRow[] };
+        return { slug: coll.slug, rows: [] as TranslationWorkRow[], total: 0 };
       }
       const docs = (result.data.docs ?? []) as Record<string, unknown>[];
       const rows = docs.map(
@@ -300,7 +358,17 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
           updatedAt: worklistUpdatedAt(doc.updatedAt ?? doc.updated_at),
         })
       );
-      return { slug: null, rows };
+      // The collection's OWN count of matching documents, not the length of the
+      // page it returned. The count query applies the same `_translated`
+      // predicate as the rows beside it — `listEntries` forwards
+      // `translationFilter` to it precisely so the two agree — so this is the
+      // real size of this collection's backlog, including the part beyond
+      // `limit` that these rows do not contain.
+      const total =
+        typeof result.data.totalDocs === "number"
+          ? result.data.totalDocs
+          : rows.length;
+      return { slug: null, rows, total };
     })
   );
 
@@ -319,22 +387,15 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // The canonical list envelope, with synthetic single-page meta — the same
   // shape `webhooks` uses for a list its service does not paginate.
   //
-  // `total` is what the fan-out FOUND, before the slice, so a caller can see
-  // that the rows on screen are not all of them: fifty-one outstanding
-  // documents return fifty rows and a total of fifty-one, and the screen can
-  // say so. Reporting `rows.length` there instead would present a truncated
-  // backlog as a complete one — the same lie as an unconsulted collection,
-  // one level down.
-  //
-  // It is still a floor rather than a census: each collection is asked for at
-  // most `limit`, so a site far past that has more outstanding work than any
-  // single request can count. Naming a floor is honest; naming it as a total
-  // would not be, which is why the field the screen reads for completeness is
-  // `notConsulted` rather than this number.
+  // `total` is each collection's OWN count of matching documents, summed, never
+  // the number of rows this response happens to carry — see `worklistTotal`.
   return respondList(
     rows,
     {
-      total: merged.length,
+      total: worklistTotal(
+        perCollection.map(r => r.total),
+        merged.length
+      ),
       page: 1,
       limit,
       totalPages: 1,
