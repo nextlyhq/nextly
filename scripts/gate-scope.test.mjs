@@ -1,100 +1,165 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
+/** This module's sibling script, resolved from here rather than from the cwd. */
+const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "gate-scope.mjs");
+
 import {
-  changedPackageDirs,
+  changedPaths,
   filterArguments,
+  filtersFor,
   filtersRefusal,
-  workspaceDirsOf,
-  workspaceGlobs,
-  packageFilters,
   report,
   touchesScripts,
+  workspaceRootsOf,
+  workspacesFrom,
 } from "./gate-scope.mjs";
+
+/** The workspaces pnpm reports for this repository, in pnpm's own shape. */
+const PNPM = [
+  { name: "nextly-project-setup", path: "/repo" },
+  { name: "@nextlyhq/plugin-page-builder", path: "/repo/packages/plugin-page-builder" },
+  { name: "@nextlyhq/plugin-sdk", path: "/repo/packages/plugin-sdk" },
+  { name: "@nextlyhq/ui", path: "/repo/packages/ui" },
+  { name: "playground", path: "/repo/apps/playground" },
+  { name: "@nextlyhq/e2e", path: "/repo/e2e" },
+];
+const WS = workspacesFrom(PNPM, "/repo");
+const filtersOf = paths => filtersFor(paths, WS).filters;
 
 describe("the packages a diff touches", () => {
   it("names each one once, whatever its file count", () => {
     expect(
-      changedPackageDirs([
+      filtersOf([
         "packages/plugin-page-builder/src/a.ts",
         "packages/plugin-page-builder/src/b.ts",
         "packages/plugin-sdk/src/index.ts",
       ])
-    ).toEqual(["plugin-page-builder", "plugin-sdk"]);
+    ).toEqual(["@nextlyhq/plugin-page-builder", "@nextlyhq/plugin-sdk"]);
   });
 
   it("names a package the author did not expect to touch", () => {
     // The case this module exists for. A gate list written from the package
     // the author has in mind cannot report the second one; a derivation does.
     expect(
-      changedPackageDirs([
+      filtersOf([
         "packages/plugin-page-builder/src/blocks-fields.ts",
         "packages/plugin-sdk/src/index.ts",
       ])
-    ).toContain("plugin-sdk");
+    ).toContain("@nextlyhq/plugin-sdk");
   });
 
-  it("drops paths outside packages/ rather than mapping them to a package", () => {
+  it("gates a workspace that is under neither packages/ nor apps/", () => {
+    // `e2e` is declared as a bare directory. A mapper that assumed a wildcard
+    // root would drop it, and the browser suite would never be gated.
+    expect(filtersOf(["e2e/tests/canvas/acceptance.spec.ts"])).toEqual([
+      "@nextlyhq/e2e",
+    ]);
+  });
+
+  it("gates an app, not only a package", () => {
+    expect(filtersOf(["apps/playground/app/page.tsx"])).toEqual(["playground"]);
+  });
+
+  it("attaches a root-level path to NO workspace", () => {
     // A change to `scripts/` or `.github/` belongs to a root task. Attaching it
     // to a nearest package would gate the wrong thing while reporting coverage.
+    // The repository root is itself a workspace pnpm lists, and its directory
+    // is a prefix of every path — so this also asserts the root was dropped.
     expect(
-      changedPackageDirs([
+      filtersOf([
         "scripts/gate-scope.mjs",
         ".github/workflows/ci.yml",
         "README.md",
         "packages/ui/src/x.ts",
       ])
-    ).toEqual(["ui"]);
+    ).toEqual(["@nextlyhq/ui"]);
   });
 
-  it("ignores a bare packages/<dir> entry that names no file", () => {
-    expect(changedPackageDirs(["packages/ui", "packages"])).toEqual([]);
+  it("ignores a bare workspace directory that names no file", () => {
+    expect(filtersOf(["packages/ui", "packages"])).toEqual([]);
   });
 
-  it("returns nothing for a diff that touches no package", () => {
+  it("returns nothing for a diff that touches no workspace", () => {
     // Must come out EMPTY rather than defaulting to every package: a gate list
     // that always names everything is not a derivation and would be ignored.
-    expect(changedPackageDirs(["README.md", "scripts/x.mjs"])).toEqual([]);
+    expect(filtersOf(["README.md", "scripts/x.mjs"])).toEqual([]);
+  });
+
+  it("keeps a path Git would have QUOTED", () => {
+    // Under the default `core.quotePath` a non-ASCII path comes back quoted, so
+    // it began with `"` and matched no workspace — the only changed package was
+    // dropped and the gate ran nothing. The commands ask for NUL-delimited
+    // output now, which is neither quoted nor escaped, so the raw path arrives.
+    expect(filtersOf(["packages/ui/src/é.ts"])).toEqual(["@nextlyhq/ui"]);
   });
 });
 
-describe("turning directories into filters", () => {
-  const manifests = {
-    "plugin-sdk": { name: "@nextlyhq/plugin-sdk" },
-    nextly: { name: "nextly" },
-  };
-
-  it("reads each filter from that package's own manifest", () => {
-    // Derived, not restated: a rename cannot leave a filter pointing at
-    // nothing, because the name comes from the file the rename edits.
-    const { filters } = packageFilters(
-      ["plugin-sdk", "nextly"],
-      dir => manifests[dir]
-    );
-
-    expect(filters).toEqual(["@nextlyhq/plugin-sdk", "nextly"]);
+describe("the workspaces pnpm reports", () => {
+  it("drops the repository root, whose directory prefixes every path", () => {
+    // Keeping it would match everything and collapse the scope to one filter.
+    expect(WS.map(w => w.name)).not.toContain("nextly-project-setup");
   });
 
-  it("REPORTS a directory whose manifest cannot be read", () => {
-    // Skipping it would shrink the gate silently, which is the failure this
-    // module exists to prevent. The likeliest cause is a package deleted in the
-    // diff, and the author should see that rather than have it hidden.
-    const { filters, unreadable } = packageFilters(
-      ["plugin-sdk", "ghost"],
-      dir => {
-        if (dir === "ghost") throw new Error("ENOENT");
-        return manifests[dir];
-      }
+  it("orders them longest directory first, so a nested workspace wins", () => {
+    const nested = workspacesFrom(
+      [
+        { name: "outer", path: "/repo/packages/outer" },
+        { name: "inner", path: "/repo/packages/outer/inner" },
+      ],
+      "/repo"
     );
-
-    expect(filters).toEqual(["@nextlyhq/plugin-sdk"]);
-    expect(unreadable).toEqual(["ghost"]);
+    expect(filtersFor(["packages/outer/inner/x.ts"], nested).filters).toEqual([
+      "inner",
+    ]);
   });
 
-  it("treats a manifest with no name as unreadable rather than as empty", () => {
-    const { filters, unreadable } = packageFilters(["odd"], () => ({}));
+  it("ignores an entry with no usable name", () => {
+    // A filter built from an empty name matches nothing, so it would shrink the
+    // gate while reading as coverage.
+    expect(
+      workspacesFrom([{ name: "", path: "/repo/packages/x" }], "/repo")
+    ).toEqual([]);
+  });
+
+  it("derives the roots from the workspaces themselves", () => {
+    // Read back from the list rather than from the globs, so the two cannot
+    // disagree about where a workspace lives. A bare directory contributes no
+    // root and needs none — it matches itself.
+    expect(workspaceRootsOf(WS)).toEqual(["apps", "packages"]);
+  });
+});
+
+describe("a workspace the diff removed", () => {
+  it("is REPORTED rather than dropped, at the path it actually had", () => {
+    // Dropping it shrinks the gate for the very change that deleted a package.
+    // The path is rendered as derived: re-rooting it produced
+    // `packages/packages/ui` and `packages/apps/playground`, nonexistent paths
+    // in the one message whose job is to name what could not be gated.
+    const { filters, unreadable } = filtersFor(
+      ["packages/deleted-pkg/src/x.ts", "apps/gone/a.ts"],
+      WS
+    );
 
     expect(filters).toEqual([]);
-    expect(unreadable).toEqual(["odd"]);
+    expect(unreadable).toEqual(["apps/gone", "packages/deleted-pkg"]);
+  });
+
+  it("does NOT report a root-level path as a missing workspace", () => {
+    // `scripts/` and `.github/` are under no workspace root, so there is
+    // nothing missing — refusing here would refuse every tooling change.
+    expect(filtersFor(["scripts/x.mjs", ".github/w.yml"], WS).unreadable).toEqual(
+      []
+    );
+  });
+
+  it("does not report a bare root path, which names no workspace directory", () => {
+    expect(filtersFor(["packages/README.md"], WS).unreadable).toEqual([]);
   });
 });
 
@@ -136,65 +201,20 @@ describe("the report", () => {
   });
 
   it("surfaces unreadable directories instead of dropping them", () => {
-    expect(
-      report({ filters: [], unreadable: ["ghost"], scripts: false })
-    ).toContain("packages/ghost");
-  });
-});
+    // Rendered exactly as derived. Prepending a root here turned
+    // `apps/playground` into `packages/apps/playground` — a path that exists
+    // nowhere, in the one message whose job is to name the workspace that
+    // could not be gated.
+    const rendered = report({
+      filters: [],
+      unreadable: ["apps/playground", "packages/ghost"],
+      scripts: false,
+    });
 
-describe("the workspace roots, which are not only packages/", () => {
-  // `pnpm-workspace.yaml` declares `apps/*`, `packages/*` and the bare `e2e`.
-  // A mapper that knows only `packages/` drops a change to an app or to the
-  // browser suite silently — and silence is the failure this module exists to
-  // remove.
-  const GLOBS = ["apps/*", "packages/*", "e2e"];
-
-  it("maps a packages/ path", () => {
-    expect(workspaceDirsOf(["packages/ui/src/x.ts"], GLOBS)).toEqual([
-      "packages/ui",
-    ]);
-  });
-
-  it("maps an apps/ path", () => {
-    expect(workspaceDirsOf(["apps/playground/app/page.tsx"], GLOBS)).toEqual([
-      "apps/playground",
-    ]);
-  });
-
-  it("maps a BARE workspace entry that has no wildcard", () => {
-    expect(workspaceDirsOf(["e2e/tests/a.spec.ts"], GLOBS)).toEqual(["e2e"]);
-  });
-
-  it("drops a path in no workspace root", () => {
-    // The control. A mapper that returned something for every path would
-    // satisfy the three cases above and name a package for `README.md`.
-    expect(workspaceDirsOf(["README.md", "scripts/x.mjs"], GLOBS)).toEqual([]);
-  });
-
-  it("ignores a bare root entry naming no file", () => {
-    expect(workspaceDirsOf(["packages/ui", "packages"], GLOBS)).toEqual([]);
-  });
-});
-
-describe("reading the workspace roots from pnpm-workspace.yaml", () => {
-  it("takes every list entry, quoted or bare", () => {
-    expect(
-      workspaceGlobs(
-        [
-          "packages:",
-          '  - "apps/*"',
-          '  - "packages/*"',
-          "  # a comment, and the bare entry below it",
-          "  - e2e",
-        ].join("\n")
-      )
-    ).toEqual(["apps/*", "packages/*", "e2e"]);
-  });
-
-  it("returns nothing for a file that declares no list", () => {
-    // Must be EMPTY rather than defaulting to `packages/*`: a silent default
-    // is how the mapper came to know one root and drop the other two.
-    expect(workspaceGlobs("packages:\n")).toEqual([]);
+    expect(rendered).toContain("packages/ghost");
+    expect(rendered).toContain("apps/playground");
+    expect(rendered).not.toContain("packages/apps/playground");
+    expect(rendered).not.toContain("packages/packages/ghost");
   });
 });
 
@@ -233,3 +253,71 @@ describe("refusing a scope that would silently omit a workspace", () => {
     expect(filtersRefusal([])).toBeNull();
   });
 });
+
+describe("against a real repository, where Git decides how paths arrive", () => {
+  // The unit cases above hand the derivation raw paths, so they cannot see how
+  // Git was ASKED for them. These build a throwaway repository instead: they
+  // are the only tests that fail if the commands stop requesting NUL-delimited
+  // output or start detecting renames again.
+  const run = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8" });
+
+  /** A repository with one workspace, a base commit, and a branch off it. */
+  function repo() {
+    const dir = mkdtempSync(join(tmpdir(), "gate-scope-"));
+    run(dir, ["init", "-q", "-b", "main"]);
+    run(dir, ["config", "user.email", "t@example.com"]);
+    run(dir, ["config", "user.name", "t"]);
+    // Left at its default ON, which is what quotes a non-ASCII path.
+    mkdirSync(join(dir, "packages", "ui", "src"), { recursive: true });
+    writeFileSync(join(dir, "packages", "ui", "package.json"), '{"name":"@nextlyhq/ui"}');
+    writeFileSync(join(dir, "packages", "ui", "src", "a.ts"), "export const a = 1;\n");
+    run(dir, ["add", "-A"]);
+    run(dir, ["commit", "-qm", "base"]);
+    // The work happens on a BRANCH: the derivation diffs the merge base, so a
+    // change committed onto the base itself would compare a commit with itself
+    // and report nothing — an empty result that reads exactly like "clean".
+    run(dir, ["checkout", "-q", "-b", "feature"]);
+    return dir;
+  }
+
+  /** The script's own path collection, run against a real repository. */
+  const changedIn = dir => changedPaths(dir, "main");
+
+  it("sees an ordinary change at all, which the two cases below rely on", () => {
+    // The control. Both cases assert a path is PRESENT, and an empty result
+    // would fail them for the wrong reason — a broken fixture rather than a
+    // lost path. This says the harness reports anything.
+    const dir = repo();
+    writeFileSync(join(dir, "packages", "ui", "src", "b.ts"), "export const b = 1;\n");
+    run(dir, ["add", "-A"]);
+    run(dir, ["commit", "-qm", "ordinary"]);
+
+    expect(changedIn(dir)).toEqual(["packages/ui/src/b.ts"]);
+  });
+
+  it("does not lose a path Git would have quoted", () => {
+    // With `core.quotePath` at its default, `git diff --name-only` returns
+    // "packages/ui/src/\303\251.ts" — starting with a quote, so it matched no
+    // workspace and the only changed package was dropped in silence.
+    const dir = repo();
+    writeFileSync(join(dir, "packages", "ui", "src", "é.ts"), "export const e = 1;\n");
+    run(dir, ["add", "-A"]);
+    run(dir, ["commit", "-qm", "add non-ascii"]);
+
+    expect(changedIn(dir)).toContain("packages/ui/src/é.ts");
+  });
+
+  it("reports BOTH sides when a file moves out of a workspace", () => {
+    // Rename detection reports a move as the destination alone, so a workspace
+    // that LOST a file was not gated — though it is the one whose build could
+    // break. Detection off, Git reports the delete and the add separately.
+    const dir = repo();
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    run(dir, ["mv", "packages/ui/src/a.ts", "docs/a.ts"]);
+    run(dir, ["commit", "-qm", "move out"]);
+
+    const paths = changedIn(dir);
+    expect(paths).toContain("packages/ui/src/a.ts");
+    expect(paths).toContain("docs/a.ts");
+  });
+})

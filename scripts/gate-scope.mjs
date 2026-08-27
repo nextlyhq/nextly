@@ -34,108 +34,136 @@
  * @module scripts/gate-scope
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
- * The workspace directory a path belongs to, for each declared root.
+ * Every workspace this repository declares, as `{ name, dir }`.
  *
- * The roots are READ from `pnpm-workspace.yaml` rather than assumed to be
- * `packages/`. This repository declares `apps/*`, `packages/*` and a bare
- * `e2e` — a browser suite that is under neither — so a mapper that knew only
- * `packages/` would drop a change to an app or to that suite in silence, which
- * is the exact failure this module exists to remove.
+ * ASKED of pnpm rather than derived from `pnpm-workspace.yaml`. Deriving it
+ * meant reimplementing a YAML reader, and the hand-rolled one answered wrongly
+ * for a valid document: `- "apps/*" # application workspaces` kept the comment
+ * as part of the glob, after which no app path matched any root and the gate
+ * omitted every app change in silence.
+ *
+ * pnpm resolves that same file to decide what a workspace IS, so asking it is
+ * the only answer that cannot disagree with the tool these filters are handed
+ * to. It also supplies each package's NAME, which is what a filter needs — the
+ * per-directory manifest read this replaces derived the same fact a second
+ * time, and disagreed with itself about where a directory was rooted.
+ *
+ * Sorted LONGEST DIRECTORY FIRST so a nested workspace wins over one that
+ * merely shares its prefix. The repository root is dropped: its directory is a
+ * prefix of every path, so keeping it would match everything and collapse the
+ * scope to a single filter.
  */
-export function workspaceDirsOf(paths, globs) {
-  const dirs = paths.map(path => workspaceDirOf(String(path), globs));
-  return [...new Set(dirs.filter(dir => dir !== null))].sort();
+export function workspacesFrom(entries, rootDir) {
+  const listed = Array.isArray(entries) ? entries : [];
+  return listed
+    .map(entry => oneWorkspace(entry, rootDir))
+    .filter(w => w.name.length > 0 && w.dir.length > 0)
+    .sort((a, b) => b.dir.length - a.dir.length);
 }
 
-/** The one workspace directory a path names, or null. */
-function workspaceDirOf(path, globs) {
-  const segments = path.split("/");
-  for (const glob of globs) {
-    const dir = matchGlob(segments, glob);
-    if (dir !== null) return dir;
+/** One pnpm entry as `{ name, dir }`, with anything unusable emptied. */
+function oneWorkspace(entry, rootDir) {
+  return { name: entryName(entry), dir: entryDir(entry, rootDir) };
+}
+
+/**
+ * An entry's package name, or the empty string.
+ *
+ * Empty rather than absent, because a `--filter` built from an empty name
+ * matches nothing: it would shrink the gate while reading as coverage.
+ */
+function entryName(entry) {
+  const name = entry?.name;
+  return typeof name === "string" ? name : "";
+}
+
+/** An entry's directory relative to the repository root, or the empty string. */
+function entryDir(entry, rootDir) {
+  const path = entry?.path;
+  return typeof path === "string" ? relativeDir(rootDir, path) : "";
+}
+
+/** One workspace's directory, relative to the repository root, with `/` separators. */
+function relativeDir(rootDir, absolute) {
+  const rel = relative(rootDir, absolute).split(sep).join("/");
+  return rel === "." ? "" : rel;
+}
+
+/**
+ * The roots a workspace may live under, derived from the workspaces themselves.
+ *
+ * Needed to tell "a path in no workspace" apart from "a path in a workspace
+ * that is GONE". `scripts/x.mjs` is the first and gates nothing extra;
+ * `packages/deleted/x.ts` is the second and must be refused rather than
+ * dropped, because dropping it shrinks the gate for the very change that
+ * removed a package.
+ *
+ * Derived rather than read back from the globs, so this cannot disagree with
+ * the list above about where workspaces live. A workspace declared as a bare
+ * directory contributes no root and needs none: it matches itself directly.
+ */
+export function workspaceRootsOf(workspaces) {
+  const roots = workspaces
+    .map(w => (w.dir.includes("/") ? w.dir.slice(0, w.dir.lastIndexOf("/")) : null))
+    .filter(root => root !== null);
+  return [...new Set(roots)].sort();
+}
+
+/**
+ * The filter for every workspace a change reaches, plus the ones it cannot name.
+ *
+ * A path under a known root that belongs to no listed workspace is REPORTED
+ * rather than skipped, because the likeliest cause is a package the diff
+ * deleted or renamed — which the author should see rather than have hidden
+ * behind a smaller gate.
+ */
+export function filtersFor(paths, workspaces) {
+  const roots = workspaceRootsOf(workspaces);
+  const names = new Set();
+  const unlisted = new Set();
+
+  for (const raw of paths) {
+    const path = String(raw);
+    const owner = ownerOf(path, workspaces);
+    if (owner !== undefined) names.add(owner.name);
+    else {
+      const missing = missingWorkspaceDir(path, roots);
+      if (missing !== null) unlisted.add(missing);
+    }
   }
-  return null;
-}
 
-/**
- * A path's directory under one workspace glob, or null.
- *
- * Two forms, because those are the two pnpm declares here, and each is its own
- * decision: a wildcard root matches one directory beneath it, and a literal
- * entry matches that directory itself.
- */
-function matchGlob(segments, glob) {
-  return glob.endsWith("/*")
-    ? matchWildcardRoot(segments, glob.slice(0, -2))
-    : matchLiteralDir(segments, glob);
-}
-
-/**
- * `<root>/*` — one directory beneath a root.
- *
- * Requires a segment AFTER that directory, since a path naming the directory
- * alone names no file inside it and so names no manifest to gate.
- */
-function matchWildcardRoot(segments, root) {
-  if (segments[0] !== root) return null;
-  if (segments.length < 3 || !segments[1]) return null;
-  return `${root}/${segments[1]}`;
-}
-
-/** A bare `<dir>` entry — the directory itself, which is its own package. */
-function matchLiteralDir(segments, dir) {
-  if (segments[0] !== dir || segments.length < 2) return null;
-  return dir;
-}
-
-/**
- * Kept as the narrow form for callers that only care about published packages.
- *
- * Expressed through {@link workspaceDirsOf} rather than reimplemented, so the
- * two cannot disagree about what a package directory is.
- */
-export function changedPackageDirs(paths) {
-  return workspaceDirsOf(paths, ["packages/*"]).map(dir => dir.split("/")[1]);
-}
-
-/**
- * The pnpm filter for each directory, read from its own manifest.
- *
- * A directory whose manifest cannot be read is REPORTED rather than skipped.
- * Skipping it would shrink the gate silently, which is the failure this whole
- * module exists to prevent — and the likeliest cause is a package deleted in
- * the diff, which the author should see rather than have hidden.
- */
-export function packageFilters(dirs, readManifest) {
-  const named = dirs.map(dir => ({ dir, name: manifestName(dir, readManifest) }));
   return {
-    filters: named.filter(e => e.name !== null).map(e => e.name),
-    unreadable: named.filter(e => e.name === null).map(e => e.dir),
+    filters: [...names].sort(),
+    unreadable: [...unlisted].sort(),
   };
 }
 
-/** One directory's package name, or null when the manifest cannot answer. */
-function manifestName(dir, readManifest) {
-  try {
-    return usableName(readManifest(dir));
-  } catch {
-    return null;
-  }
+/**
+ * The workspace a path lies inside, or undefined.
+ *
+ * A segment AFTER the directory is required: a path naming the workspace
+ * directory alone names no file inside it, so there is nothing to gate.
+ */
+function ownerOf(path, workspaces) {
+  return workspaces.find(w => path.startsWith(`${w.dir}/`));
 }
 
 /**
- * The name a manifest supplies, or null.
+ * The workspace directory a path names but no workspace claims, or null.
  *
- * An empty name is null rather than the empty string: a `--filter` built from
- * one matches nothing, so it would shrink the gate while reading as coverage.
+ * A second segment is required: `packages/README.md` sits under a root without
+ * naming a workspace directory, so nothing is missing.
  */
-function usableName(manifest) {
-  const name = manifest?.name;
-  return typeof name === "string" && name.length > 0 ? name : null;
+function missingWorkspaceDir(path, roots) {
+  const root = roots.find(r => path.startsWith(`${r}/`));
+  if (root === undefined) return null;
+  const end = path.indexOf("/", root.length + 1);
+  return end === -1 ? null : path.slice(0, end);
 }
 
 /** Whether a change reaches the root `scripts/` task, which `turbo run test` does not. */
@@ -175,23 +203,26 @@ function unreadableSection(unreadable) {
   if (unreadable.length === 0) return "";
   return [
     "Directories with no readable manifest (deleted, or renamed):",
-    ...unreadable.map(d => `  packages/${d}`),
+    // Rendered as derived. Re-rooting it here produced `packages/packages/ui`
+    // and `packages/apps/playground` — nonexistent paths, in the one message
+    // whose whole job is to name the workspace that could not be gated.
+    ...unreadable.map(d => `  ${d}`),
   ].join("\n");
 }
 
-/** The workspace globs pnpm declares, so the roots are read rather than assumed. */
-export function workspaceGlobs(yaml) {
-  return yaml
-    .split("\n")
-    .map(line => line.trim())
-    .filter(line => line.startsWith("- "))
-    .map(line => line.slice(2).trim().replace(/^["']|["']$/g, ""))
-    .filter(Boolean);
-}
-
-/** Read the manifest of one workspace directory. */
-function manifestReader(cwd) {
-  return dir => JSON.parse(readFileSync(`${cwd}/${dir}/package.json`, "utf8"));
+/**
+ * Every workspace pnpm resolves, as it resolves them.
+ *
+ * A subprocess, and worth its cost: it is the only source that cannot disagree
+ * with the runner the derived filters are handed to.
+ */
+function pnpmWorkspaces(cwd) {
+  const out = execFileSync("pnpm", ["list", "-r", "--depth", "-1", "--json"], {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 32,
+  });
+  return JSON.parse(out);
 }
 
 function git(cwd, args) {
@@ -231,13 +262,14 @@ function main() {
   const base = args.find(arg => !arg.startsWith("--")) ?? "origin/main";
   const cwd = process.cwd();
   const paths = changedPaths(cwd, base);
-  const { filters, unreadable } = packageFilters(
-    workspaceDirsOf(paths, workspaceGlobs(readFileSync(`${cwd}/pnpm-workspace.yaml`, "utf8"))),
-    manifestReader(cwd)
+  const { filters, unreadable } = filtersFor(
+    paths,
+    workspacesFrom(pnpmWorkspaces(cwd), cwd)
   );
 
   if (args.includes("--filters")) emitFilters(filters, unreadable);
-  else console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
+  else
+    console.log(report({ filters, unreadable, scripts: touchesScripts(paths) }));
 }
 
 /**
@@ -252,12 +284,28 @@ function main() {
  * `git diff` reports neither an untracked file nor its directory, so a branch
  * that only ADDS files would derive an empty scope and gate nothing.
  */
-function changedPaths(cwd, base) {
+export function changedPaths(cwd, base) {
   const mergeBase = git(cwd, ["merge-base", base, "HEAD"]).trim();
   return [
-    ...git(cwd, ["diff", "--name-only", mergeBase]).split("\n"),
-    ...git(cwd, ["ls-files", "--others", "--exclude-standard"]).split("\n"),
-  ].filter(Boolean);
+    // `-z` because Git QUOTES a path containing non-ASCII or other special
+    // characters under the default `core.quotePath`, and a quoted path starts
+    // with `"` — so it matched no workspace and the only changed package was
+    // dropped in silence. NUL-delimited output is neither quoted nor escaped.
+    //
+    // `--no-renames` because rename detection reports a move as the
+    // DESTINATION alone. A file moved out of a workspace then left that
+    // workspace ungated, having lost the file. Off, Git reports the delete and
+    // the add separately, which is both sides.
+    ...nulPaths(
+      git(cwd, ["diff", "--name-only", "-z", "--no-renames", mergeBase])
+    ),
+    ...nulPaths(git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"])),
+  ];
+}
+
+/** Paths from a NUL-delimited Git listing. */
+function nulPaths(out) {
+  return out.split("\0").filter(Boolean);
 }
 
 /**
@@ -276,4 +324,24 @@ function emitFilters(filters, unreadable) {
   process.exitCode = 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
+/**
+ * Whether this module was the thing invoked, rather than imported.
+ *
+ * Compared as REAL paths. Node resolves `import.meta.url` through symlinks
+ * while `process.argv[1]` keeps the link it was called by, so comparing them
+ * directly answered false whenever the script was launched through a symlink —
+ * and a false answer here is silent: `main()` never runs, nothing is printed,
+ * and the exit status is 0, so the hook reads a no-op as an empty scope.
+ */
+function invokedDirectly() {
+  try {
+    return (
+      realpathSync(fileURLToPath(import.meta.url)) ===
+      realpathSync(process.argv[1] ?? "")
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (invokedDirectly()) main();
