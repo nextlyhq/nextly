@@ -32,6 +32,7 @@ import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
 import {
   authorizationGroups,
+  countIsTrustworthy,
   byMostRecentlyUpdated,
   eligibleCollections,
   hasTranslatableFields,
@@ -39,6 +40,7 @@ import {
   planWorklistFanOut,
   translatedFilter,
   worklistTotal,
+  worklistTotalPages,
   worklistId,
   worklistTitle,
   worklistUpdatedAt,
@@ -364,11 +366,20 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // `translationFilter` to it precisely so the two agree — so this is the
       // real size of this collection's backlog, including the part beyond
       // `limit` that these rows do not contain.
-      const total =
-        typeof result.data.totalDocs === "number"
-          ? result.data.totalDocs
-          : rows.length;
-      return { slug: null, rows, total };
+      //
+      // And a count that contradicts its own rows did not run. `listEntries`
+      // answers a failed COUNT beside successful rows with `success: true` and
+      // `totalDocs: 0`, so believing it would report a collection's whole
+      // backlog as however many rows happened to fit — the same lie as an
+      // unconsulted collection, arriving through the one path that still had a
+      // silent fallback. Such a collection is named as unconsulted and its rows
+      // are left out, so `notConsulted` keeps ONE meaning: this answer did not
+      // cover that collection. Half-covering it — rows on screen, no honest
+      // size — invites exactly the belief that the rows are all of it.
+      if (!countIsTrustworthy(result.data.totalDocs, rows.length)) {
+        return { slug: coll.slug, rows: [] as TranslationWorkRow[], total: 0 };
+      }
+      return { slug: null, rows, total: result.data.totalDocs };
     })
   );
 
@@ -389,16 +400,22 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   //
   // `total` is each collection's OWN count of matching documents, summed, never
   // the number of rows this response happens to carry — see `worklistTotal`.
+  const total = worklistTotal(
+    perCollection.map(r => r.total),
+    merged.length
+  );
   return respondList(
     rows,
     {
-      total: worklistTotal(
-        perCollection.map(r => r.total),
-        merged.length
-      ),
+      total,
       page: 1,
       limit,
-      totalPages: 1,
+      // DERIVED from the total, never asserted as 1. Claiming a single page
+      // beside a total larger than `limit` says the rows in hand are all of
+      // them — the same lie the summed total was added to remove, one field
+      // along. See `worklistTotalPages` for why this sits beside `hasNext:
+      // false` rather than contradicting it.
+      totalPages: worklistTotalPages(total, limit),
       // FALSE, always. This endpoint takes no `page` and always returns the
       // same first slice, so a consumer following `hasNext` would request a
       // second page and receive the same rows forever. Incompleteness is a

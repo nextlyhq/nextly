@@ -91,7 +91,7 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer width={CONTENT_PAGE_MEASURE}>
+    <PageContainer width="full">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
@@ -105,7 +105,13 @@ function EditEntryPageSkeleton() {
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
-        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
+        <div
+          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          // The editor that replaces this bounds its FIELD column, not the
+          // page, so a skeleton bounded at the page moves every field
+          // sideways the moment data arrives.
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -128,7 +134,7 @@ function EditEntryPageSkeleton() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
+        <div className="w-full lg:w-[320px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
           <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
             {/* Sidebar Header/Actions Skeleton */}
             <div className="p-6  border-b border-border space-y-3">
