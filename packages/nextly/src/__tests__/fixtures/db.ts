@@ -1,10 +1,12 @@
-import Database from "better-sqlite3";
+import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
+import type Database from "better-sqlite3";
 import { defineRelations } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
 import { getSchemaEventsDdl } from "../../domains/schema/events/schema-events-ddl";
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
+
+import type { Logger } from "../../services/shared";
 
 import * as schema from "./sqlite-schema";
 
@@ -13,6 +15,21 @@ import * as schema from "./sqlite-schema";
 // the full bundle relations; RQB `with:` traversal is validated by the
 // dedicated rqb-v2-conversions integration suite instead.
 export const testRelations = defineRelations(schema);
+
+/**
+ * The logger every service in these fixtures is built with.
+ *
+ * Services take `(adapter, logger)`. A shared silent one keeps that second
+ * argument from being invented per file — which is how the first argument
+ * drifted — and keeps a passing suite quiet, since a test that logs at every
+ * level buries the one line that matters when it fails.
+ */
+export const testLogger: Logger = {
+  debug() {},
+  info() {},
+  warn() {},
+  error() {},
+};
 export type TestDrizzleDb = BetterSQLite3Database<typeof testRelations>;
 
 /**
@@ -97,25 +114,49 @@ function createTables(sqlite: Database.Database) {
  * @returns Test database instance with utilities
  */
 export async function createTestDb(): Promise<{
+  /**
+   * The adapter the services under test are constructed with.
+   *
+   * A REAL `SqliteAdapter`, not an adapter-shaped object. Every service here
+   * extends `BaseService`, whose `dialect` getter reads
+   * `this.adapter.getCapabilities()`, and the auth services between them call
+   * nine different adapter methods. A hand-written stand-in has to keep pace
+   * with all of that, and the previous fixture is what happens when it does
+   * not: it handed services a Drizzle database where an adapter was expected,
+   * and 240 tests died on one line the moment `dialect` was read.
+   *
+   * A real adapter cannot drift from the interface, because it IS the
+   * implementation.
+   */
+  adapter: ReturnType<typeof createSqliteAdapter>;
   db: TestDrizzleDb;
   sqlite: Database.Database;
   schema: typeof schema;
   reset: () => Promise<void>;
-  close: () => void;
+  close: () => Promise<void>;
 }> {
-  // Create in-memory SQLite database
-  const sqlite = new Database(":memory:");
+  // The adapter owns the connection, and everything else is derived from it.
+  //
+  // The order matters and is the whole trick: `:memory:` opened twice is two
+  // unrelated databases, so the fixture cannot create its own handle and hand
+  // the adapter a URL — the tables would exist in one and the queries run
+  // against the other, silently. Instead the adapter connects, and the raw
+  // handle is taken back out of its own Drizzle instance via `$client`, which
+  // is the same object. One connection, three views of it.
+  const adapter = createSqliteAdapter({ memory: true });
+  await adapter.connect();
+
+  const sqlite = adapter.getDrizzle().$client as Database.Database;
 
   // Enable foreign keys for referential integrity
   sqlite.pragma("foreign_keys = ON");
 
-  // Create Drizzle instance. v1: the object form is required (positional
-  // silently opens a NEW :memory: db), and db.query is driven by the
-  // relations config, not a schema map.
-  const db = drizzle({ client: sqlite, relations: testRelations });
-
-  // Create tables
+  // Create tables on that same connection.
   createTables(sqlite);
+
+  // The typed view the tests read and write through. `db.query` is driven by
+  // the relations config, not a schema map.
+  const db = adapter.getDrizzle(testRelations) as TestDrizzleDb;
 
   // Helper function to reset database (clear all tables)
   const reset = async () => {
@@ -138,12 +179,14 @@ export async function createTestDb(): Promise<{
     sqlite.pragma("foreign_keys = ON");
   };
 
-  // Helper function to close database
-  const close = () => {
-    sqlite.close();
+  // Closed through the adapter, since the adapter opened it. Closing the raw
+  // handle underneath would leave the adapter believing it is still connected.
+  const close = async () => {
+    await adapter.disconnect();
   };
 
   return {
+    adapter,
     db,
     sqlite,
     schema,

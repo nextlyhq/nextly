@@ -3,7 +3,11 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  testLogger,
+  type TestDb,
+} from "../../../__tests__/fixtures/db";
 import {
   permissionFactory,
   bulkPermissionsFactory,
@@ -29,12 +33,12 @@ describe("RoleService", () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new RoleService(testDb.db, testDb.schema);
+    service = new RoleService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   describe("listRoles()", () => {
@@ -738,7 +742,7 @@ describe("RoleService", () => {
     describe("error handling", () => {
       it("should handle database errors gracefully", async () => {
         // Arrange: Close the database connection to simulate error
-        testDb.close();
+        await testDb.close();
 
         // Act: Try to list roles with closed database
         const result = await service.listRoles();
@@ -751,7 +755,7 @@ describe("RoleService", () => {
 
         // Cleanup: Recreate database for subsequent tests
         testDb = await createTestDb();
-        service = new RoleService(testDb.db, testDb.schema);
+        service = new RoleService(testDb.adapter, testLogger);
       });
     });
 
