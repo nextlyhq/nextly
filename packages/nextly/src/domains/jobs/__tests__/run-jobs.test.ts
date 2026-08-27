@@ -50,6 +50,7 @@ function store(rows: JobRow[]): JobsStore & { finalized: unknown[] } {
     },
     claim: async id => rows.find(r => r.id === id) ?? null,
     markAttempt: async () => {},
+    renewLease: async () => true,
     finalize: async input => {
       finalized.push(input);
       return true;
@@ -280,5 +281,70 @@ describe("runJobs", () => {
     });
 
     expect(result).toMatchObject({ claimed: 1, unrecorded: 1, done: 0 });
+  });
+
+  it("extends the lease while a handler is still working", async () => {
+    // The lease is otherwise a wall-clock guess about how long the work takes,
+    // and a handler that outruns it is reclaimed and run a second time
+    // CONCURRENTLY. The fence refuses the stale runner's write but cannot undo
+    // what it already did outside the database.
+    const renewals: string[] = [];
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row()]),
+      renewLease: async (_id, runnerId) => {
+        renewals.push(runnerId);
+        return true;
+      },
+    };
+
+    await runJobs({
+      store: s,
+      registry: registryWith(
+        defineJob({
+          slug: "test:noop",
+          handler: async () => {
+            await new Promise(resolve => setTimeout(resolve, 40));
+          },
+        })
+      ),
+      runAs: runAs(),
+      now: () => NOW,
+      runnerId: "runner-a",
+      renewIntervalMs: 5,
+    });
+
+    expect(renewals.length).toBeGreaterThan(0);
+    expect(renewals.every(r => r === "runner-a")).toBe(true);
+  });
+
+  it("stops renewing once the lease is no longer this runner's", async () => {
+    // Continuing would issue writes that can never apply, against a job another
+    // runner has already taken over.
+    let calls = 0;
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row()]),
+      renewLease: async () => {
+        calls += 1;
+        return false;
+      },
+    };
+
+    await runJobs({
+      store: s,
+      registry: registryWith(
+        defineJob({
+          slug: "test:noop",
+          handler: async () => {
+            await new Promise(resolve => setTimeout(resolve, 60));
+          },
+        })
+      ),
+      runAs: runAs(),
+      now: () => NOW,
+      renewIntervalMs: 5,
+    });
+
+    // One refusal is enough to stop it; without that check this would be ~12.
+    expect(calls).toBeLessThanOrEqual(2);
   });
 });

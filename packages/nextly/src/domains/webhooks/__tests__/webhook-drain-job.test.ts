@@ -13,16 +13,24 @@ import { describe, expect, it, vi } from "vitest";
 import { JobRegistry } from "../../jobs/job-registry";
 import type { FinalizeInput, JobRow } from "../../jobs/jobs-repository";
 import { runJobs, type JobsStore } from "../../jobs/run-jobs";
+import type { DeliverTx } from "../deliver";
 import type {
   WebhookDrainDatabase,
   WebhookDrainRegistry,
 } from "../drain-runner";
+import type { FanOutTx } from "../fan-out";
 import { WEBHOOK_DRAIN_JOB, createWebhookDrainJob } from "../webhook-drain-job";
 
-/** The transaction shape the drain's database surface hands its callback. */
-type WebhookDrainTx = Parameters<
-  Parameters<WebhookDrainDatabase["transaction"]>[0]
->[0];
+/**
+ * The transaction context the drain's database surface hands its callback.
+ *
+ * `WebhookDrainDatabase` is `FanOutDatabase & DeliverDatabase`, so its
+ * `transaction` is an INTERSECTION of two call signatures whose contexts differ
+ * — fan-out needs `insertMany`, delivery does not. A fake satisfying only one
+ * of them is what the previous `as any` was hiding: the cast made a fake that
+ * cannot stand in for the real dependency compile as though it could.
+ */
+type WebhookDrainTx = FanOutTx & DeliverTx;
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");
 
@@ -58,6 +66,7 @@ function store(rows: JobRow[]): JobsStore & { finalized: FinalizeInput[] } {
     },
     claim: async id => rows.find(r => r.id === id) ?? null,
     markAttempt: async () => {},
+    renewLease: async () => true,
     finalize: async input => {
       finalized.push(input);
       return true;
@@ -65,18 +74,39 @@ function store(rows: JobRow[]): JobsStore & { finalized: FinalizeInput[] } {
   };
 }
 
-/** A drain that records that it ran, standing in for the real engine. */
-const fakeAdapter = () =>
-  ({
-    select: vi.fn(async () => []),
-    update: vi.fn(async () => []),
-    transaction: vi.fn(async (fn: any) =>
-      fn({ select: async () => [], update: async () => [] })
-    ),
-  }) as any;
+/**
+ * A drain that records that it ran, standing in for the real engine.
+ *
+ * `satisfies` rather than a cast. This fake stands at the boundary of the
+ * production wiring, and a cast removes the structural check that makes it
+ * stand there: a dependency the drain gains, or one misspelled here, would keep
+ * compiling against the fake while the real call site broke.
+ */
+const fakeAdapter = () => {
+  const empty = async (): Promise<never[]> => [];
+  const tx: WebhookDrainTx = {
+    select: empty,
+    update: empty,
+    insertMany: empty,
+  };
+  const transaction: WebhookDrainDatabase["transaction"] = <T>(
+    fn: (ctx: never) => Promise<T>
+  ): Promise<T> => fn(tx as never);
+  return {
+    select: vi.fn(empty),
+    update: vi.fn(empty),
+    // Not wrapped in vi.fn: `transaction` is an intersection of two call
+    // signatures, and Mock<A & B> is not assignable to A & B. Nothing asserts
+    // on it — the drain having reached the database is observed through
+    // `select` — so wrapping it would cost the type check and buy nothing.
+    transaction,
+  } satisfies WebhookDrainDatabase;
+};
 
 const fakeRegistry = () =>
-  ({ getEnabledEndpointsFresh: vi.fn(async () => []) }) as any;
+  ({
+    getEnabledEndpointsFresh: vi.fn(async () => []),
+  }) satisfies WebhookDrainRegistry;
 
 describe("the webhook drain as a job", () => {
   it("registers under a stable slug", () => {

@@ -44,6 +44,11 @@ function executorOf(db: UsersReadDb): unknown {
     : undefined;
 }
 
+/** How long a finished job row is kept before a pass may remove it. */
+export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+/** Rows a single pass may remove, so a sweep cannot become a long delete. */
+export const DEFAULT_PRUNE_LIMIT = 100;
+
 export interface RunJobsPassOptions {
   now?: () => Date;
   runnerId?: string;
@@ -53,6 +58,13 @@ export interface RunJobsPassOptions {
   random?: () => number;
   /** Override the identity reads; the default goes to the database. */
   runAs?: RunAsDeps;
+  /**
+   * How long a finished row is kept. `null` disables removal entirely, for a
+   * deployment that would rather keep the history and prune it itself.
+   */
+  retentionMs?: number | null;
+  /** Rows one pass may remove. */
+  pruneLimit?: number;
 }
 
 /**
@@ -93,7 +105,15 @@ export function databaseRunAs(
       if (typeof row.id !== "string") return null;
       // SQLite stores a boolean as 0/1, so compare by truthiness rather than
       // identity — `row.isActive === true` is false for an active SQLite user.
-      return { id: row.id, isActive: Boolean(row.isActive) };
+      // Every attribute `RunAsUser` carries, not just the two the lease needs.
+      // `resolveRunAs` puts these on the reconstructed context because access
+      // predicates here inspect `user.email` — but it can only carry what this
+      // lookup returns, so stopping at id/isActive made that handling unable to
+      // do anything.
+      const user: RunAsUser = { id: row.id, isActive: Boolean(row.isActive) };
+      if (typeof row.name === "string") user.name = row.name;
+      if (typeof row.email === "string") user.email = row.email;
+      return user;
     },
     listRoleSlugs,
   };
@@ -105,13 +125,14 @@ export function databaseRunAs(
  * Returns once nothing further is immediately actionable or the wall-clock
  * budget is spent; jobs scheduled for a future retry are left for a later pass.
  */
-export function runJobsPass(
+export async function runJobsPass(
   adapter: JobsDatabase & UsersReadDb,
   registry: JobRegistry,
   options?: RunJobsPassOptions
 ): Promise<RunJobsResult> {
-  return runJobs({
-    store: new JobsRepository(adapter),
+  const repository = new JobsRepository(adapter);
+  const result = await runJobs({
+    store: repository,
     registry,
     runAs: options?.runAs ?? databaseRunAs(adapter),
     now: options?.now,
@@ -121,4 +142,24 @@ export function runJobsPass(
     leaseMs: options?.leaseMs,
     random: options?.random,
   });
+
+  // Prune AFTER the drain, and never in a way that can fail it. A queue without
+  // this grows forever — a recurring workload writes one row per run, and every
+  // finished row keeps its input and its error. Bounded per pass so a sweep
+  // cannot become a long delete that outlives the tick running it.
+  const retentionMs = options?.retentionMs ?? DEFAULT_RETENTION_MS;
+  if (retentionMs !== null) {
+    const now = options?.now ?? (() => new Date());
+    try {
+      await repository.pruneTerminal(
+        new Date(now().getTime() - retentionMs),
+        options?.pruneLimit ?? DEFAULT_PRUNE_LIMIT
+      );
+    } catch {
+      // Housekeeping is not the work. A failed prune must not turn a pass that
+      // ran its jobs into a pass that reports failure.
+    }
+  }
+
+  return result;
 }

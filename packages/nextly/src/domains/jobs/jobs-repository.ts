@@ -33,10 +33,14 @@ import type {
   WhereClause,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../errors";
 import type { JobState } from "../../schemas/jobs/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
 const JOBS = "nextly_jobs";
+
+/** The longest value every supported dialect can store in an indexed column. */
+const MAX_PORTABLE_KEY_LENGTH = 191;
 
 /**
  * The transaction surface the lease claim needs (subset of the adapter tx).
@@ -93,6 +97,7 @@ export interface JobsDatabase {
    * reports failure even when it succeeded. `updateCount` is the adapter's
    * documented path for a conditional update that moves a predicate column.
    */
+  delete(table: string, where: WhereClause): Promise<number>;
   updateCount(
     table: string,
     data: Record<string, unknown>,
@@ -161,6 +166,21 @@ export class JobsRepository {
    * why this is not a read-then-write.
    */
   async enqueue(input: NewJob): Promise<EnqueueResult> {
+    // The same portable bound the slug is held to. MySQL stores this in
+    // varchar(191) — the widest utf8mb4 value it will index — and refuses a
+    // longer one in strict mode, while PostgreSQL and SQLite accept it. Without
+    // this check a dedupe key works on two dialects and throws on the third, at
+    // enqueue time rather than where the caller chose the key.
+    if (
+      input.dedupeKey !== null &&
+      input.dedupeKey.length > MAX_PORTABLE_KEY_LENGTH
+    ) {
+      throw NextlyError.invalidInput({
+        message: `A job dedupe key may be at most ${MAX_PORTABLE_KEY_LENGTH} characters.`,
+        logContext: { slug: input.slug, length: input.dedupeKey.length },
+      });
+    }
+
     const id = crypto.randomUUID();
     try {
       await this.db.insert(JOBS, {
@@ -300,6 +320,66 @@ export class JobsRepository {
   }
 
   /**
+   * Extend this runner's lease while its handler is still working.
+   *
+   * Without renewal the lease is a wall-clock guess about how long a handler
+   * takes, and a handler that outruns it is reclaimed and run a second time
+   * CONCURRENTLY — the fence then refuses the first runner's write but cannot
+   * undo whatever it already did outside the database.
+   *
+   * Fenced on `locked_by` like every other write here, so a runner whose lease
+   * has already been taken cannot extend a lease it no longer holds. `false`
+   * says exactly that, and the runner uses it to stop renewing.
+   */
+  async renewLease(
+    id: string,
+    runnerId: string,
+    now: Date,
+    leaseMs: number
+  ): Promise<boolean> {
+    const affected = await this.db.updateCount(
+      JOBS,
+      { locked_until: new Date(now.getTime() + leaseMs), updated_at: now },
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "lockedBy", op: "=", value: runnerId },
+        ],
+      }
+    );
+    return affected > 0;
+  }
+
+  /**
+   * Remove terminal rows older than `before`, at most `limit` of them.
+   *
+   * A queue without this grows forever: every completed and every permanently
+   * failed execution keeps its input and its error, and a recurring workload
+   * writes one row per run. Bounded per call so a sweep cannot become a long
+   * delete that outlives the pass it runs in.
+   *
+   * Only `done` and `failed` rows are eligible. A `pending` row is outstanding
+   * work and a `running` one is somebody's in flight.
+   */
+  async pruneTerminal(before: Date, limit: number): Promise<number> {
+    const rows = await this.db.select<{ id: string }>(JOBS, {
+      columns: ["id"],
+      where: {
+        and: [
+          { column: "state", op: "IN", value: ["done", "failed"] },
+          { column: "updatedAt", op: "<", value: before },
+        ],
+      },
+      orderBy: [{ column: "updatedAt", direction: "asc" }],
+      limit,
+    });
+    if (rows.length === 0) return 0;
+    return this.db.delete(JOBS, {
+      and: [{ column: "id", op: "IN", value: rows.map(r => r.id) }],
+    });
+  }
+
+  /**
    * Record what an attempt did, ONLY if this runner still holds the lease.
    *
    * Returns false when the lease had been handed to someone else — a slow
@@ -351,16 +431,30 @@ export class JobsRepository {
     return affected > 0;
   }
 
-  /** Increment the attempt counter. Called by the runner as it starts work. */
+  /**
+   * Increment the attempt counter, ONLY while this runner holds the lease.
+   *
+   * Fenced for the same reason `finalize` is. A runner that pauses between
+   * claiming and this write can have its lease expire and be reclaimed; the
+   * successor then advances the count, and an unfenced write from the stale
+   * runner would put it back — so a job that has been attempted three times
+   * reports two, and outlives the budget meant to stop it.
+   */
   async markAttempt(
     id: string,
+    runnerId: string,
     attemptCount: number,
     now: Date
   ): Promise<void> {
-    await this.db.update(
+    await this.db.updateCount(
       JOBS,
       { attempt_count: attemptCount, updated_at: now },
-      { and: [{ column: "id", op: "=", value: id }] }
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "lockedBy", op: "=", value: runnerId },
+        ],
+      }
     );
   }
 }

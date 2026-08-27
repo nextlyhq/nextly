@@ -45,12 +45,19 @@ the first stalls long enough for the lease to lapse, another picks the job up �
 and the stalled one is then refused when it tries to record what it did, so a
 slow worker cannot overwrite the result of the one that replaced it.
 
-That is a guarantee about the RECORD, not about the work. A job whose handler
-runs longer than its lease can be picked up again while the first attempt is
-still going, and both will do whatever the handler does. Every durable queue
-works this way — it is not possible to promise otherwise once a job can touch
-something outside the database — so a handler should be written so that running
-it twice is harmless, and the lease should be set longer than the work takes.
+A job that is still being worked on holds on to its claim: the lease is extended
+while the handler runs, so ordinary long-running work does not get taken over
+part-way through.
+
+That is still a guarantee about the RECORD rather than about the work. If a
+process stalls or loses its connection, it stops extending the claim while
+whatever it was doing may still be in flight, and another process can pick the
+job up. Every durable queue works this way — it is not possible to promise
+otherwise once a job can touch something outside the database — so a handler
+should be written so that running it twice is harmless.
+
+Finished jobs are cleared out on a rolling window rather than kept forever, so a
+job that runs every few minutes does not fill the table with its own history.
 
 It will not quietly run as somebody more powerful. A job remembers who queued
 it, and it acts as that person, with their roles. If that account has since been

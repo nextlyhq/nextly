@@ -65,4 +65,35 @@ describe("databaseRunAs", () => {
     );
     await expect(deps.listRoleSlugs("u1")).rejects.toThrow(/unreachable/);
   });
+
+  it("returns the user's name and email, which the context needs to carry", async () => {
+    // resolveRunAs puts these on the reconstructed context because access
+    // predicates here inspect `user.email`. It can only carry what this lookup
+    // returns, so stopping at id/isActive made that handling unable to do
+    // anything at all.
+    const deps = databaseRunAs({
+      select: async () => [
+        { id: "u1", isActive: 1, name: "Ada", email: "ada@example.com" },
+      ],
+    });
+    await expect(deps.findUser("u1")).resolves.toEqual({
+      id: "u1",
+      isActive: true,
+      name: "Ada",
+      email: "ada@example.com",
+    });
+  });
+
+  it("omits attributes the row does not carry rather than setting them undefined", async () => {
+    // The control: spreading unconditionally would put `email: undefined` on
+    // the user, which reads as "has an email, and it is nothing" to a predicate
+    // testing presence.
+    const deps = databaseRunAs({
+      select: async () => [{ id: "u1", isActive: 1 }],
+    });
+    await expect(deps.findUser("u1")).resolves.toEqual({
+      id: "u1",
+      isActive: true,
+    });
+  });
 });

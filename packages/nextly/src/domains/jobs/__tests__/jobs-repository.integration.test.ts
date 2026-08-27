@@ -305,6 +305,82 @@ describe.each(getConfiguredTestDialects())("JobsRepository (%s)", dialect => {
     expect(second.id).not.toBe(first.id);
   });
 
+  it("removes finished rows older than the window, and only finished ones", async () => {
+    // Without this the table grows forever: a recurring workload writes one row
+    // per run and every finished row keeps its input and its error.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const old = new Date(NOW.getTime() - 30 * 24 * 3_600_000);
+
+    const done = await repo.enqueue({
+      slug: "a",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: null,
+      now: old,
+    });
+    await repo.claim(done.id, "r", old, 1_000);
+    await repo.finalize({
+      id: done.id,
+      runnerId: "r",
+      outcome: "done",
+      nextAttemptAt: null,
+      lastError: null,
+      now: old,
+    });
+
+    // Outstanding work of the same age must survive: it is not history.
+    await repo.enqueue({
+      slug: "b",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: null,
+      now: old,
+    });
+
+    const removed = await repo.pruneTerminal(
+      new Date(NOW.getTime() - 7 * 24 * 3_600_000),
+      100
+    );
+    expect(removed).toBe(1);
+    expect(
+      (await repo.findDue({ now: NOW, limit: 10 })).map(j => j.slug)
+    ).toEqual(["b"]);
+  });
+
+  it("keeps a finished row that is still inside the window", async () => {
+    // The control: a prune that removed everything terminal would satisfy the
+    // case above while deleting a job that finished a minute ago.
+    const app = await boot(dialect);
+    const repo = new JobsRepository(app.adapter);
+    const recent = await repo.enqueue({
+      slug: "a",
+      input: {},
+      runAt: null,
+      runAsUserId: null,
+      dedupeKey: null,
+      now: NOW,
+    });
+    await repo.claim(recent.id, "r", NOW, 1_000);
+    await repo.finalize({
+      id: recent.id,
+      runnerId: "r",
+      outcome: "done",
+      nextAttemptAt: null,
+      lastError: null,
+      now: NOW,
+    });
+
+    expect(
+      await repo.pruneTerminal(
+        new Date(NOW.getTime() - 7 * 24 * 3_600_000),
+        100
+      )
+    ).toBe(0);
+  });
+
   it("still refuses a duplicate while the first job is STILL ACTIVE", async () => {
     // The control for the case above: releasing the key on completion must not
     // become releasing it always, or duplicate suppression stops working at all.
