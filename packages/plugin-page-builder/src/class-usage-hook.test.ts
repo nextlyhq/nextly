@@ -185,12 +185,19 @@ describe("the draft split it asks for", () => {
 
     await fire();
 
-    // The draft subject goes through the detail path; the published subject
-    // through the list path. One call each, to different readers.
-    expect(api.findByID).toHaveBeenCalledTimes(1);
+    // Both subjects are read by id, because a lifecycle filter constrains the
+    // main row and the localized companion together and drops documents that
+    // are legitimately in neither state. The variants differ only in whether
+    // they opt into the working-draft overlay.
+    expect(api.findByID).toHaveBeenCalledTimes(2);
+    expect(api.findByID.mock.calls.map(c => c[0].draft)).toEqual([
+      undefined,
+      true,
+    ]);
+    // The document is never read through the list path.
     expect(
       api.find.mock.calls.filter(c => c[0].collection === "pages")
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 
   it("enumerates only the published variant when it does not", async () => {
@@ -202,11 +209,15 @@ describe("the draft split it asks for", () => {
 
     await fire();
 
-    // Published only: the list read is used, and the detail read is not.
-    expect(api.findByID).not.toHaveBeenCalled();
+    // Published only, and read WITHOUT opting into the working draft. Its row
+    // is not filtered by lifecycle: this collection has status but no draft
+    // split, so the single subject must be read whatever state that row is in
+    // — filtering it to published indexes an unpublished document nowhere.
+    expect(api.findByID).toHaveBeenCalledTimes(1);
+    expect(api.findByID.mock.calls[0]?.[0].draft).toBeUndefined();
     expect(
       api.find.mock.calls.filter(c => c[0].collection === "pages")
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   });
 });
 
@@ -246,16 +257,13 @@ describe("failure, on a write that has already committed", () => {
     const { fire, api, errors } = harness({
       draftSplit: async () => ({ eligible: true }),
     });
-    api.find.mockRejectedValueOnce(new Error("index unavailable"));
+    api.findByID.mockRejectedValueOnce(new Error("document unreadable"));
 
     await expect(fire()).rejects.toThrow(/1 of 2 subject\(s\)/);
 
-    // Both subjects were read — one through each path — so the second was not
-    // skipped by the first failing.
-    expect(api.findByID).toHaveBeenCalledTimes(1);
-    expect(
-      api.find.mock.calls.filter(c => c[0].collection === "pages")
-    ).toHaveLength(1);
+    // Both subjects were read, so the second was not skipped by the first
+    // failing.
+    expect(api.findByID).toHaveBeenCalledTimes(2);
     // And the detail reaches the logger, which the thrown summary cannot carry.
     expect(errors).toHaveLength(1);
   });

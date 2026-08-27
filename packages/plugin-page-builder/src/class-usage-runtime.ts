@@ -132,9 +132,10 @@ export function classUsageIndexStore(
  * The three mappings here are the whole reason this file exists, and each is a
  * place the index can be filed against the wrong document:
  *
- * The VARIANT decides which read can answer. A draft is asked for in two ways
- * because two different stored things are both drafts — see `readDraft`. A
- * published subject is asked for through the lifecycle filter alone.
+ * The VARIANT decides only whether the read opts into the working draft.
+ * Neither read carries a lifecycle filter, because an explicit `status`
+ * constrains the main row and the localized companion TOGETHER and drops
+ * documents that are legitimately in neither state — see `readPublished`.
  *
  * `locale` is the subject's, except that the SHARED sentinel is sent as
  * `undefined` rather than as `""`. A shared field stores one value that every
@@ -152,111 +153,99 @@ export function classUsageDocumentReader(
     const row =
       subject.variant === "draft"
         ? await readDraft(nextly, subject)
-        : await readByLifecycle(nextly, subject, "published");
+        : await readPublished(nextly, subject);
     return documentIn(row, subject);
   };
 }
 
 /**
- * The document a DRAFT subject names, which two different reads can hold.
+ * The document a DRAFT subject names.
  *
- * "Is this a draft" has one authoritative answer and it is not a property of
- * any single column, which is why this asks twice instead of inspecting a row.
+ * A document published and edited since keeps its main row published and its
+ * pending edits in a SIDECAR, and only the by-id read overlays that sidecar.
+ * The marker is set exactly when one was surfaced
+ * (`collection-query-service.ts:3378`), so it identifies the overlay and
+ * nothing else — this call falls back to the live row when there is no
+ * sidecar, and answering that would file published classes under a draft that
+ * does not exist.
  *
- * A document that has been published and edited since keeps its main row
- * published and its pending edits in a SIDECAR. Only the by-id read overlays
- * that sidecar, and the overlay is the more current draft content, so it is
- * asked for first and wins.
- *
- * Everything else that is a draft is a stored ROW whose lifecycle state says
- * so, and the list read's `status` filter is the only thing that can name it:
- * it is authoritative and it also constrains a localized companion's own
- * `_status`. That covers the two cases no marker can:
- *
- * - a document that has NEVER been published, whose main row is itself the
- *   draft with no sidecar to overlay and therefore no marker;
- * - a non-default LOCALE that was explicitly unpublished while the default
- *   stays published, where the companion goes draft and the main row is
- *   deliberately left published
- *   (`domains/i18n/writes-status.integration.test.ts:157`).
- *
- * Reading the main row's `status` answered the first of those and got the
- * second exactly backwards, because that column belongs to the entry and not
- * to the language being asked about. Both were the same mistake: deriving a
- * lifecycle answer from a column instead of from the filter that owns it.
- *
- * A published document with no pending draft is refused by both reads — no
- * marker on the by-id fallback, and nothing matching `status: "draft"` — which
- * is correct, because it has no draft variant to record.
+ * Nothing is lost by refusing it, because the published subject below reads
+ * the main row WITHOUT a lifecycle filter. A document whose only row is a
+ * draft is therefore recorded under that subject rather than nowhere, which is
+ * where the never-published case is answered.
  */
 async function readDraft(
   nextly: ClassUsageDirectApi,
   subject: ClassUsageSubject
 ): Promise<unknown> {
-  const overlaid = await readWorkingDraftOverlay(nextly, subject);
-  if (overlaid !== undefined) return overlaid;
-  return readByLifecycle(nextly, subject, "draft");
-}
-
-/**
- * The pending working draft, which only the DETAIL read can produce.
- *
- * The overlay is implemented only on the by-id path (`includeWorkingDraft`,
- * `collection-query-service.ts:2722`). The marker is set exactly when a sidecar
- * was surfaced (`collection-query-service.ts:3378`), so it identifies the
- * overlay and nothing else — this call falls back to the live row when there is
- * no sidecar, and answering that would file published classes under a draft.
- */
-async function readWorkingDraftOverlay(
-  nextly: ClassUsageDirectApi,
-  subject: ClassUsageSubject
-): Promise<unknown> {
-  const row = await nextly.findByID({
-    collection: subject.entity,
-    id: subject.entityKey,
-    draft: true,
-    ...localeOptions(subject),
-    depth: 0,
-    // No error suppression. `disableErrors` converts EVERY unsuccessful result
-    // to null, not only a missing row — so a failing `afterRead` hook or a
-    // broken overlay query would read as "this document has no draft", and the
-    // subject would be left alone with the caller told nothing. A raised
-    // failure is reported instead, which is what tells a caller the index is
-    // stale.
-    //
-    // Nothing is lost by dropping it: a document with no pending draft is a
-    // SUCCESSFUL read of the live row, which the marker test below refuses.
-    // Absence and failure were never the same answer here.
-    ...AS_THE_SYSTEM,
-  });
-  const record = rowForSubject(row, subject);
+  const record = await readById(nextly, subject, { draft: true });
   if (record === undefined) return undefined;
   return record._isWorkingDraft === true ? record : undefined;
 }
 
 /**
- * The row this document has in one lifecycle state, through the filter.
+ * The document a PUBLISHED subject names, read WITHOUT a lifecycle filter.
  *
- * The list read is the only one carrying `status`, which is authoritative and
- * also constrains a localized companion's own `_status`. The by-id path has no
- * lifecycle parameter at all, so it can neither name a variant nor see a
- * per-language one.
+ * The obvious shape here is `find({ status: "published" })`, and it is wrong in
+ * three ways that all lose rows. `listEntries` pushes
+ * `eq(schema.status, statusFilter.value)` for the MAIN row and then hands the
+ * same value to the localized context for the companion's `_status`
+ * (`collection-query-service.ts:1143-1159`), so an explicit status is a
+ * CONJUNCTION over both:
+ *
+ * - a translation unpublished while the default stays published has a draft
+ *   companion under a published main row, and matches neither `published` nor
+ *   `draft`;
+ * - the inverse state matches neither, symmetrically;
+ * - a collection with `status: true` whose draft split is INELIGIBLE (drafts
+ *   off, or a reachable password field) enumerates only this subject, so
+ *   filtering it to `published` excludes its sole row whenever the entry is
+ *   currently a draft — indexing that document nowhere at all.
+ *
+ * The by-id read applies no lifecycle filter for a trusted caller:
+ * `resolveStatusFilter` returns null when `overrideAccess` is set and no status
+ * is named (`lib/status-filter.ts`), and this asks as the system. So it answers
+ * the row that exists, whatever state it is in.
+ *
+ * The cost is an over-count and it is the direction to fail in: a document
+ * whose only row is a draft has its classes recorded under this subject, which
+ * warns about a delete that was safe. Filtering it away permits deleting a
+ * class a live document still renders, and only one of those is recoverable.
  */
-async function readByLifecycle(
+async function readPublished(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject
+): Promise<unknown> {
+  return readById(nextly, subject, {});
+}
+
+/**
+ * One by-id read of this subject's document, as the system.
+ *
+ * Shared so the locale, the depth, the error policy and the identity check are
+ * stated once. The variants differ only in whether they opt into the working
+ * draft.
+ */
+async function readById(
   nextly: ClassUsageDirectApi,
   subject: ClassUsageSubject,
-  status: "published" | "draft"
-): Promise<unknown> {
-  const page = await nextly.find({
+  options: { draft?: boolean }
+): Promise<Record<string, unknown> | undefined> {
+  const row = await nextly.findByID({
     collection: subject.entity,
-    where: { id: { equals: subject.entityKey } },
-    limit: 1,
-    status,
+    id: subject.entityKey,
+    ...options,
     ...localeOptions(subject),
     depth: 0,
+    // No error suppression. `disableErrors` converts EVERY unsuccessful result
+    // to null, not only a missing row — so a failing `afterRead` hook or a
+    // broken overlay query would read as "this document is not there", and the
+    // subject would be left alone with the caller told nothing. A raised
+    // failure is reported instead, which is what tells a caller the index is
+    // stale.
     ...AS_THE_SYSTEM,
   });
-  return rowForSubject(page.items[0], subject);
+  return rowForSubject(row, subject);
 }
 
 /**
