@@ -90,6 +90,29 @@ describe("BasicsTab", () => {
     expect(last.slug).toBe("about-page");
   });
 
+  it("resumes auto-deriving when the slug is cleared", async () => {
+    // The half of the predicate that is easy to miss: `!values.slug` counts as
+    // still-automatic, so an EMPTY slug is not an override even though it
+    // differs from the derived value. Someone who deletes a slug to start over
+    // gets tracking back rather than a field pinned to the empty string.
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Controlled
+        fields={["singularName", "slug"]}
+        initial={{ singularName: "Blog", slug: "custom" }}
+        onChange={onChange}
+      />
+    );
+
+    await user.clear(screen.getByRole("textbox", { name: /slug/i }));
+    onChange.mockClear();
+    await user.type(screen.getByLabelText(/singular name/i), "ger");
+
+    const last = onChange.mock.lastCall?.[0] as BuilderSettingsValues;
+    expect(last.slug).toBe("blogger");
+  });
+
   it("stops auto-deriving slug after the user overrides it", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -101,13 +124,15 @@ describe("BasicsTab", () => {
       />
     );
 
-    // The slug has to hold a value that is NOT what the singular name would
-    // derive, because that difference is the whole mechanism. `setSingular`
-    // keeps deriving only while `values.slug` still equals the slug its
-    // previous singular name produced; once the two differ it treats the slug
-    // as overridden and stops. No flag records the override — it is recomputed
-    // from the values on every keystroke — so any route to a differing slug,
-    // typed or programmatic, ends the tracking identically.
+    // The slug has to hold a NON-EMPTY value that is not what the singular
+    // name would derive, and both halves matter. `setSingular` keeps deriving
+    // while `!values.slug || values.slug === previousAutoSlug`, so an empty
+    // slug is still an automatic one — typing a differing value is what ends
+    // the tracking, and clearing the field would resume it.
+    //
+    // No flag records the override; it is recomputed from the values on every
+    // keystroke, so any route to a differing non-empty value ends tracking
+    // identically, typed or programmatic.
     const slugInput = screen.getByRole("textbox", { name: /slug/i });
     await user.clear(slugInput);
     await user.type(slugInput, "post");
@@ -164,7 +189,7 @@ describe("BasicsTab", () => {
   });
 });
 
-describe("BasicsTab -- 3-col layout for kinds without plural", () => {
+describe("BasicsTab -- the three basics a kind without a plural renders", () => {
   it("renders singular, slug, and icon when pluralName is omitted from fields", () => {
     render(
       <BasicsTab

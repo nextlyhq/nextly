@@ -75,10 +75,18 @@ export function BasicsTab({
     </div>
   );
 
-  // Auto-derive slug AND plural from singular name UNLESS the user has
-  // overridden either. Override signal: current value differs from what an
-  // auto-derive of the OLD singular would have produced. As soon as the
-  // user stamps their own value, the auto-derive stops for that field.
+  // Auto-derive slug AND plural from the singular name until the field holds
+  // a value of its own. "Of its own" is the literal test below and is worth
+  // reading rather than paraphrasing: `!values.slug || values.slug ===
+  // previousAutoSlug`. Two states count as still-automatic — EMPTY, and equal
+  // to what the OLD singular name would have derived — so clearing the field
+  // resumes tracking rather than pinning it to the empty string, which is what
+  // someone who deletes a slug to start over expects.
+  //
+  // Nothing records the override; it is recomputed from the values on every
+  // keystroke. So any route to a differing non-empty value ends tracking
+  // identically, typed or programmatic, and editing back to the derived form
+  // resumes it.
   const setSingular = (singular: string) => {
     const previousAutoSlug = toSlug(values.singularName);
     const isStillAutoSlug = !values.slug || values.slug === previousAutoSlug;
@@ -100,10 +108,11 @@ export function BasicsTab({
   return (
     <div className="space-y-4 py-2">
       {/* A kind with no plural name (singles, components) has three basics
-          rather than four, so they share one row instead of leaving a gap
-          where the plural would have been. Collections keep the 2x2 grid —
-          singular with plural, slug with icon — which pairs each field with
-          the one it relates to. Both collapse to a single column on mobile. */}
+          rather than four, and they flow through the same two-column grid: at
+          `sm` and wider, singular and slug share the first row and the icon
+          wraps onto a second. Collections have four and fill a 2x2 —
+          singular with plural, slug with icon. Both collapse to one column
+          below `sm`. */}
       {!hasPlural &&
         (fields.includes("singularName") ||
           fields.includes("slug") ||
