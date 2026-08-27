@@ -29,3 +29,5 @@
 An empty container on the page-builder canvas now offers an Add control that puts the new block inside it. Pressing it selects the container and opens the insert panel in one step, so the block you choose next lands inside rather than beside it.
 
 A container you have positioned `fixed` or `sticky` is not offered one, because it stops travelling with the page the control is drawn over and the control would come to rest on unrelated content. Select it and insert as before to fill it.
+
+Nor is a container inside a wrapper you have set to `display: none`, since nothing of it is on the canvas to put a control on. It comes back the moment the wrapper is shown again, and selecting it and inserting fills it either way.

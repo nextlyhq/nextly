@@ -13,7 +13,9 @@
  * - the cases that need a rendered canvas STUB each element's rectangle first
  *   — the same thing `canvas-drag.test.tsx` does — and then drive the resize
  *   the component already subscribes to, so what is measured is a real
- *   rectangle rather than jsdom's zero.
+ *   rectangle rather than jsdom's zero. Whether an element generates a box at
+ *   all is stubbed there too and separately, since jsdom reports none for
+ *   every element — see `layout` and `laidOut`.
  *
  * The cases that assert only which controls EXIST mount no canvas at all, and
  * deliberately: which containers get a control comes from the document alone.
@@ -536,6 +538,47 @@ function canvasRootIn(container: HTMLElement, which = 0): HTMLElement {
 }
 
 /**
+ * Whether the render lays a box out for this element at all.
+ *
+ * jsdom performs no layout, so `getClientRects` answers with nothing for every
+ * element and the component's no-box refusal would decline every container in
+ * this file. What jsdom DOES resolve is the cascade: a `display` stored on a
+ * node compiles into the page's own `<style>` and reaches `getComputedStyle`,
+ * so the fixture's own value is what decides the answer here rather than a
+ * per-case flag.
+ *
+ * The rule applied is the one measured in Chromium: an element inside a
+ * subtree whose root computes `display: none` generates no box, and neither
+ * does that root. So the walk climbs, and it climbs past the canvas root
+ * because a hidden ancestor anywhere above has the same effect.
+ */
+function laidOut(element: Element): boolean {
+  for (
+    let node: Element | null = element;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (getComputedStyle(node).display === "none") return false;
+  }
+  return true;
+}
+
+/**
+ * The layout boxes an element generates, in the shape `getClientRects`
+ * returns them.
+ *
+ * An array carrying `item` rather than a cast: `DOMRectList` is a numeric
+ * index, a `length` and that method, and an array already supplies the first
+ * two — so the composed value satisfies the interface as it stands.
+ */
+function rectsOf(rects: readonly DOMRect[]): DOMRectList {
+  const list = [...rects];
+  return Object.assign(list, {
+    item: (index: number): DOMRect | null => list[index] ?? null,
+  });
+}
+
+/**
  * Give a rendered canvas the rectangles jsdom never lays out.
  *
  * Every element reports the canvas's own box first, so no wrapper between a
@@ -543,6 +586,13 @@ function canvasRootIn(container: HTMLElement, which = 0): HTMLElement {
  * empty string rather than `visible`, so an ancestor left unstubbed would
  * report a zero-sized clip rectangle and cut every node inside it. The named
  * nodes are then overridden with the boxes the case is about.
+ *
+ * The FRAGMENT count is stubbed beside the rectangle, and separately from it:
+ * an element that generates a box reports exactly one whatever rectangle it
+ * was given, and an element inside a hidden subtree reports none however large
+ * a rectangle it was given. Keeping the two apart is what lets a case assert
+ * that a container is refused for generating no box rather than for measuring
+ * nothing.
  */
 function layout(
   container: HTMLElement,
@@ -553,6 +603,12 @@ function layout(
   const stub = (element: Element, box: Box): void => {
     element.getBoundingClientRect = () =>
       new DOMRect(box.x, box.y, box.width, box.height);
+    element.getClientRects = () =>
+      rectsOf(
+        laidOut(element)
+          ? [new DOMRect(box.x, box.y, box.width, box.height)]
+          : []
+      );
   };
   stub(root, CANVAS_BOX);
   // `forEach` rather than `for...of`: this package's `lib` predicates
@@ -687,6 +743,51 @@ describe("which containers it actually draws a control on", () => {
               version: 1,
               props: {},
               name: "Clipped box",
+            },
+          ],
+        },
+      },
+    ],
+  };
+
+  /**
+   * An empty container inside a wrapper the author has hidden.
+   *
+   * `display` is a catalog keyword, so `none` is a value an author stores, and
+   * the wrapper is where it can still take effect: it holds a child, so it is
+   * not `:empty` and `builder-chrome.css`'s rule — which outranks the compiled
+   * per-node one — never reaches it. The container inside is untouched by that
+   * choice as far as every other question goes. It renders, it carries the
+   * slots marker, it is `:empty`, its own `display` computes to whatever the
+   * page gives it, it is `static`, and no ancestor clips it. It simply has no
+   * box.
+   */
+  const NESTED_IN_HIDDEN: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "wide",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Wide box",
+      },
+      {
+        id: "hidden-wrapper",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Hidden wrapper",
+        styles: { base: { base: { display: "none" } } },
+        slots: {
+          children: [
+            {
+              id: "inside-hidden",
+              type: "acme/empty-container-appender-box",
+              version: 1,
+              props: {},
+              name: "Box in a hidden wrapper",
             },
           ],
         },
@@ -909,6 +1010,43 @@ describe("which containers it actually draws a control on", () => {
     ).toBeNull();
   });
 
+  it("draws NO control on a container the render lays out no box for", () => {
+    /*
+     * The NO-BOX refusal, which no other branch here stands in for. The
+     * container's element exists, matches the stylesheet's whole rule, is
+     * `static` and is clipped by nothing — so every other refusal accepts it,
+     * and what is left is that a hidden wrapper above it means the render lays
+     * out no box for it. `getBoundingClientRect` still answers, with the zero
+     * rectangle, so a pass that measured on would draw a button of no area
+     * that a keyboard still reaches.
+     *
+     * Stubbed with a 400x200 rectangle DELIBERATELY, the same size as the
+     * positive control's. The refusal cannot then be coming from a container
+     * that measured nothing: the fragment count is what differs, which is the
+     * question the component asks.
+     *
+     * The wrapper's computed `display` is asserted first, so the absence below
+     * is known to be about a container that really is inside a hidden subtree
+     * rather than about a fixture whose styles never compiled — an element no
+     * rule reaches computes to jsdom's own default, not to `none`. `Wide box`
+     * is the positive control, in the same render and the same measurement
+     * pass, because an absence assertion alone is satisfied by a component
+     * that drew nothing anywhere.
+     */
+    const container = measuredCanvas(NESTED_IN_HIDDEN, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      "inside-hidden": { x: 0, y: 400, width: 400, height: 200 },
+    });
+
+    expect(computedStyleOf(container, "hidden-wrapper").display).toBe("none");
+    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(
+      screen.queryByRole("button", {
+        name: "Add a block to Box in a hidden wrapper",
+      })
+    ).toBeNull();
+  });
+
   it("draws NO control on a container the render does not produce", () => {
     /*
      * The UNRENDERED refusal, and the only one with no element to ask anything
@@ -986,13 +1124,22 @@ describe("which containers it actually draws a control on", () => {
     ],
   };
 
-  /** The computed `position` of one node's rendered element. */
-  function computedPositionOf(container: HTMLElement, id: string): string {
+  /**
+   * The computed style of one node's rendered element.
+   *
+   * One entry point returning the whole declaration rather than a reader per
+   * property: each case asks about the value its own fixture stores, and the
+   * varying part is which property that is.
+   */
+  function computedStyleOf(
+    container: HTMLElement,
+    id: string
+  ): CSSStyleDeclaration {
     const element = canvasRootIn(container).querySelector(
       `[${NODE_ID_ATTRIBUTE}="${id}"]`
     );
     if (element === null) throw new Error(`no element for ${id}`);
-    return getComputedStyle(element).position;
+    return getComputedStyle(element);
   }
 
   it("draws NO control on a container the author pinned to the viewport", () => {
@@ -1016,7 +1163,9 @@ describe("which containers it actually draws a control on", () => {
       "pinned-to-viewport": { x: 0, y: 400, width: 400, height: 200 },
     });
 
-    expect(computedPositionOf(container, "pinned-to-viewport")).toBe("fixed");
+    expect(computedStyleOf(container, "pinned-to-viewport").position).toBe(
+      "fixed"
+    );
     expect(drawnAt("Anchored box")).toEqual(["178px", "78px", "44px", "44px"]);
     expect(
       screen.queryByRole("button", { name: "Add a block to Fixed box" })
@@ -1037,7 +1186,7 @@ describe("which containers it actually draws a control on", () => {
       "pinned-to-scrollport": { x: 0, y: 400, width: 400, height: 200 },
     });
 
-    expect(computedPositionOf(container, "pinned-to-scrollport")).toBe(
+    expect(computedStyleOf(container, "pinned-to-scrollport").position).toBe(
       "sticky"
     );
     expect(drawnAt("Anchored box")).toEqual(["178px", "78px", "44px", "44px"]);

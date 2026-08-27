@@ -136,12 +136,14 @@
  *
  * - MEASURED — the pass found the element, accepted it, and holds a rectangle.
  * - DECLINED — the pass reached this container and refused it, for one of
- *   four reasons: the render produced no element for it at all, the
+ *   five reasons: the render produced no element for it at all; the
  *   stylesheet drew no box for the element it did produce (see the section
- *   above), the author positioned it against the VIEWPORT rather than against
- *   the page, or an authored ancestor clips it (the last two: see `measure`).
- *   All four are re-decided on every pass, so each is a refusal for as long as
- *   the render keeps this shape rather than a permanent one.
+ *   above); the render laid out no box for that element, because something
+ *   between it and the root generates none; the author positioned it against
+ *   the VIEWPORT rather than against the page; or an authored ancestor clips
+ *   it. `measure` states each one where it is asked. All five are re-decided
+ *   on every pass, so each is a refusal for as long as the render keeps this
+ *   shape rather than a permanent one.
  * - UNMEASURED — no pass has run at all, because there is no canvas root to
  *   run one against. Nothing has been asked about any container yet.
  *
@@ -202,6 +204,7 @@ import {
   canvasContentRect,
   canvasRootFrom,
   clippedByAncestorRect,
+  layoutFragments,
   viewportPositioned,
 } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
@@ -523,6 +526,44 @@ export function EmptyContainerAppenders({
        * happens to be about this element.
        */
       if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
+        next.set(container.id, DECLINED);
+        continue;
+      }
+      /*
+       * The render lays out no box for this element, so there is nothing on
+       * the canvas for a control to be anchored to.
+       *
+       * `getBoundingClientRect` still answers for such an element — with the
+       * zero rectangle — so measuring on would centre a square of no area at
+       * the canvas origin. That is the same focusable, named, invisible button
+       * the refusals around this one exist to prevent, arriving through an
+       * element the render kept and never laid out.
+       *
+       * An ANCESTOR is what puts a container here. Its own `display` cannot:
+       * `builder-chrome.css` gives the very selector matched above
+       * `display: block` at five compound units of specificity, outranking the
+       * three of the per-node rule an author's `display: none` or
+       * `display: contents` compiles into — measured in Chromium, a container
+       * carrying either still computed to `block` and generated its box. A
+       * node BETWEEN this one and the root is under no such rule, because a
+       * node holding a child is not `:empty`, so an author who hides a wrapper
+       * leaves every empty container inside it rendered, matching, and
+       * generating nothing. Where that rule is not in force at all the
+       * element's own keyword reaches this too, and the answer is the same.
+       *
+       * `layoutFragments` rather than a rectangle's area judged here. Whether
+       * an element generates a box is `geometry-dom.ts`'s question and
+       * `SpacingOverlay` already refuses on the same answer; the area is a
+       * consequence of it rather than a second reading, since the rule matched
+       * above draws a dashed border and a 2.75rem minimum height, so an
+       * element that generates a box measures more than nothing.
+       *
+       * Re-decided on the next pass like every refusal beside it: an edit that
+       * un-hides the wrapper changes `document`, and a recompiled sheet that
+       * does the same reaches the `MutationObserver` in `watchCanvasFor`, so
+       * either way something re-measures and the control comes back.
+       */
+      if (layoutFragments(target) === 0) {
         next.set(container.id, DECLINED);
         continue;
       }
