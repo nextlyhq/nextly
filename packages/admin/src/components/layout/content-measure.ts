@@ -23,6 +23,8 @@
  * @module components/layout/content-measure
  */
 
+import { SHELL_MEASURE } from "@nextlyhq/ui";
+
 import type { PageContainerProps } from "@admin/types/layout/page-container";
 
 /**
@@ -30,23 +32,22 @@ import type { PageContainerProps } from "@admin/types/layout/page-container";
  * is a compile error here rather than a silently ignored attribute at fifteen
  * call sites.
  */
-export const CONTENT_PAGE_MEASURE: keyof typeof CAPPED_MEASURE_TOKEN = "wide";
+export const CONTENT_PAGE_MEASURE: CappedMeasure = "wide";
 
 /**
- * The token each CAPPED measure resolves to.
+ * The widths that CAP the content column, which is every width except `full`.
  *
- * `full` is deliberately absent rather than mapped to null. It is the absence
- * of a cap, so it has no length to convert to, and an entry for it would need a
- * fallback — which is a wrong answer waiting to be returned rather than a
- * missing one. Leaving it out makes `CONTENT_PAGE_MEASURE` below unassignable
- * from `full`, so the case cannot arise instead of being handled badly.
+ * Named as a type rather than a second table of tokens: `SHELL_MEASURE` already
+ * maps each width to its value, and restating those tokens here would be a
+ * second answer to a question the shell owns — one that drifts silently,
+ * because both copies look correct beside their own neighbours.
+ *
+ * `full` is excluded because it is the absence of a cap, so it has no length a
+ * content column could take. Excluding it here makes `CONTENT_PAGE_MEASURE`
+ * unassignable from it, so the case cannot arise rather than being handled with
+ * a fallback that would quietly return the wrong measure.
  */
-const CAPPED_MEASURE_TOKEN = {
-  form: "--nx-measure-form",
-  wide: "--nx-measure-wide",
-} as const satisfies Partial<
-  Record<NonNullable<PageContainerProps["width"]>, string>
->;
+type CappedMeasure = Exclude<NonNullable<PageContainerProps["width"]>, "full">;
 
 /**
  * The content measure as a CSS length, for content that bounds its own column.
@@ -58,4 +59,4 @@ const CAPPED_MEASURE_TOKEN = {
  * the disagreement this module exists to prevent, and writing the token out
  * again by hand is how it would return.
  */
-export const CONTENT_MEASURE_LENGTH = `var(${CAPPED_MEASURE_TOKEN[CONTENT_PAGE_MEASURE]})`;
+export const CONTENT_MEASURE_LENGTH = SHELL_MEASURE[CONTENT_PAGE_MEASURE];

@@ -577,7 +577,7 @@ export type { FormActionsProps } from "./types/form-layout";
  * second inset and a full-bleed child does not have to be rendered outside the
  * measure in order to escape it. No first-party plugin has exercised it yet.
  */
-export { Bleed, PageShell } from "./components/page-shell";
+export { Bleed, PageShell, SHELL_MEASURE } from "./components/page-shell";
 /**
  * @experimental A page's own identity — trail, name, summary and actions — fed
  * entirely by props, so a page declares what it is instead of a foreign file
