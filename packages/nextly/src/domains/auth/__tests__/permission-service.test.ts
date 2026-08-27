@@ -2,7 +2,11 @@ import { randomUUID } from "crypto";
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  type TestDb,
+  testLogger,
+} from "../../../__tests__/fixtures/db";
 import { permissionFactory } from "../../../__tests__/fixtures/permissions";
 import { roleFactory } from "../../../__tests__/fixtures/roles";
 import {
@@ -20,12 +24,12 @@ describe("PermissionService - Smoke Tests", () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new PermissionService(testDb.db, testDb.schema);
+    service = new PermissionService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   describe("listPermissions()", () => {
@@ -705,7 +709,7 @@ describe("PermissionService - Smoke Tests", () => {
     describe("error handling", () => {
       it("should handle database errors gracefully", async () => {
         // Arrange: Close the database connection to simulate error
-        testDb.close();
+        await testDb.close();
 
         // Act: Try to list permissions with closed database
         const result = await service.listPermissions();
@@ -718,7 +722,7 @@ describe("PermissionService - Smoke Tests", () => {
 
         // Cleanup: Recreate database for subsequent tests
         testDb = await createTestDb();
-        service = new PermissionService(testDb.db, testDb.schema);
+        service = new PermissionService(testDb.adapter, testLogger);
       });
     });
   });
