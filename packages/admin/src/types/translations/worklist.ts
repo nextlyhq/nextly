@@ -46,6 +46,30 @@ export function worklistStateFrom(raw: string | undefined): WorklistState {
   );
 }
 
+/**
+ * The language this worklist is actually answering for.
+ *
+ * A URL value is a request, not a fact, and the one that matters here is the
+ * SOURCE language. It is a configured locale, so the server accepts it — and
+ * then answers nonsense: nothing is ever "missing" in the language everything
+ * is written in, while "translated" matches every document on the site. Both
+ * are confident, neither is true, and nothing on the screen suggests the
+ * language was the problem. A saved link outliving a change of default locale
+ * is enough to produce it.
+ *
+ * So the URL is honoured only when it names a real target, and otherwise the
+ * first target answers. Returns `undefined` only when there is no target at
+ * all, which is a site with one language — a worklist that can never have a
+ * row, and which the component reports as such.
+ */
+export function resolveActiveTarget(
+  requested: string | undefined,
+  targets: readonly string[]
+): string | undefined {
+  if (requested !== undefined && targets.includes(requested)) return requested;
+  return targets[0];
+}
+
 /** One document's outstanding work in one language. */
 export interface TranslationWorkRow {
   /** Collection slug — also how the row is opened. */

@@ -185,4 +185,61 @@ describe("TranslationWorklist", () => {
       screen.getByRole("button", { name: "Translate Ada Lovelace" })
     ).toBeInTheDocument();
   });
+
+  it("does not answer for the SOURCE language when a stale URL asks for it", () => {
+    // `en` is a configured locale, so the server accepts it and answers
+    // confidently: nothing is ever missing in the language everything is
+    // written in. A link saved before the default locale changed is enough to
+    // produce that, and nothing on screen would blame the language.
+    worklistQuery.mockClear();
+    renderWorklist({ locale: "en" });
+    expect(worklistQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "es" })
+    );
+  });
+
+  it("puts the URL back in step with the language it actually answered for", () => {
+    // Otherwise the address bar keeps naming a language the screen is not
+    // showing, and a copied link reproduces the wrong view rather than this one.
+    const onLocaleChange = vi.fn();
+    renderWorklist({ locale: "en", onLocaleChange });
+    expect(onLocaleChange).toHaveBeenCalledWith("es");
+  });
+
+  it("does not write a language into a URL that deliberately named none", () => {
+    // Arriving from the sidebar with no `?locale=` is the ordinary path, not a
+    // mistake to correct. Rewriting it there would push a history entry on
+    // every visit to the page.
+    const onLocaleChange = vi.fn();
+    renderWorklist({ locale: undefined, onLocaleChange });
+    expect(onLocaleChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves a URL that names a real target exactly as it found it", () => {
+    // The control: normalising must be triggered by an INVALID target, not by
+    // every render, or the page rewrites its own URL in a loop.
+    const onLocaleChange = vi.fn();
+    renderWorklist({ locale: "ar", onLocaleChange });
+    expect(onLocaleChange).not.toHaveBeenCalled();
+  });
+
+  it("explains an unconsulted collection without naming a cause it cannot know", () => {
+    // The server reports two causes through one field: the fan-out cap, and a
+    // collection whose read FAILED. Wording it as capacity tells someone with a
+    // broken query that their site is too big — pointing away from the fault.
+    worklistQuery.mockReturnValue(
+      settled({
+        data: {
+          items: [ROW],
+          meta: { ...META, notConsulted: ["orders"] },
+        },
+      })
+    );
+    renderWorklist();
+    expect(screen.getByText(/orders/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/more collections than one request covers, so/i)
+    ).toBeNull();
+    expect(screen.getByText(/can.t be read just now/i)).toBeInTheDocument();
+  });
 });

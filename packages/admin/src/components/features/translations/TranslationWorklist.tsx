@@ -20,6 +20,8 @@
  * @module components/features/translations/TranslationWorklist
  */
 
+import { useEffect } from "react";
+
 import {
   Alert,
   AlertDescription,
@@ -35,6 +37,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   WORKLIST_STATES,
+  resolveActiveTarget,
   type TranslationWorkRow,
   type WorklistState,
 } from "@admin/types/translations/worklist";
@@ -159,8 +162,25 @@ export function TranslationWorklist({
   // time; it simply worked it out one line too late.
   const source = defaultLocale;
   const targets = locales.filter(l => l.code !== source);
-  const active = locale ?? targets[0]?.code;
+  // Not `locale ?? targets[0]`: a URL naming the SOURCE language is a
+  // configured locale, so the server accepts it and answers nonsense — nothing
+  // is missing in the language everything is written in, and every document
+  // counts as translated. See `resolveActiveTarget`.
+  const active = resolveActiveTarget(
+    locale,
+    targets.map(t => t.code)
+  );
   const query = useTranslationWorklist({ locale: active, state });
+
+  // Put the URL back in step when it asked for a language this worklist cannot
+  // answer for, so the address bar keeps describing what is on screen and a
+  // copied link reproduces it. Only when the URL NAMED one: arriving with no
+  // `?locale=` is the ordinary path from the sidebar and must not be rewritten.
+  useEffect(() => {
+    if (locale !== undefined && active !== undefined && locale !== active) {
+      onLocaleChange(active);
+    }
+  }, [locale, active, onLocaleChange]);
 
   if (!enabled) {
     // A worklist on a site with one language is a list that can never have a
@@ -218,16 +238,24 @@ export function TranslationWorklist({
         ))}
       </div>
 
-      {/* Named rather than swallowed. The server caps how many collections it
-          will query, and a worklist that silently omits one reads as "nothing
-          to do there" — indistinguishable from the truth at a glance, and the
-          only way this page can lie. */}
+      {/* Named rather than swallowed. A worklist that silently omits a
+          collection reads as "nothing to do there" — indistinguishable from the
+          truth at a glance, and the only way this page can lie.
+
+          The wording states the OMISSION and not a cause, because the server
+          reports two causes through one field: the fan-out cap, and a
+          collection whose read failed. Explaining it as capacity would tell
+          someone with a broken query that their site is too big — a confident
+          answer to a question they did not ask, pointing away from the fault. */}
       {notConsulted.length > 0 && (
         <Alert>
           <AlertTitle>Not everything was checked</AlertTitle>
           <AlertDescription>
-            This site has more collections than one request covers, so these
-            were left out: {notConsulted.join(", ")}.
+            These collections were left out of this answer:{" "}
+            {notConsulted.join(", ")}. That happens when a site has more
+            collections than one request covers, or when a collection
+            can&rsquo;t be read just now. Reload to see whether it was
+            temporary.
           </AlertDescription>
         </Alert>
       )}
