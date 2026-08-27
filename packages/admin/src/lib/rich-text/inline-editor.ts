@@ -87,6 +87,23 @@ export interface InlineRichTextSession {
    * session takes the live one's editor away.
    */
   detach(): void;
+  /**
+   * Keep this attachment against a later request to move the editor.
+   *
+   * There is ONE editor behind every consumer, so ownership is global while a
+   * decision to preserve an edit is local to whoever made it. A consumer that
+   * has refused to write — because the words exist only in this editor and
+   * nowhere else — has to say so HERE, or the next `attach` from anywhere,
+   * including another canvas with its own hook, supersedes it and the words go
+   * with it.
+   *
+   * Cleared by detaching, which is the only way this attachment ends — so a
+   * holder MUST detach. There is one editor for the whole admin, and a hold
+   * left standing refuses every later attachment anywhere in it; nothing times
+   * it out, because an editor that let go on a timer would lose the words at a
+   * moment nobody chose.
+   */
+  hold(): void;
 }
 
 /** The one operation the page builder needs; everything else hangs off it. */
@@ -98,8 +115,10 @@ export interface InlineRichTextEditor {
    * restored first, so an author moving between passages never leaves two live.
    *
    * `null` when this passage must NOT be edited here — see the module for the
-   * two cases. Refusing leaves the passage as the page rendered it, which is
-   * the only outcome that cannot lose an author's work.
+   * two cases — and when the live attachment is HELD, because superseding one
+   * that is deliberately keeping an author's unwritten words would destroy
+   * exactly what holding it protects. Refusing leaves the passage as the page
+   * rendered it, which is the only outcome that cannot lose an author's work.
    *
    * @param element - the element to edit inside
    * @param value - the stored passage, or anything unusable for an empty one
@@ -218,6 +237,17 @@ interface RootMarks {
   readonly style: string | null;
   readonly lexical: string | null;
   /**
+   * Written by the editor on FOCUS rather than on attach, which is why
+   * restoring the three above is not enough.
+   *
+   * Measured: focusing sets `off`, and releasing the root removes the attribute
+   * outright. So an element that arrived WITHOUT one is already returned as it
+   * came; what is lost is an element that arrived WITH a value, which comes
+   * back with none — changing how a mobile keyboard behaves in a host that
+   * reuses the element for anything else.
+   */
+  readonly autocapitalize: string | null;
+  /**
    * The child NODES the element arrived with — the nodes themselves, not their
    * markup.
    *
@@ -241,6 +271,7 @@ function markRoot(element: HTMLElement): RootMarks {
     contentEditable: element.getAttribute("contenteditable"),
     style: element.getAttribute("style"),
     lexical: element.getAttribute("data-lexical-editor"),
+    autocapitalize: element.getAttribute("autocapitalize"),
     children: [...element.childNodes],
   };
   element.setAttribute("contenteditable", "true");
@@ -254,11 +285,21 @@ function restore(element: HTMLElement, name: string, was: string | null): void {
 }
 
 function unmarkRoot(element: HTMLElement, marks: RootMarks): void {
-  // The original node objects, not copies of them — see {@link RootMarks}.
-  element.replaceChildren(...marks.children);
+  /*
+   * The original node objects, not copies of them — see {@link RootMarks}.
+   *
+   * Collected into a fragment and inserted as ONE argument rather than spread:
+   * a spread passes every child as an argument, and a passage long enough
+   * exceeds the call's own argument limit — turning a restore into a throw on
+   * the way out of an edit, which is the worst possible moment for one.
+   */
+  const restored = element.ownerDocument.createDocumentFragment();
+  for (const child of marks.children) restored.append(child);
+  element.replaceChildren(restored);
   restore(element, "contenteditable", marks.contentEditable);
   restore(element, "style", marks.style);
   restore(element, "data-lexical-editor", marks.lexical);
+  restore(element, "autocapitalize", marks.autocapitalize);
 }
 
 async function build(): Promise<InlineRichTextEditor> {
@@ -379,14 +420,34 @@ async function build(): Promise<InlineRichTextEditor> {
   /** Undoes whatever the live attachment did, in the reverse order it did it. */
   let release: (() => void) | null = null;
 
+  /**
+   * Whether the live attachment has asked not to be moved.
+   *
+   * Kept HERE rather than in the session, because what it guards is the shared
+   * editor: the request to supersede arrives through `attach`, from a consumer
+   * that knows nothing about whoever holds it now.
+   */
+  let held = false;
+
   const detachCurrent = (): void => {
     release?.();
     release = null;
     owner = null;
+    held = false;
   };
 
   return {
     attach(element, value) {
+      /*
+       * A held attachment is never superseded.
+       *
+       * Asked FIRST, before parsing and before anything is touched: the answer
+       * cannot depend on the incoming passage, because what is being protected
+       * is the outgoing one. A consumer holds when it has refused to write and
+       * the author's words exist only inside this editor — so moving it, for
+       * any reason, is the one thing that loses them.
+       */
+      if (held) return null;
       /*
        * Parsed BEFORE anything is touched, so a passage this editor cannot
        * represent leaves the element exactly as the page rendered it.
@@ -498,6 +559,11 @@ async function build(): Promise<InlineRichTextEditor> {
         },
         detach() {
           if (owns()) detachCurrent();
+        },
+        hold() {
+          // Only the live owner may hold. A superseded session asking for this
+          // would freeze the editor on behalf of an edit that is already gone.
+          if (owns()) held = true;
         },
       };
     },

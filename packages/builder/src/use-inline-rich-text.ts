@@ -173,6 +173,8 @@ interface EditorSession {
   focus(at?: number): void;
   read(): unknown;
   detach(): void;
+  /** Keep this attachment when something else asks for the shared editor. */
+  hold(): void;
 }
 
 /** The facade's editor, as this module uses it. */
@@ -352,6 +354,13 @@ export function useInlineRichText(
         letGo();
         return report(INLINE_COMMIT_UNCHANGED);
       }
+      /*
+       * Held at the SHARED editor as well as here. This hook's own `begin`
+       * guard covers one canvas; ownership of the editor is global, so a second
+       * canvas with its own hook sees nothing mounted and would attach straight
+       * over the top of these words.
+       */
+      live.session.hold();
       return report({ status: "refused", reason: "moved-on" });
     }
     // The passage this session was opened for, not whichever is current now.
@@ -386,6 +395,7 @@ export function useInlineRichText(
        * applied, so the words are still only in the editor and the passage
        * stays open: an author who has hit a cap can shorten what they wrote.
        */
+      live.session.hold();
       return report({ status: "refused", reason: "rejected" });
     }
     letGo();
@@ -477,11 +487,19 @@ export function useInlineRichText(
     }
 
     let cancelled = false;
-    // Read now, while the element still holds what the page rendered. The
-    // editor replaces this subtree, so afterwards there is nothing to measure.
+    /*
+     * The POINT is taken now and the offset from it later.
+     *
+     * The ref has to be cleared synchronously, or a second edit begun before
+     * this one attaches inherits its gesture. The offset must not be computed
+     * yet though: it is a character count into the passage, and the passage can
+     * be rewritten while the editor loads — an offset measured against the old
+     * text lands somewhere unrelated in the new, or past its end. The element
+     * still holds what the page rendered when the loader resolves, because this
+     * is what replaces it.
+     */
     const point = handedPoint.current;
     handedPoint.current = null;
-    const caret = point === null ? undefined : caretOffsetAt(element, point);
     void load().then(
       live => {
         /*
@@ -518,16 +536,24 @@ export function useInlineRichText(
         const session = live.attach(element, target.value);
         if (session === null) {
           /*
-           * The editor refused this passage — it holds a node this editor
-           * cannot represent, and loading it would hand back less than the
-           * document has. Dropping the edit leaves the passage as the page
-           * rendered it, which is the only outcome that cannot lose the words.
+           * The editor refused. Either this passage cannot be represented — it
+           * holds a node this editor does not know, and loading it would hand
+           * back less than the document has — or the editor is being HELD by
+           * an edit elsewhere whose words exist nowhere else.
+           *
+           * Dropping this edit is right in both cases: it leaves the passage as
+           * the page rendered it, which is the only outcome that cannot lose
+           * words, here or in whatever is holding on.
            */
           setEditing(null);
           return;
         }
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
-        session.focus(caret);
+        // Measured against the passage now on screen, which is the one being
+        // attached — see where the point was taken.
+        session.focus(
+          point === null ? undefined : caretOffsetAt(element, point)
+        );
         mounted.current = {
           session,
           element,

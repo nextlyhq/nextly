@@ -289,3 +289,96 @@ describe("the element's CHILDREN", () => {
     expect(element.firstChild).toBe(original);
   });
 });
+
+describe("an attachment that is holding an author's words", () => {
+  /*
+   * There is ONE editor behind every consumer, so ownership is global while the
+   * decision to preserve an edit is local to whoever made it. Two canvases
+   * mounted at once run two hooks; the second sees nothing of the first's state
+   * and would attach straight over the top of words that exist nowhere else.
+   * The rule therefore has to live at this boundary, not in a consumer.
+   */
+  it("refuses to hand the editor to anything else", async () => {
+    const editor = await loadInlineRichTextEditor();
+    const first = host();
+    const session = attached(editor, first, passage("Words only in here"));
+
+    session.hold();
+
+    expect(editor.attach(host(), passage("Somewhere else"))).toBeNull();
+    // Still live, which is the point of refusing: a superseded session reads
+    // nothing, and that is exactly what holding it prevents.
+    expect(session.read()).not.toBeUndefined();
+
+    /*
+     * Released before leaving, and NOT as tidiness — the editor is a singleton
+     * shared by this whole module, so a hold left standing refuses every later
+     * attachment in the process. That is the contract working, and it is the
+     * obligation a holder takes on: whoever holds must detach.
+     */
+    session.detach();
+  });
+
+  it("hands it over once the hold has ended", async () => {
+    // The control. A refusal that never lifted would pass the case above and
+    // freeze the editor on the first passage anyone ever edited.
+    const editor = await loadInlineRichTextEditor();
+    const first = host();
+    const session = attached(editor, first, passage("Words only in here"));
+    session.hold();
+    session.detach();
+
+    expect(editor.attach(host(), passage("Somewhere else"))).not.toBeNull();
+  });
+
+  it("ignores a hold from a session that has already been superseded", async () => {
+    // Otherwise a stale consumer freezes the editor on behalf of an edit that
+    // is already gone, and nothing can ever attach again.
+    const editor = await loadInlineRichTextEditor();
+    const stale = attached(editor, host(), passage("First"));
+    attached(editor, host(), passage("Second"));
+
+    stale.hold();
+
+    expect(editor.attach(host(), passage("Third"))).not.toBeNull();
+  });
+});
+
+describe("what FOCUSING the editor leaves behind", () => {
+  it("records that focusing writes the attribute at all", async () => {
+    /*
+     * The premise, not the fix. Measured: focusing writes
+     * `autocapitalize="off"`, and releasing the root REMOVES it — so an element
+     * that arrived without one ends without one whether or not this module
+     * restores anything, and this case passes either way.
+     *
+     * Kept because it is what makes the next case the only one that needs a
+     * fix, and because "the editor sets this on focus" is the fact the whole
+     * pair rests on: if a version stopped doing it, the case below would go
+     * green for the wrong reason and nothing else would notice.
+     */
+    const editor = await loadInlineRichTextEditor();
+    const element = host();
+    expect(element.hasAttribute("autocapitalize")).toBe(false);
+
+    const session = attached(editor, element, passage("Hello"));
+    session.focus();
+    expect(element.getAttribute("autocapitalize")).toBe("off");
+
+    session.detach();
+
+    expect(element.hasAttribute("autocapitalize")).toBe(false);
+  });
+
+  it("gives back the value an element already had", async () => {
+    const editor = await loadInlineRichTextEditor();
+    const element = host();
+    element.setAttribute("autocapitalize", "sentences");
+
+    const session = attached(editor, element, passage("Hello"));
+    session.focus();
+    session.detach();
+
+    expect(element.getAttribute("autocapitalize")).toBe("sentences");
+  });
+});
