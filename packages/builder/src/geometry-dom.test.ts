@@ -820,3 +820,53 @@ describe("a clipping ancestor whose transform cannot be described", () => {
     expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
   });
 });
+
+describe("an ancestor that does not clip at all", () => {
+  /*
+   * The third verdict, and it had no fixture. jsdom's computed `overflow` for
+   * an unstyled element is the EMPTY STRING rather than `visible`, and an empty
+   * string is not `visible` — so every plain ancestor in this file reads as
+   * clipping, and inverting the `no-clip` answer changed nothing anywhere. The
+   * only way to reach it here is to declare `visible` outright.
+   *
+   * What it decides is whether the walk CONTINUES. A `no-clip` ancestor must
+   * neither cut the block nor stop the search, or a block genuinely cut by a
+   * container higher up keeps chrome drawn over pixels that container removed.
+   */
+  it("neither cuts the block nor stops the walk at it", () => {
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+
+    const clipping = box({ x: 0, y: 0, width: 400, height: 400 });
+    clipping.setAttribute("style", "overflow-x:hidden;overflow-y:hidden");
+    root.append(clipping);
+
+    const passthrough = box({ x: 0, y: 0, width: 400, height: 400 });
+    passthrough.setAttribute("style", "overflow-x:visible;overflow-y:visible");
+    clipping.append(passthrough);
+
+    // Inside the passthrough ancestor and well outside the clipping one above
+    // it. Only a walk that reads `no-clip` as "keep going" reaches the verdict.
+    const child = box({ x: -300, y: 10, width: 100, height: 100 });
+    passthrough.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(true);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
+
+  it("leaves a child it contains alone", () => {
+    /*
+     * The control: the same non-clipping ancestor with nothing above it that
+     * clips. Reading `no-clip` as a CUT would refuse this block, so the pair
+     * separates "continue the walk" from "answer true".
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const passthrough = box({ x: 0, y: 0, width: 400, height: 400 });
+    passthrough.setAttribute("style", "overflow-x:visible;overflow-y:visible");
+    root.append(passthrough);
+    const child = box({ x: -300, y: 10, width: 100, height: 100 });
+    passthrough.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(false);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+});

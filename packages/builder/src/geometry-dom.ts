@@ -867,10 +867,13 @@ function anyAncestorCuts(
  * each corner where the two curves disagree, which is real and irrelevant to
  * anything drawn away from the corners.
  *
- * Shares {@link ancestorClipContext} with {@link clippedByAncestor} rather
- * than reading `overflow`, composing scale or resolving the clip rectangle a
- * second time: the two answer different questions about the same ancestor,
- * and the parts they share have to stay exactly the same reading.
+ * Shares {@link ancestorClipContext} and {@link rectCut} with
+ * {@link clippedByAncestor} rather than reading `overflow`, composing scale,
+ * resolving the clip rectangle or judging the edges a second time: the two
+ * answer different questions about the same ancestor, and the parts they share
+ * have to stay exactly the same reading. What is left after that sharing is
+ * the whole of the difference — this function is `rectCut` alone, and the
+ * corner-aware one is `rectCut` plus {@link cornerCut}.
  */
 export function clippedByAncestorRect(
   element: Element,
@@ -879,14 +882,9 @@ export function clippedByAncestorRect(
   const view = element.ownerDocument.defaultView;
   if (view === null) return false;
   const box = element.getBoundingClientRect();
-  return anyAncestorCuts(element, root, node => {
-    const context = ancestorClipContext(node, view, root);
-    if (context.kind === "cut") return true;
-    return (
-      context.kind === "clips" &&
-      cutByEdges(box, context.clip, context.clipsX, context.clipsY)
-    );
-  });
+  return anyAncestorCuts(element, root, node =>
+    rectCut(ancestorClipContext(node, view, root), box)
+  );
 }
 
 /**
@@ -906,10 +904,54 @@ function cutByAncestor(
   root: Element
 ): boolean {
   const context = ancestorClipContext(node, view, root);
-  if (context.kind === "no-clip") return false;
-  if (context.kind === "cut") return true;
-  if (cutByEdges(box, context.clip, context.clipsX, context.clipsY))
-    return true;
+  return rectCut(context, box) || cornerCut(context, box, radii);
+}
+
+/**
+ * Whether an ancestor cuts the block's RECTANGLE — the whole of
+ * {@link clippedByAncestorRect}'s verdict, and the first half of
+ * {@link cutByAncestor}'s.
+ *
+ * ONE implementation rather than one per caller. The two questions differ by
+ * the corner refinement below and by nothing else, so the straight-edge part
+ * has to be the same reading in both — and it was not: written out twice, the
+ * rect question guarded with `context.kind === "clips" && ...` while the
+ * corner-aware one narrowed the union. A refusal reason added to
+ * {@link AncestorClipContext} would have been gained by one caller and
+ * silently skipped by the other.
+ *
+ * Exhaustive over the union deliberately: with no `default`, a fourth member
+ * leaves this function able to return `undefined`, which its declared `boolean`
+ * refuses. Both callers inherit that, which is the property the duplicate
+ * version could not have.
+ */
+function rectCut(context: AncestorClipContext, box: DOMRect): boolean {
+  switch (context.kind) {
+    case "no-clip":
+      return false;
+    case "cut":
+      return true;
+    case "clips":
+      return cutByEdges(box, context.clip, context.clipsX, context.clipsY);
+  }
+}
+
+/**
+ * Whether a rounded clipping ancestor cuts the block at a CORNER — the
+ * refinement {@link clippedByAncestor} adds and {@link clippedByAncestorRect}
+ * deliberately does not.
+ *
+ * Only a `clips` ancestor has a curve to compare against: `no-clip` and `cut`
+ * are already whole answers that {@link rectCut} gave, and asking a second
+ * question about them would either re-refuse something or refuse something
+ * nothing clips.
+ */
+function cornerCut(
+  context: AncestorClipContext,
+  box: DOMRect,
+  radii: CornerRadii
+): boolean {
+  if (context.kind !== "clips") return false;
   /*
    * The BLOCK's radii are composed here too, and for the same reason the
    * ancestor's geometry is.
