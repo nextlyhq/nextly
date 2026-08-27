@@ -100,6 +100,13 @@ export const nextlyTables: TableDefinition[] = [
         type: "text",
       },
       {
+        // Nullable, matching `mustChangePassword: integer(..., { mode: "boolean" })`
+        // on the real table: unset means "no answer recorded", which is not the
+        // same as "need not change".
+        name: "must_change_password",
+        type: "boolean",
+      },
+      {
         name: "password_hash",
         type: "text",
         nullable: false,

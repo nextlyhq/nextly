@@ -194,6 +194,24 @@ export async function createTestDb(): Promise<{
   // Create tables on that same connection.
   createTables(sqlite);
 
+  // Let the adapter resolve tables by NAME.
+  //
+  // `adapter.select("users", ...)` and the Drizzle query API go through a
+  // resolver that production sets during boot-time schema loading. Without one
+  // the adapter cannot map a name to a table object and refuses with "not found
+  // in schema registry" — which reads as a missing table rather than a missing
+  // wiring, and sends the reader looking at the DDL.
+  //
+  // Resolved from the same bundle the fixture creates its tables from, so a
+  // name the adapter can resolve is a table that exists.
+  const byName = new Map<string, unknown>();
+  for (const value of Object.values(schema)) {
+    if (isSqliteTable(value)) byName.set(getTableConfig(value).name, value);
+  }
+  adapter.setTableResolver({
+    getTable: (tableName: string) => byName.get(tableName) ?? null,
+  });
+
   // The typed view the tests read and write through. `db.query` is driven by
   // the relations config, not a schema map.
   const db = adapter.getDrizzle(testRelations) as TestDrizzleDb;
