@@ -3,9 +3,20 @@
 /**
  * The affordance drawn over a container with nothing in it.
  *
- * Geometry is NOT asserted here: jsdom reports every element as zero-sized, so
- * a position assertion would pass against any implementation. Placement is
- * verified in a real browser in Task 8.
+ * jsdom lays nothing out, so an element MEASURED here reports a zero-sized
+ * rectangle and a position assertion taken from one would pass against any
+ * implementation. That is a limit on measurement and nothing else, and this
+ * file draws the line in the two places it actually falls:
+ *
+ * - `centeredControlRect` is arithmetic over two rectangles with no DOM in it,
+ *   and is asserted directly.
+ * - the cases that need a rendered canvas STUB each element's rectangle first
+ *   — the same thing `canvas-drag.test.tsx` does — and then drive the resize
+ *   the component already subscribes to, so what is measured is a real
+ *   rectangle rather than jsdom's zero.
+ *
+ * The cases that assert only which controls EXIST mount no canvas at all, and
+ * deliberately: which containers get a control comes from the document alone.
  *
  * `fireEvent` rather than `@testing-library/user-event`: this package does not
  * depend on that library and no other suite here does either, and the control
@@ -28,12 +39,21 @@ import {
   type BlockRenderArgs,
   type SiteSheetInput,
 } from "@nextlyhq/blocks-react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
-import { EmptyContainerAppenders } from "./empty-container-appender";
+import {
+  centeredControlRect,
+  EmptyContainerAppenders,
+} from "./empty-container-appender";
 import { registrySlotSource } from "./inserter";
 
 // This suite queries by role against the whole document (`screen`), so a tree
@@ -302,7 +322,9 @@ class FakeResizeObserver {
   static instances: FakeResizeObserver[] = [];
   readonly observed: Element[] = [];
   disconnected = false;
-  constructor(_callback: ResizeObserverCallback) {
+  private readonly callback: ResizeObserverCallback;
+  constructor(callback: ResizeObserverCallback) {
+    this.callback = callback;
     FakeResizeObserver.instances.push(this);
   }
   observe(target: Element): void {
@@ -311,6 +333,16 @@ class FakeResizeObserver {
   unobserve(): void {}
   disconnect(): void {
     this.disconnected = true;
+  }
+  /**
+   * Report a resize, which is the only way to make the component measure a
+   * canvas whose rectangles were stubbed AFTER it mounted.
+   *
+   * No entries: the component's own callback ignores them and re-measures
+   * everything, which is what a caller here wants to happen.
+   */
+  fire(): void {
+    this.callback([], this);
   }
 }
 
@@ -414,5 +446,244 @@ describe("what it stays subscribed to", () => {
     expect(observer?.observed).toContain(
       container.querySelector(`.${CANVAS_ROOT_CLASS}`)
     );
+  });
+});
+
+describe("the rectangle the control is drawn at", () => {
+  /*
+   * Asserted directly, because `centeredControlRect` is arithmetic over two
+   * rectangles with no DOM in it. The suite header's reason for not asserting
+   * geometry — jsdom lays nothing out — is about MEASURING an element, and it
+   * does not reach a pure function that is handed a rectangle.
+   */
+  it("centres the control in a container larger than it", () => {
+    expect(
+      centeredControlRect({ x: 10, y: 20, width: 200, height: 100 }, 44)
+    ).toEqual({ x: 88, y: 48, width: 44, height: 44 });
+  });
+
+  it("never grows taller than the container it sits in", () => {
+    // A container shorter than the control. Unclamped, the height stays 44 and
+    // the top is (19 - 44) / 2 = -12.5 ABOVE the container — over whatever is
+    // laid out before it, which is where a press meant for that neighbour then
+    // lands.
+    const container = { x: 0, y: 200, width: 400, height: 19 };
+    const control = centeredControlRect(container, 44);
+
+    // Full 44 on the axis with room for it: the clamp is per axis, so a short
+    // container loses no width.
+    expect(control).toEqual({ x: 178, y: 200, width: 44, height: 19 });
+    expect(control.y).toBeGreaterThanOrEqual(container.y);
+    expect(control.y + control.height).toBeLessThanOrEqual(
+      container.y + container.height
+    );
+  });
+
+  it("never grows wider than the container it sits in", () => {
+    // The axis with no guarantee behind it: `[data-nx-slots]:empty` sets a
+    // `min-height` and no `min-width`, so a narrow empty column is a perfectly
+    // ordinary container that is narrower than the control.
+    const container = { x: 100, y: 0, width: 20, height: 300 };
+    const control = centeredControlRect(container, 44);
+
+    expect(control).toEqual({ x: 100, y: 128, width: 20, height: 44 });
+    expect(control.x).toBeGreaterThanOrEqual(container.x);
+    expect(control.x + control.width).toBeLessThanOrEqual(
+      container.x + container.width
+    );
+  });
+});
+
+/**
+ * A container whose ROOT carries content of its own beside its slot.
+ *
+ * The shape `core/accordion-item` has: a `<details>` holding a `<summary>` and
+ * the slot's output, so an instance with an empty `children` slot renders a
+ * root that is NOT `:empty` and measures the summary's own height. That is the
+ * separating property between the two questions this component used to ask
+ * separately — the document says the slot is empty, the render says the
+ * element carries no affordance.
+ */
+const DETAILS_CONTAINER = "acme/empty-container-appender-details";
+
+/** The canvas root's own rectangle, and the one every wrapper reports. */
+const CANVAS_BOX = { x: 0, y: 0, width: 800, height: 600 };
+
+interface Box {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Give a rendered canvas the rectangles jsdom never lays out.
+ *
+ * Every element reports the canvas's own box first, so no wrapper between a
+ * node and the root reads as clipping it — jsdom's computed `overflow` is the
+ * empty string rather than `visible`, so an ancestor left unstubbed would
+ * report a zero-sized clip rectangle and cut every node inside it. The named
+ * nodes are then overridden with the boxes the case is about.
+ */
+function layout(container: HTMLElement, boxes: Record<string, Box>): void {
+  const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+  if (root === null) throw new Error("no canvas root rendered");
+  const stub = (element: Element, box: Box): void => {
+    element.getBoundingClientRect = () =>
+      new DOMRect(box.x, box.y, box.width, box.height);
+  };
+  stub(root, CANVAS_BOX);
+  // `forEach` rather than `for...of`: this package's `lib` predicates
+  // `NodeListOf` having an iterator on a DOM iterable declaration it does not
+  // include, so the loop form does not compile here.
+  root.querySelectorAll("*").forEach(element => stub(element, CANVAS_BOX));
+  for (const [id, box] of Object.entries(boxes)) {
+    const element = root.querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`);
+    if (element === null) throw new Error(`no element for ${id}`);
+    stub(element, box);
+  }
+}
+
+/** The inline rectangle a control was drawn at, in the order left/top/w/h. */
+function drawnAt(name: string): [string, string, string, string] {
+  const button = screen.getByRole("button", { name: `Add a block to ${name}` });
+  if (!(button instanceof HTMLElement)) throw new Error(`${name}: no element`);
+  return [
+    button.style.left,
+    button.style.top,
+    button.style.width,
+    button.style.height,
+  ];
+}
+
+describe("which containers it actually draws a control on", () => {
+  function registerShapes() {
+    if (hasBlock(DETAILS_CONTAINER)) return;
+    registerBlocks(
+      [
+        {
+          name: "acme/empty-container-appender-box",
+          version: 1,
+          description: "A container whose root holds nothing but its slot.",
+          example: { props: {} },
+          slots: { children: {} },
+          render: ({ className, renderSlot }: BlockRenderArgs<object>) =>
+            React.createElement("div", { className }, renderSlot("children")),
+        },
+        {
+          name: DETAILS_CONTAINER,
+          version: 1,
+          description: "A container whose root also renders a summary.",
+          example: { props: {} },
+          slots: { children: {} },
+          render: ({ className, renderSlot }: BlockRenderArgs<object>) =>
+            React.createElement(
+              "details",
+              { className },
+              React.createElement("summary", null, "Section"),
+              renderSlot("children")
+            ),
+        },
+      ],
+      { source: "empty-container-appender-shapes" }
+    );
+  }
+
+  const SHAPES: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "wide",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Wide box",
+      },
+      {
+        id: "narrow",
+        type: "acme/empty-container-appender-box",
+        version: 1,
+        props: {},
+        name: "Narrow column",
+      },
+      {
+        id: "summary-bearing",
+        type: DETAILS_CONTAINER,
+        version: 1,
+        props: {},
+        name: "Closed section",
+      },
+    ],
+  };
+
+  /**
+   * Mount the canvas, give it a layout, and let the component re-measure.
+   *
+   * The stubs cannot be in place before mount — the elements do not exist yet
+   * — so the resize the component already subscribes to is what drives the
+   * second measurement, exactly as a breakpoint or a webfont swap would.
+   */
+  function measuredCanvas(boxes: Record<string, Box>): void {
+    registerShapes();
+    withFakeResizeObserver();
+
+    const { container } = render(
+      <Canvas
+        document={SHAPES}
+        siteStyles={SITE_STYLES}
+        overlay={
+          <EmptyContainerAppenders
+            document={SHAPES}
+            slots={registrySlotSource()}
+            blocks={{ get: () => undefined }}
+            onAppend={() => undefined}
+          />
+        }
+      />
+    );
+
+    layout(container, boxes);
+    const observer = FakeResizeObserver.instances.at(-1);
+    if (observer === undefined) throw new Error("no observer subscribed");
+    act(() => observer.fire());
+  }
+
+  it("declines a container whose root is not the one the stylesheet styles", () => {
+    /*
+     * `builder-chrome.css` gives its 44px box to `[data-nx-slots]:empty`, and
+     * a closed `<details>` is not `:empty` — it holds its summary. So there is
+     * no box under this container, its rectangle is the summary's own 19px,
+     * and a 44px control centred in it would start 12.5px ABOVE the container
+     * and paint over the node laid out before it.
+     *
+     * The wide box is the must-be-found control: it is measured in the same
+     * pass, so a zero rectangle on the details container means the container
+     * was declined rather than that nothing was measured at all.
+     */
+    measuredCanvas({
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      "summary-bearing": { x: 0, y: 400, width: 400, height: 19 },
+    });
+
+    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Closed section")).toEqual(["0px", "0px", "0px", "0px"]);
+  });
+
+  it("keeps the control inside a container narrower than it", () => {
+    /*
+     * A legitimately narrow empty container: `[data-nx-slots]:empty` promises
+     * a `min-height` and no `min-width`, so this one really is 20px wide and
+     * really does carry the dashed box. Unclamped, a 44px control centred in
+     * it starts at x = -12 and reaches 12px past its right edge, over both
+     * neighbours.
+     */
+    measuredCanvas({
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      narrow: { x: 0, y: 200, width: 20, height: 200 },
+    });
+
+    expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(drawnAt("Narrow column")).toEqual(["0px", "278px", "20px", "44px"]);
   });
 });

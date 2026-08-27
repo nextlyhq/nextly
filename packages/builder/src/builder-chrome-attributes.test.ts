@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { SLOTS_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import { describe, expect, it } from "vitest";
 
+import { EMPTY_CONTAINER_SELECTOR } from "./empty-slot";
 import { EMPTY_ELEMENTS_ATTRIBUTE } from "./shell-state";
 
 /**
@@ -40,6 +41,25 @@ const CHROME = readFileSync(
 describe("the empty-container affordance is keyed off the exported constants", () => {
   it("matches the slots marker by the constant, not a retyped copy", () => {
     expect(CHROME).toContain(`[${SLOTS_ATTRIBUTE}]`);
+  });
+
+  it("draws its box for exactly the elements the appender draws a control on", () => {
+    /*
+     * The stylesheet and `EmptyContainerAppenders` cover ONE population, not
+     * two that happen to agree. The appender asks `Element.matches` with this
+     * constant; the stylesheet, having no module system, spells it out — so
+     * this is where the copy is held to it. Without this, a stylesheet that
+     * narrowed or widened its selector would leave the appender drawing
+     * controls on containers carrying no box, or declining containers that
+     * have one, with nothing failing either way.
+     *
+     * The opening brace is part of the needle, and it is what makes this an
+     * assertion about a RULE. The selector is also written in prose in a
+     * comment further down the file, so a bare `toContain` stays green after
+     * the rule itself has been changed to key off something else — the
+     * comment alone would satisfy it.
+     */
+    expect(CHROME).toContain(`${EMPTY_CONTAINER_SELECTOR} {`);
   });
 
   it("guards the affordance behind the hide-preference's attribute and value, by the constant", () => {

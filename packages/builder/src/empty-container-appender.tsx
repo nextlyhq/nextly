@@ -76,11 +76,47 @@
  * need of `clippedByAncestor`'s corner-aware refinement — see `measure` for
  * why asking that stricter question here would cost more than it protects.
  *
- * For the ordinary case — a block declaring one slot, empty — this changes
- * nothing an author can see: `builder-chrome.css`'s `[data-nx-slots]:empty`
- * rule already gives such a container a 44px box, so centring a 44px square
- * inside its own measured rectangle places the control exactly where that box
- * already is.
+ * For the ordinary case this changes nothing an author can see: the container
+ * the control is drawn on is one `builder-chrome.css` has already given a 44px
+ * box, so centring a 44px square inside its measured rectangle places the
+ * control exactly where that box already is. That sentence is only true
+ * because of the condition below, which is what makes the box's presence a
+ * guarantee rather than an assumption.
+ *
+ * ## Which containers get a control is the STYLESHEET's question
+ *
+ * `emptySlotOf` decides which containers this component knows about, and that
+ * is a question about the stored document. Whether an affordance is drawn is a
+ * question about the RENDER, and `builder-chrome.css` already asks it:
+ * {@link EMPTY_CONTAINER_SELECTOR}. `measure` asks the same one of the same
+ * element rather than trusting the two to describe the same containers.
+ *
+ * They do not. A node can have an empty slot inside a root that renders
+ * content of its own — `core/accordion-item` puts a `<summary>` beside its
+ * slot, so a closed one has an empty `children` slot and a root that is not
+ * `:empty`. The stylesheet declined such a container, this component did not,
+ * and the fixed-size control was then centred in a rectangle sized by the
+ * summary rather than by a box that was never drawn. A node rendering several
+ * slots is the same shape: its root is not `:empty` while a later slot holds
+ * anything, which is precisely when a control over its centre would sit on a
+ * populated region.
+ *
+ * The consequence is that a container carrying no visual affordance gets no
+ * control either, which is the point rather than a shortfall — it is still
+ * fillable, because selecting it and inserting routes through `emptySlotOf`
+ * in `insertionPointFor` exactly as before.
+ *
+ * ## Never outside its own container
+ *
+ * The control is additionally CLAMPED to the measured rectangle, because the
+ * stylesheet guarantees a minimum height and not a minimum width. An empty
+ * container narrower than the control is legitimate — a narrow column — and an
+ * unclamped square centred in it hangs over both edges, onto whatever sits
+ * beside it. Since the overlay paints in document order, a control that
+ * escapes its own container lands on top of an earlier sibling and takes the
+ * press meant for it. The full-bleed button this replaced could not do that;
+ * containment is the property that had to be kept when the size stopped
+ * matching the container.
  *
  * ## Identity is independent of geometry, and has to stay that way
  *
@@ -122,7 +158,7 @@ import {
   nodeElement,
   nodeElements,
 } from "./canvas";
-import { emptySlotOf } from "./empty-slot";
+import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
 import type { Rect } from "./geometry";
 import {
   canvasContentRect,
@@ -249,17 +285,29 @@ const NO_RECTS: ReadonlyMap<string, Rect> = new Map();
 const APPENDER_SIZE_PX = 44;
 
 /**
- * A fixed {@link APPENDER_SIZE_PX} square, centred inside a larger rectangle.
+ * A {@link APPENDER_SIZE_PX} square centred inside a rectangle, never larger
+ * than the rectangle itself.
  *
  * See the module docblock ("A fixed, centred square") for why the button is
- * never sized to the measured rectangle itself.
+ * not sized to the measured rectangle, and ("Never outside its own container")
+ * for why it is clamped to it. Exported for its own tests: it is arithmetic on
+ * two rectangles with no DOM in it, so it is the one part of this file's
+ * geometry that can be asserted directly.
+ *
+ * The clamp is per axis because the guarantee is per axis. The stylesheet's
+ * `min-height` makes the ordinary container at least as tall as the control,
+ * so `Math.min` returns `size` and the result is byte-identical to an
+ * unclamped one; there is no `min-width`, so a legitimately narrow empty
+ * container — a column a few pixels wide — is the case that needs it.
  */
-function centeredControlRect(rect: Rect, size: number): Rect {
+export function centeredControlRect(rect: Rect, size: number): Rect {
+  const width = Math.min(size, rect.width);
+  const height = Math.min(size, rect.height);
   return {
-    x: rect.x + (rect.width - size) / 2,
-    y: rect.y + (rect.height - size) / 2,
-    width: size,
-    height: size,
+    x: rect.x + (rect.width - width) / 2,
+    y: rect.y + (rect.height - height) / 2,
+    width,
+    height,
   };
 }
 
@@ -360,6 +408,21 @@ export function EmptyContainerAppenders({
        * question here would decline the control for exactly the composition
        * an author reaches for most.
        */
+      /*
+       * The stylesheet's own condition, asked of the element the stylesheet
+       * would ask it of — not a second condition computed here.
+       *
+       * `emptySlotOf` decided WHICH containers this component knows about,
+       * from the document. That is a different population from the one
+       * `builder-chrome.css` draws its 44px box for, and the module docblock
+       * above depends on them being the same: a container the stylesheet
+       * declined has no box, so a control centred in its measured rectangle is
+       * centred in whatever that block happens to render instead. A closed
+       * `core/accordion-item` is the first-party case — an empty `children`
+       * slot inside a root that also renders a `<summary>`, so the root is not
+       * `:empty` and measures the summary's own height.
+       */
+      if (!target.matches(EMPTY_CONTAINER_SELECTOR)) continue;
       if (clippedByAncestorRect(target, root)) continue;
       const measured = canvasContentRect(target, root);
       next.set(container.id, centeredControlRect(measured, APPENDER_SIZE_PX));
