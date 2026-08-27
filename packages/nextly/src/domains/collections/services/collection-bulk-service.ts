@@ -1842,17 +1842,9 @@ export class CollectionBulkService extends BaseService {
       skipHooks = false,
     } = options ?? {};
 
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
     // Early return for empty input
     if (ids.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
 
     // 1. Check collection-level access FIRST (once for all entries)
@@ -1884,92 +1876,50 @@ export class CollectionBulkService extends BaseService {
     // there will ever be — would silently omit every localized component value.
     await this.mutationService.warmLocalizedReadiness(params.collectionName);
 
-    // Whether any item appended an outbox event in the shared transaction. Read
-    // back onto the result only after the transaction commits (below), so a
-    // rollback — which undoes every delete and its event — never reports a
-    // durable event that isn't there.
-    let anyRecorded = false;
-    // The revalidation intents of every committed delete, applied to the result
-    // only after the shared transaction commits (below) — a rollback undoes every
-    // delete, so its tags must not be busted.
-    const collectedIntents: RevalidationIntent[] = [];
-    // Process all entries within a single transaction
+    // The shared batch loop accumulates into one mutable state so the rollback
+    // rewrite below can read the partial accounting a mid-batch abort leaves
+    // behind.
+    const state = newLegacyBatchState();
     try {
       await this.adapter.transaction(async tx => {
-        // Process in batches for memory efficiency
-        for (let i = 0; i < ids.length; i += batchSize) {
-          const batch = ids.slice(i, Math.min(i + batchSize, ids.length));
-
-          // Process each entry in the batch
-          for (let j = 0; j < batch.length; j++) {
-            const entryIndex = i + j;
-            const entryId = batch[j];
-
-            try {
-              // Delete entry using transaction method
-              const deleteResult =
-                await this.mutationService.deleteSingleEntryInTransaction(
-                  tx,
-                  params,
-                  entryId,
-                  skipHooks
-                );
-              // A committed item owes a delivery even if its afterDelete hook
-              // then threw (returned success:false).
-              if (deleteResult.eventRecorded) anyRecorded = true;
-              if (deleteResult.revalidationIntent) {
-                collectedIntents.push(deleteResult.revalidationIntent);
-              }
-
-              // Aggregate the outbox signal (see the batch-create loop).
-              if (deleteResult.eventRecorded) result.eventRecorded = true;
-              if (deleteResult.success) {
-                result.successful++;
-                result.ids.push(entryId);
-              } else {
-                result.failed++;
-                result.errors.push({
-                  index: entryIndex,
-                  error: deleteResult.message,
-                });
-
-                // If stopOnError, throw to trigger transaction rollback
-                if (stopOnError) {
-                  throw new Error(
-                    `Entry at index ${entryIndex} failed: ${deleteResult.message}`
-                  );
+        await runLegacyBatch(
+          tx,
+          ids,
+          { batchSize, stopOnError },
+          state,
+          async entryId => {
+            const deleteResult =
+              await this.mutationService.deleteSingleEntryInTransaction(
+                tx,
+                params,
+                entryId,
+                skipHooks
+              );
+            return deleteResult.success
+              ? {
+                  ok: true,
+                  id: entryId,
+                  eventRecorded: deleteResult.eventRecorded,
+                  revalidationIntent: deleteResult.revalidationIntent,
                 }
-              }
-            } catch (error: unknown) {
-              // A THROWN error (as opposed to a returned {success:false}) is
-              // unexpected and may have left a partial write in this SHARED
-              // transaction — e.g. the row was deleted but its entry.deleted
-              // outbox event failed to insert. A shared transaction cannot
-              // partially roll back, so committing would break the outbox
-              // guarantee (a delete with no event). Abort the whole batch rather
-              // than soft-failing this item and committing the rest. Expected
-              // per-item failures (access denied, not found) are RETURNED above,
-              // not thrown, so partial success is unaffected.
-              result.failed++;
-              result.errors.push({
-                index: entryIndex,
-                error:
-                  error instanceof Error
-                    ? error.message
-                    : "Unknown error occurred",
-              });
-
-              throw error; // Roll the whole batch back.
-            }
-          }
-        }
+              : {
+                  ok: false,
+                  message: deleteResult.message,
+                  eventRecorded: deleteResult.eventRecorded,
+                  revalidationIntent: deleteResult.revalidationIntent,
+                };
+          },
+          // A THROWN error (as opposed to a returned {success:false}) may have
+          // left a partial write in this SHARED transaction — e.g. the row was
+          // deleted but its entry.deleted outbox event failed to insert. A
+          // shared transaction cannot partially roll back, so committing would
+          // break the outbox guarantee (a delete with no event). Abort the
+          // whole batch on every throw. Expected per-item failures (access
+          // denied, not found) are RETURNED by the worker, not thrown, so
+          // partial success is unaffected.
+          () => true
+        );
       });
-      // The transaction committed (this line is skipped if it rejected), so any
-      // events it recorded are durable; surface that for the post-write drain.
-      result.eventRecorded = anyRecorded;
-      if (collectedIntents.length > 0) {
-        result.revalidationIntents = collectedIntents;
-      }
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert
@@ -1977,7 +1927,7 @@ export class CollectionBulkService extends BaseService {
       // was undone, so nothing committed: report ALL requested ids as failed
       // (not just those processed before the abort) and surface the batch error,
       // so a caller is not told 0 succeeded / 1 failed for a 3-id request.
-      const rolledBackCount = result.successful;
+      const rolledBackCount = state.successful;
       if (rolledBackCount > 0) {
         this.logger.warn("Bulk delete rolled back", {
           collectionName: params.collectionName,
@@ -1985,12 +1935,12 @@ export class CollectionBulkService extends BaseService {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      result.successful = 0;
-      result.ids = [];
-      result.failed = ids.length;
+      state.successful = 0;
+      state.ids = [];
+      state.failed = ids.length;
       // The rolled-back deletes recorded no committed events, so clear the
-      // aggregated flag to keep the wrapper from draining uncommitted events.
-      result.eventRecorded = false;
+      // aggregated signal to keep the wrapper from draining uncommitted events.
+      state.eventRecorded = false;
       const batchError = error instanceof Error ? error.message : String(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
       // Rebuild errors as exactly one entry per requested id, in index order.
@@ -1999,14 +1949,19 @@ export class CollectionBulkService extends BaseService {
       // rolled-back ids that had no entry — otherwise `errors` would exceed
       // `failed` and give a client duplicate detail for one id.
       const byIndex = new Map<number, string>();
-      for (const e of result.errors) {
+      for (const e of state.errors) {
         if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
       }
-      result.errors = [];
+      state.errors = [];
       for (let i = 0; i < ids.length; i += 1) {
-        result.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
+        state.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
       }
     }
+    // Delete always reports the outbox signal, even when nothing recorded:
+    // the previous shape read its own flag back after commit (true) or after
+    // rollback (false), never left it absent.
+    state.eventRecorded = state.eventRecorded ?? false;
+    const result = toBatchResult(state);
 
     this.logger.info("Bulk delete completed", {
       collectionName: params.collectionName,
@@ -2070,17 +2025,9 @@ export class CollectionBulkService extends BaseService {
       skipHooks = false,
     } = options ?? {};
 
-    // Initialize result tracking
-    const result: BatchOperationResult = {
-      successful: 0,
-      failed: 0,
-      errors: [],
-      ids: [],
-    };
-
     // Early return for empty input
     if (ids.length === 0) {
-      return result;
+      return { successful: 0, failed: 0, errors: [], ids: [] };
     }
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
@@ -2112,67 +2059,48 @@ export class CollectionBulkService extends BaseService {
       };
     }
 
-    // Process in batches for memory efficiency
-    for (let i = 0; i < ids.length; i += batchSize) {
-      const batch = ids.slice(i, Math.min(i + batchSize, ids.length));
-
-      // Process each entry in the batch
-      for (let j = 0; j < batch.length; j++) {
-        const entryIndex = i + j;
-        const entryId = batch[j];
-
-        try {
-          const deleteResult =
-            await this.mutationService.deleteSingleEntryInTransaction(
-              tx,
-              params,
-              entryId,
-              skipHooks
-            );
-
-          // Surface the worker's intent regardless of success (set only once the
-          // row was deleted); the caller flushes it after committing its tx.
-          if (deleteResult.revalidationIntent) {
-            (result.revalidationIntents ??= []).push(
-              deleteResult.revalidationIntent
-            );
-          }
-          // Aggregate the outbox signal (see the batch-create loop).
-          if (deleteResult.eventRecorded) result.eventRecorded = true;
-          if (deleteResult.success) {
-            result.successful++;
-            result.ids.push(entryId);
-          } else {
-            result.failed++;
-            result.errors.push({
-              index: entryIndex,
-              error: deleteResult.message,
-            });
-
-            if (stopOnError) {
-              throw new Error(
-                `Entry at index ${entryIndex} failed: ${deleteResult.message}`
-              );
+    // The shared batch loop. The intents and outbox signal it accumulates are
+    // surfaced on the result for the CALLER to flush after ITS commit — this
+    // method cannot flush pre-commit.
+    const state = newLegacyBatchState();
+    await runLegacyBatch(
+      tx,
+      ids,
+      { batchSize, stopOnError },
+      state,
+      async entryId => {
+        const deleteResult =
+          await this.mutationService.deleteSingleEntryInTransaction(
+            tx,
+            params,
+            entryId,
+            skipHooks
+          );
+        return deleteResult.success
+          ? {
+              ok: true,
+              id: entryId,
+              eventRecorded: deleteResult.eventRecorded,
+              revalidationIntent: deleteResult.revalidationIntent,
             }
-          }
-        } catch (error: unknown) {
-          // A THROWN error may have left a partial write in the CALLER'S
-          // transaction — e.g. a row deleted but its entry.deleted outbox event
-          // failed to insert. Propagate it so the caller's transaction rolls
-          // back rather than committing a delete with no event. Expected per-item
-          // failures are RETURNED above, not thrown, so partial success stands.
-          result.failed++;
-          result.errors.push({
-            index: entryIndex,
-            error:
-              error instanceof Error ? error.message : "Unknown error occurred",
-          });
-
-          throw error; // Caller's transaction will be rolled back.
-        }
-      }
-    }
-
-    return result;
+          : {
+              ok: false,
+              message: deleteResult.message,
+              eventRecorded: deleteResult.eventRecorded,
+              revalidationIntent: deleteResult.revalidationIntent,
+            };
+      },
+      // A THROWN error may have left a partial write in the CALLER'S
+      // transaction — e.g. a row deleted but its entry.deleted outbox event
+      // failed to insert. Propagate it so the caller's transaction rolls
+      // back rather than committing a delete with no event. Expected per-item
+      // failures are RETURNED by the worker, not thrown, so partial success
+      // stands.
+      () => true
+    );
+    // Delete always reports the outbox signal, even when nothing recorded,
+    // matching the self-transaction twin's read-back-after-commit shape.
+    state.eventRecorded = state.eventRecorded ?? false;
+    return toBatchResult(state);
   }
 }
