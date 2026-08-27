@@ -222,6 +222,50 @@ describe("resolving a subject to its document", () => {
     ).rejects.toThrow(/cannot be confirmed|identifying as/);
   });
 
+  it("answers an EMPTY document for a row whose field was never written", async () => {
+    // `blocksField` declares no `defaultValue`, so the column starts NULL and
+    // stays that way until something saves. The row itself arrived, so this is
+    // a definite reading — no classes — and it must not be reported as the
+    // absence that leaves a subject's rows alone. Reported that way, every
+    // document whose blocks field was never written kept whatever classes it
+    // last had.
+    const { api } = recordingApi({
+      findByID: async () => ({ id: "p1", title: "unrelated", content: null }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "published" })
+    );
+
+    expect(document).toMatchObject({ nodes: [] });
+  });
+
+  it("answers an EMPTY document for a row that carries no such key at all", async () => {
+    // The same reading for a projection that omits the field rather than
+    // storing null: the row is in hand either way.
+    const { api } = recordingApi({
+      findByID: async () => ({ id: "p1", title: "unrelated" }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "published" })
+    );
+
+    expect(document).toMatchObject({ nodes: [] });
+  });
+
+  it("still answers NOTHING when no row came back at all", async () => {
+    // The control that keeps the two apart. A withheld row is not a document
+    // with no blocks, and only this case may leave the subject's rows alone.
+    const { api } = recordingApi({ findByID: async () => null });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "published" })
+    );
+
+    expect(document).toBeUndefined();
+  });
+
   it("sends NO locale for a shared field rather than the empty string", async () => {
     // A shared field stores one value every language reads, and that value is
     // what a read with no locale resolves to.

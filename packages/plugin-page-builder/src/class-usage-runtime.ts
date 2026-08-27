@@ -16,6 +16,7 @@
 import type { ClassUsageIndexStore } from "./class-usage-maintenance";
 import type { ClassUsageSubject } from "./class-usage-reconcile";
 import type { ClassUsageDocumentReader } from "./class-usage-write";
+import { emptyBlockDocument } from "./fields/blocks-document";
 
 /**
  * The part of the Direct API this needs.
@@ -328,5 +329,25 @@ function localeOptions(subject: ClassUsageSubject): {
  */
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
-  return (row as Record<string, unknown>)[subject.field];
+  const value = (row as Record<string, unknown>)[subject.field];
+  if (value !== undefined && value !== null) return value;
+
+  // The ROW came back and this field holds nothing. That is a definite answer —
+  // no classes — and it must not be reported as the absence above, which means
+  // something else entirely: no row at all, which a read hook can manufacture
+  // and which therefore leaves the subject's rows alone.
+  //
+  // The field is null for a document whose blocks were never written:
+  // `blocksField` declares no `defaultValue`, so the column starts NULL and
+  // stays that way until something saves. Reporting that as absence retained
+  // whatever the subject last had, for a document that now applies nothing.
+  //
+  // An emptied field is a different value and needs no special case here:
+  // `BlockDocument.nodes` is not optional, so the editor's commit path cannot
+  // store `null`, and clearing every block stores a document with no nodes.
+  // Both reach the same answer by different routes.
+  //
+  // Answered as the engine's own empty document rather than a literal, so this
+  // and the field's own read path agree about what "no blocks" is.
+  return emptyBlockDocument();
 }

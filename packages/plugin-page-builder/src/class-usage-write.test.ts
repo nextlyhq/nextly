@@ -195,6 +195,33 @@ describe("a document that is not there in one locale or variant", () => {
     expect(calls).not.toContain("delete:r1");
   });
 
+  it("RECONCILES a document whose field holds nothing, rather than counting it absent", async () => {
+    // The end of the chain the reader starts: a row that arrived with an empty
+    // blocks field is a definite zero, so its stale rows must GO. Counted as
+    // absent instead, every document whose field was never written kept the
+    // classes it last had, and each of them blocked a delete that was safe.
+    const { store, calls } = recordingStore([{ id: "r1", classId: "old" }]);
+
+    const report = await reconcileWrittenDocument({
+      store,
+      // What the reader answers for a row present with nothing in the field.
+      read: async () => ({ formatVersion: 1, kind: "page", nodes: [] }),
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: true,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    // Reconciled, NOT absent — that is the discriminating half.
+    expect(report).toMatchObject({ subjects: 2, reconciled: 2, absent: 0 });
+    // And the stale row is actually removed on the subject that stored one.
+    expect(calls).toContain("delete:r1");
+  });
+
   it("still reconciles the subjects that ARE present", async () => {
     // The control: a walk that skipped everything on one absence would satisfy
     // the case above while maintaining nothing.

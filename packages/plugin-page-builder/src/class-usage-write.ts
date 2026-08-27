@@ -181,8 +181,14 @@ async function reconcileOne(
     const document = await args.read(subject);
     // An absent document leaves this subject's rows ALONE.
     //
-    // Absence cannot be made definite through any read available here. A list
-    // read applies `beforeOperation` and `beforeRead` regardless of
+    // Absence here means NO ROW, and nothing weaker. A document whose field
+    // holds nothing is answered as an empty document instead, because that is
+    // a definite reading of a row that did arrive — it reconciles to zero rows
+    // and the stale ones go. Collapsing the two retained the classes of every
+    // document whose blocks field had never been written.
+    //
+    // Absence itself cannot be made definite through any read available here.
+    // A list read applies `beforeOperation` and `beforeRead` regardless of
     // `overrideAccess` — they settle the predicate before any seam touches it
     // — so a tenant scope or a soft-delete filter withholds the row and the
     // page comes back empty. Nothing distinguishes that from a document that
