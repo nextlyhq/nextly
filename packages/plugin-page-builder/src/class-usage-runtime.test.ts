@@ -177,22 +177,42 @@ describe("resolving a subject to its document", () => {
     expect(calls[0]).not.toHaveProperty("status");
   });
 
-  it("REFUSES a row for a DIFFERENT document than the subject named", async () => {
-    // A predicate is a request, not a guarantee: `beforeRead` may clear the
-    // filter outright and the query service preserves that
-    // (collection-query-service.ts:688-713). Filing another document's classes
-    // here would also REMOVE the rows the real document earned, and a class it
-    // still renders would then read as unused.
+  it("ACCEPTS a document whose id an afterRead hook reshaped", async () => {
+    // `afterRead` REPLACES the document, and a collection may legitimately drop
+    // or rewrite `id` when it reshapes its public read. The by-id read has
+    // already pinned the entry in its own query, so identity is a property of
+    // what was asked rather than of what came back — comparing them would fail
+    // every maintenance pass on such a collection, and a class the save
+    // introduced would get no row at all.
+    //
+    // Core removed its own id comparison for exactly this
+    // (runtime/routing/__tests__/content-route-by-id.test.ts:198).
     const { api } = recordingApi({
       findByID: async () => ({
-        id: "some-other-page",
-        content: documentUsing("intruder"),
+        id: "reshaped-by-a-hook",
+        content: documentUsing("hero"),
       }),
     });
 
-    await expect(
-      classUsageDocumentReader(api)(subject({ variant: "published" }))
-    ).rejects.toThrow(/some-other-page/);
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "published" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
+  });
+
+  it("ACCEPTS a document an afterRead hook stripped the id from", async () => {
+    // The other half of the same reshape: a projection that omits `id`
+    // entirely. Requiring the column would reject it just as a rewrite does.
+    const { api } = recordingApi({
+      findByID: async () => ({ content: documentUsing("hero") }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "published" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
   });
 
   it("sends NO locale for a shared field rather than the empty string", async () => {
