@@ -330,24 +330,27 @@ function localeOptions(subject: ClassUsageSubject): {
 function documentIn(row: unknown, subject: ClassUsageSubject): unknown {
   if (typeof row !== "object" || row === null) return undefined;
   const value = (row as Record<string, unknown>)[subject.field];
-  if (value !== undefined && value !== null) return value;
 
-  // The ROW came back and this field holds nothing. That is a definite answer —
-  // no classes — and it must not be reported as the absence above, which means
-  // something else entirely: no row at all, which a read hook can manufacture
-  // and which therefore leaves the subject's rows alone.
-  //
-  // The field is null for a document whose blocks were never written:
-  // `blocksField` declares no `defaultValue`, so the column starts NULL and
-  // stays that way until something saves. Reporting that as absence retained
-  // whatever the subject last had, for a document that now applies nothing.
-  //
-  // An emptied field is a different value and needs no special case here:
-  // `BlockDocument.nodes` is not optional, so the editor's commit path cannot
-  // store `null`, and clearing every block stores a document with no nodes.
-  // Both reach the same answer by different routes.
+  // An explicitly stored NULL is a definite answer: no classes. The column is
+  // null for a document whose blocks were never written — `blocksField`
+  // declares no `defaultValue`, so it starts null and stays that way until
+  // something saves. Reporting that as an absence retained whatever the
+  // subject last had, for a document that now applies nothing.
   //
   // Answered as the engine's own empty document rather than a literal, so this
   // and the field's own read path agree about what "no blocks" is.
-  return emptyBlockDocument();
+  if (value === null) return emptyBlockDocument();
+
+  if (value !== undefined) return value;
+
+  // The key is NOT THERE, which is a different thing and must not be read as
+  // an empty document. `afterRead` replaces the record and may project a field
+  // away — filtering fields is supported and tested
+  // (`hooks/__tests__/hooks-integration.test.ts`) — so the document may still
+  // apply every class it did before. Treating that as empty would remove the
+  // rows of a live document and let safe-delete take a class its pages render.
+  //
+  // Indeterminate, therefore, and handled like any absence: the subject's rows
+  // are left alone, which over-counts until the next rebuild.
+  return undefined;
 }

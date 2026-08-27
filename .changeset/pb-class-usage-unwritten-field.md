@@ -46,3 +46,9 @@ the same value.
 Nothing distinguishes them by convention - the separation is structural. A field cleared in the
 editor stores a document with no nodes rather than nothing, because `BlockDocument.nodes` is not
 optional and the commit path cannot express the alternative.
+
+A field that was not RETURNED is a third state and is left alone. An `afterRead` hook replaces the
+record and may project a field away, which core supports, so the key can be missing from a document
+that still applies every class it did before. Only an explicitly stored null is read as empty;
+a missing key is indeterminate, and treating it as empty would remove a live document's rows and
+let the safe-delete check take a class its pages still render.

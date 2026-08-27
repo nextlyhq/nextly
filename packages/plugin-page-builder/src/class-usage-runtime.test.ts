@@ -240,9 +240,12 @@ describe("resolving a subject to its document", () => {
     expect(document).toMatchObject({ nodes: [] });
   });
 
-  it("answers an EMPTY document for a row that carries no such key at all", async () => {
-    // The same reading for a projection that omits the field rather than
-    // storing null: the row is in hand either way.
+  it("answers NOTHING for a row that carries no such key at all", async () => {
+    // A missing key is NOT an empty document. `afterRead` replaces the record
+    // and may project a field away — filtering fields is supported and tested
+    // in core — so the document may still apply every class it did before.
+    // Reading that as empty would remove a live document's rows and let
+    // safe-delete take a class its pages still render.
     const { api } = recordingApi({
       findByID: async () => ({ id: "p1", title: "unrelated" }),
     });
@@ -251,7 +254,7 @@ describe("resolving a subject to its document", () => {
       subject({ variant: "published" })
     );
 
-    expect(document).toMatchObject({ nodes: [] });
+    expect(document).toBeUndefined();
   });
 
   it("still answers NOTHING when no row came back at all", async () => {
