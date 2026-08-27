@@ -594,6 +594,47 @@ describe("preferences", () => {
       showEmptyElements: false,
     });
   });
+
+  it("does not re-invoke onShowEmptyElementsChange when only the host's callback identity changes", () => {
+    // A host wires this the conventional way — an inline callback recreated
+    // on every one of ITS OWN renders — and if the effect reporting this
+    // preference depended on that identity, a rerender with nothing else
+    // changed would call the new callback anyway. Chained with a host whose
+    // own state update is itself a fresh render (`setState(c => ({ ...c }))`
+    // always produces a new object), that is a render loop; this asserts the
+    // narrower, safely-testable half of it: identity churn alone must not
+    // re-invoke the callback.
+    const store = memoryStore();
+    stubContainerFits(true);
+    const first = vi.fn();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onShowEmptyElementsChange={first}
+      />
+    );
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledWith(true);
+
+    const second = vi.fn();
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onShowEmptyElementsChange={second}
+      />
+    );
+    expect(second).not.toHaveBeenCalled();
+
+    // Toggling the preference must still reach the LATEST callback, proving
+    // the ref is read fresh rather than pinned to the first render's closure.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show empty containers" })
+    );
+    expect(second).toHaveBeenCalledWith(false);
+    expect(first).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("where overlays inside the shell portal to", () => {

@@ -1118,9 +1118,23 @@ export function BuilderShell({
    * inert, not incorrect — where applying the SAME token twice would have
    * been a second unwanted forced-open.
    */
+  // Held in a ref rather than read straight from the prop. A host passing the
+  // conventional inline callback — `value => setState(c => ({ ...c, value }))`
+  // — hands this a NEW function identity on every one of its own renders, and
+  // that identity was a dependency here: the effect re-ran even though
+  // `showEmptyElements` had not changed, called the callback again, and a host
+  // whose state update itself triggers a re-render — an ordinary spread
+  // creates a new object every time, whether or not any field actually
+  // differs — closes that into a render loop. The ref always holds the latest
+  // callback without needing to be a dependency, so the effect below runs only
+  // when the PREFERENCE changes.
+  const onShowEmptyElementsChangeRef = React.useRef(onShowEmptyElementsChange);
   React.useEffect(() => {
-    onShowEmptyElementsChange?.(preferences.showEmptyElements);
-  }, [preferences.showEmptyElements, onShowEmptyElementsChange]);
+    onShowEmptyElementsChangeRef.current = onShowEmptyElementsChange;
+  });
+  React.useEffect(() => {
+    onShowEmptyElementsChangeRef.current?.(preferences.showEmptyElements);
+  }, [preferences.showEmptyElements]);
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref
