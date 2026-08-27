@@ -15,6 +15,11 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import {
+  CONTENT_MEASURE_LENGTH,
+  CONTENT_PAGE_MEASURE,
+} from "@admin/components/layout/content-measure";
+
 import { PageContainer } from "./index";
 
 describe("PageContainer", () => {
@@ -66,6 +71,22 @@ describe("PageContainer", () => {
         .getByTestId("page-container")
         .style.getPropertyValue("--nx-shell-measure")
     ).toBe("100%");
+  });
+
+  it("the content length agrees with what the shell actually renders", () => {
+    // The oracle is the RENDER, not the map. `CONTENT_MEASURE_LENGTH` and the
+    // shell both read `SHELL_MEASURE`, so comparing them to each other would
+    // compare two reads of one value and pass however wrong that value was.
+    // Rendering the container at the content measure and reading the property
+    // back off the DOM is a different observation, and it is the one that
+    // catches the field column being bounded to something the page never uses.
+    render(<PageContainer width={CONTENT_PAGE_MEASURE}>content</PageContainer>);
+    const rendered = screen
+      .getByTestId("page-container")
+      .style.getPropertyValue("--nx-shell-measure");
+
+    expect(rendered).not.toBe("");
+    expect(CONTENT_MEASURE_LENGTH).toBe(rendered);
   });
 
   it("keeps the grid for `full`, which is what separates it from no width", () => {

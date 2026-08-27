@@ -19,7 +19,10 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import {
+  CONTENT_MEASURE_LENGTH,
+  CONTENT_PAGE_MEASURE,
+} from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -81,7 +84,7 @@ function CreateEntryBreadcrumbs({
  */
 function CreateEntryPageSkeleton() {
   return (
-    <PageContainer width={CONTENT_PAGE_MEASURE}>
+    <PageContainer width="full">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading collection...
@@ -95,7 +98,13 @@ function CreateEntryPageSkeleton() {
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
-        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
+        <div
+          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          // The form that replaces this bounds its FIELD column, not the
+          // page, so a skeleton bounded at the page moves every field
+          // sideways the moment data arrives.
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -118,39 +127,6 @@ function CreateEntryPageSkeleton() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
-          <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
-            {/* Sidebar Header/Actions Skeleton */}
-            <div className="p-6  border-b border-border space-y-3">
-              <div className="flex gap-3">
-                <Skeleton className="h-10 flex-1" />
-                <Skeleton className="h-10 flex-1" />
-              </div>
-            </div>
-
-            {/* Sidebar Content Skeleton */}
-            <div className="p-6 space-y-8">
-              {/* Sidebar Fields / SEO */}
-              <div className="space-y-4">
-                <Skeleton className="h-6 w-32" />
-                <div className="space-y-2">
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              </div>
-
-              {/* Document Info Skeleton (Empty in Create mode but placeholder header shown) */}
-              <div className="pt-6  border-t border-border">
-                <div className="bg-primary/5 px-6 py-3 mb-4">
-                  <Skeleton className="h-4 w-32" />
-                </div>
-                <div className="px-6 py-4 text-xs text-muted-foreground italic">
-                  Document info will be available after saving.
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </PageContainer>
   );
