@@ -1769,3 +1769,68 @@
   font-weight: 400;
   color: var(--nx-muted-foreground);
 }
+
+/**
+ * The "+" drawn over an empty container.
+ *
+ * BASE tokens rather than the `--nx-builder-*` set several sections above,
+ * matching the drop indicator: this control belongs to the canvas's own
+ * palette, which is the page's rather than the chrome's, so the token it takes
+ * its colour from should be the one every other canvas affordance uses.
+ *
+ * A builder token would in fact resolve here — the empty-container rule above
+ * is scoped to `.nx-builder-chrome`, so a container carrying this control is
+ * always inside the element those tokens are declared on. That is a reason the
+ * choice is safe either way rather than a reason to change it.
+ *
+ * Positioned exactly like `.nx-spacing-overlay`: a full-bleed layer over the
+ * canvas root's own content box, so the pixel numbers the component computes
+ * through `canvasContentRect` land on the containers they were measured from.
+ */
+.nx-empty-container-appenders {
+  position: absolute;
+  inset: 0;
+  /* Above the spacing bands, which only describe what already is; below the
+     floating toolbar, which can be showing for the same selected-but-empty
+     container and should not be covered by this. */
+  z-index: 2;
+  /*
+   * Never a pointer target ITSELF. This layer spans the whole canvas root, and
+   * a hit-test that could land on the empty space between controls would make
+   * every block underneath it unclickable — exactly the failure
+   * `.nx-spacing-overlay` avoids the same way. Each button below opts back in.
+   */
+  pointer-events: none;
+}
+
+/*
+ * The button itself: transparent at rest, so it does not double up on the
+ * dashed `[data-nx-slots]:empty` box already drawn under it, and picking up
+ * colour only on hover and focus — where the two states share a treatment
+ * because both are ways of saying "this is interactive", pointer and keyboard
+ * alike.
+ */
+.nx-empty-container-appenders__button {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-empty-container-appenders__button:hover {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+.nx-empty-container-appenders__button:focus-visible {
+  outline: 2px solid var(--nx-primary);
+  outline-offset: -2px;
+  color: var(--nx-foreground);
+}

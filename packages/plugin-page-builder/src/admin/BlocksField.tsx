@@ -35,6 +35,7 @@
 
 import {
   resolveSiteTokens,
+  getBlock,
   hasBlock,
   registerBlocks,
   registryNestingSource,
@@ -45,7 +46,7 @@ import {
   type BreakpointId,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { registrySlotSource } from "@nextlyhq/builder";
+import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   authoredBreakpoints,
@@ -61,6 +62,7 @@ import {
   BuilderShell,
   Canvas,
   DropIndicator,
+  EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
   pageStyleTrace,
@@ -193,6 +195,23 @@ const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
 function ensureCoreBlocksRegistered(): void {
   const missing = coreBlocks.filter(block => !hasBlock(block.name));
   if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
+}
+
+/**
+ * Whether the empty-container appender should be suppressed right now.
+ *
+ * Two independent reasons collapse into one boolean here, named, rather than
+ * inlined at the JSX call site: a drag in progress, where the document is
+ * mid-change, and the author having turned empty-container chrome off, where
+ * the container this control would sit over has collapsed to zero height. A
+ * bare `||` at the call site reads as one condition; naming it is what says
+ * these are two unrelated causes that happen to share an operator.
+ */
+function emptyContainerAppenderHidden(
+  draggingId: string | null,
+  showEmptyElements: boolean
+): boolean {
+  return draggingId !== null || !showEmptyElements;
 }
 
 /**
@@ -627,6 +646,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const drag = useCanvasDrag({ editor, slots, nesting });
 
   /*
+   * The empty-container appender's only read of a block's definition: its
+   * accessible label. `{ get: getBlock }` satisfies its `BlockLookup` with no
+   * adapter, because `getBlock` already returns `AnyBlockDefinition | undefined`
+   * and that type carries the one field the appender reads.
+   */
+  const blocks = useMemo(() => ({ get: getBlock }), []);
+
+  /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
    * may be typed into is the block's own declaration, read by the builder.
    */
@@ -1034,6 +1061,39 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   }, [editor.document, onCommit, onClose]);
 
   /*
+   * Opens the insert panel from the canvas itself, for the empty-container
+   * appender: pressing its "+" must select the container AND show the panel
+   * that fills it as one gesture, never two.
+   *
+   * A counter bumped on every press, not a boolean: `BuilderShell` reads this
+   * as "open it AGAIN", including when the author has since closed the panel
+   * by hand, and a value that repeated itself would look unchanged and do
+   * nothing the second time. Starts `undefined` rather than `0` so mounting
+   * the editor is not itself a press.
+   */
+  const [openInsertPanelToken, setOpenInsertPanelToken] = useState<
+    number | undefined
+  >(undefined);
+  const openInsertPanel = useCallback(() => {
+    setOpenInsertPanelToken(current => (current ?? 0) + 1);
+  }, []);
+
+  /*
+   * Whether the author wants empty-container chrome showing at all, mirrored
+   * from the shell so the appender mounted below can answer the same question
+   * the dashed placeholder box's own CSS rule already answers.
+   *
+   * Starts at the preference's own default rather than an assumed `true`: the
+   * shell reports the real value once it has read it, but that report lands
+   * one render after this component's first — an assumed value would be a
+   * SECOND declaration of the default that goes stale the day the shell's own
+   * changes and this one does not.
+   */
+  const [showEmptyElements, setShowEmptyElements] = useState(
+    DEFAULT_PREFERENCES.showEmptyElements
+  );
+
+  /*
    * The editor takes the window: the shell draws its own rail, panels, top bar
    * and bottom bar, so admin chrome around it is a second set of the same
    * furniture, and the canvas is the one surface whose purpose is the space it
@@ -1065,6 +1125,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
+        // Forces the insert panel open from the empty-container appender,
+        // which lives on the canvas below rather than beside the rail that
+        // normally opens a panel.
+        openInsertPanelToken={openInsertPanelToken}
+        // The read half of the same gap: mirrors the shell's own preference
+        // so the appender below can be suppressed by the SAME switch that
+        // already suppresses the placeholder box it sits over.
+        onShowEmptyElementsChange={setShowEmptyElements}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -1330,6 +1398,35 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   <SpacingOverlay
                     editor={editor}
                     hidden={drag.draggingId !== null}
+                  />
+                  {/*
+                  Suppressed during a drag for the same reason the toolbar and
+                  the bands are: the document is mid-change, so a control
+                  offering to fill a container names a shape that is about to
+                  be different.
+                  ALSO suppressed while the author has turned empty-container
+                  chrome off: the dashed placeholder box collapses to zero
+                  height under the same preference (`builder-chrome.css`'s
+                  `[data-nx-slots]:empty` rule already matches it), and a "+"
+                  left floating over nothing after that would make the
+                  preference lie about what a visitor sees.
+                */}
+                  <EmptyContainerAppenders
+                    document={editor.document}
+                    slots={slots}
+                    blocks={blocks}
+                    hidden={emptyContainerAppenderHidden(
+                      drag.draggingId,
+                      showEmptyElements
+                    )}
+                    onAppend={nodeId => {
+                      // Select first, then open. The inserter derives its
+                      // target from the selection, so selecting the container
+                      // is what makes the next insert land inside it — there
+                      // is no second targeting path to keep in step.
+                      editor.select(nodeId);
+                      openInsertPanel();
+                    }}
                   />
                 </>
               }
