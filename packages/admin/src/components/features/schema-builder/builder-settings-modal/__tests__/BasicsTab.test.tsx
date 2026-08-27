@@ -101,11 +101,10 @@ describe("BasicsTab", () => {
       />
     );
 
-    // Typed straight into the field. The slug used to sit behind a pencil
-    // button, and `7cdc8d8ee` replaced that arrangement with a plain input —
-    // so clicking "Edit" first found no such button and this test failed
-    // before reaching the behaviour it is named for. The sibling plural test
-    // below has always typed directly; this one now matches it.
+    // Typed straight into the field, because the slug IS a plain input here.
+    // The edit has to be a real user edit rather than a programmatic set: what
+    // the assertion below turns on is that a user-supplied slug stops tracking
+    // the singular name, and only an actual edit sets the flag that stops it.
     const slugInput = screen.getByRole("textbox", { name: /slug/i });
     await user.clear(slugInput);
     await user.type(slugInput, "post");

@@ -1,16 +1,16 @@
-// SlugInput is a controlled text input for an entity's slug, read-only once the
-// entity exists.
+// SlugInput is a controlled text input for an entity's slug, and it stops
+// accepting edits once the entity exists.
 //
-// It previously had read and edit modes — a bold value, a pencil button, a
-// "Done" — and four tests locked that UX. `7cdc8d8ee` ("stop offering an
-// entity's slug for editing after creation") replaced the whole arrangement
-// with a single `Input`, so those tests described a component that no longer
-// exists and asserted against markup nothing rendered. They are replaced here
-// rather than deleted: the component still has a contract, and leaving it
-// uncovered would trade four failing tests for none at all.
+// That read-only-after-creation rule is the contract worth locking: a slug is
+// an address. Renaming one after anything points at it breaks those links
+// silently, so the component refuses rather than warning, and these cases
+// assert the refusal is a property of the rendered input rather than of a
+// wrapper that happens not to pass a handler.
 //
-// SlugInput is controlled, so these use a stateful wrapper — the same shape any
-// real consumer (BasicsTab with react-hook-form) provides.
+// It is controlled, so every case drives it through a stateful wrapper — the
+// same shape a real consumer provides (BasicsTab, via react-hook-form). Testing
+// it uncontrolled would let a typed character appear on screen from React's own
+// DOM state and read as the component accepting input it never received.
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
