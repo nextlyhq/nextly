@@ -25,10 +25,32 @@ const documentUsing = (...classes: string[]) => ({
 });
 
 /** A store holding no rows, recording every write it is asked to make. */
-function recordingStore() {
+function recordingStore(stored: { id: string; classId: string }[] = []) {
   const calls: string[] = [];
   const store: ClassUsageIndexStore = {
-    find: async () => ({ items: [], meta: { hasNext: false } }),
+    // Rows are answered only for the subject that ASKS for them, read off the
+    // predicate. A fixture that served every subject the same rows would make
+    // one subject's reconciliation look like another's — and the assertions
+    // here are precisely about which subject did what.
+    find: async args => ({
+      items: (args.where.variant?.equals === "draft" ? stored : []).map(
+        row => ({
+          scope: "collection",
+          entity: "pages",
+          entityKey: "p1",
+          field: "content",
+          locale: "",
+          // Stamped from the PREDICATE, not fixed. A row labelled with a
+          // variant the query did not ask for makes `assertRowMatches` throw
+          // before any removal is attempted — so a regressed guard would turn
+          // this red for a malformed fixture instead of for the deletion it is
+          // meant to catch.
+          variant: args.where.variant?.equals ?? "published",
+          ...row,
+        })
+      ),
+      meta: { hasNext: false },
+    }),
     create: async args => {
       calls.push(`create:${String(args.data.classId)}`);
       return {};
@@ -141,17 +163,23 @@ describe("enumerating the subjects one save owes", () => {
 
 describe("a document that is not there in one locale or variant", () => {
   it("leaves that subject's rows ALONE rather than reconciling against nothing", async () => {
-    // Absence is ordinary: a collection with drafts holds a published row for a
-    // document with no pending draft. Reconciling against nothing would delete
-    // that subject's rows, and the rebuild's sweep — which can tell a deleted
-    // document from an untranslated one — is what removes rows that are really
-    // orphaned.
-    const { store, calls } = recordingStore();
+    // Absence cannot be made definite through any read available here: a list
+    // read applies `beforeOperation` and `beforeRead` regardless of
+    // `overrideAccess`, so a tenant scope or soft-delete filter withholds the
+    // row and the page comes back empty. Nothing distinguishes that from a
+    // document that is genuinely gone.
+    //
+    // The asymmetry decides it. Keeping a row that should have gone
+    // OVERCOUNTS: the UI warns, a deletion is refused, the next rebuild
+    // corrects it. Deleting one that should have stayed UNDERCOUNTS: the class
+    // reads as unused, safe-delete permits it, and the pages that render it
+    // lose it. Only one of those is recoverable.
+    const { store, calls } = recordingStore([{ id: "r1", classId: "old" }]);
 
     const report = await reconcileWrittenDocument({
       store,
       read: async subject =>
-        subject.variant === "draft" ? null : documentUsing("hero"),
+        subject.variant === "draft" ? undefined : documentUsing("hero"),
       collection: {
         slug: "pages",
         fields: [{ type: "blocks", name: "content" }],
@@ -163,8 +191,30 @@ describe("a document that is not there in one locale or variant", () => {
     });
 
     expect(report).toMatchObject({ subjects: 2, reconciled: 1, absent: 1 });
-    // One create for the published document, and NOTHING for the absent draft.
-    expect(calls).toEqual(["create:hero"]);
+    // The stored row survives: nothing was deleted on the absent subject.
+    expect(calls).not.toContain("delete:r1");
+  });
+
+  it("still reconciles the subjects that ARE present", async () => {
+    // The control: a walk that skipped everything on one absence would satisfy
+    // the case above while maintaining nothing.
+    const { store, calls } = recordingStore();
+
+    await reconcileWrittenDocument({
+      store,
+      read: async subject =>
+        subject.variant === "draft" ? undefined : documentUsing("hero"),
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: true,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect(calls).toContain("create:hero");
   });
 });
 
@@ -194,6 +244,39 @@ describe("a subject that fails", () => {
     expect((report.failures[0]?.failure as Error).message).toBe(
       "connection lost"
     );
+    expect(report.reconciled).toBe(0);
+  });
+
+  it("counts a WITHHELD read as a failure and not as an absence", async () => {
+    // The two outcomes licence opposite things, so they must not collapse.
+    // Absence deliberately leaves the subject's rows alone, which protects the
+    // classes already indexed — but a class this very save INTRODUCED has no
+    // row to protect, so reporting a withheld read as absence would leave it
+    // indexed nowhere and safe-delete would remove it.
+    //
+    // A withheld document is not silent here: the reader never sets
+    // `disableErrors`, so a document a hook narrowed away comes back as an
+    // unsuccessful result and is thrown rather than answered as nothing.
+    const { store } = recordingStore();
+
+    const report = await reconcileWrittenDocument({
+      store,
+      read: async () => {
+        throw new Error("hidden by a read hook");
+      },
+      collection: {
+        slug: "pages",
+        fields: [{ type: "blocks", name: "content" }],
+        hasDrafts: false,
+      },
+      documentId: "p1",
+      locales: [],
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect(report.failures).toHaveLength(1);
+    // The discriminating half: it is NOT filed as an absence.
+    expect(report.absent).toBe(0);
     expect(report.reconciled).toBe(0);
   });
 

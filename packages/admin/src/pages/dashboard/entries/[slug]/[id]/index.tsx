@@ -19,7 +19,10 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import {
+  CONTENT_PAGE_MEASURE,
+  CONTENT_MEASURE_LENGTH,
+} from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
@@ -88,7 +91,7 @@ function EditEntryBreadcrumbs({
  */
 function EditEntryPageSkeleton() {
   return (
-    <PageContainer width={CONTENT_PAGE_MEASURE}>
+    <PageContainer width="full">
       {/* Accessibility: Announce loading state to screen readers */}
       <div className="sr-only" role="status" aria-live="polite">
         Loading entry...
@@ -102,7 +105,13 @@ function EditEntryPageSkeleton() {
         {/* Main Content */}
         {/* `min-w-0` as the editor that replaces this carries it: without it
             this pane will not shrink and pushes the rail past the column. */}
-        <div className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6">
+        <div
+          className="flex-1 min-w-0 space-y-6 lg:p-8 pt-6 mx-auto w-full"
+          // The editor that replaces this bounds its FIELD column, not the
+          // page, so a skeleton bounded at the page moves every field
+          // sideways the moment data arrives.
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
           {/* Breadcrumbs skeleton */}
           <div className="mb-6">
             <Skeleton className="h-5 w-64" />
@@ -125,7 +134,7 @@ function EditEntryPageSkeleton() {
         </div>
 
         {/* Sidebar */}
-        <div className="w-full lg:w-[360px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
+        <div className="w-full lg:w-[320px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
           <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-4rem)] flex flex-col">
             {/* Sidebar Header/Actions Skeleton */}
             <div className="p-6  border-b border-border space-y-3">
@@ -512,7 +521,7 @@ export default function EditEntryPage({
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <MeasuredPageFrame>
+      <MeasuredPageFrame contentCarriesMeasure>
         {/* Each injection slot gets a box of its own. Under the measured
             frame these are direct children of a CSS grid, and the rule that
             puts a child in the content column can only place a generated
@@ -521,7 +530,15 @@ export default function EditEntryPage({
             instead. The registry imposes no root-element contract on a plugin,
             so the page provides the box rather than trusting it to. */}
         {beforeEditPath && (
-          <div>
+          <div
+            // Bounded here rather than inheriting the page, which no longer
+            // caps: the frame gives the panel to the form-and-rail row, and a
+            // slot outside that row would otherwise stretch the whole width.
+            // Plugin content keeps the measure it had before the row took the
+            // panel, so nothing a plugin renders changes shape.
+            className="mx-auto w-full"
+            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+          >
             <PluginSlot path={beforeEditPath} props={editInjectionProps} />
           </div>
         )}
@@ -545,7 +562,15 @@ export default function EditEntryPage({
           onCancel={handleCancel}
         />
         {afterEditPath && (
-          <div>
+          <div
+            // Bounded here rather than inheriting the page, which no longer
+            // caps: the frame gives the panel to the form-and-rail row, and a
+            // slot outside that row would otherwise stretch the whole width.
+            // Plugin content keeps the measure it had before the row took the
+            // panel, so nothing a plugin renders changes shape.
+            className="mx-auto w-full"
+            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+          >
             <PluginSlot path={afterEditPath} props={editInjectionProps} />
           </div>
         )}
