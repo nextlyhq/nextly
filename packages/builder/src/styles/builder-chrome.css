@@ -1773,12 +1773,15 @@
 /**
  * The "+" drawn over an empty container.
  *
- * BASE tokens rather than the `--nx-builder-*` set several sections above.
- * Those are declared on `.nx-builder-chrome`, and this control is measured in
- * the same e2e harness `spacing-overlay.tsx` documents as mounting the canvas
- * with no shell around it — a builder token there resolves to nothing exactly
- * where this control would be verified. The drop indicator reaches for
- * `--nx-primary` for the same reason.
+ * BASE tokens rather than the `--nx-builder-*` set several sections above,
+ * matching the drop indicator: this control belongs to the canvas's own
+ * palette, which is the page's rather than the chrome's, so the token it takes
+ * its colour from should be the one every other canvas affordance uses.
+ *
+ * A builder token would in fact resolve here — the empty-container rule above
+ * is scoped to `.nx-builder-chrome`, so a container carrying this control is
+ * always inside the element those tokens are declared on. That is a reason the
+ * choice is safe either way rather than a reason to change it.
  *
  * Positioned exactly like `.nx-spacing-overlay`: a full-bleed layer over the
  * canvas root's own content box, so the pixel numbers the component computes

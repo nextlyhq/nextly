@@ -40,14 +40,13 @@
  * ## When it re-measures, and the one case it cannot see
  *
  * A re-measure happens when the selection changes, when the document changes,
- * whenever `watchCanvasGeometry` reports that a rectangle may have moved, and
- * when a mutation lands outside this overlay's own layer. Between them those
- * cover an edit, an image or webfont arriving, the panels moving, a scroller
- * carrying the block, a transition settling, a recompiled site sheet, and a
- * breakpoint changing — a breakpoint is driven by the canvas's own width, so
- * the root's resize is the event that reports it.
+ * and whenever `watchCanvasFor` reports that a rectangle may have moved.
+ * Between them those cover an edit, an image or webfont arriving, the panels
+ * moving, a scroller carrying the block, a transition settling, a recompiled
+ * site sheet, and a breakpoint changing — a breakpoint is driven by the
+ * canvas's own width, so the root's resize is the event that reports it.
  *
- * Which of those the first of the two owns is deliberately not restated here:
+ * Which mechanisms the second of those owns is deliberately not restated here:
  * that list belongs to `canvas-geometry-watch.ts`, and a copy of it in this
  * docblock would be a second answer to fall out of step.
  *
@@ -73,7 +72,7 @@ import {
   type CornerRadii,
 } from "./border-radii";
 import { CANVAS_ROOT_CLASS, nodeElement } from "./canvas";
-import { watchCanvasGeometry } from "./canvas-geometry-watch";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import type { EditorState } from "./editor-state";
 import type { Rect, Scale } from "./geometry";
 import {
@@ -539,59 +538,20 @@ export function SpacingOverlay({
    * finishing, a webfont swapping, the panels being resized around the canvas,
    * a scroller between a block and the root, a transition settling.
    *
-   * That whole list is `watchCanvasGeometry`'s, shared with every other overlay
+   * That whole list is `watchCanvasFor`'s, shared with every other overlay
    * measuring against this root: which changes can move a rectangle is one
    * question, and a second copy of the answer drifts from the first silently —
    * the copy simply never hears one of the mechanisms, and looks complete.
    *
-   * The overlay cannot drive its own loop through it: it is `position: absolute`
-   * filling the root and carries no node marker, so nothing it draws is observed
-   * there or contributes to the root's size.
+   * The layer is handed over as a READ rather than as an element, because it
+   * does not exist yet on the first pass. It is what locates the canvas root,
+   * and it is also what tells a foreign mutation from the bands' own: drawing
+   * them mutates the very subtree being observed, so without it each
+   * measurement would schedule the next.
    */
   React.useEffect(() => {
     if (hidden || selectedId === null) return;
-    const element = layer.current;
-    const root =
-      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
-    if (root === null) return;
-    const geometry = watchCanvasGeometry(root, measure);
-
-    /*
-     * The one subscription that stays here, because it is the one this overlay
-     * has to answer for itself: a change that alters computed style without
-     * altering any size. A site-style save recompiles the sheet, and
-     * `PageRenderer` emits it as a `<style>` INSIDE the page root — so the
-     * bytes changing is a mutation in this subtree, where a resize observer has
-     * nothing to report because a class-driven margin moves blocks without
-     * resizing them.
-     *
-     * Mutations inside the overlay's own layer are ignored, and that rule is
-     * why this cannot be shared. Drawing the bands is itself a mutation of the
-     * observed subtree, so reacting to it would have the measurement trigger
-     * the next measurement — and which mutations are "its own" is a different
-     * answer for every overlay.
-     */
-    const styles =
-      typeof MutationObserver === "undefined"
-        ? null
-        : new MutationObserver(records => {
-            const own = layer.current;
-            const outside = records.some(
-              record => own === null || !own.contains(record.target)
-            );
-            if (outside) measure();
-          });
-    styles?.observe(root, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      characterData: true,
-    });
-
-    return () => {
-      geometry();
-      styles?.disconnect();
-    };
+    return watchCanvasFor(() => layer.current, measure);
     /*
      * `document` re-subscribes, and dropping it strands the observer on a
      * DETACHED element. An edit replaces the rendered tree while the selection

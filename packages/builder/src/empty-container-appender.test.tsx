@@ -36,6 +36,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 import {
   NODE_ID_ATTRIBUTE,
+  SLOTS_ATTRIBUTE,
   type BlockRenderArgs,
   type SiteSheetInput,
 } from "@nextlyhq/blocks-react";
@@ -50,6 +51,7 @@ import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CANVAS_ROOT_CLASS, Canvas } from "./canvas";
+import { BUILDER_CHROME_CLASS } from "./shell-state";
 import {
   centeredControlRect,
   EmptyContainerAppenders,
@@ -517,6 +519,23 @@ interface Box {
 }
 
 /**
+ * The nth canvas root inside a render, throwing rather than answering `null`.
+ *
+ * Indexed because one case mounts TWO canvases in a single render to compare
+ * them; every other caller takes the only one there is. A missing root is a
+ * broken fixture rather than a result, so it raises instead of letting a later
+ * query report an absence that means nothing.
+ */
+function canvasRootIn(container: HTMLElement, which = 0): HTMLElement {
+  const roots = container.querySelectorAll<HTMLElement>(
+    `.${CANVAS_ROOT_CLASS}`
+  );
+  const root = roots[which];
+  if (root === undefined) throw new Error(`no canvas root at index ${which}`);
+  return root;
+}
+
+/**
  * Give a rendered canvas the rectangles jsdom never lays out.
  *
  * Every element reports the canvas's own box first, so no wrapper between a
@@ -525,9 +544,12 @@ interface Box {
  * report a zero-sized clip rectangle and cut every node inside it. The named
  * nodes are then overridden with the boxes the case is about.
  */
-function layout(container: HTMLElement, boxes: Record<string, Box>): void {
-  const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
-  if (root === null) throw new Error("no canvas root rendered");
+function layout(
+  container: HTMLElement,
+  boxes: Record<string, Box>,
+  which = 0
+): void {
+  const root = canvasRootIn(container, which);
   const stub = (element: Element, box: Box): void => {
     element.getBoundingClientRect = () =>
       new DOMRect(box.x, box.y, box.width, box.height);
@@ -542,6 +564,19 @@ function layout(container: HTMLElement, boxes: Record<string, Box>): void {
     if (element === null) throw new Error(`no element for ${id}`);
     stub(element, box);
   }
+}
+
+/**
+ * Let queued mutation records reach the observer that asked for them.
+ *
+ * `MutationObserver` delivers its records in a microtask rather than at the
+ * moment of the write, so an assertion taken straight after a DOM change runs
+ * before the callback has been entered at all — which reads exactly like a
+ * subscription that never fired. A macrotask turn drains the microtask queue,
+ * so waiting one is enough for delivery however many turns it takes.
+ */
+async function flushObservers(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0));
 }
 
 /** The inline rectangle a control was drawn at, in the order left/top/w/h. */
@@ -696,6 +731,14 @@ describe("which containers it actually draws a control on", () => {
    *
    * Returns the rendered container, for a case that has to re-stub a
    * rectangle and drive a second measurement of its own.
+   *
+   * Mounted inside a shell root, because that is the composition the affordance
+   * exists in: `builder-chrome.css` scopes its box to `.nx-builder-chrome`, so a
+   * canvas with no shell around it is drawn no box and gets no control. A plain
+   * element carrying the class rather than `BuilderShell` itself — the class is
+   * the whole of what the selector asks for, and mounting the real shell would
+   * bring a rail, panels and a resize-driven layout into a file about which
+   * rectangles are measured.
    */
   function measuredCanvas(
     canvasDocument: BlockDocument,
@@ -706,18 +749,20 @@ describe("which containers it actually draws a control on", () => {
     withFakeResizeObserver();
 
     const { container } = render(
-      <Canvas
-        document={canvasDocument}
-        siteStyles={SITE_STYLES}
-        overlay={
-          <EmptyContainerAppenders
-            document={overlayDocument}
-            slots={registrySlotSource()}
-            blocks={{ get: () => undefined }}
-            onAppend={() => undefined}
-          />
-        }
-      />
+      <div className={BUILDER_CHROME_CLASS}>
+        <Canvas
+          document={canvasDocument}
+          siteStyles={SITE_STYLES}
+          overlay={
+            <EmptyContainerAppenders
+              document={overlayDocument}
+              slots={registrySlotSource()}
+              blocks={{ get: () => undefined }}
+              onAppend={() => undefined}
+            />
+          }
+        />
+      </div>
     );
 
     layout(container, boxes);
@@ -749,6 +794,93 @@ describe("which containers it actually draws a control on", () => {
     expect(drawnAt("Wide box")).toEqual(["178px", "78px", "44px", "44px"]);
     expect(
       screen.queryByRole("button", { name: "Add a block to Closed section" })
+    ).toBeNull();
+  });
+
+  it("draws NO control on a canvas with no builder shell around it", () => {
+    /*
+     * The third ancestor condition of the stylesheet's rule, and the only one
+     * nothing else answers. `EmptyContainerAppenders` and `Canvas` are both
+     * exported, so a host can compose them with no shell at all — the product
+     * path does not, since `BlocksField` mounts the canvas inside
+     * `BuilderShell`, but nothing prevents it. `builder-chrome.css` scopes its
+     * 44px box to `.nx-builder-chrome`, so in that composition the container
+     * keeps its natural size of nothing and a control drawn on the element-level
+     * match alone is a zero-area button: focusable, announced by name, and
+     * invisible.
+     *
+     * TWO canvases in one render, because an absence assertion on its own is
+     * satisfied by a component that drew nothing anywhere. The shelled one holds
+     * the identical container type and IS drawn, in the same render and the same
+     * measurement pass, so the query is known to find a button here.
+     *
+     * The bare container is additionally checked to satisfy the element-level
+     * half of the rule — it exists, it carries the slots marker, it is `:empty`
+     * — so what is being read below is the ancestor condition refusing rather
+     * than a node that never rendered.
+     */
+    registerShapes();
+    withFakeResizeObserver();
+
+    const container = (id: string, name: string): BlockDocument => ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id,
+          type: "acme/empty-container-appender-box",
+          version: 1,
+          props: {},
+          name,
+        },
+      ],
+    });
+    const shelled = container("shelled", "Shelled box");
+    const bare = container("bare", "Bare box");
+    const appenders = (document: BlockDocument) => (
+      <EmptyContainerAppenders
+        document={document}
+        slots={registrySlotSource()}
+        blocks={{ get: () => undefined }}
+        onAppend={() => undefined}
+      />
+    );
+
+    const { container: rendered } = render(
+      <>
+        <div className={BUILDER_CHROME_CLASS}>
+          <Canvas
+            document={shelled}
+            siteStyles={SITE_STYLES}
+            overlay={appenders(shelled)}
+          />
+        </div>
+        <Canvas
+          document={bare}
+          siteStyles={SITE_STYLES}
+          overlay={appenders(bare)}
+        />
+      </>
+    );
+
+    layout(rendered, { shelled: { x: 0, y: 0, width: 400, height: 200 } }, 0);
+    layout(rendered, { bare: { x: 0, y: 0, width: 400, height: 200 } }, 1);
+    // Every overlay in the render, not the newest: each canvas subscribes its
+    // own observer, and firing one leaves the other never measured — which would
+    // make the absence below a statement about a pass that did not happen.
+    for (const observer of FakeResizeObserver.instances) {
+      act(() => observer.fire());
+    }
+
+    const bareElement = canvasRootIn(rendered, 1).querySelector(
+      `[${NODE_ID_ATTRIBUTE}="bare"]`
+    );
+    expect(bareElement).not.toBeNull();
+    expect(bareElement?.matches(`[${SLOTS_ATTRIBUTE}]:empty`)).toBe(true);
+
+    expect(drawnAt("Shelled box")).toEqual(["178px", "78px", "44px", "44px"]);
+    expect(
+      screen.queryByRole("button", { name: "Add a block to Bare box" })
     ).toBeNull();
   });
 
@@ -880,6 +1012,92 @@ describe("which containers it actually draws a control on", () => {
     });
 
     expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
+  });
+
+  it("re-measures when a site style recompiles inside the canvas", async () => {
+    /*
+     * The change no other subscription can see: a recompiled site sheet arrives
+     * as a `<style>` inside the page root, and a class-driven margin or position
+     * moves an empty container while resizing nothing, scrolling nothing and
+     * finishing no transition. Only a mutation record reports it.
+     *
+     * The sheet is REPLACED rather than added, because that is what a save
+     * does, and the record it produces has the `<style>` element's text node as
+     * its target — a `characterData` record from deep inside the page, which is
+     * the shape the observer's options have to cover.
+     *
+     * The rectangle is re-stubbed and the new position asserted, so what is
+     * checked is a completed re-measurement rather than the presence of a
+     * subscription.
+     */
+    const container = measuredCanvas(NESTED, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 0, width: 400, height: 200 },
+    });
+    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+
+    const root = canvasRootIn(container);
+    const sheet = document.createElement("style");
+    sheet.textContent = ".nx-pb-a { margin-top: 0 }";
+    await act(async () => {
+      root.append(sheet);
+      await flushObservers();
+    });
+
+    // The class rule now pushes the container 100px down. Nothing resized:
+    // `clipper` still reports the canvas's own box.
+    layout(container, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 100, width: 400, height: 200 },
+    });
+    await act(async () => {
+      sheet.textContent = ".nx-pb-a { margin-top: 100px }";
+      await flushObservers();
+    });
+
+    expect(drawnAt("Clipped box")).toEqual(["178px", "178px", "44px", "44px"]);
+  });
+
+  it("does NOT re-measure for a mutation of its own output", async () => {
+    /*
+     * The other half of the same subscription, and it needs its own case: the
+     * overlay draws INSIDE the subtree it observes, so an observer with no
+     * exclusion has every measurement schedule the next one off the DOM writes
+     * that measurement just made.
+     *
+     * Driven the same way as the case above and asserted the opposite way
+     * round: the rectangle is re-stubbed so a re-measure WOULD move the control,
+     * and then a mutation is made inside the overlay's own layer. The control
+     * staying where it was is the exclusion working — and the previous test is
+     * what proves this fixture can move it at all, since an assertion that
+     * nothing happened is satisfied by an observer that never fires for
+     * anything.
+     *
+     * The mutation is the shape the overlay's own render produces — the `style`
+     * attribute of a drawn button being written — and it is written back with
+     * the value it already carries, so the mutation record is the only thing
+     * that can move this assertion. A write that changed the position would be
+     * asserting its own edit rather than whether a measurement ran.
+     */
+    const container = measuredCanvas(NESTED, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 0, width: 400, height: 200 },
+    });
+    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
+
+    layout(container, {
+      wide: { x: 0, y: 0, width: 400, height: 200 },
+      clipped: { x: 0, y: 100, width: 400, height: 200 },
+    });
+    const drawn = screen.getByRole("button", {
+      name: "Add a block to Clipped box",
+    });
+    await act(async () => {
+      drawn.setAttribute("style", drawn.getAttribute("style") ?? "");
+      await flushObservers();
+    });
+
+    expect(drawnAt("Clipped box")).toEqual(["178px", "78px", "44px", "44px"]);
   });
 
   it("keeps the control inside a container narrower than it", () => {

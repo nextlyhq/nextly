@@ -28,6 +28,7 @@ import * as React from "react";
 
 import { devWarnOnce } from "./dev-warn";
 import {
+  BUILDER_CHROME_CLASS,
   DEFAULT_PREFERENCES,
   EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
@@ -127,8 +128,8 @@ export interface BuilderShellProps {
    * A plain boolean or a bare panel name cannot express "again" — the second
    * press would carry the same value as the first, and an effect keyed on it
    * would never re-run. A counter the caller bumps on every press is the same
-   * shape `usePreferences` already uses for `loadCount` below: not the state
-   * itself, but a count of how many times the caller asked for it.
+   * shape {@link PreferencesLoad.count} below has: not the state itself, but a
+   * count of how many times the thing behind it happened.
    *
    * Left `undefined` this does nothing, which is what every host that has no
    * such control gets by default.
@@ -317,6 +318,40 @@ export function useShellIsActive(): boolean {
 }
 
 /**
+ * What the newest completed read of a preference store left behind.
+ *
+ * TWO fields because there are two different questions downstream, and one
+ * value cannot answer both:
+ *
+ * - `count` answers "has a NEW record arrived", which is what a remount is
+ *   keyed on. Any read qualifies: the panel group has to re-register against
+ *   whatever layout landed, whoever it belongs to.
+ * - `store` answers "whose record is `preferences` holding right now", which is
+ *   what any guard protecting a WRITE needs. The count cannot answer it — it is
+ *   monotonic, so it is already nonzero for the previous store the moment a host
+ *   swaps in a new one, and a write let through in that window spreads the old
+ *   store's record and persists it into the new store, replacing the layout and
+ *   the `showEmptyElements` of whichever user or workspace the new store belongs
+ *   to.
+ *
+ * `store` is the store OBJECT rather than a name or an index, for the reason
+ * the identity is already the read's dependency: it is the thing itself, and no
+ * two live stores can compare equal without being the same store.
+ *
+ * `null` is the state before any read has completed, and it is deliberately not
+ * a fourth thing to test for: every caller compares this against the store it
+ * is about to act on, and `null` is not any store, so "no read yet" and "a
+ * different store's read" answer alike without either being spelled out.
+ */
+interface PreferencesLoad {
+  readonly count: number;
+  readonly store: PreferenceStore | null;
+}
+
+/** Before any read has reached state. */
+const NO_LOAD: PreferencesLoad = { count: 0, store: null };
+
+/**
  * Preferences, restored AFTER mount and written back whenever they change.
  *
  * Reading storage in the initializer is the obvious shape and it is wrong here.
@@ -334,29 +369,7 @@ export function useShellIsActive(): boolean {
 function usePreferences(store: PreferenceStore) {
   const [preferences, setPreferences] =
     React.useState<ShellPreferences>(DEFAULT_PREFERENCES);
-  /**
-   * How many times a store has been READ into this hook.
-   *
-   * Downstream, restoring a layout is a once-per-load act, and "once" has to be
-   * counted against something. Counted against the component's lifetime it is
-   * wrong as soon as the host swaps stores — signing into a second workspace
-   * loads that user's preferences, and a guard that already fired leaves the
-   * previous user's widths on screen.
-   *
-   * A counter rather than the store's identity because it is what the guard
-   * downstream compares against, and it says WHICH load was applied rather than
-   * merely that one was.
-   *
-   * It does NOT detect a host mutating the data behind a store it keeps
-   * handing us: the read below is keyed on the store's identity, so an
-   * unchanged object means no read happens at all and this never advances.
-   * That is the documented contract on `store` — a new backing user or
-   * workspace is a new store object — rather than a gap. Detecting it instead
-   * would mean a subscription or a revision token on the port, which is a
-   * third method every host implementing it would have to get right, for a
-   * case a caller can satisfy by passing a new object.
-   */
-  const [loadCount, setLoadCount] = React.useState(0);
+  const [load, setLoad] = React.useState<PreferencesLoad>(NO_LOAD);
 
   React.useEffect(() => {
     const restored = readPreferences(store);
@@ -365,7 +378,11 @@ function usePreferences(store: PreferenceStore) {
     setPreferences(current =>
       shallowEqualPreferences(current, restored) ? current : restored
     );
-    setLoadCount(count => count + 1);
+    // Set in the SAME effect as the preferences it describes, which is what
+    // makes `store` below an honest account of whose record `preferences`
+    // holds: React applies both updates in one commit, so no render can see
+    // one without the other.
+    setLoad(current => ({ count: current.count + 1, store }));
   }, [store]);
 
   // The newest preferences, reachable from a callback that must not go stale.
@@ -396,7 +413,15 @@ function usePreferences(store: PreferenceStore) {
     [store]
   );
 
-  return [preferences, update, loadCount] as const;
+  /*
+   * The store-specific answer is derived HERE rather than handed out for a
+   * caller to work out, because the comparison is only sound against the same
+   * store the read was keyed on — and that is this argument. Returning
+   * `load.store` instead would leave every caller re-deriving it, and a caller
+   * holding a different store variable (the shell resolves a fallback of its
+   * own) would compare the wrong pair while looking correct.
+   */
+  return [preferences, update, load.count, load.store === store] as const;
 }
 
 /**
@@ -722,6 +747,13 @@ function ShellRegions({
    * Restoring a layout happens once per load, and this is what "once" is
    * counted against: the group is remounted per load so the library
    * re-reads the restored layout at panel registration.
+   *
+   * ANY load, deliberately — unlike the write guard on the token effect, which
+   * has to know WHOSE record arrived. A remount is a response to a new layout
+   * being on screen, and the panels have to re-register against it whichever
+   * store produced it: the swap that makes a count useless for deciding a write
+   * is exactly a case that must remount. So the count and the identity are two
+   * separate answers rather than one this could share.
    */
   loadCount: number;
 }) {
@@ -785,7 +817,8 @@ function ShellRegions({
       ref={chromeRef}
       onKeyDownCapture={onKeyDownCapture}
       className={cn(
-        "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
+        BUILDER_CHROME_CLASS,
+        "flex h-full w-full flex-col overflow-hidden",
         className
       )}
       // Absent when empty containers are shown, which is the default. A state
@@ -1079,14 +1112,18 @@ export function BuilderShell({
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
   fallbackStore.current ??= browserStore(STORAGE_KEY);
   const resolvedStore = store ?? fallbackStore.current;
-  const [preferences, update, loadCount] = usePreferences(resolvedStore);
+  const [preferences, update, loadCount, loadedFromCurrentStore] =
+    usePreferences(resolvedStore);
   const [measureShell, shellFits] = useFitsFullShell();
 
   /*
-   * Applies an `openInsertPanelToken` change AT MOST ONCE, the same
-   * once-per-value guard `usePreferences` uses `loadCount` for above — a ref
-   * rather than state, because recording that a token was handled is not
-   * itself something a re-render should follow from.
+   * Applies an `openInsertPanelToken` change AT MOST ONCE — a ref rather than
+   * state, because recording that a token was handled is not itself something a
+   * re-render should follow from.
+   *
+   * The ref deliberately survives a store swap. A token already applied belongs
+   * to the session the author pressed the control in, so re-applying it to the
+   * store that replaced it would open a panel nobody asked this store for.
    *
    * FORCES `leftPanel` to `"insert"` rather than routing through
    * `panelAfterRailClick`: that helper TOGGLES, and toggling is exactly wrong
@@ -1103,31 +1140,42 @@ export function BuilderShell({
   React.useEffect(() => {
     if (openInsertPanelToken === undefined) return;
     /*
-     * Nothing is applied until a store read has LANDED, and that ordering is
-     * the whole of this guard.
+     * Nothing is applied until THIS store's read has landed, and that ordering
+     * is the whole of this guard.
      *
      * `update` takes the newest preferences this hook has seen and writes the
-     * result straight back through the store. Reading the store is itself an
-     * effect, so on the mount pass it has only SCHEDULED the restored record —
-     * what `update` would spread here is still `DEFAULT_PREFERENCES`. A token
-     * defined at mount would therefore persist the defaults over the author's
-     * own record, taking their panel widths and their `showEmptyElements` with
-     * it, while the panel it was asked for opens and looks entirely correct.
+     * result straight back through the store it currently holds. Reading a
+     * store is itself an effect, so in the commit a store first arrives in it
+     * has only SCHEDULED that store's record — what `update` would spread here
+     * is still whatever `preferences` held before. Both ways that happens end
+     * in a write of the wrong record:
      *
-     * `loadCount` is the arrival this needs: it counts reads that have reached
-     * state rather than reads that have been started, so a nonzero value means
-     * `preferences` describes the store. It advances on EVERY store — a read
+     * - at MOUNT, `preferences` is `DEFAULT_PREFERENCES`, so a token defined on
+     *   the first render persists the defaults over the author's own panel
+     *   widths and `showEmptyElements`.
+     * - after a store SWAP — signing into a second workspace, promoting a
+     *   memory store to a persisted one — `preferences` is the PREVIOUS store's
+     *   record, so a token arriving in the same render writes one user's or
+     *   workspace's saved layout into another's.
+     *
+     * Either way the panel the token asked for opens and looks entirely
+     * correct, which is what makes the write invisible until the next load.
+     *
+     * So the arrival this waits on is store-specific rather than "some read has
+     * happened": a COUNT of reads is already nonzero for the outgoing store at
+     * the moment of a swap, which is precisely the window the second case sits
+     * in. Once it is true, it stays true for as long as the store does — a read
      * cannot fail (`readPreferences` answers with the defaults for unreadable
      * or malformed storage) and one that remembers nothing still answers — so
-     * this delays a mount-time token by a single render and can never hold one
-     * indefinitely. A token arriving any later meets a count already past zero
-     * and applies in the same flush it arrived in.
+     * this delays a token by a single render and can never hold one
+     * indefinitely. A token arriving any later than that render applies in the
+     * same flush it arrived in.
      */
-    if (loadCount === 0) return;
+    if (!loadedFromCurrentStore) return;
     if (handledInsertPanelToken.current === openInsertPanelToken) return;
     handledInsertPanelToken.current = openInsertPanelToken;
     update(current => ({ ...current, leftPanel: "insert" }));
-  }, [openInsertPanelToken, update, loadCount]);
+  }, [openInsertPanelToken, update, loadedFromCurrentStore]);
 
   /*
    * The read half of the same gap: told on every value `showEmptyElements`
@@ -1199,7 +1247,8 @@ export function BuilderShell({
               // positioning now, and repeating it would apply a grid area or a
               // border twice.
               className={cn(
-                "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
+                BUILDER_CHROME_CLASS,
+                "flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
               )}
             >
               {/*

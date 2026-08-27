@@ -101,6 +101,14 @@
  * anything, which is precisely when a control over its centre would sit on a
  * populated region.
  *
+ * The rule's ANCESTOR conditions are part of that question and not a detail of
+ * how the stylesheet is written. Its box is scoped to a builder shell that has
+ * not been asked to hide empty-element chrome, and `Canvas` and this component
+ * are both exported — so a host composing them with no shell renders containers
+ * the element-level condition accepts and the rule never reaches. Asking the
+ * whole selector is what keeps "there is a box here" a fact rather than an
+ * assumption about how the caller mounted this.
+ *
  * The consequence is that a container carrying no visual affordance gets no
  * control either, which is the point rather than a shortfall — it is still
  * fillable, because selecting it and inserting routes through `emptySlotOf`
@@ -186,7 +194,7 @@ import {
 } from "react";
 
 import { CANVAS_ROOT_CLASS, CHROME_ATTRIBUTE, nodeElement } from "./canvas";
-import { watchCanvasGeometry } from "./canvas-geometry-watch";
+import { watchCanvasFor } from "./canvas-geometry-watch";
 import { EMPTY_CONTAINER_SELECTOR, emptySlotOf } from "./empty-slot";
 import type { Rect } from "./geometry";
 import {
@@ -487,18 +495,30 @@ export function EmptyContainerAppenders({
         continue;
       }
       /*
-       * The stylesheet's own condition, asked of the element the stylesheet
-       * would ask it of — not a second condition computed here.
+       * The stylesheet's own condition, WHOLE, asked of the element the
+       * stylesheet would ask it of — not a second condition computed here.
        *
        * `emptySlotOf` decided WHICH containers this component knows about,
        * from the document. That is a different population from the one
        * `builder-chrome.css` draws its 44px box for, and the module docblock
        * above depends on them being the same: a container the stylesheet
        * declined has no box, so a control centred in its measured rectangle is
-       * centred in whatever that block happens to render instead. A closed
-       * `core/accordion-item` is the first-party case — an empty `children`
-       * slot inside a root that also renders a `<summary>`, so the root is not
-       * `:empty` and measures the summary's own height.
+       * centred in whatever that block happens to render instead. Both halves
+       * of the rule produce that, and both are reachable:
+       *
+       * - the ELEMENT does not qualify. A closed `core/accordion-item` is the
+       *   first-party case — an empty `children` slot inside a root that also
+       *   renders a `<summary>`, so the root is not `:empty` and measures the
+       *   summary's own height.
+       * - the ANCESTORS do not qualify. `Canvas` and this component are both
+       *   exported, so a host can compose them with no builder shell around
+       *   them, and the rule's `.nx-builder-chrome` scope then never applies to
+       *   any container in that canvas — every one of them sizeless, and every
+       *   control drawn on one a focusable button with no area.
+       *
+       * `Element.matches` evaluates the ancestor combinators as well as the
+       * compound, so one call covers the rule rather than the part of it that
+       * happens to be about this element.
        */
       if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
         next.set(container.id, DECLINED);
@@ -561,24 +581,21 @@ export function EmptyContainerAppenders({
    * neighbour). Both move a control off the container it names, and the second
    * kind is invisible to every observer.
    *
-   * `watchCanvasGeometry` owns the whole list rather than this file
-   * subscribing to the part it happened to think of. The one subscription this
-   * overlay does NOT want is a `MutationObserver`, and that is what keeps it
-   * out of the shared helper: drawing a control is itself a mutation of the
-   * observed subtree, so adopting one means owning a rule for which mutations
-   * are this overlay's own. `SpacingOverlay` keeps such a rule beside its own
-   * call. The cost of leaving it out is stated rather than hidden: a
-   * recompiled site sheet moves blocks through changed class rules, and a
-   * control over one stays where it was until the next resize, scroll,
-   * transition or edit.
+   * A recompiled site sheet is the third kind and needs the same treatment: a
+   * changed class rule moves an empty container while resizing nothing and
+   * scrolling nothing, so only a mutation record reports it.
+   *
+   * `watchCanvasFor` owns the whole list rather than this file subscribing to
+   * the part it happened to think of — which is exactly how the site-sheet case
+   * came to be missing. The layer is handed over as a READ rather than as an
+   * element, because it does not exist yet on the first pass. It is what
+   * locates the canvas root, and it is also what tells a foreign mutation from
+   * this overlay's own: drawing a control mutates the very subtree being
+   * observed, so without it each measurement would schedule the next.
    */
   useEffect(() => {
     if (hidden || containers.length === 0) return;
-    const element = layer.current;
-    const root =
-      element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
-    if (root === null) return;
-    return watchCanvasGeometry(root, measure);
+    return watchCanvasFor(() => layer.current, measure);
   }, [measure, hidden, containers, document]);
 
   // `hidden` renders NOTHING, matching how `BlockToolbar` is suppressed during

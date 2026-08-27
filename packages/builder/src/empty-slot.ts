@@ -20,6 +20,11 @@ import type { BlockNode } from "@nextlyhq/blocks-engine";
 import { SLOTS_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 import type { SlotSource } from "./inserter";
+import {
+  BUILDER_CHROME_CLASS,
+  CANVAS_ROOT_CLASS,
+  EMPTY_ELEMENTS_ATTRIBUTE,
+} from "./shell-state";
 
 /**
  * The rendered element an empty-container affordance may be drawn on.
@@ -39,13 +44,30 @@ import type { SlotSource } from "./inserter";
  * placing a fixed-size control on a container that had been given no box to
  * place it in, and on a root measuring less than the control it centred there.
  *
- * The ELEMENT-level half of the stylesheet's selector, deliberately. The rule
- * is additionally scoped by two ancestor conditions — inside a builder shell
- * that has not been told to hide empty-element chrome, inside a canvas — and
- * each of those is already answered elsewhere for the appender rather than
- * re-asked here: it measures nothing outside a canvas root, and the shell hands
- * it the same preference through its `hidden` prop. What was NOT answered
- * anywhere is which elements qualify, which is this.
+ * ## The WHOLE rule, not the element-level part of it
+ *
+ * All three conditions are here, because all three decide whether a box is
+ * drawn and the affordance is only correct where one is:
+ *
+ * - inside a builder shell ({@link BUILDER_CHROME_CLASS}). A consumer can
+ *   compose the exported appender with a bare `Canvas` and no shell at all —
+ *   the product path does not, since `BlocksField` mounts the canvas inside
+ *   `BuilderShell`, but nothing stops a host or a harness doing it. The rule
+ *   then never applies, the container keeps its natural size of nothing, and a
+ *   control drawn on the element-level match alone is a focusable button with
+ *   no area: reachable by keyboard, announced by name, and invisible. That is
+ *   the same defect declining an unrendered container removed, arriving through
+ *   a partial condition.
+ * - not asked to hide empty-element chrome ({@link EMPTY_ELEMENTS_ATTRIBUTE}).
+ * - inside a canvas ({@link CANVAS_ROOT_CLASS}).
+ *
+ * The last two are additionally answered elsewhere for the appender — it
+ * measures nothing outside a canvas root, and the shell hands it the same
+ * preference through its `hidden` prop — and they stay in the selector anyway,
+ * because this is the stylesheet's rule rather than a subset of it chosen for
+ * the appender. `Element.matches` evaluates ancestors, so asking it of the
+ * element the stylesheet would ask it of gets the same answer the browser gives
+ * the rule.
  *
  * A stylesheet cannot import a constant, so `builder-chrome.css` spells this
  * out and `builder-chrome-attributes.test.ts` is what holds the two in step.
@@ -55,7 +77,9 @@ import type { SlotSource } from "./inserter";
  * applies both markers to a block's single root — so the element found by node
  * id is the element this question is about, with no second address to resolve.
  */
-export const EMPTY_CONTAINER_SELECTOR = `[${SLOTS_ATTRIBUTE}]:empty`;
+export const EMPTY_CONTAINER_SELECTOR =
+  `.${BUILDER_CHROME_CLASS}:not([${EMPTY_ELEMENTS_ATTRIBUTE}="hidden"]) ` +
+  `.${CANVAS_ROOT_CLASS} [${SLOTS_ATTRIBUTE}]:empty`;
 
 /**
  * The block's first declared slot, when it holds nothing.

@@ -506,6 +506,88 @@ describe("opening the insert panel from outside the shell", () => {
     window.localStorage.clear();
   });
 
+  it("keeps the INCOMING store's record when a swap and a new token arrive together", () => {
+    /*
+     * The store swap a host makes when the backing user or workspace changes —
+     * signing into a second workspace, promoting a memory store to a persisted
+     * one — with a press of the canvas appender landing in the same render.
+     *
+     * Reading a store is an effect, so in the commit the new store first
+     * arrives in, the newest preferences this shell has seen are still the
+     * OUTGOING store's. A token applied there computes its write from those and
+     * persists them through the new store, so one workspace's saved layout and
+     * `showEmptyElements` replace another's. A count of reads cannot see this:
+     * it is already nonzero from the first store and a swap only takes it
+     * higher, so the window is exactly where the count looks safest.
+     *
+     * The two records differ in every field, so a write of EITHER wrong record
+     * is visible: `first` is non-default throughout, and `second` differs from
+     * `first` on all three and from the defaults on `layouts`. Asserting the
+     * panel opened as well, because a guard that simply never releases the
+     * token would leave the record intact and the feature dead.
+     */
+    stubContainerFits(true);
+    const firstLayouts = { "canvas,panel": { canvas: 3, panel: 1 } };
+    const secondLayouts = { "canvas,panel": { canvas: 1, panel: 4 } };
+    const first = memoryStore(
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPinned: false,
+        showEmptyElements: false,
+        layouts: firstLayouts,
+      })
+    );
+    const second = memoryStore(
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPinned: true,
+        showEmptyElements: true,
+        layouts: secondLayouts,
+      })
+    );
+
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={first}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    // The first store's read has landed before the swap, which is what makes
+    // this a test about the SECOND store rather than about a cold mount.
+    expect(document.querySelector(".nx-builder-chrome")).not.toBeNull();
+    expect(
+      document
+        .querySelector(".nx-builder-chrome")
+        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
+    ).toBe("hidden");
+
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={second}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(JSON.parse(second.value as string)).toMatchObject({
+      leftPanel: "insert",
+      leftPinned: true,
+      showEmptyElements: true,
+      layouts: secondLayouts,
+    });
+    // The state the author sees, not only the bytes: the attribute is absent
+    // when empty containers are shown, so the outgoing store's `false` reaching
+    // this render would put it back.
+    expect(
+      document
+        .querySelector(".nx-builder-chrome")
+        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
+    ).toBeNull();
+  });
+
   it("does not reopen a manually closed panel when the SAME token survives an unrelated effect re-run", () => {
     // `update`'s identity follows the `store` prop (documented on `store`
     // above: a host swapping stores is expected to hand over a new object),

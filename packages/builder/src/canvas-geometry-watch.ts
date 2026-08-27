@@ -21,16 +21,61 @@
  * the author scrolled a container — while the file looked like a complete copy
  * of the one beside it. A caller that asks this question asks all of it.
  *
- * What is deliberately NOT here: a `MutationObserver`. It answers a different
- * question — the DOM CHANGED, which includes changes an overlay makes by
- * drawing itself — so a caller adopting it needs its own rule for which
- * mutations are its own, and that rule cannot be shared. `spacing-overlay.tsx`
- * keeps one beside this call for exactly that reason.
+ * A `MutationObserver` answers a THIRD question — the DOM changed, which alters
+ * computed style without necessarily altering any size. It needs something the
+ * other two do not, because the subtree it observes CONTAINS the overlay's own
+ * output: where that output is, which only the overlay knows.
+ *
+ * {@link watchCanvasFor} is therefore the entry point and all three are behind
+ * it, taking the one thing a caller has to supply. Offering the mechanisms
+ * separately would put "did I remember to take all of them" back on each
+ * overlay, which is the failure this module was extracted to remove and which
+ * happened again the moment there were two subscriptions to remember instead of
+ * one — an overlay took the geometry half, left the mutation half out, and its
+ * controls stayed where a recompiled site sheet had moved the blocks from.
  *
  * @module canvas-geometry-watch
  */
 
 import { nodeElements } from "./canvas";
+import { canvasRootFrom } from "./geometry-dom";
+import { CANVAS_ROOT_CLASS } from "./shell-state";
+
+/**
+ * Everything an overlay drawn over this canvas has to re-measure for.
+ *
+ * ONE call rather than a list a caller assembles: which changes can move a
+ * rectangle is a single question, and an overlay that answers part of it looks
+ * exactly like one that answers all of it — the file reads as complete and the
+ * controls are simply stale under whichever mechanism was left out.
+ *
+ * The canvas root is resolved FROM the layer rather than passed in, so a caller
+ * cannot subscribe against one root while drawing into another; `undefined`
+ * comes back when there is none, which is an overlay mounted outside a canvas
+ * and has nothing to watch.
+ *
+ * @param ownLayer - reads the caller's own layer element, and is read rather
+ *   than passed because the layer does not exist until after the first render;
+ *   it locates the canvas AND says which mutations are the caller's own
+ * @param moved - re-measure; called once per change, never per frame
+ * @returns unsubscribes everything this installed, or `undefined` when there
+ *   was no canvas root to install anything on
+ */
+export function watchCanvasFor(
+  ownLayer: () => HTMLElement | null,
+  moved: () => void
+): (() => void) | undefined {
+  const element = ownLayer();
+  const root =
+    element === null ? null : canvasRootFrom(element, CANVAS_ROOT_CLASS);
+  if (root === null) return undefined;
+  const geometry = watchCanvasGeometry(root, moved);
+  const styles = watchCanvasStyleMutations(root, ownLayer, moved);
+  return () => {
+    geometry();
+    styles();
+  };
+}
 
 /**
  * Call `moved` whenever the canvas's laid-out geometry may have changed.
@@ -39,10 +84,7 @@ import { nodeElements } from "./canvas";
  * @param moved - re-measure; called once per change, never per frame
  * @returns unsubscribes everything this installed
  */
-export function watchCanvasGeometry(
-  root: HTMLElement,
-  moved: () => void
-): () => void {
+function watchCanvasGeometry(root: HTMLElement, moved: () => void): () => void {
   /*
    * EVERY rendered node is observed, not only the ones a caller draws over:
    * what moves a node is often a SIBLING changing size rather than the node
@@ -97,4 +139,75 @@ export function watchCanvasGeometry(
     root.removeEventListener("transitioncancel", settled);
     root.removeEventListener("scroll", settled, true);
   };
+}
+
+/**
+ * Call `moved` when a mutation OUTSIDE the caller's own output lands in the
+ * canvas.
+ *
+ * The change this reaches and {@link watchCanvasGeometry} cannot: a recompiled
+ * site sheet. `PageRenderer` emits the sheet as a `<style>` inside the page
+ * root, so a save mutates this subtree — and a class-driven margin, position or
+ * transform then moves blocks while resizing nothing, scrolling nothing and
+ * finishing no transition. Every subscription in the function above stays
+ * silent, and an overlay drawn over one of those blocks keeps the coordinates
+ * the old rule gave it until something else re-measures.
+ *
+ * SEPARATE from that function rather than folded into it, and this is the part
+ * a caller has to supply. An overlay draws INTO the subtree being observed, so
+ * every measurement mutates it — a control appearing or leaving is a
+ * `childList` record, a new rectangle rewrites a `style` attribute — and an
+ * observer that reacted to those would have each measurement schedule the next.
+ * Which mutations are the caller's own is therefore not answerable here, which
+ * is why it is an argument rather than a rule written into this module.
+ *
+ * The test applied to that answer IS shared, because both overlays give the
+ * same one: a full-bleed layer of their own, so containment within it decides
+ * ownership exactly. An overlay that drew into the page itself — inline
+ * chrome attached to a block rather than a layer above it — could not be
+ * answered by containment and should not use this.
+ *
+ * @param root - the canvas root whose subtree is watched
+ * @param ownOutput - the caller's own layer, read at delivery time because it
+ *   does not exist when the subscription is taken
+ * @param moved - re-measure; called once per batch of foreign mutations
+ * @returns unsubscribes
+ */
+function watchCanvasStyleMutations(
+  root: HTMLElement,
+  ownOutput: () => HTMLElement | null,
+  moved: () => void
+): () => void {
+  // Absent in jsdom unless a test supplies one, and absent in older browsers.
+  // A missing observer costs a re-measure rather than correctness: every caller
+  // measures on render as well.
+  if (typeof MutationObserver === "undefined") return () => {};
+  const styles = new MutationObserver(records => {
+    const own = ownOutput();
+    /*
+     * `own === null` counts as OUTSIDE rather than as the caller's own. The
+     * layer is null only once the caller has unmounted, and an unmounted
+     * overlay owns nothing in this subtree; treating it as own-output would
+     * silently drop a real site-style change in any window where the reference
+     * were momentarily unset.
+     */
+    const outside = records.some(
+      record => own === null || !own.contains(record.target)
+    );
+    if (outside) moved();
+  });
+  /*
+   * Every kind of record, because every kind can carry a new rule: a sheet
+   * being replaced is `childList`, a sheet's bytes changing in place is
+   * `characterData`, and a class or inline style moving on a block is
+   * `attributes`. `subtree` because the sheet sits inside the page root rather
+   * than beside it.
+   */
+  styles.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+  });
+  return () => styles.disconnect();
 }

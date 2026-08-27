@@ -168,6 +168,33 @@ export interface ShellPreferences {
 export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
 
 /**
+ * The class marking the editor shell's own root element.
+ *
+ * The scope every piece of editor chrome is drawn inside, and the element
+ * {@link EMPTY_ELEMENTS_ATTRIBUTE} is stamped on. Kept beside that attribute
+ * and away from the component, for the reason its docblock gives: the markers
+ * `builder-chrome.css` has to spell out literally are the ones a rename can
+ * break silently, so each has one exported spelling that the shell writing it,
+ * the code asking about it and the test pinning the stylesheet all take from.
+ */
+export const BUILDER_CHROME_CLASS = "nx-builder-chrome";
+
+/**
+ * The class marking the canvas root, and the boundary the hit-test stops at.
+ *
+ * Here rather than in `canvas.tsx` for the reason above: it is the middle term
+ * of the empty-container affordance's selector, which `empty-slot.ts` composes
+ * — and reaching into the canvas COMPONENT for it would pull a React module
+ * into every consumer of that constant, for one string. `canvas.tsx` re-exports
+ * it, so callers reading it as the canvas's own marker are unaffected.
+ *
+ * The hit-test walk needs an upper bound (see `nodeIdFromEvent`), and that
+ * bound has to be identifiable from a DOM node rather than from React state,
+ * because the walk starts at an event target and climbs.
+ */
+export const CANVAS_ROOT_CLASS = "nx-canvas";
+
+/**
  * The identity of a panel arrangement, from the panels themselves.
  *
  * Sorted and joined rather than taken from `leftPanel`, so it is derived from
