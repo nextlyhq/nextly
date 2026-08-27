@@ -1,14 +1,18 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  AUTHORIZATION_CONCURRENCY,
   MAX_WORKLIST_COLLECTIONS,
+  authorizationGroups,
   byMostRecentlyUpdated,
   eligibleCollections,
+  hasTranslatableFields,
   notConsultedSources,
   planWorklistFanOut,
   translatedFilter,
   worklistId,
   worklistTitle,
+  worklistTotal,
   worklistUpdatedAt,
   type TranslationWorkRow,
 } from "./translation-worklist-service";
@@ -236,5 +240,110 @@ describe("translatedFilter", () => {
     expect(translatedFilter("es", "missing")).toEqual({
       _translated: { locale: "es", state: "missing" },
     });
+  });
+});
+
+describe("authorizationGroups", () => {
+  it("resolves ONE decision before any others are started", () => {
+    // The warm-up, and the reason the first group is a single slug rather than
+    // a rounding artefact. `canReadEntity` resolves a session caller through
+    // `isSuperAdmin`, a per-user TTL cache: fired all at once from cold, every
+    // call misses before the first populates it, so one question becomes N
+    // simultaneous permission reads. Letting one finish converts the rest into
+    // cache hits.
+    const groups = authorizationGroups(["a", "b", "c", "d"], 2);
+    expect(groups[0]).toEqual(["a"]);
+  });
+
+  it("never puts more than `concurrency` decisions in flight together", () => {
+    const groups = authorizationGroups(
+      Array.from({ length: 50 }, (_, i) => `c${i}`),
+      8
+    );
+    expect(groups.slice(1).every(g => g.length <= 8)).toBe(true);
+  });
+
+  it("decides EVERY candidate, because a collection with no verdict is unusable", () => {
+    // Bounding the COUNT rather than the concurrency would leave collections
+    // undecided, and there is nothing safe to do with one: naming it as
+    // unconsulted discloses a collection the caller may not read, and dropping
+    // it silently is the "nothing to do there" lie the endpoint exists to
+    // prevent. Every slug in, every slug out, once.
+    const slugs = Array.from({ length: 137 }, (_, i) => `c${i}`);
+    expect(authorizationGroups(slugs).flat()).toEqual(slugs);
+  });
+
+  it("has no group at all for no candidates", () => {
+    // A lone empty group would fire one authorization round-trip for a site
+    // with nothing to authorize.
+    expect(authorizationGroups([])).toEqual([]);
+  });
+
+  it("is one group for one candidate", () => {
+    expect(authorizationGroups(["only"])).toEqual([["only"]]);
+  });
+
+  it("bounds concurrency below the query cap it precedes", () => {
+    // These bound different resources — queries and permission reads — but a
+    // concurrency wider than the fan-out itself would bound nothing in the
+    // common case.
+    expect(AUTHORIZATION_CONCURRENCY).toBeLessThan(MAX_WORKLIST_COLLECTIONS);
+  });
+});
+
+describe("hasTranslatableFields", () => {
+  it("refuses a collection whose fields cannot be translated", () => {
+    // `localized: true` with nothing localizable generates NO companion table,
+    // so the `_translated` predicate produces no condition, so the query
+    // narrows nothing and every document is reported as outstanding work.
+    expect(hasTranslatableFields([{ type: "number", name: "count" }])).toBe(
+      false
+    );
+  });
+
+  it("refuses a collection whose text fields all opted OUT", () => {
+    expect(
+      hasTranslatableFields([
+        { type: "text", name: "sku", localized: false },
+        { type: "text", name: "code", localized: false },
+      ])
+    ).toBe(false);
+  });
+
+  it("accepts a collection with one translatable field", () => {
+    expect(
+      hasTranslatableFields([
+        { type: "number", name: "count" },
+        { type: "text", name: "title" },
+      ])
+    ).toBe(true);
+  });
+
+  it("refuses a collection with no fields at all", () => {
+    expect(hasTranslatableFields([])).toBe(false);
+  });
+});
+
+describe("worklistTotal", () => {
+  it("counts the backlog, not the page it could carry", () => {
+    // The failure this exists to prevent: one collection with 51 outstanding
+    // documents is asked for 50, and reporting what came back presents a
+    // truncated backlog as a complete census.
+    expect(worklistTotal([51], 50)).toBe(51);
+  });
+
+  it("sums across collections rather than reporting the largest", () => {
+    expect(worklistTotal([7, 11, 2], 20)).toBe(20);
+    expect(worklistTotal([7, 11, 2], 5)).toBe(20);
+  });
+
+  it("never reports fewer than the rows sitting beside it on screen", () => {
+    // A count query that fails falls back to zero inside the query service. A
+    // total below the visible rows is the one answer a reader cannot interpret.
+    expect(worklistTotal([0, 0], 12)).toBe(12);
+  });
+
+  it("is zero for an empty worklist", () => {
+    expect(worklistTotal([], 0)).toBe(0);
   });
 });

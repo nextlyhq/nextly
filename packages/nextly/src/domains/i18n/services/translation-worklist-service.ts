@@ -39,6 +39,7 @@
  * @module domains/i18n/services/translation-worklist-service
  */
 
+import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { TranslationFilterState } from "../companion-join";
 
 /**
@@ -48,6 +49,97 @@ import type { TranslationFilterState } from "../companion-join";
  * collections would otherwise issue a hundred queries to draw one screen.
  */
 export const MAX_WORKLIST_COLLECTIONS = 20;
+
+/**
+ * Whether a collection can actually answer a translation question.
+ *
+ * `localized: true` is the master switch, not the answer. A collection may hold
+ * it while every field on it is non-localizable — numbers only, or every text
+ * field explicitly `localized: false` — and no companion table is generated for
+ * such a collection.
+ *
+ * That matters because the reserved `_translated` filter then produces NO SQL
+ * condition (the companion is absent, so the builder returns `undefined`), and
+ * a filter that narrows nothing returns everything. Every document in the
+ * collection would be reported as outstanding work.
+ *
+ * The test is deliberately the SAME expression `buildCompanionSchema` evaluates
+ * before returning `null` — `resolveLocalizedFieldNames(...).length === 0`. Two
+ * rules that merely agree today would drift; one expression cannot.
+ */
+export function hasTranslatableFields(fields: readonly unknown[]): boolean {
+  return (
+    resolveLocalizedFieldNames(
+      fields as Parameters<typeof resolveLocalizedFieldNames>[0],
+      true
+    ).length > 0
+  );
+}
+
+/**
+ * How much outstanding work the fan-out FOUND, which is not how much it returned.
+ *
+ * Each collection is asked for at most `limit` rows, so counting the rows in
+ * hand caps the total at `limit` by construction: one collection holding
+ * fifty-one outstanding documents hands back fifty and would report fifty — a
+ * truncated backlog presented as a finished census, which is precisely the
+ * reassuring lie this endpoint exists to remove. The per-collection counts come
+ * from the same query's count arm, which applies the same `_translated`
+ * predicate as the rows, so they describe the real backlog.
+ *
+ * Floored at the number of rows returned. A count that fails falls back to zero
+ * inside the query service, and a total lower than the rows visible beside it is
+ * the one answer a reader cannot make sense of.
+ */
+export function worklistTotal(
+  perCollectionTotals: readonly number[],
+  rowCount: number
+): number {
+  const counted = perCollectionTotals.reduce((sum, n) => sum + n, 0);
+  return Math.max(counted, rowCount);
+}
+
+/**
+ * How many authorization decisions may be in flight at once.
+ *
+ * The cap above bounds QUERIES; this bounds the far cheaper decision that
+ * precedes them, and it exists for a different resource. `canReadEntity`
+ * resolves a session caller through `isSuperAdmin`, which is a per-user TTL
+ * cache: fired concurrently from a cold cache, every call misses before the
+ * first one populates it, so a site with a hundred localized collections opens
+ * a hundred simultaneous permission reads to answer one question a hundred
+ * times. Grouping them keeps the pool intact and lets the cache do its job.
+ */
+export const AUTHORIZATION_CONCURRENCY = 8;
+
+/**
+ * The order authorization decisions are taken in: one, then bounded groups.
+ *
+ * The lone first group is not a rounding artefact — it is the warm-up. The
+ * shared per-user caches (`isSuperAdmin`, and the role/permission reads behind
+ * it) are populated by whichever call resolves first, so letting one finish
+ * before the rest fan out converts N cold misses into one miss and N-1 hits.
+ * Fanning out immediately is what makes a cold cache expensive.
+ *
+ * Deliberately NOT a cap on how many collections are authorized. Every
+ * candidate still gets a decision, because a collection that is skipped without
+ * one cannot be safely named as unconsulted (naming it discloses that it
+ * exists) nor safely omitted (that is the silent "nothing to do there" this
+ * endpoint exists to prevent). What is bounded here is concurrency, which is
+ * the resource that actually breaks.
+ */
+export function authorizationGroups(
+  slugs: readonly string[],
+  concurrency: number = AUTHORIZATION_CONCURRENCY
+): string[][] {
+  if (slugs.length === 0) return [];
+  const groups: string[][] = [[slugs[0]]];
+  const rest = slugs.slice(1);
+  for (let i = 0; i < rest.length; i += concurrency) {
+    groups.push(rest.slice(i, i + concurrency));
+  }
+  return groups;
+}
 
 /** One document's outstanding work in one language. */
 export interface TranslationWorkRow {
