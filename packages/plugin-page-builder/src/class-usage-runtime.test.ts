@@ -50,6 +50,13 @@ function recordingApi(overrides: Partial<ClassUsageDirectApi> = {}) {
       if (args.collection === "idx") {
         return { items: [{ id: "r1" }], meta: { hasNext: false } };
       }
+      // The LIFECYCLE FILTER is honoured, because it is the thing under test.
+      // A fake answering the same page whatever `status` asked for would agree
+      // with any reader, including one that never sent the filter at all. This
+      // models the ordinary document: published, with no draft variant.
+      if (args.status !== "published") {
+        return { items: [], meta: { hasNext: false } };
+      }
       // A COLLECTION ROW, which is what the API answers: the block document
       // sits under the field, beside everything else the record holds.
       return {
@@ -127,18 +134,30 @@ describe("resolving a subject to its document", () => {
     expect(document).toBeUndefined();
   });
 
-  it("reads a NEVER-PUBLISHED draft, whose main row carries no marker", async () => {
+  it("reads a NEVER-PUBLISHED draft, which no marker can identify", async () => {
     // Nothing was overlaid, so nothing set `_isWorkingDraft`: the main row is
-    // itself the draft and its own status says so. Requiring the marker read
-    // this document as absent while the published read excluded it by
-    // definition, so a class used only on a page still being written was
-    // recorded under neither subject and safe-delete reported no usage.
+    // itself the draft. Requiring the marker read this document as absent while
+    // the published read excluded it by definition, so a class used only on a
+    // page still being written was recorded under neither subject and
+    // safe-delete reported no usage for it. The lifecycle filter names it.
+    // Ordered locally, because an override replaces the recording default and
+    // would otherwise leave the shared call log empty.
+    const asked: string[] = [];
     const { api } = recordingApi({
-      findByID: async () => ({
-        id: "p1",
-        status: "draft",
-        content: documentUsing("hero"),
-      }),
+      findByID: async () => {
+        asked.push("findByID");
+        return { id: "p1", content: documentUsing("hero") };
+      },
+      find: async args => {
+        asked.push(`find:${String(args.status)}`);
+        return {
+          items:
+            args.status === "draft"
+              ? [{ id: "p1", content: documentUsing("hero") }]
+              : [],
+          meta: { hasNext: false },
+        };
+      },
     });
 
     const document = await classUsageDocumentReader(api)(
@@ -146,6 +165,58 @@ describe("resolving a subject to its document", () => {
     );
 
     expect(document).toEqual(documentUsing("hero"));
+    // The by-id read is asked FIRST, because a pending sidecar draft is the
+    // more current content and only that path can surface it. The lifecycle
+    // read answers only once the overlay declined.
+    expect(asked).toEqual(["findByID", "find:draft"]);
+  });
+
+  it("reads a LOCALE unpublished while the default stays published", async () => {
+    // Unpublishing a non-default translation moves the companion's `_status`
+    // to draft and deliberately LEAVES the main row published
+    // (domains/i18n/writes-status.integration.test.ts:157). So the entry's own
+    // status column reads "published" for a language whose draft this is:
+    // that column answers about the entry, not about the translation being
+    // asked for. Only the lifecycle filter constrains the companion.
+    const { api } = recordingApi({
+      findByID: async () => ({
+        id: "p1",
+        status: "published",
+        content: documentUsing("hero"),
+      }),
+      find: async args => ({
+        items:
+          args.status === "draft" && args.locale === "de"
+            ? [{ id: "p1", content: documentUsing("hero") }]
+            : [],
+        meta: { hasNext: false },
+      }),
+    });
+
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft", locale: "de" })
+    );
+
+    expect(document).toEqual(documentUsing("hero"));
+  });
+
+  it("REFUSES a row for a DIFFERENT document than the subject named", async () => {
+    // A predicate is a request, not a guarantee: `beforeRead` may clear the
+    // filter outright and the query service preserves that
+    // (collection-query-service.ts:688-713), so the first row of the page can
+    // belong to another document. Filing its classes here would also REMOVE
+    // the rows the real document earned, and a class it still renders would
+    // then read as unused.
+    const { api } = recordingApi({
+      find: async () => ({
+        items: [{ id: "some-other-page", content: documentUsing("intruder") }],
+        meta: { hasNext: false },
+      }),
+    });
+
+    await expect(
+      classUsageDocumentReader(api)(subject({ variant: "published" }))
+    ).rejects.toThrow(/some-other-page/);
   });
 
   it("sends NO locale for a shared field rather than the empty string", async () => {

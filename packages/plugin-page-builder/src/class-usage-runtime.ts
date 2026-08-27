@@ -132,12 +132,9 @@ export function classUsageIndexStore(
  * The three mappings here are the whole reason this file exists, and each is a
  * place the index can be filed against the wrong document:
  *
- * `draft` is derived from the VARIANT and is passed on both branches. The
- * Direct API overlays the pending working draft only when asked, so omitting it
- * for a draft subject reads the published row and files its classes as the
- * draft's — and passing it for a published subject does the reverse wherever a
- * draft exists. The two subjects are separate rows precisely because those two
- * documents can differ.
+ * The VARIANT decides which read can answer. A draft is asked for in two ways
+ * because two different stored things are both drafts — see `readDraft`. A
+ * published subject is asked for through the lifecycle filter alone.
  *
  * `locale` is the subject's, except that the SHARED sentinel is sent as
  * `undefined` rather than as `""`. A shared field stores one value that every
@@ -147,7 +144,6 @@ export function classUsageIndexStore(
  * `depth: 0` because the rows are derived from the stored blocks JSON. Populating
  * relationships would replace ids with documents, which changes the shape the
  * derivation walks while adding reads a save does not need.
- *
  */
 export function classUsageDocumentReader(
   nextly: ClassUsageDirectApi
@@ -155,27 +151,63 @@ export function classUsageDocumentReader(
   return async (subject: ClassUsageSubject) => {
     const row =
       subject.variant === "draft"
-        ? await readWorkingDraft(nextly, subject)
-        : await readPublished(nextly, subject);
+        ? await readDraft(nextly, subject)
+        : await readByLifecycle(nextly, subject, "published");
     return documentIn(row, subject);
   };
 }
 
 /**
+ * The document a DRAFT subject names, which two different reads can hold.
+ *
+ * "Is this a draft" has one authoritative answer and it is not a property of
+ * any single column, which is why this asks twice instead of inspecting a row.
+ *
+ * A document that has been published and edited since keeps its main row
+ * published and its pending edits in a SIDECAR. Only the by-id read overlays
+ * that sidecar, and the overlay is the more current draft content, so it is
+ * asked for first and wins.
+ *
+ * Everything else that is a draft is a stored ROW whose lifecycle state says
+ * so, and the list read's `status` filter is the only thing that can name it:
+ * it is authoritative and it also constrains a localized companion's own
+ * `_status`. That covers the two cases no marker can:
+ *
+ * - a document that has NEVER been published, whose main row is itself the
+ *   draft with no sidecar to overlay and therefore no marker;
+ * - a non-default LOCALE that was explicitly unpublished while the default
+ *   stays published, where the companion goes draft and the main row is
+ *   deliberately left published
+ *   (`domains/i18n/writes-status.integration.test.ts:157`).
+ *
+ * Reading the main row's `status` answered the first of those and got the
+ * second exactly backwards, because that column belongs to the entry and not
+ * to the language being asked about. Both were the same mistake: deriving a
+ * lifecycle answer from a column instead of from the filter that owns it.
+ *
+ * A published document with no pending draft is refused by both reads — no
+ * marker on the by-id fallback, and nothing matching `status: "draft"` — which
+ * is correct, because it has no draft variant to record.
+ */
+async function readDraft(
+  nextly: ClassUsageDirectApi,
+  subject: ClassUsageSubject
+): Promise<unknown> {
+  const overlaid = await readWorkingDraftOverlay(nextly, subject);
+  if (overlaid !== undefined) return overlaid;
+  return readByLifecycle(nextly, subject, "draft");
+}
+
+/**
  * The pending working draft, which only the DETAIL read can produce.
  *
- * A document that is already published keeps its main row at `published` and
- * its pending edits in a sidecar. The list read filters the main table, so it
- * returns nothing for such a document — and reading "nothing" as the draft's
- * content would record a pending draft as applying no classes at all.
- *
  * The overlay is implemented only on the by-id path (`includeWorkingDraft`,
- * `collection-query-service.ts:2722`), so draft subjects go through it. Three
- * different rows come back through it — an overlaid draft, a never-published
- * main row that is itself a draft, and the live row this falls back to when
- * there is no draft at all — and `isDraftRow` is what tells them apart.
+ * `collection-query-service.ts:2722`). The marker is set exactly when a sidecar
+ * was surfaced (`collection-query-service.ts:3378`), so it identifies the
+ * overlay and nothing else — this call falls back to the live row when there is
+ * no sidecar, and answering that would file published classes under a draft.
  */
-async function readWorkingDraft(
+async function readWorkingDraftOverlay(
   nextly: ClassUsageDirectApi,
   subject: ClassUsageSubject
 ): Promise<unknown> {
@@ -193,63 +225,77 @@ async function readWorkingDraft(
     // stale.
     //
     // Nothing is lost by dropping it: a document with no pending draft is a
-    // SUCCESSFUL read of the live row, which the draft test below refuses.
+    // SUCCESSFUL read of the live row, which the marker test below refuses.
     // Absence and failure were never the same answer here.
     ...AS_THE_SYSTEM,
   });
-  if (typeof row !== "object" || row === null) return undefined;
-  return isDraftRow(row) ? row : undefined;
+  const record = rowForSubject(row, subject);
+  if (record === undefined) return undefined;
+  return record._isWorkingDraft === true ? record : undefined;
 }
 
 /**
- * Whether a row read with `draft: true` is a draft at all.
+ * The row this document has in one lifecycle state, through the filter.
  *
- * Two stored forms are drafts and only one of them is marked. A document that
- * has been published and edited since keeps its main row at `published` and
- * its pending edits in a sidecar; reading it overlays that sidecar and sets
- * `_isWorkingDraft`, while leaving `status` at the live parent's value. There
- * the marker is the only thing that names it.
- *
- * A document that has NEVER been published has no sidecar to overlay: its main
- * row is itself the draft. Nothing is overlaid, so nothing sets the marker —
- * `collection-query-service.ts:3378` sets it only when a draft was actually
- * surfaced — and the row's own `status` is what says what it is. Requiring the
- * marker refused exactly these documents, and the published read excludes them
- * by definition, so a class used only on a page still being written was
- * recorded under neither subject and a safe-delete check saw no usage for it.
- *
- * The live row this call falls back to fails both tests: it carries no marker
- * and its status is `published`. The column is always there to be read, because
- * a draft subject is enumerated only for a collection whose draft split
- * resolved, and that requires `status: true`.
+ * The list read is the only one carrying `status`, which is authoritative and
+ * also constrains a localized companion's own `_status`. The by-id path has no
+ * lifecycle parameter at all, so it can neither name a variant nor see a
+ * per-language one.
  */
-function isDraftRow(row: object): boolean {
-  const record = row as Record<string, unknown>;
-  return record._isWorkingDraft === true || record.status === "draft";
-}
-
-/**
- * The published row, read through the LIFECYCLE filter.
- *
- * The list read is used here because it is the only one that carries `status`,
- * which is authoritative and also constrains a localized companion's own
- * `_status`. The by-id path has no lifecycle parameter at all, so a published
- * subject read that way would accept a document whose only row is a draft.
- */
-async function readPublished(
+async function readByLifecycle(
   nextly: ClassUsageDirectApi,
-  subject: ClassUsageSubject
+  subject: ClassUsageSubject,
+  status: "published" | "draft"
 ): Promise<unknown> {
   const page = await nextly.find({
     collection: subject.entity,
     where: { id: { equals: subject.entityKey } },
     limit: 1,
-    status: "published",
+    status,
     ...localeOptions(subject),
     depth: 0,
     ...AS_THE_SYSTEM,
   });
-  return page.items[0];
+  return rowForSubject(page.items[0], subject);
+}
+
+/**
+ * The row a read answered, once it is confirmed to BE the document asked for.
+ *
+ * A predicate is a request, not a guarantee. `beforeOperation` and `beforeRead`
+ * can replace the supplied filter or clear it outright, and the query service
+ * honours that deliberately — returning `null` from `beforeRead` means "this
+ * read has no filter" and is preserved as such
+ * (`collection-query-service.ts:688-713`). Those hooks run regardless of
+ * `overrideAccess`, so nothing this module passes can prevent it.
+ *
+ * The first row of an unfiltered read is then simply some other document, and
+ * taking it would derive that document's classes and file them under this
+ * subject — while removing the rows the real document's references had earned.
+ * A class the live page still renders would read as unused and become
+ * deletable, which is the one direction that loses data.
+ *
+ * So a mismatch RAISES rather than resolving to nothing. Answering `undefined`
+ * would be indistinguishable from an absent document, and absence deliberately
+ * leaves a subject's rows alone — the caller would be told the subject was
+ * reconciled when the read never reached it. A raised failure is reported to
+ * the caller and says the index is stale.
+ *
+ * An empty result is NOT a mismatch: no row means no document, which is a
+ * different and legitimate answer.
+ */
+function rowForSubject(
+  row: unknown,
+  subject: ClassUsageSubject
+): Record<string, unknown> | undefined {
+  if (typeof row !== "object" || row === null) return undefined;
+  const record = row as Record<string, unknown>;
+  if (record.id === subject.entityKey) return record;
+  throw new Error(
+    `Class-usage read for ${subject.entity}:${subject.entityKey} answered ` +
+      `id="${String(record.id)}"; the read was widened past its predicate and ` +
+      `its document must not be filed under this subject.`
+  );
 }
 
 /**
