@@ -608,7 +608,12 @@ export function SingleForm({
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
     // is no embedded case to exclude.
-    <UnsavedChangesGuard isDirty={hasUnsavedWork} disabled={isSubmitting}>
+    <UnsavedChangesGuard
+      isDirty={hasUnsavedWork}
+      disabled={isSubmitting}
+      // Same rule as the entry editor: a refused switch takes its seed with it.
+      onCancel={onSeedHandled}
+    >
       <UnsavedWorkProvider report={unsavedWork.report}>
         {/*
         Which document the fields are inside. The entry editor has always

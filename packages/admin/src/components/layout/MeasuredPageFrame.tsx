@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 
 import { useSuppressedChrome } from "./ChromeSuppression";
+import { CONTENT_PAGE_MEASURE } from "./content-measure";
 import { PageContainer } from "./page-container";
 
 interface MeasuredPageFrameProps {
@@ -15,6 +16,21 @@ interface MeasuredPageFrameProps {
    * callers reconcile identically. `null` says the same thing as omitting it.
    */
   breadcrumbs?: ReactNode;
+  /**
+   * The content bounds its own column, so the page must not bound it again.
+   *
+   * True for a view that seats chrome BESIDE its fields — the entry editor's
+   * document rail is a fixed-width sibling of the field column, and under a
+   * page-level cap the two share it, so the rail's width is spent out of the
+   * author's. Such a view takes the panel and applies the measure to its
+   * fields alone.
+   *
+   * Left false for everything else, and that is the point rather than
+   * caution: a view with no rail gains nothing from the panel and a
+   * plugin-supplied one would have its layout changed without asking. The
+   * page keeps the content measure unless the content says it owns it.
+   */
+  contentCarriesMeasure?: boolean;
   children: ReactNode;
 }
 
@@ -41,16 +57,30 @@ interface MeasuredPageFrameProps {
  *
  * The default form matters as much as the custom one. `BlocksField` suppresses
  * `pageFrame` from inside it, and a page that declares a measure without
- * honouring that would hand the page builder a 56rem column to work in.
+ * honouring that would hand the page builder a measured column to work in.
  *
- * A framed view is page CONTENT, so the measure is the page's, declared here.
- * A view that declared its own would sit inside this container's padding and
- * add a second inset to it, which is the disagreement the shell exists to end.
- * Framed and immersive are the whole vocabulary; there is no third case for a
- * width to answer.
+ * A framed view is page CONTENT, so the measure is the page's, declared here —
+ * unless the view says it bounds its own, which is what `contentCarriesMeasure`
+ * states. A view that quietly declared a width anyway would sit inside this
+ * container's inset and add a second one to it, which is the disagreement the
+ * shell exists to end; saying so is what keeps the two from both applying.
+ *
+ * Framed and immersive remain the whole FRAME vocabulary. The measure is a
+ * separate question, and it has three answers rather than two: the page bounds
+ * the content, the content bounds itself, or there is no frame to bound it.
+ *
+ * The measure is `wide`, not the form measure. Both are reading widths and the
+ * difference is what is being read. A settings form is a short column of
+ * labelled controls and nothing else. An entry is a document: its fields
+ * include rich text, media and repeated groups, and it shares its column with
+ * the document rail, so the rail's width comes out of the author's. At the form
+ * measure that leaves the widest field under half the column, and controls that
+ * lay out horizontally — an editor toolbar, the header's actions — wrap onto
+ * extra rows or drop their labels for icons.
  */
 export function MeasuredPageFrame({
   breadcrumbs,
+  contentCarriesMeasure = false,
   children,
 }: MeasuredPageFrameProps) {
   const framed = !useSuppressedChrome().has("pageFrame");
@@ -84,7 +114,10 @@ export function MeasuredPageFrame({
     : "hidden";
 
   return (
-    <PageContainer width="form" className={framed ? undefined : "contents"}>
+    <PageContainer
+      width={contentCarriesMeasure ? "full" : CONTENT_PAGE_MEASURE}
+      className={framed ? undefined : "contents"}
+    >
       <div className={trailClass}>{breadcrumbs}</div>
       {children}
     </PageContainer>

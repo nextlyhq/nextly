@@ -22,7 +22,7 @@
  *
  * ## Why this asks for the page frame and nothing else
  *
- * The editor's measure is a 56rem column, declared by `MeasuredPageFrame`, and
+ * The editor is bounded to a measure, declared by `MeasuredPageFrame`, and
  * two panes cannot share it. The frame is released the way the page builder
  * releases it — by asking, from inside — rather than by the page passing a
  * different width: `MeasuredPageFrame` states that framed and immersive are the

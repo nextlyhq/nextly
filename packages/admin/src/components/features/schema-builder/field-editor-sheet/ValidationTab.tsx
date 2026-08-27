@@ -4,15 +4,13 @@
 // through every branch and be offered nothing; it now inherits the rules of the
 // built-in type its declared storage primitive behaves as.
 //
-// Rendering order is this file's own concern: rules are drawn in the order
-// below rather than the order core happens to list them, so the layout stays
-// stable as the vocabulary grows.
-import { Input, Label } from "@nextlyhq/ui";
-import type { FieldValidationRule } from "nextly/field-catalog";
+// The controls themselves are the kit's, shared with the form builder's field
+// editor, which drew the same set independently. What stays here is the part
+// that is genuinely this surface's: resolving the allowed set from the plugin
+// registry, and mapping the builder's own storage.
 import { validationRulesForFieldType } from "nextly/field-catalog";
-import { useId } from "react";
 
-import { ValidationNumberField } from "@admin/components/field-ui";
+import { ValidationRulesEditor } from "@admin/components/field-ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { pluginFieldTypeStorage } from "@admin/lib/builder/plugin-field-type-entries";
 
@@ -24,143 +22,31 @@ type Props = {
   onChange: (next: BuilderField) => void;
 };
 
-/**
- * How each numeric rule presents and what values it admits.
- *
- * Whether a bound COUNTS things decides what it admits: a length or a row count
- * is a whole number of zero or more, while a bound on a value may legitimately
- * be fractional or negative. The kit control turns that one flag into the input
- * constraints, so every surface applies the same answer.
- */
-const NUMERIC_RULES = {
-  minLength: { label: "Min length", counts: true },
-  maxLength: { label: "Max length", counts: true },
-  minRows: { label: "Min rows", counts: true },
-  maxRows: { label: "Max rows", counts: true },
-  min: { label: "Min", counts: false },
-  max: { label: "Max", counts: false },
-} as const satisfies Partial<
-  Record<FieldValidationRule, { label: string; counts: boolean }>
->;
-
-type NumericRule = keyof typeof NUMERIC_RULES;
-
-/** Numeric rules drawn side by side, in the order they are presented. */
-const NUMERIC_PAIRS: readonly (readonly [NumericRule, NumericRule])[] = [
-  ["minLength", "maxLength"],
-  ["minRows", "maxRows"],
-  ["min", "max"],
-];
-
 export function ValidationTab({ field, readOnly = false, onChange }: Props) {
   const branding = useBranding();
-  const v = field.validation ?? {};
-  const setV = (next: Partial<NonNullable<BuilderField["validation"]>>) =>
-    onChange({ ...field, validation: { ...v, ...next } });
+  const validation = field.validation ?? {};
 
-  // `required` is offered by its own control outside this tab, so it is read
-  // out of the list rather than drawn twice.
-  const allowed = new Set<FieldValidationRule>(
-    validationRulesForFieldType(
-      field.type,
-      pluginFieldTypeStorage(branding.plugins, field.type)
-    )
+  // This surface stores the rules under the names core uses, so the kit's
+  // values pass through unmapped. The form builder does not, and maps at its
+  // own call site rather than here.
+  const allowed = validationRulesForFieldType(
+    field.type,
+    pluginFieldTypeStorage(branding.plugins, field.type)
   );
 
   return (
-    <div className="space-y-4">
-      {NUMERIC_PAIRS.filter(
-        ([lo, hi]) => allowed.has(lo) || allowed.has(hi)
-      ).map(([lo, hi]) => (
-        <div key={lo} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {[lo, hi]
-            .filter(rule => allowed.has(rule))
-            .map(rule => (
-              <ValidationNumberField
-                key={rule}
-                label={NUMERIC_RULES[rule].label}
-                counts={NUMERIC_RULES[rule].counts}
-                value={v[rule]}
-                disabled={readOnly}
-                onChange={(n: number | undefined) => setV({ [rule]: n })}
-              />
-            ))}
-        </div>
-      ))}
-
-      {allowed.has("pattern") && (
-        <PatternRow
-          value={v.pattern}
-          disabled={readOnly}
-          onChange={pattern => setV({ pattern })}
-        />
-      )}
-
-      {allowed.has("message") && (
-        <MessageRow
-          value={v.message}
-          disabled={readOnly}
-          describesPattern={allowed.has("pattern")}
-          onChange={message => setV({ message })}
-        />
-      )}
-    </div>
-  );
-}
-
-function PatternRow({
-  value,
-  disabled,
-  onChange,
-}: {
-  value: string | undefined;
-  disabled?: boolean;
-  onChange: (v: string) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="space-y-1">
-      <Label htmlFor={id}>Pattern</Label>
-      <Input
-        id={id}
-        placeholder="^[a-z0-9-]+$"
-        value={value ?? ""}
-        disabled={disabled}
-        onChange={e => onChange(e.target.value)}
-      />
-      <p className="text-xs text-muted-foreground">
-        Regex the value must match.
-      </p>
-    </div>
-  );
-}
-
-function MessageRow({
-  value,
-  disabled,
-  describesPattern,
-  onChange,
-}: {
-  value: string | undefined;
-  disabled?: boolean;
-  describesPattern: boolean;
-  onChange: (v: string) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="space-y-1">
-      <Label htmlFor={id}>Custom error message</Label>
-      <Input
-        id={id}
-        value={value ?? ""}
-        disabled={disabled}
-        onChange={e => onChange(e.target.value)}
-      />
-      <p className="text-xs text-muted-foreground">
-        {describesPattern
-          ? "Shown when the value fails the Pattern above. Falls back to a default message if blank."
-          : "Shown when the value fails validation. Falls back to a default message if blank."}
-      </p>
-    </div>
+    <ValidationRulesEditor
+      allowed={allowed}
+      // Only where a Pattern is actually offered. Core hands the same message
+      // to other failures too — `applyNumberBounds` uses it for min and max —
+      // so on a field with no Pattern control the specific wording would name
+      // a constraint the author cannot see and did not write the copy for.
+      messageDescribes={allowed.includes("pattern") ? "pattern" : "validation"}
+      value={validation}
+      disabled={readOnly}
+      onChange={next =>
+        onChange({ ...field, validation: { ...validation, ...next } })
+      }
+    />
   );
 }

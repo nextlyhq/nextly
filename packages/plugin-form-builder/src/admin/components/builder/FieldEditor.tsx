@@ -12,10 +12,12 @@
 
 "use client";
 import {
+  drawsAnyValidationRule,
   FieldOptionsEditor,
-  ValidationNumberField,
+  ValidationRulesEditor,
   withOptionIds,
   type FieldOptionsEditorProps,
+  type ValidationRuleValues,
 } from "@nextlyhq/plugin-sdk/admin";
 import {
   FormLabelWithTooltip,
@@ -31,16 +33,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@nextlyhq/ui";
+import { validationRulesForFieldType } from "nextly/field-catalog";
 import { useState, useCallback, useMemo } from "react";
 
 import type {
+  AnyFieldValidation,
   AnyFormField,
   FormField,
-  TextFormField,
   SelectFormField,
   RadioFormField,
 } from "../../../types";
 import { isKnownFormField } from "../../../types";
+// From the metadata module rather than from `generate-schema`, which
+// implements it: the editor needs only to know WHICH rules bite for a
+// type, and importing that from the module that builds schemas pulls the
+// whole schema implementation and `zod` into every admin client bundle
+// before anyone opens a field.
+import { enforcedValidationRules } from "../../../utils/enforced-validation";
 
 import { ConditionalLogicEditor } from "./ConditionalLogicEditor";
 
@@ -447,7 +456,21 @@ function OptionsEditor({
 }
 
 /**
- * Validation tab - field validation settings
+ * Validation tab - field validation settings.
+ *
+ * Which rules a type accepts is ASKED of core rather than decided here. This
+ * previously branched on `field.type === "text" || field.type === "textarea"`
+ * and similar, which is a list that cannot see a type it was not written to
+ * know about — a plugin-contributed field type was offered nothing at all, and
+ * `url` and `phone` were handled by yet another list further down.
+ *
+ * The controls themselves are the shared kit's, so this surface and the schema
+ * builder no longer drift on labels, help text or which rules exist. What stays
+ * here is what is genuinely this surface's: its own tab chrome, its file-size
+ * control (stored on the field rather than in `validation`), and the mapping of
+ * its own storage key — this builder stores the custom message as
+ * `errorMessage` where core names the rule `message`, and a shared component
+ * that silently reconciled the two would make every stored value wrong.
  */
 function ValidationTab({
   field,
@@ -456,12 +479,36 @@ function ValidationTab({
   field: FormField;
   onUpdate: (updates: Partial<FormField>) => void;
 }) {
-  const validation = useMemo(() => field.validation || {}, [field.validation]);
+  // Read across field types rather than narrowing to one: the whole point of
+  // the shared editor is that this tab no longer branches on `field.type`.
+  const validation: AnyFieldValidation = useMemo(
+    () => field.validation ?? {},
+    [field.validation]
+  );
+  // What the type MEANS, narrowed to what this runtime enforces FOR THAT TYPE.
+  // Both halves are asked rather than restated, so neither can drift behind the
+  // other. The narrowing has to be per type: a single set of enforced rules
+  // only says a rule is honoured somewhere, which would offer `min`/`max` on a
+  // date whose schema reads its bounds from `field.min`/`field.max` and never
+  // consults `validation` — a control storing a bound nothing reads, which is
+  // worse than no control because the author believes the rule is in force.
+  const allowed = useMemo(() => {
+    const enforced = enforcedValidationRules(field.type);
+    return validationRulesForFieldType(field.type).filter(rule =>
+      enforced.includes(rule)
+    );
+  }, [field.type]);
 
-  const updateValidation = useCallback(
-    (key: string, value: string | number | undefined) => {
+  const applyRules = useCallback(
+    (next: Partial<ValidationRuleValues>) => {
+      const { message, ...rules } = next;
       onUpdate({
-        validation: { ...validation, [key]: value },
+        validation: {
+          ...validation,
+          ...rules,
+          // This surface's own key for the rule core calls `message`.
+          ...(message === undefined ? {} : { errorMessage: message }),
+        },
       });
     },
     [validation, onUpdate]
@@ -469,84 +516,24 @@ function ValidationTab({
 
   return (
     <div className="space-y-6 pt-2">
-      {/* Custom error message */}
-      <div className="space-y-2">
-        <FormLabelWithTooltip
-          label="Custom Error Message"
-          htmlFor="error-message"
-          description="Override the default browser validation message."
-        />
-        <Input
-          id="error-message"
-          type="text"
-          value={validation.errorMessage || ""}
-          onChange={e => updateValidation("errorMessage", e.target.value)}
-          placeholder="This field is required"
-          className="bg-transparent"
-        />
-      </div>
+      <ValidationRulesEditor
+        allowed={allowed}
+        value={{
+          minLength: validation.minLength,
+          maxLength: validation.maxLength,
+          // No row bounds here: this surface neither stores nor enforces them,
+          // and `allowed` above never admits them, so passing them would be a
+          // value the editor could not draw and the runtime could not read.
+          min: validation.min,
+          max: validation.max,
+          pattern: validation.pattern,
+          message: validation.errorMessage,
+        }}
+        onChange={applyRules}
+      />
 
-      {/* Text/Textarea length validation */}
-      {(field.type === "text" || field.type === "textarea") && (
-        <div className="grid grid-cols-2 gap-4">
-          <ValidationNumberField
-            label="Min Length"
-            description="Minimum characters required."
-            counts
-            value={field.validation?.minLength}
-            onChange={n => updateValidation("minLength", n)}
-          />
-          <ValidationNumberField
-            label="Max Length"
-            description="Maximum characters allowed."
-            counts
-            value={field.validation?.maxLength}
-            onChange={n => updateValidation("maxLength", n)}
-          />
-        </div>
-      )}
-
-      {/* Number min/max validation */}
-      {field.type === "number" && (
-        <div className="grid grid-cols-2 gap-4">
-          <ValidationNumberField
-            label="Min Value"
-            description="Minimum numerical value."
-            value={field.validation?.min}
-            onChange={n => updateValidation("min", n)}
-          />
-          <ValidationNumberField
-            label="Max Value"
-            description="Maximum numerical value."
-            value={field.validation?.max}
-            onChange={n => updateValidation("max", n)}
-          />
-        </div>
-      )}
-
-      {/* Pattern validation for text fields */}
-      {(field.type === "text" ||
-        field.type === "email" ||
-        field.type === "phone" ||
-        field.type === "url") && (
-        <div className="space-y-2">
-          <FormLabelWithTooltip
-            label="Pattern (Regex)"
-            htmlFor="val-pattern"
-            description="Regular expression for advanced validation."
-          />
-          <Input
-            id="val-pattern"
-            type="text"
-            value={(field as TextFormField).validation?.pattern || ""}
-            onChange={e => updateValidation("pattern", e.target.value)}
-            placeholder="^[A-Za-z]+$"
-            className="bg-transparent"
-          />
-        </div>
-      )}
-
-      {/* File size validation */}
+      {/* Not a validation rule: a file's size limit is stored on the field
+          itself rather than in `validation`, so it stays with this surface. */}
       {field.type === "file" && (
         <div className="space-y-2">
           <FormLabelWithTooltip
@@ -572,8 +559,9 @@ function ValidationTab({
         </div>
       )}
 
-      {/* Info for fields without validation options */}
-      {(field.type === "checkbox" || field.type === "hidden") && (
+      {/* Asked, not restated: naming the types with no options here would be a
+          third copy of the reasoning this tab just removed. */}
+      {!drawsAnyValidationRule(allowed) && field.type !== "file" && (
         // Semantic border token so this info-box boundary is visible at the 3:1 UI minimum.
         <div className="p-3 bg-muted rounded-none text-xs text-muted-foreground text-center border border-dashed border-border">
           No additional validation options for this field type.

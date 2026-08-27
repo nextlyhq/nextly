@@ -26,6 +26,7 @@ import { HistoricalDocumentBanner } from "@admin/components/features/versions/Hi
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import { snapshotToFormValues } from "@admin/components/features/versions/snapshot-to-form-values";
 import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
+import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { Alert, AlertDescription, Skeleton, toast } from "@admin/components/ui";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
@@ -738,7 +739,16 @@ export function EntryForm({
     // closing the dialog rather than a history move — and a modal opened FROM
     // this editor would mount a second interceptor over this one, so two
     // dialogs would answer one navigation.
-    <UnsavedChangesGuard isDirty={hasUnsavedWork} disabled={isSubmitting}>
+    <UnsavedChangesGuard
+      isDirty={hasUnsavedWork}
+      disabled={isSubmitting}
+      // A refused switch takes its seed with it. The request to fill the target
+      // from this language was made ALONGSIDE a navigation; if the navigation
+      // does not happen, the request did not either — and a seed left behind
+      // fires the moment the author reaches that language by any other route,
+      // offering a copy they declined minutes earlier.
+      onCancel={onSeedHandled}
+    >
       <UnsavedWorkProvider report={unsavedWork.report}>
         <EntryLocaleProvider value={localeCtx}>
           <DocumentHistoryContext.Provider value={documentHistory}>
@@ -798,7 +808,16 @@ export function EntryForm({
                           The two modal callers never had that padding either. */}
                         <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
                           {/* Main column */}
-                          <div className="flex-1 min-w-0 flex flex-col">
+                          <div
+                            className="flex-1 min-w-0 flex flex-col mx-auto w-full"
+                            // The measure lives on the FIELD column, not on
+                            // the page: the rail is a fixed-width sibling,
+                            // so a page-level cap would bound the two
+                            // together and spend the rail's width out of
+                            // the author's. `mx-auto` centres what is left
+                            // once the rail has taken its share.
+                            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+                          >
                             {/* No horizontal negative inset here. These bands fill the Main column,
                     which is already as wide as the content column allows;
                     pulling them wider pushed both ~32px past the page edges

@@ -99,11 +99,16 @@ describe("DefaultValueField", () => {
   // entirely (locked decision: brainstorm 2026-05-04 Option B). The old
   // Switch-based test moved into this describe block.
   describe("tri-state boolean default (PR E3)", () => {
+    // `checkbox` is the FIELD type; `boolean` is the COLUMN type it maps to
+    // (`catalog.ts`: `checkbox: "boolean"`). This described the column, so
+    // `SUPPORTED_TYPES` did not recognise it, the component returned null, and
+    // eight assertions failed against an empty body — a test that could only
+    // ever have failed, on a component that works.
     const makeBoolField = (defaultValue?: boolean | null): BuilderField =>
       baseField({
         name: "isPublished",
         label: "Is Published",
-        type: "boolean",
+        type: "checkbox",
         ...(defaultValue !== undefined ? { defaultValue } : {}),
       });
 

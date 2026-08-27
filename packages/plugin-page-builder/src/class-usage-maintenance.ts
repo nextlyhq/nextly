@@ -72,7 +72,6 @@ import {
   type StoredClassUsageRow,
 } from "./class-usage-reconcile";
 import {
-  CLASS_USAGE_INDEX_SLUG,
   type ClassUsageRow,
   type ClassUsageScope,
   type ClassUsageVariant,
@@ -88,9 +87,18 @@ import { readStoredJson } from "./stored-json";
  * generated when this plugin is wired. The index collection is this plugin's
  * own to know.
  */
+/**
+ * The index, as everything above it sees it.
+ *
+ * No method names a collection. The store IS the index — it is constructed
+ * knowing which one, so nothing above it can point a write at the wrong table,
+ * and the plugin's `.rename()` support has exactly one place to be honoured.
+ * Naming the slug at every call site meant four literals inside this module
+ * alone, each of which would have kept writing to the declared name on an
+ * installation that renamed it.
+ */
 export interface ClassUsageIndexStore {
   find(args: {
-    collection: string;
     where: Record<string, { equals: string }>;
     limit: number;
     page: number;
@@ -105,11 +113,8 @@ export interface ClassUsageIndexStore {
      */
     sort: string;
   }): Promise<{ items: unknown[]; meta: { hasNext: boolean } }>;
-  create(args: {
-    collection: string;
-    data: Record<string, unknown>;
-  }): Promise<unknown>;
-  delete(args: { collection: string; id: string }): Promise<unknown>;
+  create(args: { data: Record<string, unknown> }): Promise<unknown>;
+  delete(args: { id: string }): Promise<unknown>;
 }
 
 /** How many index rows one query asks for. */
@@ -241,13 +246,84 @@ async function storedRowsWhere(
   where: Record<string, { equals: string }>,
   describe: string
 ): Promise<StoredClassUsageRow[]> {
-  const rows: StoredClassUsageRow[] = [];
+  return rowsWhere(store, where, describe, readStoredRow);
+}
+
+/**
+ * The identity of a stored row, without decoding the columns it is not keyed by.
+ *
+ * A row whose `variant` is NULL — written before that column existed, or left
+ * that way by a restore — is rejected by `readStoredRow`, which is right for
+ * reconciliation: that walk binds a variant, so a row carrying none belongs to
+ * no subject it could be compared against, and nothing there knows enough to
+ * remove it.
+ *
+ * A document-wide DELETE knows enough. It binds only the document, the document
+ * is gone, and every row keyed to it goes with it whatever else the row says.
+ * Decoding the variant there would silently spare exactly the rows no subject
+ * can reach and no sweep visits — they would outlive their document and count
+ * towards their classes for ever, with nothing able to remove them.
+ */
+interface ClassUsageRowIdentity {
+  id: string;
+  scope: string;
+  entity: string;
+  entityKey: string;
+}
+
+/**
+ * Read only the columns a document-wide removal is keyed by.
+ *
+ * A row that answers the document's predicates but carries no readable `id`
+ * RAISES rather than being skipped. Skipping is right for a row this walk
+ * cannot recognise at all — that row is another query's business — but a row
+ * that IS this document's and cannot be addressed is the one case where
+ * silence strands it: the document is gone, so no reconciliation will visit it
+ * again, and it counts towards its class for ever.
+ *
+ * The id can go missing for a real reason. `afterRead` may reshape a list
+ * response, and the Direct API applies those transformations even for a
+ * trusted caller — so a host that projects this plugin's own index collection
+ * can drop the column the rows are addressed by. Raising reports that; the
+ * alternative reported a clean deletion that had not happened.
+ */
+function readRowIdentity(item: unknown): ClassUsageRowIdentity | null {
+  if (!isPlainRecord(item)) return null;
+  const keyed = readStrings(item, ["scope", "entity", "entityKey"]);
+  if (keyed === null) return null;
+  const [scope, entity, entityKey] = keyed;
+
+  const id = item.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(
+      `Class-usage row for ${scope}:${entity}:${entityKey} has no readable ` +
+        `id, so it cannot be removed with the document it belongs to; it ` +
+        `would count towards its class until a rebuild runs.`
+    );
+  }
+  return { id, scope, entity, entityKey };
+}
+
+/**
+ * Every row matching a query, decoded by the caller's reader.
+ *
+ * The reader is a parameter because two walks need different amounts of the
+ * row: reconciliation compares whole subjects, while a removal needs only what
+ * it is keyed by. Sharing the paging and the misbinding check keeps them from
+ * drifting apart, which is how one of them would stop refusing foreign rows.
+ */
+async function rowsWhere<T extends { id: string }>(
+  store: ClassUsageIndexStore,
+  where: Record<string, { equals: string }>,
+  describe: string,
+  decode: (item: unknown) => T | null
+): Promise<T[]> {
+  const rows: T[] = [];
   await walkPages({
     maxPages: MAX_PAGES,
     describe,
     fetchPage: page =>
       store.find({
-        collection: CLASS_USAGE_INDEX_SLUG,
         where,
         limit: PAGE_SIZE,
         page,
@@ -259,7 +335,7 @@ async function storedRowsWhere(
       }),
     onPage: items => {
       for (const item of items) {
-        const row = readStoredRow(item);
+        const row = decode(item);
         if (row === null) continue;
         // Validated HERE rather than by each consumer. Every path that reads
         // rows goes on to delete some of them, and a row outside the requested
@@ -285,7 +361,7 @@ async function storedRowsWhere(
  * invisibly on every call and nothing would ever report it.
  */
 function assertRowMatches(
-  row: StoredClassUsageRow,
+  row: { id: string },
   where: Record<string, { equals: string }>,
   describe: string
 ): void {
@@ -371,12 +447,11 @@ export async function maintainClassUsage(args: {
   // reports it as referencing neither, which permits one that was not.
   for (const row of insert) {
     await store.create({
-      collection: CLASS_USAGE_INDEX_SLUG,
       data: { ...row },
     });
   }
   for (const id of remove) {
-    await store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id });
+    await store.delete({ id });
   }
 
   return {
@@ -384,6 +459,63 @@ export async function maintainClassUsage(args: {
     removed: remove.length,
     undetermined: !derivation.complete,
   };
+}
+
+/**
+ * Drop every row a deleted document owned.
+ *
+ * This is the one place in the write path where absence is DEFINITE. Every
+ * other question about whether a document is there is asked by reading, and a
+ * read cannot answer it: `listEntries` applies `beforeOperation` and
+ * `beforeRead` regardless of access override, so a tenant scope or a
+ * soft-delete filter withholds a live row and the page comes back empty,
+ * indistinguishable from a document that is gone. That is why an absent
+ * document leaves its rows alone everywhere else.
+ *
+ * Here nothing is inferred. The hook IS the notification that the row was
+ * removed, and it runs after the delete committed — so the rows can be dropped
+ * outright, and the usual asymmetry does not apply because there is no reading
+ * to be wrong about.
+ *
+ * Bound on the document and NOT on field, locale or variant. A delete removes
+ * the document in every language and both lifecycle states at once, so every
+ * subject it owned goes with it. Binding the other three would need the caller
+ * to enumerate subjects from configuration that may since have changed —
+ * and a blocks field REMOVED from a collection after its rows were written
+ * would then be unnameable, leaving those rows behind for ever with no live
+ * document to reconcile them against and no sweep that visits them.
+ *
+ * Rows are read whole before any is deleted. These are offset queries, so
+ * deleting while paging shifts later rows behind the cursor and skips them.
+ *
+ * Only the identity columns are decoded, so a row whose `variant` or `locale`
+ * is unreadable still goes. Those are precisely the rows no subject can name
+ * and no sweep visits, so sparing them here would strand them for ever.
+ */
+export async function forgetDeletedDocument(args: {
+  store: ClassUsageIndexStore;
+  scope: ClassUsageScope;
+  entity: string;
+  entityKey: string;
+}): Promise<{ removed: number }> {
+  const where = {
+    scope: { equals: args.scope },
+    entity: { equals: args.entity },
+    entityKey: { equals: args.entityKey },
+  };
+  const rows = await rowsWhere(
+    args.store,
+    where,
+    `${args.scope}:${args.entity}:${args.entityKey}:*`,
+    readRowIdentity
+  );
+
+  let removed = 0;
+  for (const row of rows) {
+    await args.store.delete({ id: row.id });
+    removed += 1;
+  }
+  return { removed };
 }
 
 /**
@@ -456,7 +588,7 @@ export async function forgetAbsentDocuments(args: {
     }
     if (!gone) continue;
 
-    await args.store.delete({ collection: CLASS_USAGE_INDEX_SLUG, id: row.id });
+    await args.store.delete({ id: row.id });
     removed += 1;
   }
   return { removed };
