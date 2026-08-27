@@ -198,17 +198,19 @@ export function richTextToPlainText(value: RichTextValue): string {
     }
     if (!isRichTextNode(item)) continue;
 
+    /*
+     * Asked ONCE, before the node is read, because it is the same question
+     * either way: does this node end a line? A container answers it and so
+     * does a leaf that carries its own text — the boundary lands after the
+     * node in both cases, since the stack pops what went on last.
+     */
+    if (!isInline(item)) stack.push(BLOCK_BOUNDARY);
+
     const leaf = leafText(item);
     if (leaf !== null) {
-      // A leaf that is not inline still ENDS a block, so it earns the same
-      // boundary a container would. Pushed rather than appended, so it lands
-      // after this node the way the container case does.
-      if (!isInline(item)) stack.push(BLOCK_BOUNDARY);
       parts.push(leaf);
       continue;
     }
-
-    if (!isInline(item)) stack.push(BLOCK_BOUNDARY);
     if (Array.isArray(item.children)) pushChildren(stack, item.children);
   }
 
