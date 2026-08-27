@@ -15,13 +15,14 @@
  *
  * @module geometry-dom.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SQUARE_CORNERS } from "./border-radii";
 import {
   canvasContentPoint,
   canvasContentRect,
   clippedByAncestor,
+  clippedByAncestorRect,
   frameInsetOf,
   canvasRootFrom,
   hasScrollbarGutter,
@@ -53,6 +54,7 @@ function frameWith({
 
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 describe("frameInsetOf", () => {
@@ -612,5 +614,209 @@ describe("a clipping ancestor inside a canvas that is PAINTED smaller", () => {
     ancestor.append(child);
 
     expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
+});
+
+/**
+ * The two clip questions, and where they must give DIFFERENT answers.
+ *
+ * `clippedByAncestor` refuses a block whose square corner pokes past a more
+ * tightly rounded ancestor's arc; `clippedByAncestorRect` asks about the
+ * straight edges alone. That gap is the whole reason the second exists — the
+ * appender draws a small control at a container's CENTRE, and refusing it for a
+ * clip confined to a corner nothing is drawn near would decline `core/box`
+ * inside `core/card`, which `card.tsx` calls the commonest composition in the
+ * library. Routing the appender back through the corner-aware question would
+ * bring that regression back, and every case below would stay green unless one
+ * of them pins the disagreement itself.
+ */
+describe("the straight-edge clip question, against the corner-aware one", () => {
+  /** An `overflow: hidden` ancestor with a rounded corner, at a painted rectangle. */
+  function roundedClipper(
+    rect: { x: number; y: number; width: number; height: number },
+    radius: number
+  ) {
+    const element = box(rect);
+    /*
+     * LONGHANDS, and per axis. jsdom's computed style does not expand the
+     * `overflow` or `border-radius` shorthands, so a fixture written with them
+     * reports an empty string for every property this reads — and an empty
+     * string is not `visible`, so the ancestor still counts as clipping while
+     * its radii silently read as zero. The corner test would then never fire
+     * and the two functions would agree for the wrong reason.
+     */
+    element.setAttribute(
+      "style",
+      [
+        "overflow-x:hidden",
+        "overflow-y:hidden",
+        "border-style:solid",
+        "border-width:0px",
+        `border-top-left-radius:${radius}px`,
+        `border-top-right-radius:${radius}px`,
+        `border-bottom-right-radius:${radius}px`,
+        `border-bottom-left-radius:${radius}px`,
+      ].join(";")
+    );
+    return element;
+  }
+
+  it("agrees that a child well outside the clip rectangle is cut", () => {
+    // Both questions answer the same way whenever the straight edges already
+    // settle it, which is what makes the disagreement below a property of the
+    // corner refinement rather than of one function being stricter throughout.
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = roundedClipper(
+      { x: 0, y: 0, width: 400, height: 400 },
+      60
+    );
+    root.append(ancestor);
+    const child = box({ x: -200, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+    expect(clippedByAncestorRect(child, root)).toBe(true);
+  });
+
+  it("DIFFERS on a child cut only where the ancestor's corner is rounded", () => {
+    /*
+     * The child sits inside all four padding edges and its own square top-left
+     * corner lies outside the ancestor's 60px arc — the `core/box` in
+     * `core/card` composition. This is the fixture the whole trade rests on, so
+     * its two assertions have to come out opposite: identical answers here
+     * would mean the fixture never reached the corner test and the case would
+     * license nothing.
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = roundedClipper(
+      { x: 0, y: 0, width: 400, height: 400 },
+      60
+    );
+    root.append(ancestor);
+    const child = box({ x: 0, y: 0, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+    expect(clippedByAncestorRect(child, root)).toBe(false);
+  });
+});
+
+/**
+ * The parts of `DOMMatrix` `renderedScale` reads, and nothing else.
+ *
+ * jsdom implements no `DOMMatrix` at all, so `renderedScale` takes its
+ * "nothing is laid out" branch and reports the identity — which is
+ * describable. A rotated ancestor therefore cannot be expressed in this
+ * environment without supplying one, and the refusal it triggers is the only
+ * way any ancestor reaches the `cut` verdict, so nothing reaches that verdict
+ * either.
+ *
+ * Only `a`..`f`, `is2D` and `multiply` are ever read, and only a
+ * `matrix(a, b, c, d, e, f)` literal is ever parsed, because that is the form
+ * the fixtures below declare. A stub narrower than the real interface is
+ * honest here for the same reason a narrowed test double is anywhere: it
+ * cannot answer a question the code does not ask.
+ */
+class Matrix2D {
+  readonly a: number;
+  readonly b: number;
+  readonly c: number;
+  readonly d: number;
+  readonly e: number;
+  readonly f: number;
+  readonly is2D = true;
+
+  constructor(source?: string | readonly number[]) {
+    const terms =
+      typeof source === "string"
+        ? source
+            .slice(source.indexOf("(") + 1, source.lastIndexOf(")"))
+            .split(",")
+            .map(Number)
+        : (source ?? [1, 0, 0, 1, 0, 0]);
+    this.a = terms[0] ?? 1;
+    this.b = terms[1] ?? 0;
+    this.c = terms[2] ?? 0;
+    this.d = terms[3] ?? 1;
+    this.e = terms[4] ?? 0;
+    this.f = terms[5] ?? 0;
+  }
+
+  /** `A.multiply(B)` is A·B, the composition the walk accumulates. */
+  multiply(other: Matrix2D): Matrix2D {
+    return new Matrix2D([
+      this.a * other.a + this.c * other.b,
+      this.b * other.a + this.d * other.b,
+      this.a * other.c + this.c * other.d,
+      this.b * other.c + this.d * other.d,
+      this.a * other.e + this.c * other.f + this.e,
+      this.b * other.e + this.d * other.f + this.f,
+    ]);
+  }
+}
+
+describe("a clipping ancestor whose transform cannot be described", () => {
+  /*
+   * `rotate(30deg)` on the ancestor. Neither reading survives it: `a` and `d`
+   * stop being scale factors, and `getBoundingClientRect` answers with an
+   * axis-aligned BOUNDING box whose edges are not the clip edges — the real
+   * clip is a slanted rectangle inside it, so a child genuinely cut by it
+   * still reads as contained on every straight-edge comparison. Both clip
+   * questions refuse such an ancestor outright, and the child below is one
+   * that BOTH would otherwise accept: it sits well inside the bounding box, so
+   * nothing but the refusal itself can produce a `true` here.
+   */
+  function rotatedClipper(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) {
+    const element = box(rect);
+    element.setAttribute(
+      "style",
+      [
+        "overflow-x:hidden",
+        "overflow-y:hidden",
+        // The composed matrix for a 30-degree rotation, written out because
+        // the stub above reads matrix terms rather than parsing a rotation.
+        "transform:matrix(0.8660254, 0.5, -0.5, 0.8660254, 0, 0)",
+      ].join(";")
+    );
+    return element;
+  }
+
+  it("is refused by BOTH clip questions, not measured", () => {
+    vi.stubGlobal("DOMMatrix", Matrix2D);
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = rotatedClipper({ x: 0, y: 0, width: 400, height: 400 });
+    root.append(ancestor);
+    const child = box({ x: 100, y: 100, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(true);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
+
+  it("accepts the same child once the ancestor is axis-aligned", () => {
+    /*
+     * The control, and it is what makes the case above about the ROTATION
+     * rather than about the fixture. `matrix(1, 0, 0, 1, 0, 0)` is the
+     * identity written in the same form, so the ancestor still declares a
+     * transform and still clips; only the off-diagonal terms change.
+     */
+    vi.stubGlobal("DOMMatrix", Matrix2D);
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = box({ x: 0, y: 0, width: 400, height: 400 });
+    ancestor.setAttribute(
+      "style",
+      "overflow-x:hidden;overflow-y:hidden;transform:matrix(1, 0, 0, 1, 0, 0)"
+    );
+    root.append(ancestor);
+    const child = box({ x: 100, y: 100, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(false);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
   });
 });
