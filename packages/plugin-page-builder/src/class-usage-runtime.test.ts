@@ -91,9 +91,16 @@ describe("resolving a subject to its document", () => {
     // overlay exists only on the by-id path.
     const { api, calls } = recordingApi();
 
-    await classUsageDocumentReader(api)(subject({ variant: "draft" }));
+    const document = await classUsageDocumentReader(api)(
+      subject({ variant: "draft" })
+    );
 
     expect(calls[0]).toMatchObject({ op: "findByID", draft: true });
+    // The POSITIVE control, and the half that matters. Asserting only the call
+    // leaves an implementation that makes it and then answers nothing passing:
+    // every working draft would go unindexed, and a class used only by pending
+    // edits would pass the safe-delete check.
+    expect(document).toEqual(documentUsing("hero"));
   });
 
   it("reads PUBLISHED with NO lifecycle filter, and does not opt into the draft", async () => {
@@ -388,8 +395,7 @@ describe("a failure on the DRAFT read", () => {
     // the point. `disableErrors` is honoured inside the Direct API — it
     // converts every unsuccessful result to null, not only a missing row — so
     // a fake that simply throws propagates whether or not the flag is set, and
-    // a test written that way passes with the defect present. Measured: it
-    // did.
+    // a test written that way passes with the defect present.
     //
     // What this module controls is whether it asks for the suppression, so
     // that is what is asserted. Setting it would make a failing `afterRead`

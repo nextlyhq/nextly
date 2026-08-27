@@ -79,9 +79,9 @@ function harness(
       content: documentUsing("hero"),
       ...(args.draft === true ? { _isWorkingDraft: true } : {}),
     })),
-    // Both read shapes: drafts go through the detail path (the only
-    // sidecar-aware one), published through the list path (the only one
-    // carrying a lifecycle filter).
+    // BOTH variants are read by id above; only `draft` differs between them,
+    // and it selects the working-draft overlay. `find` therefore models the
+    // INDEX store alone, never a document read.
     create: vi.fn(async () => ({})),
     delete: vi.fn(async () => ({})),
   };

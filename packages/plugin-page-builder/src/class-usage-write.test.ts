@@ -40,7 +40,12 @@ function recordingStore(stored: { id: string; classId: string }[] = []) {
           entityKey: "p1",
           field: "content",
           locale: "",
-          variant: "published",
+          // Stamped from the PREDICATE, not fixed. A row labelled with a
+          // variant the query did not ask for makes `assertRowMatches` throw
+          // before any removal is attempted — so a regressed guard would turn
+          // this red for a malformed fixture instead of for the deletion it is
+          // meant to catch.
+          variant: args.where.variant?.equals ?? "published",
           ...row,
         })
       ),

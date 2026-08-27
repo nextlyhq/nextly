@@ -448,8 +448,7 @@ describe("forgetting a document that was deleted", () => {
     //
     // The fixture spans TWO pages deliberately. On a single page, deleting as
     // each page arrives produces exactly the same call order as reading
-    // everything first, so a one-page fixture asserts nothing: it passed
-    // against a per-page delete when that was tried as a break.
+    // everything first, so a one-page fixture cannot tell the two apart.
     const calls: string[] = [];
     const rowsByPage: Record<number, string[]> = { 1: ["r1", "r2"], 2: ["r3"] };
     const store: ClassUsageIndexStore = {
