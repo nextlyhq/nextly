@@ -52,7 +52,7 @@ describe("useInsertDialogState", () => {
     expect(resetState).not.toHaveBeenCalled();
   });
 
-  it("submits on Enter without shift key, and ignores shift+Enter and other keys", () => {
+  it("submits on Enter from a text input, and ignores shift+Enter, other keys, and Enter from non-text controls", () => {
     const resetState = vi.fn();
     const onSubmit = vi.fn();
 
@@ -60,12 +60,16 @@ describe("useInsertDialogState", () => {
       useInsertDialogState({ resetState, onSubmit })
     );
 
-    // Regular Enter -> submits
+    const textInput = document.createElement("input");
+    const button = document.createElement("button");
+
+    // Regular Enter from a text input -> submits
     const preventDefault1 = vi.fn();
     act(() => {
       result.current.handleKeyDown({
         key: "Enter",
         shiftKey: false,
+        target: textInput,
         preventDefault: preventDefault1,
       } as unknown as React.KeyboardEvent);
     });
@@ -78,6 +82,7 @@ describe("useInsertDialogState", () => {
       result.current.handleKeyDown({
         key: "Enter",
         shiftKey: true,
+        target: textInput,
         preventDefault: preventDefault2,
       } as unknown as React.KeyboardEvent);
     });
@@ -90,11 +95,26 @@ describe("useInsertDialogState", () => {
       result.current.handleKeyDown({
         key: "Escape",
         shiftKey: false,
+        target: textInput,
         preventDefault: preventDefault3,
       } as unknown as React.KeyboardEvent);
     });
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(preventDefault3).not.toHaveBeenCalled();
+
+    // Enter from a focused button (Cancel, alignment, Select option) must
+    // activate that control, not submit the dialog
+    const preventDefault4 = vi.fn();
+    act(() => {
+      result.current.handleKeyDown({
+        key: "Enter",
+        shiftKey: false,
+        target: button,
+        preventDefault: preventDefault4,
+      } as unknown as React.KeyboardEvent);
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(preventDefault4).not.toHaveBeenCalled();
   });
 });
 

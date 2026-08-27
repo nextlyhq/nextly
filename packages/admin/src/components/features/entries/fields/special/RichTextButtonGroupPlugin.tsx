@@ -154,6 +154,9 @@ export function RichTextButtonGroupPlugin({
     }
   }, []);
 
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit. Enter submission is new here — the other three dialogs
+  // already had it, and the shared shell is what makes the four agree.
   const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
     useInsertDialogState({
       resetState,
@@ -466,6 +469,10 @@ export function RichTextButtonGroupPlugin({
           )}
         </div>
 
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders. Confirm is gated on every button having
+            text and a URL — emptiness only, matching the button-link dialog,
+            so a non-empty invalid URL still submits and shows the banner. */}
         <InsertDialogFooter
           error={error}
           onCancel={() => handleOpenChange(false)}
@@ -473,6 +480,7 @@ export function RichTextButtonGroupPlugin({
           confirmLabel={
             editingNodeKey ? "Update Button Group" : "Insert Button Group"
           }
+          confirmDisabled={buttons.some(b => !b.text.trim() || !b.url.trim())}
         />
       </DialogContent>
     </Dialog>

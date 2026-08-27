@@ -13,11 +13,16 @@ import {
   AlignRight,
 } from "@admin/components/icons";
 
+// The alignment contract is owned by the node models; the shared control is a
+// consumer of it, not a second author. Re-exported so plugin consumers can
+// keep importing the type from either surface.
+import type { ButtonAlignment as NodeButtonAlignment } from "./ButtonLinkNode";
+
 // ============================================================
 // Types
 // ============================================================
 
-export type ButtonAlignment = "left" | "center" | "right";
+export type ButtonAlignment = NodeButtonAlignment;
 
 export interface UseInsertDialogStateOptions {
   /** Callback to clear form state when the dialog closes or reopens */
@@ -66,6 +71,19 @@ export interface ButtonAlignmentControlProps {
 // Hook: useInsertDialogState
 // ============================================================
 
+// Input types whose Enter key activates the control itself rather than
+// submitting the surrounding dialog.
+const NON_TEXT_INPUT_TYPES = [
+  "button",
+  "checkbox",
+  "color",
+  "file",
+  "radio",
+  "range",
+  "reset",
+  "submit",
+];
+
 /**
  * Shared state and event handling for rich-text plugin insert dialogs.
  * Encapsulates open/close toggling, state resets, and Enter-to-submit keydown handling.
@@ -95,7 +113,17 @@ export function useInsertDialogState({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      // Enter submits only while the user is typing in a text field. On
+      // buttons and checkboxes Enter activates the focused control, and the
+      // wrapped Radix Select does not stop its option keydown from bubbling,
+      // which would submit the dialog mid-selection.
+      const el = e.target;
+      const fromTextField =
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLInputElement &&
+          !NON_TEXT_INPUT_TYPES.includes(el.type));
+      if (fromTextField) {
         e.preventDefault();
         onSubmit();
       }

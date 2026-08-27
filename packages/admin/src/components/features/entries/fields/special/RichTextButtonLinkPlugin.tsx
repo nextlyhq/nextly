@@ -113,6 +113,8 @@ export function RichTextButtonLinkPlugin({
     }
   }, []);
 
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit, so this dialog cannot drift from the other three.
   const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
     useInsertDialogState({
       resetState,
@@ -445,6 +447,9 @@ export function RichTextButtonLinkPlugin({
           )}
         </div>
 
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders. Only emptiness gates the confirm here so a
+            non-empty but invalid URL still submits and surfaces the banner. */}
         <InsertDialogFooter
           error={error}
           onCancel={() => handleOpenChange(false)}

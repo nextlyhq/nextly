@@ -68,6 +68,8 @@ export function RichTextTablePlugin({
     setError(null);
   }, []);
 
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit, so this dialog cannot drift from the other three.
   const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
     useInsertDialogState({
       resetState,
@@ -205,6 +207,8 @@ export function RichTextTablePlugin({
           </div>
         </div>
 
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders, so their behavior and styling stay one. */}
         <InsertDialogFooter
           error={error}
           onCancel={() => handleOpenChange(false)}
