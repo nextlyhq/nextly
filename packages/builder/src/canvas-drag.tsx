@@ -342,25 +342,40 @@ export function useCanvasDrag({
     detachDocument.current = null;
   }, []);
 
-  const reset = React.useCallback(() => {
-    // Cancelling here rather than in each ending: `reset` is what pointer-up,
-    // Escape and unmount all funnel through, so a frame cannot outlive the
-    // gesture it scrolls for by any route.
+  /**
+   * End the gesture and release everything it holds, WITHOUT drawing.
+   *
+   * Split from {@link reset} for the one ending that cannot draw: a host
+   * unmounting mid-drag, where a `setState` would be an update to a component
+   * that no longer exists. Every other ending wants the redraw and goes through
+   * `reset`, which is this plus that.
+   *
+   * Cancelling the frame here rather than in each ending is what stops a scroll
+   * loop outliving the gesture it scrolls for: `pump` reschedules itself every
+   * frame and only stops when it finds no active gesture, so leaving
+   * `gesture.current` populated on unmount keeps it running — holding the
+   * editor and the DOM, and still scrolling a canvas whose editor has closed.
+   */
+  const teardown = React.useCallback(() => {
     const running = gesture.current?.frame;
     if (running !== null && running !== undefined) {
       cancelAnimationFrame(running);
     }
     gesture.current = null;
-    // For the same reason, and by the same route: a palette drag listens on the
-    // document, and every way one can end arrives here.
+    // A palette drag listens on the document, and every way one can end arrives
+    // here.
     stopTrackingDocument();
+  }, [stopTrackingDocument]);
+
+  const reset = React.useCallback(() => {
+    teardown();
     setState({
       draggingId: null,
       draggingBlockName: null,
       target: null,
       refusal: null,
     });
-  }, [stopTrackingDocument]);
+  }, [teardown]);
 
   const onPointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
@@ -687,6 +702,15 @@ export function useCanvasDrag({
       // Built at the release, from the caller's own snapshot of the palette.
       const node = subject.makeNode();
       if (node === null) return;
+      // The position and the nesting verdict were both computed for the type
+      // the gesture ADVERTISED. A node of some other type was never asked
+      // about, so inserting it here would place a block into a parent or slot
+      // that may forbid it — and the op layer checks structural shape, not the
+      // nesting rule, so nothing downstream would catch it.
+      //
+      // Declined rather than re-resolved: the target was chosen for a different
+      // block, so there is no position here that was ever offered for this one.
+      if (node.type !== subject.blockName) return;
       // `apply` answers null when the op is refused, and a refusal must not be
       // followed by a select: the panel offers only placements the rule
       // permits, so a null here means the document moved under the gesture.
@@ -823,13 +847,28 @@ export function useCanvasDrag({
        * docblock names a drag begun from the inserter as its reason for
        * listening here rather than on the canvas.
        */
+      /*
+       * Only the pointer that began this gesture drives it.
+       *
+       * The node-origin path gets this from pointer capture, which retargets
+       * one pointer and ignores the rest. A palette drag deliberately takes no
+       * capture, so its document listeners see EVERY active pointer: on a
+       * touch device, lifting a second finger would otherwise commit the first
+       * finger's target, and a second finger's movement would aim the drag.
+       */
+      const owner = event.pointerId;
       const move = (native: PointerEvent): void => {
+        if (native.pointerId !== owner) return;
         trackMove(native.clientX, native.clientY, native.pointerId, null);
       };
       const up = (native: PointerEvent): void => {
+        if (native.pointerId !== owner) return;
         endGesture(native.pointerId, null);
       };
-      const cancel = (): void => reset();
+      const cancel = (native: PointerEvent): void => {
+        if (native.pointerId !== owner) return;
+        reset();
+      };
       // Before registering, never after: overwriting the detach closure below
       // while an earlier palette gesture is still live would strand its three
       // listeners with nothing able to remove them, and they would go on
@@ -851,11 +890,12 @@ export function useCanvasDrag({
     [canvasRoot, endGesture, reset, stopTrackingDocument, trackMove]
   );
 
-  // Every ordinary ending funnels through `reset`, which detaches those
-  // listeners. This covers the one ending that does not: a host unmounting
-  // mid-drag, which would otherwise leave three document listeners holding a
-  // gesture nothing can end.
-  React.useEffect(() => stopTrackingDocument, [stopTrackingDocument]);
+  // Every ordinary ending funnels through `reset`. This covers the one that
+  // does not: a host unmounting mid-drag, which would otherwise leave a running
+  // frame loop and three document listeners holding a gesture nothing can end.
+  // `teardown` rather than `reset`, because a state update here would be one on
+  // a component that has gone.
+  React.useEffect(() => teardown, [teardown]);
 
   /*
    * Escape abandons the drag, listened for on the DOCUMENT rather than on the
@@ -883,13 +923,22 @@ export function useCanvasDrag({
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      // An abandoned palette drag still ends in a release, and if the pointer
+      // has come back to the row it started on, that press and release are one
+      // click — which the row inserts on. Escape would visibly cancel the drag
+      // and add a block anyway, so this ending needs the same suppression the
+      // committed one gets.
+      const drag = gesture.current;
+      if (drag?.active === true && drag.subject.kind === "insert") {
+        swallowNextClick();
+      }
       reset();
     };
     document.addEventListener("keydown", abandon, true);
     return () => {
       document.removeEventListener("keydown", abandon, true);
     };
-  }, [dragging, reset]);
+  }, [dragging, reset, swallowNextClick]);
 
   return {
     ...state,
