@@ -12,7 +12,13 @@
  * with `"use client"` and pulls in the whole component tree, which does not
  * belong in a Node test process.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+} from "node:fs";
 import {
   publishedEntries,
   sourcesBySubpath,
@@ -20,7 +26,10 @@ import {
 
 import {
   DECLARATION_ENTRIES,
-  ensureDeclarations,
+  declarationsDir,
+  EXTENDS_PACKAGE,
+  EXTENDS_PACKAGE_DIR,
+  upToDate,
 } from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -338,27 +347,23 @@ describe("ui STABILITY.md ledger", () => {
  * absent from an artifact.
  */
 describe("ui release tags reach the published types", () => {
-  // Vitest initialises a global setup once per project, so a watch rerun after
-  // an edit would otherwise read declarations built before it. Regenerating
-  // here — where it is re-evaluated every run — means the assertions below
-  // always describe the current source rather than merely detecting that they
-  // do not.
-  // The ONLY place the declarations are built. A global setup ran once per
-  // project and this hook ran per suite, so both together built twice per run
-  // for no gain; this one covers the watch case a global setup cannot, because
-  // it is re-evaluated on every rerun.
+  // The directory the declaration build wrote to. Read from what the helper
+  // returns rather than assuming `dist`: the build stays out of `dist` because
+  // other packages import this one through it while these tests run.
   //
-  // A generous timeout because it BUILDS. The build is unconditional rather
-  // than guarded by a staleness computation — see `ensure-declarations` for why
-  // that computation was removed — and two tsup invocations do not fit in
-  // Vitest's ten-second hook default. Allowing the time the operation takes is
-  // the honest fix, not making the operation guess less carefully.
-  // The directory the guard built for itself. Read from what the build
-  // returned rather than assuming `dist`: the build stays out of `dist`
-  // because other packages import this one through it while these tests run.
+  // Normally a pure READ. The build is `build:surface-declarations`, which the
+  // test and coverage tasks depend on, so under turbo the declarations are
+  // already current when this runs — which is the point: it used to build here
+  // unconditionally, and a loaded runner exceeded the budget and failed a
+  // package the branch had not touched.
+  //
+  // The budget is kept for the runs turbo never sees, where the helper does
+  // build: `pnpm --filter @nextlyhq/ui test`, and the watch and UI runners.
+  // Those are someone's own machine watching a file change, not a runner
+  // executing the rest of the graph, so the wall clock is theirs to spend.
   let builtDir = "";
   beforeAll(() => {
-    builtDir = ensureDeclarations();
+    builtDir = declarationsDir();
   }, 120_000);
 
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
@@ -382,7 +387,7 @@ describe("ui release tags reach the published types", () => {
   const DIST_ENTRIES = DECLARATION_ENTRIES;
 
   it("has built declarations to check", () => {
-    // `ensureDeclarations` throws on a missing entry, so this asserts the
+    // `declarationsDir` throws on a missing entry, so this asserts the
     // guard's own precondition rather than the state of a checkout: a guard
     // that quietly checks nothing is indistinguishable from a passing one.
     for (const entry of DIST_ENTRIES) {
@@ -578,5 +583,78 @@ describe("ui release tags do not shadow the documentation", () => {
     // "nothing was parsed" just as readily as "nothing is wrong".
     const probe = path.join(SRC, "__tests__", "shadowed-tag-probe.fixture.ts");
     expect(shadowed(probe)).toHaveLength(1);
+  });
+});
+
+describe("what the freshness check watches", () => {
+  /**
+   * Runs a case with one file's modification time moved to now, and puts the
+   * original time back afterwards.
+   *
+   * The file's CONTENT is never touched, so this cannot leave the tree dirty —
+   * and the freshness question is about times rather than bytes, so a time is
+   * the honest thing to move.
+   */
+  function withTouched(target: string, run: () => void): void {
+    const before = statSync(target);
+    try {
+      const now = new Date();
+      utimesSync(target, now, now);
+      run();
+    } finally {
+      utimesSync(target, before.atime, before.mtime);
+    }
+  }
+
+  /** The declarations, built and therefore current, before a case moves a time. */
+  function currentDeclarations(): void {
+    declarationsDir();
+    expect(upToDate()).toBe(true);
+  }
+
+  it("watches the config package this one actually extends", () => {
+    /*
+     * The declaration build reads its compiler options through an `extends`
+     * chain that leaves this package, so a change at the other end of it
+     * changes the output while nothing inside this package moves.
+     *
+     * Driven rather than described. An earlier version of this case asserted
+     * only that the tsconfig NAMES the package and that the directory exists,
+     * and stayed green when the entry was deleted from the input list — the
+     * list was right and nothing consulted it.
+     */
+    const config = readFileSync(path.join(PKG_ROOT, "tsconfig.json"), "utf8");
+    expect(config).toContain(`"extends": "${EXTENDS_PACKAGE}/`);
+
+    currentDeclarations();
+    withTouched(
+      path.join(PKG_ROOT, "..", EXTENDS_PACKAGE_DIR, "base-bundler.json"),
+      () => {
+        expect(upToDate()).toBe(false);
+      }
+    );
+  });
+
+  it("watches the workspace lockfile, because the toolchain is an input", () => {
+    /*
+     * A dependency-only upgrade changes the installed TypeScript or tsup
+     * without touching a byte in this package. The declarations it produced
+     * are then the previous compiler's work, and every other path watched here
+     * still looks current.
+     */
+    currentDeclarations();
+    withTouched(path.join(PKG_ROOT, "..", "..", "pnpm-lock.yaml"), () => {
+      expect(upToDate()).toBe(false);
+    });
+  });
+
+  it("does not call everything stale", () => {
+    /*
+     * The control. A freshness check that always answered `false` would pass
+     * both cases above and rebuild on every run, which is the cost this whole
+     * arrangement exists to avoid.
+     */
+    currentDeclarations();
+    expect(upToDate()).toBe(true);
   });
 });

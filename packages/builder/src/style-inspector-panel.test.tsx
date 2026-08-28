@@ -184,6 +184,247 @@ describe("the Style tab beside Content", () => {
   });
 });
 
+describe("when there is nothing to style", () => {
+  it("says to select a block, rather than rendering an empty panel", () => {
+    /*
+     * Not covered by the wrapper's own no-selection case: that one renders
+     * `InspectorPanel`, which says "Select a block to edit it." This panel says
+     * "style", and a query matching one does not match the other.
+     */
+    register({ spacing: true });
+    const { container } = render(
+      <StyleInspectorPanel editor={editorFor(documentOf(), null)} />
+    );
+    expect(
+      container.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
+    expect(screen.getByText(/select a block to style it/i)).toBeDefined();
+  });
+});
+
+describe("the class selector, mounted above the style sections", () => {
+  const LIBRARY = [
+    { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+    { id: "id-card", slug: "card", orderIndex: 1, styles: {} },
+  ];
+
+  /** The panel with a node carrying classes, and a host that opted in. */
+  function mountWithClasses(
+    options: {
+      classIds?: string[];
+      library?: typeof LIBRARY | undefined;
+      optIn?: boolean;
+    } = {}
+  ) {
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          ...(options.classIds === undefined
+            ? {}
+            : { classes: options.classIds }),
+        },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    const onCreateClass = vi.fn();
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(options.optIn === false ? {} : { onCreateClass })}
+        {...(options.library === undefined
+          ? {}
+          : { classLibrary: options.library })}
+      />
+    );
+    return { editor, onCreateClass };
+  }
+
+  it("is absent entirely when the host never opted in", () => {
+    /*
+     * `onCreateClass` is what opts in, NOT the library. A host that cannot
+     * write the site style has no way to create a class, and a selector that
+     * offered to would report an intent nobody acts on.
+     */
+    mountWithClasses({ optIn: false, library: LIBRARY });
+    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  });
+
+  it("shows the loading state when the host opted in but is still reading", () => {
+    // The distinction that would otherwise collapse: an absent library means
+    // "in flight" only BECAUSE opting in is signalled separately. Drawn the
+    // same way, a host mid-load and a host with no class surface at all would
+    // be indistinguishable, and only one of them has a field about to fill.
+    mountWithClasses({ library: undefined });
+    expect(screen.getByText(/loading classes/i)).toBeDefined();
+  });
+
+  it("shows the classes the selected node carries", () => {
+    mountWithClasses({ classIds: ["id-card"], library: LIBRARY });
+    expect(screen.getByRole("button", { name: /remove card/i })).toBeDefined();
+  });
+
+  it("writes an applied class through the editor, with no host callback", () => {
+    // Applying an EXISTING class is a node edit, which this panel already
+    // knows how to write. Requiring a callback for it would make the host
+    // rebuild an op the panel is holding all the parts of.
+    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
+    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
+      target: { value: "hero" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
+      key: "Enter",
+    });
+
+    expect(onCreateClass).not.toHaveBeenCalled();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["id-hero"] },
+    });
+  });
+
+  it("UNSETS the field when the last class is removed", () => {
+    /*
+     * Not `classes: []`. The field is optional and the two mean the same to
+     * every reader, so writing the empty array leaves a key that says nothing
+     * — and an inverse built from it would restore that key on undo.
+     */
+    const { editor } = mountWithClasses({
+      classIds: ["id-hero"],
+      library: LIBRARY,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /remove hero/i }));
+
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["classes"],
+    });
+  });
+
+  it("appears for a block that offers no style properties at all", () => {
+    /*
+     * Named classes compile independently of a block's own style support, so
+     * such a block can still carry one. Exiting early on an empty section list
+     * left the only surface that can apply a class unreachable for exactly the
+     * blocks whose styling has to come from classes.
+     */
+    register({});
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: /add a class/i })
+    ).toBeDefined();
+    // And it still says the block has no style controls, rather than pretending.
+    expect(screen.getByText(/does not offer style properties/i)).toBeDefined();
+  });
+
+  it("forgets a typed query when the selection moves to another block", () => {
+    /*
+     * The query and the highlighted row are state about the node in hand.
+     * Unkeyed, React reuses the component across a selection change while the
+     * write callback switches to the new node — so Enter applies the PREVIOUS
+     * block's pending choice to the block now selected.
+     */
+    register({ spacing: true });
+    const first = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+        { id: "b", type: "acme/box", version: 1, props: {} },
+      ] as BlockNode[],
+    } as BlockDocument;
+
+    const view = render(
+      <StyleInspectorPanel
+        editor={editorFor(first, "a")}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "hero" } });
+    expect((field() as HTMLInputElement).value).toBe("hero");
+
+    view.rerender(
+      <StyleInspectorPanel
+        editor={editorFor(first, "b")}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+    expect((field() as HTMLInputElement).value).toBe("");
+  });
+
+  it("tells the selector when the document refused the write", () => {
+    /*
+     * `applyAll` answers null when the store refuses — a page at its byte limit
+     * rejects an edit the class rules found valid. Discarded, the selector
+     * clears the query and resets as though the class had been applied, so the
+     * author loses the typed choice and is told nothing.
+     */
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    editor.applyAll.mockReturnValue(null);
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "hero" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect((field() as HTMLInputElement).value).toBe("hero");
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be applied/i
+    );
+  });
+
+  it("reports a creation to the host rather than writing it", () => {
+    // The class has no id until the host has stored it, so a node write here
+    // would have to invent one.
+    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
+    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
+      target: { value: "call-to-action" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
+      key: "Enter",
+    });
+
+    expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
+
 describe("sections", () => {
   it("opens one section at a time", () => {
     mount({ spacing: true, effects: true });
@@ -268,6 +509,31 @@ describe("controls", () => {
     // `multiply` is the catalog's, not a list written here — a value absent
     // from `mix-blend-mode` would fail to appear.
     expect(screen.getByRole("option", { name: "multiply" })).toBeDefined();
+  });
+
+  it("writes on Enter, and stops the entry form from submitting", () => {
+    /*
+     * Both halves matter and neither implies the other. Committing without
+     * `preventDefault` submits the surrounding entry form, saving or
+     * publishing the entry when the author meant to finish one field; and
+     * preventing without committing loses the edit silently. Nothing covered
+     * this before, which is how the handler came to be refactored unguarded.
+     */
+    const editor = mount({ spacing: true });
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "12px" } });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(event);
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it("writes through the store on blur, not on every keystroke", () => {

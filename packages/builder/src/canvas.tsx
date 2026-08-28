@@ -47,16 +47,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CanvasDragHandlers } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
 import { selectionModeFor, type SelectionMode } from "./selection";
+import { CANVAS_ROOT_CLASS } from "./shell-state";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.
  *
- * The walk needs an upper bound for the reason given in
- * {@link nodeIdFromEvent}, and that bound has to be identifiable from a DOM
- * node rather than from React state, because the walk starts at an event
- * target and climbs.
+ * Declared in `shell-state.ts` beside the other markers `builder-chrome.css`
+ * spells out literally, and re-exported here because this is where a reader
+ * looks for the canvas's own marker. See {@link nodeIdFromEvent} for the walk
+ * that needs it as an upper bound.
  */
-export const CANVAS_ROOT_CLASS = "nx-canvas";
+export { CANVAS_ROOT_CLASS };
 
 /**
  * Marks the selected block's own element.

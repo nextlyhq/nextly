@@ -41,6 +41,7 @@ import { image } from "./image";
 import { list } from "./list";
 import { paragraph } from "./paragraph";
 import { quote } from "./quote";
+import { richText } from "./rich-text";
 import { section } from "./section";
 import { spacer } from "./spacer";
 
@@ -88,6 +89,13 @@ export { image, IMAGE_LOADING, type ImageProps } from "./image";
 export { list, LIST_KINDS, type ListProps } from "./list";
 export { paragraph, type ParagraphProps } from "./paragraph";
 export { quote, type QuoteProps } from "./quote";
+export { richText, type RichTextBlockProps } from "./rich-text";
+/*
+ * Re-exported because `RichTextBlockProps` NAMES it: a consumer of this entry
+ * that types a variable holding a passage would otherwise have to import the
+ * engine to spell the type of a prop this entry gave them.
+ */
+export type { RichTextValue } from "@nextlyhq/blocks-engine";
 export { section } from "./section";
 export { spacer, type SpacerProps } from "./spacer";
 export {
@@ -142,6 +150,7 @@ export const coreBlocks = [
   spacer,
   heading,
   paragraph,
+  richText,
   list,
   image,
   button,

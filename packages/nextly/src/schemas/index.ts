@@ -50,6 +50,7 @@ import { emailTemplatesMysql } from "./email-templates/mysql";
 import { emailTemplatesPg } from "./email-templates/postgres";
 import { emailTemplatesSqlite } from "./email-templates/sqlite";
 import { fieldGroupLockTables } from "./field-group-lock";
+import { jobsTables } from "./jobs";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
@@ -191,6 +192,7 @@ export function getCoreSchema(
     // — a table absent from this snapshot is never created by db:sync, and the
     // SQLite bootstrap fallback would hide that on one dialect only.
     ...Object.values(releasesTables(dialect)),
+    ...Object.values(jobsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
   ];
 
@@ -288,6 +290,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_versions",
   "nextly_releases",
   "nextly_release_members",
+  "nextly_jobs",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",

@@ -24,6 +24,7 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { BaseService } from "../../../shared/base-service";
 import type { Logger } from "../../../shared/types";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
 import type {
   GetSingleOptions,
@@ -105,6 +106,11 @@ export class SingleEntryService extends BaseService {
   ) {
     super(adapter, logger);
 
+    // What a due release makes visible. Built once and shared, so the cheap
+    // check's memo is shared too — a cache per read would reload the earliest
+    // scheduled instant on every request and lose the point of having one.
+    const releaseVisibility = releaseVisibilityFor(adapter);
+
     this.queryService = new SingleQueryService(
       adapter,
       logger,
@@ -112,7 +118,9 @@ export class SingleEntryService extends BaseService {
       hookRegistry,
       fieldGroupDataService,
       rbacAccessControlService,
-      localization
+      localization,
+      undefined,
+      releaseVisibility
     );
 
     // The write path evaluates a Single's stored access rules; its own

@@ -65,6 +65,7 @@ import {
   respondMutation,
 } from "./api/response-shapes";
 import { getSchemaJournal } from "./api/schema-journal";
+import { getTranslationWorklist } from "./api/translations";
 import {
   listWebhooks,
   getWebhookById,
@@ -345,6 +346,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "previewUrl",
   "imageSizes",
   "dashboard",
+  "translations",
   "schema",
   "email",
 ]);
@@ -477,6 +479,32 @@ async function handleDashboardRequest(
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+  }
+}
+
+// ============================================================================
+// Translations Direct Dispatch
+// ============================================================================
+
+/**
+ * Delegate a translation-worklist request to its handler.
+ *
+ * One method today. Kept as a switch rather than a direct call so a second
+ * read (a per-language count, say) lands beside it instead of growing another
+ * dispatch branch above.
+ */
+async function handleTranslationsRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getTranslationWorklist":
+      return getTranslationWorklist(req);
+    default:
+      return new Response(
+        JSON.stringify({ error: "Unknown translations operation" }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
   }
@@ -1040,6 +1068,14 @@ async function handleServiceRequest(
   // endpoints — no body to consume, but keeping consistent dispatch pattern.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
+  }
+
+  // ==================== TRANSLATIONS DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication) and is read-only, so it intercepts
+  // here for the same reason dashboard does: before `req.text()`, which a GET
+  // has no body for.
+  if (service === "translations") {
+    return handleTranslationsRequest(req, method);
   }
 
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================

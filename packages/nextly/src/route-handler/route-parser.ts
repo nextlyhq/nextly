@@ -2221,6 +2221,33 @@ function parseWebhookRoutes(
 // ============================================================================
 
 /**
+ * Parse the translation worklist route.
+ *
+ *   GET /api/translations → getTranslationWorklist
+ *
+ * GET-only and authenticated; the handler owns its own auth, and which rows come
+ * back is decided per row by each collection's read rules.
+ *
+ * Bare rather than nested under a language (`/translations/es`): the language is
+ * a filter over one list, not a different resource, and it travels as a query
+ * parameter beside the state and the limit it belongs with.
+ */
+function parseTranslationRoutes(
+  id: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "GET") return null;
+  if (id !== undefined) return null;
+  return {
+    service: "translations",
+    operation: "list",
+    method: "getTranslationWorklist",
+    routeParams,
+  };
+}
+
+/**
  * Parse dashboard-related routes.
  *
  *   GET /api/dashboard/stats          → getDashboardStats
@@ -2569,6 +2596,12 @@ export function parseRestRoute(
       httpMethod,
       routeParams
     );
+    if (result) return result;
+  }
+
+  // Handle the translation worklist
+  if (resource === "translations") {
+    const result = parseTranslationRoutes(id, httpMethod, routeParams);
     if (result) return result;
   }
 

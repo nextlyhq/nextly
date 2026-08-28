@@ -119,6 +119,13 @@ const POST_045_TABLES = [
   // touching the child reading as a phantom diff.
   "nextly_releases",
   "nextly_release_members",
+  // The durable job queue, post-0.45 like the tables above: an existing install
+  // gains it on upgrade, so its CREATE TABLE and its indexes are legitimate
+  // rather than phantom. The pass-2 assertion below is what proves the
+  // declaration reaches the dialect bundles as well as the core schema — a
+  // table present in only one of the two is re-proposed on every reconcile
+  // instead of round-tripping to silence.
+  "nextly_jobs",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the

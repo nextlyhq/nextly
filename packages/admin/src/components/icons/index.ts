@@ -110,6 +110,7 @@ export {
   Laptop,
   Layout, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   LayoutGrid, // Collection Builder: blocks field
+  Languages, // Translations: the worklist's sidebar entry
   Layers,
   LayoutDashboard,
   Library,

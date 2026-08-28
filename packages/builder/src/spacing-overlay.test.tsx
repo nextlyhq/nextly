@@ -241,6 +241,30 @@ describe("when the overlay draws at all", () => {
     const { container } = mount(editorOf("a"));
     expect(bandSides(container)).toEqual(["margin-top"]);
   });
+
+  it.each(["fixed", "sticky"])(
+    "draws no band for a block positioned %s",
+    position => {
+      /*
+       * A block pinned to the viewport or to a scrollport has left the canvas
+       * content the bands are drawn in, so a band beside it slides away from it
+       * on the first scroll — and the canvas root is not what scrolls, so
+       * nothing re-measures.
+       *
+       * Here rather than only over the predicate in `geometry-dom.test.ts`,
+       * because what this asserts is the WIRING: the refusal is now decided by
+       * a shared function taking the element, and an overlay that passed the
+       * wrong element — or dropped the argument to a boolean parameter that
+       * accepts any of them — would keep drawing while the predicate itself
+       * stayed correct and covered. The fixture is the same one asserted to
+       * produce a band directly above, so the emptiness is this block being
+       * refused rather than a fixture with no spacing in it.
+       */
+      stubComputedStyle({ a: { marginTop: "16px", position } });
+      const { container } = mount(editorOf("a"));
+      expect(bandSides(container)).toEqual([]);
+    }
+  );
 });
 
 describe("which values it reports", () => {

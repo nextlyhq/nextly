@@ -17,6 +17,7 @@ import {
 import { cn } from "@nextlyhq/ui/utils";
 import {
   Blocks,
+  Braces,
   FileText,
   Layers,
   Palette,
@@ -28,6 +29,7 @@ import * as React from "react";
 
 import { devWarnOnce } from "./dev-warn";
 import {
+  BUILDER_CHROME_CLASS,
   DEFAULT_PREFERENCES,
   EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
@@ -77,6 +79,7 @@ const PANEL_CHROME: Record<
   layers: { label: "Layers", Icon: Layers },
   components: { label: "Components", Icon: Blocks },
   tokens: { label: "Tokens", Icon: Palette },
+  classes: { label: "Classes", Icon: Braces },
   fonts: { label: "Fonts", Icon: Type },
   pages: { label: "Pages", Icon: FileText },
   settings: { label: "Settings", Icon: Settings },
@@ -98,9 +101,9 @@ export interface BuilderShellProps {
   /**
    * Which panels the host can actually fill.
    *
-   * The rail always shows all seven, because the set is the editor's shape and
-   * hiding the unbuilt ones would make the chrome change under an author as
-   * features land. What it must not do is OPEN one nothing renders into: that
+   * The rail always shows every panel, because the set is the editor's shape
+   * and hiding the unbuilt ones would make the chrome change under an author
+   * as features land. What it must not do is OPEN one nothing renders into: that
    * reserves a panel and shrinks the canvas to display nothing, which reads as a
    * broken control rather than an absent feature.
    *
@@ -113,6 +116,45 @@ export interface BuilderShellProps {
    * the panel body.
    */
   availablePanels?: readonly LeftPanel[];
+  /**
+   * Opens the insert panel from OUTSIDE the shell, once per distinct value.
+   *
+   * The rail is normally the only way to change which panel is open, and its
+   * own click handler is a TOGGLE — pressing an already-open panel's item
+   * closes it. A control drawn on the canvas itself (the empty-container
+   * appender) needs the opposite contract: pressing it must show the insert
+   * panel whether or not it is already open, and pressing it again for a
+   * DIFFERENT empty container must show it again even if the author closed it
+   * by hand in between.
+   *
+   * A plain boolean or a bare panel name cannot express "again" — the second
+   * press would carry the same value as the first, and an effect keyed on it
+   * would never re-run. A counter the caller bumps on every press is the same
+   * shape {@link PreferencesLoad.count} below has: not the state itself, but a
+   * count of how many times the thing behind it happened.
+   *
+   * Left `undefined` this does nothing, which is what every host that has no
+   * such control gets by default.
+   */
+  openInsertPanelToken?: number;
+  /**
+   * Reports `showEmptyElements` to a host that needs to know whether the
+   * canvas's empty-container chrome should be showing right now.
+   *
+   * The preference lives entirely inside this shell — see `store` below —
+   * and a caller drawing a SEPARATE overlay over the same canvas (the
+   * empty-container appender, mounted through `Canvas`'s own `overlay` prop
+   * rather than through this component's internals) has no way to reach it.
+   * This is the read half of that gap; `openInsertPanelToken` above is the
+   * write half of a different one.
+   *
+   * Called for every value the preference takes, including the very first
+   * one: a host that waited for a change would have no answer at all until
+   * the author touched the control, and would have to guess the default in
+   * the meantime — a guess that silently goes stale the day the default
+   * changes here and not at every call site that duplicated it.
+   */
+  onShowEmptyElementsChange?: (showEmptyElements: boolean) => void;
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -278,6 +320,40 @@ export function useShellIsActive(): boolean {
 }
 
 /**
+ * What the newest completed read of a preference store left behind.
+ *
+ * TWO fields because there are two different questions downstream, and one
+ * value cannot answer both:
+ *
+ * - `count` answers "has a NEW record arrived", which is what a remount is
+ *   keyed on. Any read qualifies: the panel group has to re-register against
+ *   whatever layout landed, whoever it belongs to.
+ * - `store` answers "whose record is `preferences` holding right now", which is
+ *   what any guard protecting a WRITE needs. The count cannot answer it — it is
+ *   monotonic, so it is already nonzero for the previous store the moment a host
+ *   swaps in a new one, and a write let through in that window spreads the old
+ *   store's record and persists it into the new store, replacing the layout and
+ *   the `showEmptyElements` of whichever user or workspace the new store belongs
+ *   to.
+ *
+ * `store` is the store OBJECT rather than a name or an index, for the reason
+ * the identity is already the read's dependency: it is the thing itself, and no
+ * two live stores can compare equal without being the same store.
+ *
+ * `null` is the state before any read has completed, and it is deliberately not
+ * a fourth thing to test for: every caller compares this against the store it
+ * is about to act on, and `null` is not any store, so "no read yet" and "a
+ * different store's read" answer alike without either being spelled out.
+ */
+interface PreferencesLoad {
+  readonly count: number;
+  readonly store: PreferenceStore | null;
+}
+
+/** Before any read has reached state. */
+const NO_LOAD: PreferencesLoad = { count: 0, store: null };
+
+/**
  * Preferences, restored AFTER mount and written back whenever they change.
  *
  * Reading storage in the initializer is the obvious shape and it is wrong here.
@@ -295,29 +371,7 @@ export function useShellIsActive(): boolean {
 function usePreferences(store: PreferenceStore) {
   const [preferences, setPreferences] =
     React.useState<ShellPreferences>(DEFAULT_PREFERENCES);
-  /**
-   * How many times a store has been READ into this hook.
-   *
-   * Downstream, restoring a layout is a once-per-load act, and "once" has to be
-   * counted against something. Counted against the component's lifetime it is
-   * wrong as soon as the host swaps stores — signing into a second workspace
-   * loads that user's preferences, and a guard that already fired leaves the
-   * previous user's widths on screen.
-   *
-   * A counter rather than the store's identity because it is what the guard
-   * downstream compares against, and it says WHICH load was applied rather than
-   * merely that one was.
-   *
-   * It does NOT detect a host mutating the data behind a store it keeps
-   * handing us: the read below is keyed on the store's identity, so an
-   * unchanged object means no read happens at all and this never advances.
-   * That is the documented contract on `store` — a new backing user or
-   * workspace is a new store object — rather than a gap. Detecting it instead
-   * would mean a subscription or a revision token on the port, which is a
-   * third method every host implementing it would have to get right, for a
-   * case a caller can satisfy by passing a new object.
-   */
-  const [loadCount, setLoadCount] = React.useState(0);
+  const [load, setLoad] = React.useState<PreferencesLoad>(NO_LOAD);
 
   React.useEffect(() => {
     const restored = readPreferences(store);
@@ -326,7 +380,11 @@ function usePreferences(store: PreferenceStore) {
     setPreferences(current =>
       shallowEqualPreferences(current, restored) ? current : restored
     );
-    setLoadCount(count => count + 1);
+    // Set in the SAME effect as the preferences it describes, which is what
+    // makes `store` below an honest account of whose record `preferences`
+    // holds: React applies both updates in one commit, so no render can see
+    // one without the other.
+    setLoad(current => ({ count: current.count + 1, store }));
   }, [store]);
 
   // The newest preferences, reachable from a callback that must not go stale.
@@ -357,7 +415,15 @@ function usePreferences(store: PreferenceStore) {
     [store]
   );
 
-  return [preferences, update, loadCount] as const;
+  /*
+   * The store-specific answer is derived HERE rather than handed out for a
+   * caller to work out, because the comparison is only sound against the same
+   * store the read was keyed on — and that is this argument. Returning
+   * `load.store` instead would leave every caller re-deriving it, and a caller
+   * holding a different store variable (the shell resolves a fallback of its
+   * own) would compare the wrong pair while looking correct.
+   */
+  return [preferences, update, load.count, load.store === store] as const;
 }
 
 /**
@@ -683,6 +749,13 @@ function ShellRegions({
    * Restoring a layout happens once per load, and this is what "once" is
    * counted against: the group is remounted per load so the library
    * re-reads the restored layout at panel registration.
+   *
+   * ANY load, deliberately — unlike the write guard on the token effect, which
+   * has to know WHOSE record arrived. A remount is a response to a new layout
+   * being on screen, and the panels have to re-register against it whichever
+   * store produced it: the swap that makes a count useless for deciding a write
+   * is exactly a case that must remount. So the count and the identity are two
+   * separate answers rather than one this could share.
    */
   loadCount: number;
 }) {
@@ -746,7 +819,8 @@ function ShellRegions({
       ref={chromeRef}
       onKeyDownCapture={onKeyDownCapture}
       className={cn(
-        "nx-builder-chrome flex h-full w-full flex-col overflow-hidden",
+        BUILDER_CHROME_CLASS,
+        "flex h-full w-full flex-col overflow-hidden",
         className
       )}
       // Absent when empty containers are shown, which is the default. A state
@@ -1025,7 +1099,12 @@ function ShellRegions({
  *
  * @experimental
  */
-export function BuilderShell({ store, ...props }: BuilderShellProps) {
+export function BuilderShell({
+  store,
+  openInsertPanelToken,
+  onShowEmptyElementsChange,
+  ...props
+}: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
   // `usePreferences`' callback identity every render, and the write effect with
   // it. Only the FALLBACK needs that treatment though. Capturing the caller's
@@ -1035,8 +1114,99 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
   const fallbackStore = React.useRef<PreferenceStore | null>(null);
   fallbackStore.current ??= browserStore(STORAGE_KEY);
   const resolvedStore = store ?? fallbackStore.current;
-  const [preferences, update, loadCount] = usePreferences(resolvedStore);
+  const [preferences, update, loadCount, loadedFromCurrentStore] =
+    usePreferences(resolvedStore);
   const [measureShell, shellFits] = useFitsFullShell();
+
+  /*
+   * Applies an `openInsertPanelToken` change AT MOST ONCE — a ref rather than
+   * state, because recording that a token was handled is not itself something a
+   * re-render should follow from.
+   *
+   * The ref deliberately survives a store swap. A token already applied belongs
+   * to the session the author pressed the control in, so re-applying it to the
+   * store that replaced it would open a panel nobody asked this store for.
+   *
+   * FORCES `leftPanel` to `"insert"` rather than routing through
+   * `panelAfterRailClick`: that helper TOGGLES, and toggling is exactly wrong
+   * for a control whose contract is "show the panel this fills" — never
+   * "close it if it happens to already be open", which is what a second rail
+   * click on the same item means.
+   *
+   * No availability check against `availablePanels` here: `ShellRegions`
+   * below already normalises `preferences.leftPanel` against it when deriving
+   * the panel it actually renders, so a request naming a panel the host
+   * cannot fill is absorbed there rather than needing a second check here.
+   */
+  const handledInsertPanelToken = React.useRef<number | undefined>(undefined);
+  React.useEffect(() => {
+    if (openInsertPanelToken === undefined) return;
+    /*
+     * Nothing is applied until THIS store's read has landed, and that ordering
+     * is the whole of this guard.
+     *
+     * `update` takes the newest preferences this hook has seen and writes the
+     * result straight back through the store it currently holds. Reading a
+     * store is itself an effect, so in the commit a store first arrives in it
+     * has only SCHEDULED that store's record — what `update` would spread here
+     * is still whatever `preferences` held before. Both ways that happens end
+     * in a write of the wrong record:
+     *
+     * - at MOUNT, `preferences` is `DEFAULT_PREFERENCES`, so a token defined on
+     *   the first render persists the defaults over the author's own panel
+     *   widths and `showEmptyElements`.
+     * - after a store SWAP — signing into a second workspace, promoting a
+     *   memory store to a persisted one — `preferences` is the PREVIOUS store's
+     *   record, so a token arriving in the same render writes one user's or
+     *   workspace's saved layout into another's.
+     *
+     * Either way the panel the token asked for opens and looks entirely
+     * correct, which is what makes the write invisible until the next load.
+     *
+     * So the arrival this waits on is store-specific rather than "some read has
+     * happened": a COUNT of reads is already nonzero for the outgoing store at
+     * the moment of a swap, which is precisely the window the second case sits
+     * in. Once it is true, it stays true for as long as the store does — a read
+     * cannot fail (`readPreferences` answers with the defaults for unreadable
+     * or malformed storage) and one that remembers nothing still answers — so
+     * this delays a token by a single render and can never hold one
+     * indefinitely. A token arriving any later than that render applies in the
+     * same flush it arrived in.
+     */
+    if (!loadedFromCurrentStore) return;
+    if (handledInsertPanelToken.current === openInsertPanelToken) return;
+    handledInsertPanelToken.current = openInsertPanelToken;
+    update(current => ({ ...current, leftPanel: "insert" }));
+  }, [openInsertPanelToken, update, loadedFromCurrentStore]);
+
+  /*
+   * The read half of the same gap: told on every value `showEmptyElements`
+   * takes, including the first, so a host answers "should my own overlay be
+   * showing" honestly from the start rather than assuming the default and
+   * drifting from it the day that default changes here.
+   *
+   * No once-per-value guard here, unlike the token above. Reporting the same
+   * value twice is calling the host back with information it already has —
+   * inert, not incorrect — where applying the SAME token twice would have
+   * been a second unwanted forced-open.
+   */
+  // Held in a ref rather than read straight from the prop. A host passing the
+  // conventional inline callback — `value => setState(c => ({ ...c, value }))`
+  // — hands this a NEW function identity on every one of its own renders, and
+  // that identity was a dependency here: the effect re-ran even though
+  // `showEmptyElements` had not changed, called the callback again, and a host
+  // whose state update itself triggers a re-render — an ordinary spread
+  // creates a new object every time, whether or not any field actually
+  // differs — closes that into a render loop. The ref always holds the latest
+  // callback without needing to be a dependency, so the effect below runs only
+  // when the PREFERENCE changes.
+  const onShowEmptyElementsChangeRef = React.useRef(onShowEmptyElementsChange);
+  React.useEffect(() => {
+    onShowEmptyElementsChangeRef.current = onShowEmptyElementsChange;
+  });
+  React.useEffect(() => {
+    onShowEmptyElementsChangeRef.current?.(preferences.showEmptyElements);
+  }, [preferences.showEmptyElements]);
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref
@@ -1079,7 +1249,8 @@ export function BuilderShell({ store, ...props }: BuilderShellProps) {
               // positioning now, and repeating it would apply a grid area or a
               // border twice.
               className={cn(
-                "nx-builder-chrome flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
+                BUILDER_CHROME_CLASS,
+                "flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center"
               )}
             >
               {/*

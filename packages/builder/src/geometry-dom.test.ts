@@ -15,17 +15,21 @@
  *
  * @module geometry-dom.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SQUARE_CORNERS } from "./border-radii";
 import {
   canvasContentPoint,
   canvasContentRect,
+  canvasPointerPoints,
   clippedByAncestor,
+  clippedByAncestorRect,
   frameInsetOf,
   canvasRootFrom,
   hasScrollbarGutter,
   overflowApplies,
+  renderSkips,
+  viewportPositioned,
 } from "./geometry-dom";
 
 /**
@@ -53,6 +57,7 @@ function frameWith({
 
 afterEach(() => {
   document.body.innerHTML = "";
+  vi.unstubAllGlobals();
 });
 
 describe("frameInsetOf", () => {
@@ -279,6 +284,42 @@ describe("a canvas that is PAINTED smaller than it is laid out", () => {
     ).toEqual({ x: rect.x, y: rect.y });
   });
 
+  it("leaves the PAINTED point undivided and unmoved by the scroll", () => {
+    /*
+     * The half that reads as correct while being wrong, because the two spaces
+     * COINCIDE at every default: unscaled, they differ by nothing; unscrolled,
+     * they differ only by the scale. So the separating fixture is a scale that
+     * is not 1 TOGETHER WITH a non-zero scroll, and either one alone leaves a
+     * painted point that had quietly acquired the division, or the scroll, or
+     * both, agreeing with a correct one.
+     *
+     * What each space is for: the painted point is the distance from the
+     * canvas's painted top-left, which is what the HAND moved, so a drag's
+     * hysteresis threshold measured in it stays a threshold about the hand
+     * however far the canvas is zoomed out. The content point is that same
+     * distance in the canvas's own pixels, past everything already scrolled,
+     * which is the space the rectangles a drop is resolved against live in.
+     */
+    const root = scaledRoot(
+      { x: 100, y: 50, width: 912, height: 570 },
+      { width: 1280, height: 800 },
+      { left: 0, top: 250 }
+    );
+
+    const points = canvasPointerPoints(
+      100 + 200 * SCALE,
+      50 + 300 * SCALE,
+      root
+    );
+
+    // The fixture is CAPABLE of telling them apart. Without this the two
+    // assertions below could both hold on an implementation that answered one
+    // point twice, which is exactly the confusion they exist to catch.
+    expect(points.painted).not.toEqual(points.content);
+    expect(points.painted).toEqual({ x: 200 * SCALE, y: 300 * SCALE });
+    expect(points.content).toEqual({ x: 200, y: 550 });
+  });
+
   it("is the IDENTITY when nothing has been laid out", () => {
     /*
      * jsdom lays nothing out, so `offsetWidth` is 0 and a ratio taken from it
@@ -315,6 +356,65 @@ describe("canvasContentPoint", () => {
       x: rect.x,
       y: rect.y,
     });
+  });
+});
+
+describe("what a mapped pointer costs", () => {
+  /**
+   * Count the reads of ONE element's rectangle.
+   *
+   * Wraps the fixture's own stub rather than the prototype, so a read of some
+   * other element cannot satisfy the count — which is the way a second
+   * implementation would hide, since it needs this root and no other.
+   */
+  function countingRoot(scroll: { left: number; top: number }) {
+    const root = canvasRoot({ x: 100, y: 50, width: 400, height: 800 }, scroll);
+    const counter = { reads: 0 };
+    const measured = root.getBoundingClientRect.bind(root);
+    root.getBoundingClientRect = () => {
+      counter.reads += 1;
+      return measured();
+    };
+    return { root, counter };
+  }
+
+  it("reads the root ONCE for both spaces", () => {
+    /*
+     * The reason the two points are returned together rather than fetched one
+     * at a time. `getBoundingClientRect` forces the layout the browser was
+     * deferring, and a drag asks on every pointer move — so a caller that
+     * wanted both spaces and called two mappings paid a second synchronous
+     * reflow per move for an answer it already held.
+     *
+     * Exact rather than a bound, so it fails in both directions: a second read
+     * regresses it, and an implementation that answered without measuring at
+     * all — which would place every overlay at a nonsense coordinate — does not
+     * pass it either.
+     */
+    const { root, counter } = countingRoot({ left: 0, top: 250 });
+
+    canvasPointerPoints(140, 150, root);
+
+    expect(counter.reads).toBe(1);
+  });
+
+  it("costs the same when only the content point is wanted", () => {
+    /*
+     * The projection must not measure a second time on its way to discarding
+     * the painted half. Its own case rather than a second assertion above,
+     * because the two paths regress independently: a read added here fails only
+     * this one.
+     *
+     * What it does NOT see, stated so the green is not read as more than it is:
+     * this function's body replaced by an equivalent mapping with ONE read of
+     * its own costs exactly the same and passes. That is a duplicate rather
+     * than a cost, and no read count can tell the two apart.
+     */
+    const { root, counter } = countingRoot({ left: 0, top: 250 });
+
+    canvasContentPoint(140, 150, root);
+
+    expect(counter.reads).toBe(1);
   });
 });
 
@@ -361,6 +461,95 @@ describe("finding the canvas root across realms", () => {
     expect(canvasRootFrom(child, "nx-canvas")).toBe(root);
 
     frame.remove();
+  });
+});
+
+describe("which elements have left the canvas's content coordinates", () => {
+  /**
+   * An element whose computed `position` is whatever the caller names.
+   *
+   * Set as an inline declaration rather than through a class rule, because what
+   * this predicate reads is the COMPUTED value and an inline declaration is the
+   * shortest cascade that produces one. `empty-container-appender.test.tsx`
+   * reaches the same computed value the long way round — through an authored
+   * `styles` envelope compiled into the page's own sheet — so the production
+   * route is covered where the component is, and this file stays about the
+   * predicate.
+   */
+  function positioned(position: string | undefined): HTMLElement {
+    const element = document.createElement("div");
+    if (position !== undefined) element.style.position = position;
+    document.body.appendChild(element);
+    return element;
+  }
+
+  it("refuses an element pinned to the viewport", () => {
+    expect(viewportPositioned(positioned("fixed"))).toBe(true);
+  });
+
+  it("refuses an element pinned to a scrollport", () => {
+    /*
+     * Asserted apart from `fixed` rather than assumed to follow it. The two are
+     * one branch today, and a refusal written as an equality against a single
+     * value passes the case above while leaving this one accepted — which is
+     * the shape a narrowing takes when someone simplifies the condition.
+     */
+    expect(viewportPositioned(positioned("sticky"))).toBe(true);
+  });
+
+  it.each(["static", "relative", "absolute"])(
+    "accepts an element positioned %s, which stays in the page",
+    position => {
+      expect(viewportPositioned(positioned(position))).toBe(false);
+    }
+  );
+
+  it("accepts an element nothing has positioned at all", () => {
+    /*
+     * The control that decides the DIRECTION of the test above, and the one
+     * that would be missing from a predicate written as an allow-list. jsdom
+     * computes `position` on an unstyled element to the EMPTY STRING rather
+     * than to `static`, so "is it one of the values that stay in the page"
+     * answers no for every ordinary block in this runtime — refusing the whole
+     * canvas while every case above still passes.
+     */
+    expect(getComputedStyle(positioned(undefined)).position).toBe("");
+    expect(viewportPositioned(positioned(undefined))).toBe(false);
+  });
+
+  it("reads the ELEMENT's own realm rather than this one", () => {
+    /*
+     * A canvas portalled into a same-origin iframe is styled by that document.
+     * Reading through the ambient `window` asks a `getComputedStyle` that
+     * belongs to a different realm, and the control is the same element read
+     * both ways: this realm's function must NOT be what produced the answer.
+     */
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    const inner = frame.contentDocument;
+    if (inner === null) throw new Error("the iframe has no document");
+
+    const foreign = inner.createElement("div");
+    foreign.style.position = "sticky";
+    inner.body.appendChild(foreign);
+
+    const ambient = vi.spyOn(window, "getComputedStyle");
+    expect(viewportPositioned(foreign)).toBe(true);
+    expect(ambient).not.toHaveBeenCalled();
+
+    ambient.mockRestore();
+    frame.remove();
+  });
+
+  it("accepts an element with no view, which nothing has positioned", () => {
+    // A detached document has no `defaultView`, so there is no computed style
+    // to read. Nothing has been laid out and nothing has been positioned, and
+    // the callers decline such an element for their own reasons anyway.
+    const detached = document.implementation.createHTMLDocument();
+    expect(detached.defaultView).toBeNull();
+    const orphan = detached.createElement("div");
+    orphan.style.position = "fixed";
+    expect(viewportPositioned(orphan)).toBe(false);
   });
 });
 
@@ -612,5 +801,335 @@ describe("a clipping ancestor inside a canvas that is PAINTED smaller", () => {
     ancestor.append(child);
 
     expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
+});
+
+/**
+ * The two clip questions, and where they must give DIFFERENT answers.
+ *
+ * `clippedByAncestor` refuses a block whose square corner pokes past a more
+ * tightly rounded ancestor's arc; `clippedByAncestorRect` asks about the
+ * straight edges alone. That gap is the whole reason the second exists — the
+ * appender draws a small control at a container's CENTRE, and refusing it for a
+ * clip confined to a corner nothing is drawn near would decline `core/box`
+ * inside `core/card`, which `card.tsx` calls the commonest composition in the
+ * library. Routing the appender back through the corner-aware question would
+ * bring that regression back, and every case below would stay green unless one
+ * of them pins the disagreement itself.
+ */
+describe("the straight-edge clip question, against the corner-aware one", () => {
+  /** An `overflow: hidden` ancestor with a rounded corner, at a painted rectangle. */
+  function roundedClipper(
+    rect: { x: number; y: number; width: number; height: number },
+    radius: number
+  ) {
+    const element = box(rect);
+    /*
+     * LONGHANDS, and per axis. jsdom's computed style does not expand the
+     * `overflow` or `border-radius` shorthands, so a fixture written with them
+     * reports an empty string for every property this reads — and an empty
+     * string is not `visible`, so the ancestor still counts as clipping while
+     * its radii silently read as zero. The corner test would then never fire
+     * and the two functions would agree for the wrong reason.
+     */
+    element.setAttribute(
+      "style",
+      [
+        "overflow-x:hidden",
+        "overflow-y:hidden",
+        "border-style:solid",
+        "border-width:0px",
+        `border-top-left-radius:${radius}px`,
+        `border-top-right-radius:${radius}px`,
+        `border-bottom-right-radius:${radius}px`,
+        `border-bottom-left-radius:${radius}px`,
+      ].join(";")
+    );
+    return element;
+  }
+
+  it("agrees that a child well outside the clip rectangle is cut", () => {
+    // Both questions answer the same way whenever the straight edges already
+    // settle it, which is what makes the disagreement below a property of the
+    // corner refinement rather than of one function being stricter throughout.
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = roundedClipper(
+      { x: 0, y: 0, width: 400, height: 400 },
+      60
+    );
+    root.append(ancestor);
+    const child = box({ x: -200, y: 10, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+    expect(clippedByAncestorRect(child, root)).toBe(true);
+  });
+
+  it("DIFFERS on a child cut only where the ancestor's corner is rounded", () => {
+    /*
+     * The child sits inside all four padding edges and its own square top-left
+     * corner lies outside the ancestor's 60px arc — the `core/box` in
+     * `core/card` composition. This is the fixture the whole trade rests on, so
+     * its two assertions have to come out opposite: identical answers here
+     * would mean the fixture never reached the corner test and the case would
+     * license nothing.
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = roundedClipper(
+      { x: 0, y: 0, width: 400, height: 400 },
+      60
+    );
+    root.append(ancestor);
+    const child = box({ x: 0, y: 0, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+    expect(clippedByAncestorRect(child, root)).toBe(false);
+  });
+});
+
+/**
+ * The parts of `DOMMatrix` `renderedScale` reads, and nothing else.
+ *
+ * jsdom implements no `DOMMatrix` at all, so `renderedScale` takes its
+ * "nothing is laid out" branch and reports the identity — which is
+ * describable. A rotated ancestor therefore cannot be expressed in this
+ * environment without supplying one, and the refusal it triggers is the only
+ * way any ancestor reaches the `cut` verdict, so nothing reaches that verdict
+ * either.
+ *
+ * Only `a`..`f`, `is2D` and `multiply` are ever read, and only a
+ * `matrix(a, b, c, d, e, f)` literal is ever parsed, because that is the form
+ * the fixtures below declare. A stub narrower than the real interface is
+ * honest here for the same reason a narrowed test double is anywhere: it
+ * cannot answer a question the code does not ask.
+ */
+class Matrix2D {
+  readonly a: number;
+  readonly b: number;
+  readonly c: number;
+  readonly d: number;
+  readonly e: number;
+  readonly f: number;
+  readonly is2D = true;
+
+  constructor(source?: string | readonly number[]) {
+    const terms =
+      typeof source === "string"
+        ? source
+            .slice(source.indexOf("(") + 1, source.lastIndexOf(")"))
+            .split(",")
+            .map(Number)
+        : (source ?? [1, 0, 0, 1, 0, 0]);
+    this.a = terms[0] ?? 1;
+    this.b = terms[1] ?? 0;
+    this.c = terms[2] ?? 0;
+    this.d = terms[3] ?? 1;
+    this.e = terms[4] ?? 0;
+    this.f = terms[5] ?? 0;
+  }
+
+  /** `A.multiply(B)` is A·B, the composition the walk accumulates. */
+  multiply(other: Matrix2D): Matrix2D {
+    return new Matrix2D([
+      this.a * other.a + this.c * other.b,
+      this.b * other.a + this.d * other.b,
+      this.a * other.c + this.c * other.d,
+      this.b * other.c + this.d * other.d,
+      this.a * other.e + this.c * other.f + this.e,
+      this.b * other.e + this.d * other.f + this.f,
+    ]);
+  }
+}
+
+describe("a clipping ancestor whose transform cannot be described", () => {
+  /*
+   * `rotate(30deg)` on the ancestor. Neither reading survives it: `a` and `d`
+   * stop being scale factors, and `getBoundingClientRect` answers with an
+   * axis-aligned BOUNDING box whose edges are not the clip edges — the real
+   * clip is a slanted rectangle inside it, so a child genuinely cut by it
+   * still reads as contained on every straight-edge comparison. Both clip
+   * questions refuse such an ancestor outright, and the child below is one
+   * that BOTH would otherwise accept: it sits well inside the bounding box, so
+   * nothing but the refusal itself can produce a `true` here.
+   */
+  function rotatedClipper(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) {
+    const element = box(rect);
+    element.setAttribute(
+      "style",
+      [
+        "overflow-x:hidden",
+        "overflow-y:hidden",
+        // The composed matrix for a 30-degree rotation, written out because
+        // the stub above reads matrix terms rather than parsing a rotation.
+        "transform:matrix(0.8660254, 0.5, -0.5, 0.8660254, 0, 0)",
+      ].join(";")
+    );
+    return element;
+  }
+
+  it("is refused by BOTH clip questions, not measured", () => {
+    vi.stubGlobal("DOMMatrix", Matrix2D);
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = rotatedClipper({ x: 0, y: 0, width: 400, height: 400 });
+    root.append(ancestor);
+    const child = box({ x: 100, y: 100, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(true);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
+
+  it("accepts the same child once the ancestor is axis-aligned", () => {
+    /*
+     * The control, and it is what makes the case above about the ROTATION
+     * rather than about the fixture. `matrix(1, 0, 0, 1, 0, 0)` is the
+     * identity written in the same form, so the ancestor still declares a
+     * transform and still clips; only the off-diagonal terms change.
+     */
+    vi.stubGlobal("DOMMatrix", Matrix2D);
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const ancestor = box({ x: 0, y: 0, width: 400, height: 400 });
+    ancestor.setAttribute(
+      "style",
+      "overflow-x:hidden;overflow-y:hidden;transform:matrix(1, 0, 0, 1, 0, 0)"
+    );
+    root.append(ancestor);
+    const child = box({ x: 100, y: 100, width: 100, height: 100 });
+    ancestor.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(false);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+});
+
+describe("an ancestor that does not clip at all", () => {
+  /*
+   * The third verdict, and it had no fixture. jsdom's computed `overflow` for
+   * an unstyled element is the EMPTY STRING rather than `visible`, and an empty
+   * string is not `visible` — so every plain ancestor in this file reads as
+   * clipping, and inverting the `no-clip` answer changed nothing anywhere. The
+   * only way to reach it here is to declare `visible` outright.
+   *
+   * What it decides is whether the walk CONTINUES. A `no-clip` ancestor must
+   * neither cut the block nor stop the search, or a block genuinely cut by a
+   * container higher up keeps chrome drawn over pixels that container removed.
+   */
+  it("neither cuts the block nor stops the walk at it", () => {
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+
+    const clipping = box({ x: 0, y: 0, width: 400, height: 400 });
+    clipping.setAttribute("style", "overflow-x:hidden;overflow-y:hidden");
+    root.append(clipping);
+
+    const passthrough = box({ x: 0, y: 0, width: 400, height: 400 });
+    passthrough.setAttribute("style", "overflow-x:visible;overflow-y:visible");
+    clipping.append(passthrough);
+
+    // Inside the passthrough ancestor and well outside the clipping one above
+    // it. Only a walk that reads `no-clip` as "keep going" reaches the verdict.
+    const child = box({ x: -300, y: 10, width: 100, height: 100 });
+    passthrough.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(true);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(true);
+  });
+
+  it("leaves a child it contains alone", () => {
+    /*
+     * The control: the same non-clipping ancestor with nothing above it that
+     * clips. Reading `no-clip` as a CUT would refuse this block, so the pair
+     * separates "continue the walk" from "answer true".
+     */
+    const root = canvasRoot({ x: 0, y: 0, width: 400, height: 400 });
+    const passthrough = box({ x: 0, y: 0, width: 400, height: 400 });
+    passthrough.setAttribute("style", "overflow-x:visible;overflow-y:visible");
+    root.append(passthrough);
+    const child = box({ x: -300, y: 10, width: 100, height: 100 });
+    passthrough.append(child);
+
+    expect(clippedByAncestorRect(child, root)).toBe(false);
+    expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+});
+
+describe("whether the render skips an element", () => {
+  /**
+   * The `checkVisibility` the RUNTIME brought, read before any case replaces it.
+   *
+   * `Element.prototype` is where the method is defined when it exists — an own,
+   * writable, enumerable, configurable data property, per the CSSOM View
+   * `partial interface Element` — so the teardown below has to put a real one
+   * back rather than delete. jsdom implements none today, which makes this
+   * `undefined` and the restore a deletion.
+   */
+  const RUNTIME_CHECK_VISIBILITY = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "checkVisibility"
+  );
+
+  /**
+   * What `checkVisibility` answers for every element in a case — or, as
+   * `undefined`, that there is no such method to ask.
+   *
+   * All three inputs to {@link renderSkips} are SUPPLIED rather than inherited
+   * from whatever the test runtime happens to implement, and the absent one is
+   * the reason: it is the behaviour on an engine older than Chrome 105, Firefox
+   * 106 or Safari 17.4, it does not stop being reachable when the runtime grows
+   * an implementation of its own, and a case that reached it by merely
+   * installing nothing would be satisfied just as well by a runtime whose
+   * method answers `true` — which is the case two below.
+   */
+  function runtimeAnswering(visible: boolean | undefined): void {
+    if (visible === undefined) {
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+      return;
+    }
+    Element.prototype.checkVisibility = () => visible;
+  }
+
+  // Whatever a case supplied is dropped and the runtime's own method put back:
+  // the captured descriptor where there was one, and its absence where there
+  // was not.
+  afterEach(() => {
+    if (RUNTIME_CHECK_VISIBILITY === undefined) {
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+    } else {
+      Object.defineProperty(
+        Element.prototype,
+        "checkVisibility",
+        RUNTIME_CHECK_VISIBILITY
+      );
+    }
+  });
+
+  it("reports NOT skipped where the runtime cannot answer", () => {
+    /*
+     * The availability posture, stated as a test rather than left to a
+     * docblock. `checkVisibility` is absent before Chrome 105, Firefox 106 and
+     * Safari 17.4, and the answer there is the one that changes nothing: a
+     * caller that refused on absence would delete an affordance from every
+     * element on such a runtime, on no evidence about any of them.
+     *
+     * The two cases below are what make this a statement about the ABSENCE
+     * rather than about a function that answers `false` unconditionally.
+     */
+    runtimeAnswering(undefined);
+    expect(renderSkips(document.createElement("div"))).toBe(false);
+  });
+
+  it("reports skipped when the runtime says the element is not visible", () => {
+    runtimeAnswering(false);
+    expect(renderSkips(document.createElement("div"))).toBe(true);
+  });
+
+  it("reports NOT skipped when the runtime says the element is visible", () => {
+    runtimeAnswering(true);
+    expect(renderSkips(document.createElement("div"))).toBe(false);
   });
 });

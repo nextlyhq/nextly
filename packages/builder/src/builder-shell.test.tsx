@@ -329,6 +329,314 @@ describe("the rail", () => {
   });
 });
 
+describe("opening the insert panel from outside the shell", () => {
+  // `rerender` rather than `renderShell` throughout: these assert what
+  // happens BETWEEN two renders holding the same store, and `renderShell`
+  // builds a fresh store each call, which would additionally exercise the
+  // reload-on-swapped-store behaviour covered elsewhere and confuse which
+  // effect produced the result.
+
+  it("opens it once the token changes from undefined", () => {
+    stubContainerFits(true);
+    const store = memoryStore();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    expect(screen.queryByText("insert panel")).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("does not close an already-open insert panel when the effect first applies its token", () => {
+    // The rail's own click handler TOGGLES: a second press on the same item
+    // closes the panel. Forcing the panel open must not inherit that —
+    // pressing the canvas control again for the same container must never
+    // read as "hide it".
+    //
+    // The panel is opened by a RAIL CLICK here, deliberately not by an
+    // earlier token — from `leftPanel: null`, a correct force-set and a
+    // buggy `panelAfterRailClick(current, "insert")` both land on
+    // `"insert"`, so a fixture starting closed cannot tell them apart. Only
+    // starting from ALREADY OPEN separates them: the toggle would close it,
+    // the force-set leaves it exactly as it was.
+    stubContainerFits(true);
+    const store = memoryStore();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.getByText("insert panel")).toBeTruthy();
+
+    // The token's FIRST value, applied against a panel already open by the
+    // rail rather than by a previous token — so the once-per-token guard is
+    // not what is standing between this render and the effect running.
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("reopens on a NEW token after the author closed the panel by hand", () => {
+    stubContainerFits(true);
+    const store = memoryStore();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+    expect(screen.getByText("insert panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.queryByText("insert panel")).toBeNull();
+
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={2}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+  });
+
+  it("keeps every stored preference when a token is already set at mount", () => {
+    /*
+     * The store is READ in an effect, so on the mount pass the restored record
+     * has only been scheduled: the newest preferences this shell has seen are
+     * still the defaults. A token applied there computes its write from those
+     * defaults and persists them, so the author's panel widths and their
+     * `showEmptyElements` are gone — from the store and from the state — while
+     * the panel they asked for opens and everything on screen looks right.
+     *
+     * Every stored field is asserted, plus the panel: a test asserting only
+     * that the panel opened passes against exactly that loss, and one
+     * asserting only the record passes against a token that never applies at
+     * all. `showEmptyElements` is additionally read off the chrome attribute,
+     * because the store and the state are two separate casualties and the
+     * record alone cannot tell them apart.
+     */
+    stubContainerFits(true);
+    const layouts = { "canvas,panel": { canvas: 3, panel: 1 } };
+    const store = memoryStore(
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPinned: false,
+        showEmptyElements: false,
+        layouts,
+      })
+    );
+
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+    // Queried rather than assumed present: a selector that matched nothing
+    // would make the attribute assertion pass on `undefined`.
+    const chrome = document.querySelector(".nx-builder-chrome");
+    expect(chrome).not.toBeNull();
+    expect(chrome?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)).toBe("hidden");
+    expect(JSON.parse(store.value as string)).toMatchObject({
+      leftPanel: "insert",
+      leftPinned: false,
+      showEmptyElements: false,
+      layouts,
+    });
+  });
+
+  it("still applies a mount-time token when the shell falls back to its own store", () => {
+    /*
+     * Waiting for a store read raises one question: can a token WAIT FOREVER?
+     * It cannot, and the case with no `store` prop at all is where that would
+     * show — the shell builds its own fallback, and the read that releases the
+     * token runs for it exactly as for a supplied one. Reading cannot fail
+     * either: unreadable or malformed storage answers with the defaults rather
+     * than throwing, so there is no path where the count stays where it was.
+     *
+     * `localStorage` is cleared on both sides because this is the only case in
+     * the file that reaches the fallback store: before, so the mount starts
+     * from a known-empty one, and after, so nothing it wrote is still there
+     * for another mount to restore.
+     */
+    stubContainerFits(true);
+    window.localStorage.clear();
+
+    render(
+      <BuilderShell
+        onExit={vi.fn()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+    window.localStorage.clear();
+  });
+
+  it("keeps the INCOMING store's record when a swap and a new token arrive together", () => {
+    /*
+     * The store swap a host makes when the backing user or workspace changes —
+     * signing into a second workspace, promoting a memory store to a persisted
+     * one — with a press of the canvas appender landing in the same render.
+     *
+     * Reading a store is an effect, so in the commit the new store first
+     * arrives in, the newest preferences this shell has seen are still the
+     * OUTGOING store's. A token applied there computes its write from those and
+     * persists them through the new store, so one workspace's saved layout and
+     * `showEmptyElements` replace another's. A count of reads cannot see this:
+     * it is already nonzero from the first store and a swap only takes it
+     * higher, so the window is exactly where the count looks safest.
+     *
+     * The two records differ in every field, so a write of EITHER wrong record
+     * is visible: `first` is non-default throughout, and `second` differs from
+     * `first` on all three and from the defaults on `layouts`. Asserting the
+     * panel opened as well, because a guard that simply never releases the
+     * token would leave the record intact and the feature dead.
+     */
+    stubContainerFits(true);
+    const firstLayouts = { "canvas,panel": { canvas: 3, panel: 1 } };
+    const secondLayouts = { "canvas,panel": { canvas: 1, panel: 4 } };
+    const first = memoryStore(
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPinned: false,
+        showEmptyElements: false,
+        layouts: firstLayouts,
+      })
+    );
+    const second = memoryStore(
+      JSON.stringify({
+        ...DEFAULT_PREFERENCES,
+        leftPinned: true,
+        showEmptyElements: true,
+        layouts: secondLayouts,
+      })
+    );
+
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={first}
+        renderPanel={panel => <p>{panel} panel</p>}
+      />
+    );
+    // The first store's read has landed before the swap, which is what makes
+    // this a test about the SECOND store rather than about a cold mount.
+    expect(document.querySelector(".nx-builder-chrome")).not.toBeNull();
+    expect(
+      document
+        .querySelector(".nx-builder-chrome")
+        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
+    ).toBe("hidden");
+
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={second}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.getByText("insert panel")).toBeTruthy();
+    expect(JSON.parse(second.value as string)).toMatchObject({
+      leftPanel: "insert",
+      leftPinned: true,
+      showEmptyElements: true,
+      layouts: secondLayouts,
+    });
+    // The state the author sees, not only the bytes: the attribute is absent
+    // when empty containers are shown, so the outgoing store's `false` reaching
+    // this render would put it back.
+    expect(
+      document
+        .querySelector(".nx-builder-chrome")
+        ?.getAttribute(EMPTY_ELEMENTS_ATTRIBUTE)
+    ).toBeNull();
+  });
+
+  it("does not reopen a manually closed panel when the SAME token survives an unrelated effect re-run", () => {
+    // `update`'s identity follows the `store` prop (documented on `store`
+    // above: a host swapping stores is expected to hand over a new object),
+    // so a re-render that swaps stores re-runs this effect even though the
+    // TOKEN did not change. The regression this guards: without the
+    // once-per-token guard, that re-run would reapply "insert" over a manual
+    // close it had nothing to do with.
+    //
+    // A `className` change was tried here first and did not exercise this at
+    // all — neither `openInsertPanelToken` nor `update` depends on it, so the
+    // effect never re-runs and the guard is never reached. Only a dependency
+    // the effect actually reads can demonstrate the guard is doing anything.
+    stubContainerFits(true);
+    const backing: { value: string | null } = { value: null };
+    const storeOverBacking = (): PreferenceStore => ({
+      read: () => backing.value,
+      write: value => {
+        backing.value = value;
+      },
+    });
+
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={storeOverBacking()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+    expect(screen.getByText("insert panel")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Insert" }));
+    expect(screen.queryByText("insert panel")).toBeNull();
+
+    // A DIFFERENT store object reading the same backing value — `update`
+    // changes identity, `openInsertPanelToken` does not.
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={storeOverBacking()}
+        renderPanel={panel => <p>{panel} panel</p>}
+        openInsertPanelToken={1}
+      />
+    );
+
+    expect(screen.queryByText("insert panel")).toBeNull();
+  });
+});
+
 describe("preferences", () => {
   it("writes the open panel through the store, not to localStorage", () => {
     // The port is what lets these become durable server-side prefs later. A
@@ -446,6 +754,47 @@ describe("preferences", () => {
     expect(JSON.parse(store.value as string)).toMatchObject({
       showEmptyElements: false,
     });
+  });
+
+  it("does not re-invoke onShowEmptyElementsChange when only the host's callback identity changes", () => {
+    // A host wires this the conventional way — an inline callback recreated
+    // on every one of ITS OWN renders — and if the effect reporting this
+    // preference depended on that identity, a rerender with nothing else
+    // changed would call the new callback anyway. Chained with a host whose
+    // own state update is itself a fresh render (`setState(c => ({ ...c }))`
+    // always produces a new object), that is a render loop; this asserts the
+    // narrower, safely-testable half of it: identity churn alone must not
+    // re-invoke the callback.
+    const store = memoryStore();
+    stubContainerFits(true);
+    const first = vi.fn();
+    const { rerender } = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onShowEmptyElementsChange={first}
+      />
+    );
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledWith(true);
+
+    const second = vi.fn();
+    rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onShowEmptyElementsChange={second}
+      />
+    );
+    expect(second).not.toHaveBeenCalled();
+
+    // Toggling the preference must still reach the LATEST callback, proving
+    // the ref is read fresh rather than pinned to the first render's closure.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Show empty containers" })
+    );
+    expect(second).toHaveBeenCalledWith(false);
+    expect(first).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -583,3 +583,27 @@ describe("two ops applied in one tick", () => {
     expect(byId.get("b")?.cssId).toBe("y");
   });
 });
+
+describe("selecting what was just inserted", () => {
+  it("lands in the same tick as the insert", () => {
+    // `select` resolves the id against the document, so it can only work if
+    // the insert is visible to it immediately rather than at the next render.
+    // A mocked editor cannot observe this: it records the call and says
+    // nothing about whether the selection took.
+    const { result } = renderHook(() =>
+      useEditorState({ initialDocument: doc([node("a")]) })
+    );
+
+    const fresh = node("brand-new");
+
+    act(() => {
+      result.current.apply({ kind: "insert", node: fresh, at: { index: 1 } });
+      result.current.select(fresh.id);
+    });
+
+    // The insert landing is the control: without it this test would be
+    // measuring a selection that was refused for the right reason.
+    expect(ids(result.current.document)).toEqual(["a", "brand-new"]);
+    expect(result.current.selectedId).toBe("brand-new");
+  });
+});

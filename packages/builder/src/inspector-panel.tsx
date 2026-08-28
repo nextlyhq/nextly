@@ -62,10 +62,28 @@ import {
   type LockState,
 } from "./inspector";
 import { selectionLock } from "./selection-ops";
-import { StyleInspectorPanel } from "./style-inspector-panel";
+import {
+  StyleInspectorPanel,
+  type StyleInspectorPanelProps,
+} from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 
 export interface InspectorPanelProps {
+  /**
+   * The site's class library, forwarded to the style tab's class selector.
+   *
+   * Declared here only to CARRY it: this panel has no opinion about classes,
+   * and the meaning of each — including why an absent library is a read in
+   * flight rather than a host opting out — lives on
+   * {@link StyleInspectorPanelProps.classLibrary}.
+   *
+   * Forwarded rather than left out because a prop the chain drops is invisible:
+   * the surface renders in isolation, its tests pass, and every real selection
+   * in the shipped editor shows nothing.
+   */
+  classLibrary?: StyleInspectorPanelProps["classLibrary"];
+  /** Create a class and apply it to the selected block. Opts the surface in. */
+  onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
   /**
    * The editor whose selected block this edits.
    *
@@ -165,6 +183,8 @@ const INSPECTOR_TABS = [
 
 export function InspectorPanel({
   editor,
+  classLibrary,
+  onCreateClass,
   policy,
   styleState,
   breakpoint,
@@ -317,6 +337,8 @@ export function InspectorPanel({
             liveBreakpoints={liveBreakpoints}
             onJumpToBreakpoint={onJumpToBreakpoint}
             tokens={tokens}
+            classLibrary={classLibrary}
+            onCreateClass={onCreateClass}
           />
         </TabsContent>
 

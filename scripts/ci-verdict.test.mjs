@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   EXIT_NOT_CLEAN,
+  REVIEW_THREADS_QUERY,
+  REVIEW_THREAD_NODE_FIELDS,
+  advisoryExemptions,
+  canonicalActorLogin,
   changesRequested,
   completeRevisionSet,
   fingerprint,
@@ -881,6 +885,35 @@ describe("unresolvedThreads", () => {
   });
 });
 
+describe("advisoryExemptions", () => {
+  /**
+   * A login named in both policies is required for coverage AND excluded from
+   * blocking, so an unreduced advisory list would exempt a reviewer that is
+   * simultaneously being asked to review. Blocking wins, and both gates read
+   * this one rule — a gate filtering differently clears what the other holds.
+   */
+  it("removes a login that is also blocking", () => {
+    expect(advisoryExemptions([CODEX], [RABBIT, CODEX])).toEqual([RABBIT]);
+    expect(advisoryExemptions([CODEX], [CODEX])).toEqual([]);
+  });
+
+  /** The control: with no overlap the advisory list is returned intact. */
+  it("leaves a purely advisory login alone", () => {
+    expect(advisoryExemptions([CODEX], [RABBIT])).toEqual([RABBIT]);
+  });
+
+  /**
+   * An unreadable policy exempts nothing, which counts every thread. A gate
+   * that cannot read its policy must not hand out exemptions it cannot
+   * justify, and returning the input unfiltered would do exactly that.
+   */
+  it("exempts nothing when either list is unreadable", () => {
+    expect(advisoryExemptions(undefined, [RABBIT])).toEqual([RABBIT]);
+    expect(advisoryExemptions([CODEX], undefined)).toEqual([]);
+    expect(advisoryExemptions(undefined, undefined)).toEqual([]);
+  });
+});
+
 describe("advisory review threads", () => {
   const thread = (login, isResolved) => ({
     isResolved,
@@ -924,6 +957,211 @@ describe("advisory review threads", () => {
     expect(
       unresolvedThreads([{ isResolved: false, comments: {} }], [RABBIT])
     ).toBe(1);
+  });
+});
+
+describe("canonicalActorLogin", () => {
+  /**
+   * The measured shape. GitHub spells one identity two ways, and this is the
+   * pair, read from the same pull request in the same minute:
+   *
+   *   REST    pulls/1286/comments  .user.login  -> "coderabbitai[bot]"
+   *   GraphQL reviewThreads author .login       -> "coderabbitai"
+   *   GraphQL same node            .__typename  -> "Bot"
+   *
+   * Configuration is written in the REST spelling, because that is the one a
+   * person sees on the pull request, so REST is the canonical form and this
+   * reconciles GraphQL to it.
+   */
+  it("restores the suffix GraphQL omits, for a bot", () => {
+    expect(
+      canonicalActorLogin({ login: "coderabbitai", __typename: "Bot" })
+    ).toBe(RABBIT);
+    expect(
+      canonicalActorLogin({
+        login: "chatgpt-codex-connector",
+        __typename: "Bot",
+      })
+    ).toBe(CODEX);
+  });
+
+  /**
+   * The whole reason the suffix may be appended at all. `__typename` is
+   * assigned by GitHub and no account can present it, so a USER that registers
+   * the name `coderabbitai` keeps its bare login and cannot borrow the app's
+   * identity. Appending on the strength of the NAME would hand any account
+   * that can comment the advisory reviewer's exemption.
+   */
+  it("refuses to promote a user that merely shares the name", () => {
+    expect(
+      canonicalActorLogin({ login: "coderabbitai", __typename: "User" })
+    ).toBe("coderabbitai");
+    expect(
+      canonicalActorLogin({ login: "coderabbitai", __typename: "Organization" })
+    ).toBe("coderabbitai");
+    // No `__typename` at all is not a bot either. A partial response must not
+    // be able to manufacture an exemption.
+    expect(canonicalActorLogin({ login: "coderabbitai" })).toBe("coderabbitai");
+  });
+
+  it("is idempotent, so a login already in REST shape is unchanged", () => {
+    expect(canonicalActorLogin({ login: RABBIT, __typename: "Bot" })).toBe(
+      RABBIT
+    );
+  });
+
+  /**
+   * A deleted account comes back as `author: null`. Undefined rather than a
+   * string, so the caller decides — and every caller here counts what it
+   * cannot identify.
+   */
+  it("reports no login where there is no author to read", () => {
+    expect(canonicalActorLogin(null)).toBeUndefined();
+    expect(canonicalActorLogin(undefined)).toBeUndefined();
+    expect(canonicalActorLogin({})).toBeUndefined();
+    expect(canonicalActorLogin({ login: "" })).toBeUndefined();
+  });
+});
+
+describe("the stability stamp moves when the verdict would", () => {
+  const thread = (login, typename) => ({
+    isResolved: false,
+    comments: { nodes: [{ author: { login, __typename: typename } }] },
+  });
+
+  /**
+   * The stamp exists so the observation window can tell whether the evidence
+   * moved underneath it. `unresolvedThreads` reads the CANONICAL login, and
+   * `__typename` decides what a login canonicalises to — so a stamp over the
+   * raw login alone holds still across two snapshots that stand for different
+   * verdicts, and the window reports the first snapshot's answer after the
+   * second would have counted the thread.
+   */
+  it("distinguishes snapshots whose account KIND changes the verdict", () => {
+    const asUser = [thread("coderabbitai", "User")];
+    const asBot = [thread("coderabbitai", "Bot")];
+    // The premise: these two really do decide differently.
+    expect(unresolvedThreads(asUser, [RABBIT])).toBe(1);
+    expect(unresolvedThreads(asBot, [RABBIT])).toBe(0);
+    // So their stamps must differ, or the window cannot see the change.
+    expect(fingerprint([], asUser, [])).not.toBe(fingerprint([], asBot, []));
+  });
+
+  /**
+   * The other half, and the reason the stamp records the DERIVED value rather
+   * than the two raw fields. A kind changing between two non-bot values cannot
+   * move the verdict, and a stamp that moved anyway would report evidence
+   * changing where nothing a decision reads did — retrying a settled answer.
+   */
+  it("holds still where the account kind cannot change the verdict", () => {
+    const asUser = [thread("coderabbitai", "User")];
+    const asOrg = [thread("coderabbitai", "Organization")];
+    expect(unresolvedThreads(asUser, [RABBIT])).toBe(
+      unresolvedThreads(asOrg, [RABBIT])
+    );
+    expect(fingerprint([], asUser, [])).toBe(fingerprint([], asOrg, []));
+  });
+
+  /** The control: an unrelated field still moves the stamp. */
+  it("still moves when resolution changes", () => {
+    const open = [thread("someone", "User")];
+    const closed = [{ ...open[0], isResolved: true }];
+    expect(fingerprint([], open, [])).not.toBe(fingerprint([], closed, []));
+  });
+});
+
+describe("the review-thread query asks for what the code reads", () => {
+  /**
+   * The one property no fixture can establish. Every test above builds its own
+   * thread objects, so they supply `__typename` whether or not the request ever
+   * asked GitHub for it — removing the field from the query leaves all of them
+   * green while, in production, no thread canonicalises to a bot, nothing is
+   * ever exempt, and every advisory thread blocks — reachable by editing one
+   * line nothing else watches.
+   *
+   * Asserted against the exported string the request actually sends, not a copy
+   * of it, so the test cannot drift from the query the way a duplicated literal
+   * would.
+   */
+  it("selects every author field the canonicaliser reads", () => {
+    // Present, and inside the author selection rather than merely somewhere in
+    // the document — a `__typename` on any other node would satisfy a bare
+    // substring check while telling the canonicaliser nothing.
+    expect(REVIEW_THREADS_QUERY).toContain("author { login __typename }");
+  });
+
+  /**
+   * The query and the fragment stay one decision.
+   *
+   * `verify-merge.mjs` builds its own query from this same fragment, and it
+   * reaches it through the dynamic sibling loader — an edge no static analysis
+   * follows. So nothing else connects the two gates' field selections, and if
+   * this query stopped being built from the fragment they could drift apart
+   * again while both files still read correctly on their own.
+   */
+  it("is built from the fragment the other gate also uses", () => {
+    expect(REVIEW_THREAD_NODE_FIELDS).toContain("author { login __typename }");
+    expect(REVIEW_THREADS_QUERY).toContain(REVIEW_THREAD_NODE_FIELDS);
+  });
+
+  it("still selects the fields the rest of the read depends on", () => {
+    // The control. If the query were replaced wholesale with something that
+    // happened to mention the author fields, these would catch it — and if this
+    // assertion ever fails alongside the one above, the query was rewritten
+    // rather than adjusted.
+    expect(REVIEW_THREADS_QUERY).toContain("isResolved");
+    expect(REVIEW_THREADS_QUERY).toContain("pageInfo { hasNextPage endCursor }");
+    expect(REVIEW_THREADS_QUERY).toContain("reviewThreads(first:100");
+  });
+});
+
+describe("advisory threads, in the shape GraphQL actually sends", () => {
+  /**
+   * Built from the MEASURED GraphQL payload rather than from the constants the
+   * filter is configured with. The helper above this one takes a login and
+   * hands it straight back inside a thread, so the two sides that DIVERGE in
+   * production are one value in the test, and it passes under any suffix
+   * convention at all — an oracle that is a second derivation of the source it
+   * is checking cannot see the two disagree.
+   */
+  const botThread = (slug, isResolved) => ({
+    isResolved,
+    comments: { nodes: [{ author: { login: slug, __typename: "Bot" } }] },
+  });
+
+  it("exempts the advisory bot when its login arrives without the suffix", () => {
+    expect(unresolvedThreads([botThread("coderabbitai", false)], [RABBIT])).toBe(
+      0
+    );
+  });
+
+  /**
+   * THE DISCRIMINATING CASE, and the reason both bots appear in one payload.
+   *
+   * A fixture carrying a single bot is satisfied by three different wrong
+   * implementations: today's, which matches neither and counts both; one that
+   * strips the suffix from the config and matches everything ending in the
+   * name; and one keyed on `__typename === "Bot"`, which exempts EVERY bot and
+   * so waves through the blocking reviewer this gate exists to enforce.
+   * Exactly one survives asserting that these two threads come out different.
+   */
+  it("exempts the advisory bot and still counts the blocking one", () => {
+    const threads = [
+      botThread("coderabbitai", false),
+      botThread("chatgpt-codex-connector", false),
+    ];
+    expect(unresolvedThreads(threads, [RABBIT])).toBe(1);
+  });
+
+  /** A human's thread blocks, and carries no suffix in either API. */
+  it("counts a human thread, whose login is the same in both APIs", () => {
+    const human = {
+      isResolved: false,
+      comments: {
+        nodes: [{ author: { login: "mobeenabdullah", __typename: "User" } }],
+      },
+    };
+    expect(unresolvedThreads([human], [RABBIT])).toBe(1);
   });
 });
 

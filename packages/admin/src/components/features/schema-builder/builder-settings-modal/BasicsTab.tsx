@@ -1,8 +1,14 @@
-// Why: Basics-tab fields for the BuilderSettingsModal. Renders only the
-// fields listed in the per-kind config (config-driven). Auto-derives the
-// slug from the singular name on each keystroke until the user explicitly
-// overrides it via SlugInput's Edit affordance — once `values.slug` differs
-// from the auto-derived form, we treat that as an override and stop tracking.
+// Basics-tab fields for the BuilderSettingsModal. Renders only the fields
+// listed in the per-kind config, so the tab is config-driven rather than
+// branching per entity kind.
+//
+// The slug auto-derives from the singular name on each keystroke, and stops
+// once a NON-EMPTY `values.slug` differs from the slug that name would derive.
+// Empty counts as automatic, so clearing the field resumes derivation instead
+// of pinning it to the empty string. The override is recomputed from the values
+// rather than recorded — there is no flag to keep in step, and editing the slug
+// back to the derived form resumes tracking too, which is what someone
+// correcting a typo expects.
 // Slug case is per-kind: singles use kebab (the entry-form slug validator is
 // kebab-only); collections and components keep snake to match their backend
 // validators. This is the one place the shared modal needs a per-kind branch
@@ -71,10 +77,18 @@ export function BasicsTab({
     </div>
   );
 
-  // Auto-derive slug AND plural from singular name UNLESS the user has
-  // overridden either. Override signal: current value differs from what an
-  // auto-derive of the OLD singular would have produced. As soon as the
-  // user stamps their own value, the auto-derive stops for that field.
+  // Auto-derive slug AND plural from the singular name until the field holds
+  // a value of its own. "Of its own" is the literal test below and is worth
+  // reading rather than paraphrasing: `!values.slug || values.slug ===
+  // previousAutoSlug`. Two states count as still-automatic — EMPTY, and equal
+  // to what the OLD singular name would have derived — so clearing the field
+  // resumes tracking rather than pinning it to the empty string, which is what
+  // someone who deletes a slug to start over expects.
+  //
+  // Nothing records the override; it is recomputed from the values on every
+  // keystroke. So any route to a differing non-empty value ends tracking
+  // identically, typed or programmatic, and editing back to the derived form
+  // resumes it.
   const setSingular = (singular: string) => {
     const previousAutoSlug = toSlug(values.singularName);
     const isStillAutoSlug = !values.slug || values.slug === previousAutoSlug;
@@ -95,10 +109,12 @@ export function BasicsTab({
 
   return (
     <div className="space-y-4 py-2">
-      {/* PR G feedback 2: when the per-kind config has NO pluralName
-          (singles, components), pack singular + slug + icon into a
-          single 3-col row. Collections still use the 2x2 layout
-          (singular+plural, slug+icon). Collapses sensibly on mobile. */}
+      {/* A kind with no plural name (singles, components) has three basics
+          rather than four, and they flow through the same two-column grid: at
+          `sm` and wider, singular and slug share the first row and the icon
+          wraps onto a second. Collections have four and fill a 2x2 —
+          singular with plural, slug with icon. Both collapse to one column
+          below `sm`. */}
       {!hasPlural &&
         (fields.includes("singularName") ||
           fields.includes("slug") ||
