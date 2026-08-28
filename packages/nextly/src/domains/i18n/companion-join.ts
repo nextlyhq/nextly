@@ -837,42 +837,14 @@ export async function populateTranslationStatus(
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     const meta: Record<string, LocaleTranslationMeta> = {};
     for (const code of locales) {
-      const rawCr = perLocaleRows[code];
-      // On a status-scoped read, a companion row not in that status is treated as
-      // absent, so the overview does not report a draft-only translation as present.
-      const cr =
-        args.statusValue !== undefined &&
-        rawCr &&
-        rawCr._status !== args.statusValue
-          ? undefined
-          : rawCr;
-      const hasContent =
-        !!cr && localizedFields.some(f => !isBlank(cr[f.column]));
-      const entry: LocaleTranslationMeta = {
-        translated: code === defaultLocale ? true : hasContent,
-      };
-      if (hasStatus && cr && typeof cr._status === "string") {
-        entry.status = cr._status;
-      }
-      // Only ever set to `true`. Left absent when the comparison cannot answer, so a consumer
-      // reading `stale === false` is reading a real "not stale" rather than an unknown wearing
-      // its clothes.
-      //
-      // 🔴 `code !== defaultLocale` is BELT-AND-BRACES and is kept deliberately, so it does not
-      // read as load-bearing to the next person: for the source locale, `cr` and the source row
-      // are the same object, so the strict comparison is already false. That redundancy rests on
-      // object IDENTITY rather than on a rule, though — a future normalisation that handed this
-      // loop a copy, or a rounded timestamp, could make a row compare greater than itself — so
-      // the state the guard asserts is spelled out rather than inferred. No test separates the
-      // two mechanisms, and none can while both hold.
-      if (
-        code !== defaultLocale &&
-        hasContent &&
-        isStaleAgainstSource(cr, perLocaleRows[defaultLocale])
-      ) {
-        entry.stale = true;
-      }
-      meta[code] = entry;
+      meta[code] = buildLocaleMeta({
+        code,
+        perLocaleRows,
+        localizedFields,
+        defaultLocale,
+        hasStatus,
+        statusValue: args.statusValue,
+      });
     }
     markPendingChanges(
       meta,
@@ -882,4 +854,70 @@ export async function populateTranslationStatus(
     );
     row[outKey] = meta;
   }
+}
+
+/**
+ * The companion row for one locale, or `undefined` when a status-scoped read must not see it.
+ *
+ * On a published read, a row whose `_status` differs is treated as ABSENT rather than as present-
+ * but-draft. That is the rule the whole overview rests on: reporting a draft-only translation as
+ * present would tell a reader the public site carries content it does not serve.
+ */
+function rowInStatusScope(
+  row: Record<string, unknown> | undefined,
+  statusValue: string | undefined
+): Record<string, unknown> | undefined {
+  if (row === undefined || statusValue === undefined) return row;
+  return row._status === statusValue ? row : undefined;
+}
+
+/**
+ * One locale's entry in a document's translation overview.
+ *
+ * Extracted from the loop above rather than inlined, because it answers three independent
+ * questions about the same row — does this language have content, what lifecycle state is it in,
+ * and has its source moved since — and reading them as one block invites the mistake of treating
+ * them as one answer. They are not: a language can be published AND stale, and the whole
+ * vocabulary decision behind `stale` is that it qualifies the state rather than replacing it.
+ */
+function buildLocaleMeta(args: {
+  code: string;
+  perLocaleRows: Record<string, Record<string, unknown>>;
+  localizedFields: LocalizedFieldRef[];
+  defaultLocale: string;
+  hasStatus: boolean;
+  statusValue: string | undefined;
+}): LocaleTranslationMeta {
+  const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
+    args;
+  const companionRow = rowInStatusScope(perLocaleRows[code], args.statusValue);
+
+  const hasContent =
+    !!companionRow &&
+    localizedFields.some(f => !isBlank(companionRow[f.column]));
+  const entry: LocaleTranslationMeta = {
+    translated: code === defaultLocale ? true : hasContent,
+  };
+
+  const status = companionRow?._status;
+  if (hasStatus && typeof status === "string") entry.status = status;
+
+  // Only ever set to `true`. Left absent when the comparison cannot answer, so a consumer reading
+  // `stale === false` is reading a real "not stale" rather than an unknown wearing its clothes.
+  //
+  // 🔴 `code !== defaultLocale` is BELT-AND-BRACES and is kept deliberately, so it does not read
+  // as load-bearing to the next person: for the source locale, `companionRow` and the source row
+  // are the same object, so the strict comparison is already false. That redundancy rests on
+  // object IDENTITY rather than on a rule, though — a future normalisation that handed this a
+  // copy, or a rounded timestamp, could make a row compare greater than itself — so the state the
+  // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
+  // none can while both hold.
+  if (
+    code !== defaultLocale &&
+    hasContent &&
+    isStaleAgainstSource(companionRow, perLocaleRows[defaultLocale])
+  ) {
+    entry.stale = true;
+  }
+  return entry;
 }
