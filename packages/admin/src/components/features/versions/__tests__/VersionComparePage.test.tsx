@@ -458,3 +458,59 @@ describe("versionsHref — the address carries the language", () => {
     expect(versionsHref(scope, undefined, "fr")).toContain("locale=fr");
   });
 });
+
+describe("VersionComparePage — selecting a row keeps the language", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canMock.mockReturnValue(true);
+  });
+
+  /**
+   * The address is what the page is named from, so a navigation that drops the
+   * locale sends the reader to a comparison headed in another language. The
+   * rail interleaves locales, so the row clicked is routinely not in the
+   * language currently on screen — which is why the SELECTED version's locale
+   * decides, rather than the one the current address happens to carry.
+   */
+  it("writes the selected version's locale into the address", async () => {
+    useVersionsMock.mockReturnValue(
+      listing([row(9, "fr"), row(8, "fr"), row(7, "fr")])
+    );
+    const user = (await import("@testing-library/user-event")).default.setup();
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Version 8/ }));
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock.mock.calls[0]?.[0]).toContain("locale=fr");
+  });
+
+  /**
+   * The control. A document with no locale must produce no parameter — an
+   * empty one reads as a language that failed to resolve rather than one never
+   * asked for, and without this the assertion above would pass on a page that
+   * always appended something.
+   */
+  it("writes no locale for a document that has none", async () => {
+    useVersionsMock.mockReturnValue(listing([row(9), row(8), row(7)]));
+    const user = (await import("@testing-library/user-event")).default.setup();
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Version 8/ }));
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock.mock.calls[0]?.[0]).not.toContain("locale");
+  });
+});
