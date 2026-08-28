@@ -1700,7 +1700,7 @@ export function compilePageCss(
         budget,
         warningAllowance,
         {
-          origin: { kind: "page" },
+          origin: { kind: "element", tag },
           trace,
           mayFetchUrl,
           weightlessAnchor: defaultsAnchor,

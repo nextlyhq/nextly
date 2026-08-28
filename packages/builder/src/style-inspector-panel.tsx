@@ -2228,6 +2228,12 @@ function originSubject(
         : "an enclosing block's defaults";
     case "page":
       return "the page";
+    // Named for what an author can act on. "the `h1` baseline" rather than the
+    // tier's internal name, because the next thing they do is either override
+    // it on this block or replace the baseline for the whole site, and both
+    // start from knowing which element it keys on.
+    case "element":
+      return `the ${origin.tag} typography baseline`;
     case "node":
       if (origin.id !== editing.nodeId) return "an enclosing block";
       return control ?? "this block";
