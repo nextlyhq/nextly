@@ -305,12 +305,31 @@ async function runOne(
   // does not begin until `withLeaseRenewal` — so the fence it passed describes
   // a lease it no longer holds. `renewLease` is fenced on `lockedBy`, so one
   // write both extends the lease and answers whether it is still ours.
-  const stillOursAfterIdentity = await deps.store.renewLease(
-    job.id,
-    runnerId,
-    now(),
-    deps.leaseMs ?? DEFAULT_LEASE_MS
-  );
+  let stillOursAfterIdentity: boolean;
+  try {
+    stillOursAfterIdentity = await deps.store.renewLease(
+      job.id,
+      runnerId,
+      now(),
+      deps.leaseMs ?? DEFAULT_LEASE_MS
+    );
+  } catch (error) {
+    // A transient adapter error on the fence is not a verdict about ownership,
+    // and it must not escape: this sits between the two failure boundaries, so
+    // a rejection here would abort `runJobs` outright — leaving this row leased
+    // and skipping every later candidate in the batch. One unlucky write would
+    // stop the whole drain. Charged as an ordinary attempt instead, so the job
+    // retries on its own backoff.
+    return decide(
+      job,
+      attempt,
+      definition.retry.maxAttempts,
+      error instanceof Error ? error.message : String(error),
+      runnerId,
+      now,
+      deps.random
+    );
+  }
   if (!stillOursAfterIdentity) return LEASE_LOST;
 
   try {
