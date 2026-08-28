@@ -14,6 +14,8 @@
  *
  * @module layers-panel.test
  */
+import { ShortcutProvider } from "@nextlyhq/ui";
+import { renderToStaticMarkup } from "react-dom/server";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import * as React from "react";
@@ -28,6 +30,7 @@ import {
 
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
+import { BlockKeyboardActions } from "./keyboard-actions";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "./editor-state";
 
@@ -116,15 +119,40 @@ function nestedDocument(): BlockDocument {
 
 let editorRef: EditorState | null = null;
 
-function Host({ document }: { document: BlockDocument }): React.JSX.Element {
+function Host({
+  document,
+  keys = "bound",
+}: {
+  document: BlockDocument;
+  keys?: "bound" | "disabled" | "absent";
+}): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
-  return <LayersPanel editor={editor} />;
+  const panel = <LayersPanel editor={editor} />;
+  /*
+   * The bindings are part of the composition under test, not scenery.
+   *
+   * The panel now says which keystrokes reorder a block, and that sentence is
+   * only true while something is listening for them. A harness that rendered
+   * the panel alone could not tell a hint that is honest from one advertising
+   * keys nothing is bound to — it would assert the words and never the claim.
+   */
+  if (keys === "absent") return panel;
+  return (
+    <ShortcutProvider>
+      <BlockKeyboardActions editor={editor} enabled={keys === "bound"}>
+        {panel}
+      </BlockKeyboardActions>
+    </ShortcutProvider>
+  );
 }
 
-function renderPanel(document: BlockDocument = nestedDocument()) {
+function renderPanel(
+  document: BlockDocument = nestedDocument(),
+  keys: "bound" | "disabled" | "absent" = "bound"
+) {
   register();
-  return render(<Host document={document} />);
+  return render(<Host document={document} keys={keys} />);
 }
 
 /** The rows currently on screen, by their accessible name. */
@@ -170,6 +198,56 @@ describe("LayersPanel", () => {
     expect(hint?.querySelectorAll(".nx-layers-panel__hint-key").length).toBe(
       MOVE_KEYS.length
     );
+  });
+
+  it("emits no keystroke at all in a SERVER render", () => {
+    /*
+     * The hydration case, and the only place it is observable.
+     *
+     * `detectApplePlatform` reads `navigator`, which a server does not have, so
+     * it answers false there — a server would emit `Alt` and the first browser
+     * render `⌥`, React would find markup it did not produce, and it would
+     * throw the subtree away.
+     *
+     * No test in this file can see that: jsdom always HAS a `navigator`, so
+     * resolving the platform during render gives the same answer as resolving
+     * it after mounting, and every case above passes either way. Rendering to
+     * a string is what removes the browser from the question — effects do not
+     * run there, which is exactly the condition the server is in.
+     */
+    register();
+    const html = renderToStaticMarkup(<Host document={nestedDocument()} />);
+
+    expect(html).not.toContain("Move up");
+    expect(html).not.toContain("Alt");
+    expect(html).not.toContain("\u2325");
+  });
+
+  it("says nothing about keys nothing is listening for", () => {
+    /*
+     * A host may mount this panel with no bindings above it at all. Advertising
+     * the keystrokes there is not a cosmetic slip — it is the editor telling an
+     * author to press something that does nothing, which is worse than the
+     * silence this replaced, because silence at least does not mislead.
+     */
+    renderPanel(nestedDocument(), "absent");
+
+    expect(window.document.getElementById("nx-layers-move-hint")).toBeNull();
+    expect(
+      screen.getByRole("tree").getAttribute("aria-describedby")
+    ).toBeNull();
+  });
+
+  it("says nothing while the bindings are turned off", () => {
+    /*
+     * The other way the same claim goes false, and the one a presence check
+     * alone would miss: the provider IS above this, and a host has disabled it
+     * because something modal is over the canvas. The keystrokes reach nothing
+     * until it closes.
+     */
+    renderPanel(nestedDocument(), "disabled");
+
+    expect(window.document.getElementById("nx-layers-move-hint")).toBeNull();
   });
 
   it("makes the hint the tree's own description", () => {

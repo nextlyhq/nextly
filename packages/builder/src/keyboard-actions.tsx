@@ -172,6 +172,33 @@ const BlockActionsContext = React.createContext<BlockActions | null>(null);
  * like a missing wrapper — and it would reach a person before it reached a
  * developer.
  */
+/**
+ * Whether the block keystrokes are actually bound right now.
+ *
+ * Separate from {@link BlockActionsContext} because the two answer different
+ * questions and a surface can need the second without the first. The verbs are
+ * reachable from anything under the provider; whether PRESSING a key runs them
+ * depends on `enabled`, which a host turns off when something modal is over the
+ * canvas.
+ *
+ * Defaults to `false` with no provider above, so a surface that advertises a
+ * keystroke cannot advertise one nothing is listening for — an unmounted
+ * provider and a disabled one are the same fact to anyone reading a hint.
+ */
+const BlockKeysEnabledContext = React.createContext(false);
+
+/**
+ * Whether the block keystrokes are live, for a surface that TELLS an author
+ * about them.
+ *
+ * A hint is a claim that pressing something does something, so it has to be
+ * derived from whether that is true rather than from the shortcut existing in
+ * a table somewhere.
+ */
+export function useBlockKeysEnabled(): boolean {
+  return React.useContext(BlockKeysEnabledContext);
+}
+
 export function useBlockActionsContext(): BlockActions {
   const actions = React.useContext(BlockActionsContext);
   if (actions === null) {
@@ -698,10 +725,16 @@ export function BlockKeyboardActions({
   // has nothing it was already watching.
   return (
     <BlockActionsContext.Provider value={actions}>
-      <p aria-live="polite" role="status" className="nx-sr-only">
-        {announcement}
-      </p>
-      {children}
+      {/*
+        The same default the bindings themselves take, so what a hint claims and
+        what a keypress does cannot disagree.
+      */}
+      <BlockKeysEnabledContext.Provider value={enabled ?? true}>
+        <p aria-live="polite" role="status" className="nx-sr-only">
+          {announcement}
+        </p>
+        {children}
+      </BlockKeysEnabledContext.Provider>
     </BlockActionsContext.Provider>
   );
 }
