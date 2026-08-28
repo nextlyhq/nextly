@@ -939,6 +939,26 @@ describe("nodeForEntry", () => {
       ]);
     });
 
+    it("expands from the snapshot it was built with, not the live registry", () => {
+      // The row is registered BEFORE the source is built; the child it names is
+      // registered AFTER. A source that resolved live would find the child and
+      // seed it.
+      registerBlocks([mixedRow] as never, { source: "acme" });
+      const source = blockSourceFor(undefined);
+      registerBlocks([registeredCell] as never, { source: "acme" });
+
+      const node = nodeForEntry(
+        entry(catalogFrom([mixedRow] as never), "acme/mixed-row"),
+        source
+      );
+
+      // The panel documents its palette as read once per mount, and the row an
+      // author sees must be the row an insert builds. A live source would let a
+      // plugin registering while the panel is open change what a stale row
+      // inserts — same version and props, different children.
+      expect(node.slots).toBeUndefined();
+    });
+
     it("uses the registry when no definitions are supplied", () => {
       const node = nodeForEntry(
         entry(catalog([mixedRow, registeredCell]), "acme/mixed-row"),

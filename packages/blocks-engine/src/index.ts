@@ -198,6 +198,7 @@ export {
   registerSupport,
   getBlock,
   isBlockName,
+  isUsableSlotName,
   hasBlock,
   allBlocks,
   getBlockSource,

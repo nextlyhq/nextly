@@ -32,6 +32,7 @@ import {
   isNodeType,
   isNodeVersion,
   isPlainRecord,
+  isUsableSlotName,
   treeDepth,
   walkNodes,
   insertNode,
@@ -175,26 +176,6 @@ type PatchField = keyof typeof PATCH_FIELDS;
 type RemovableField = {
   [K in PatchField]: IsOptional<BlockNode, K> extends true ? K : never;
 }[PatchField];
-
-/**
- * Whether a slot name can be stored and read back as its own key.
- *
- * ONE policy, asked wherever a slot name appears — a destination position and a
- * slot carried inside an inserted subtree are the same question, and answering
- * it in only one place is what let a subtree smuggle in the name a position
- * could not.
- *
- * The rejected names are the ones `Object.prototype` owns. Reading
- * `slots[name]` for one of those answers with an inherited member instead of
- * `undefined`, and ASSIGNING it — which the engine does when it rebuilds a slot
- * map — sets the prototype rather than creating an own property, dropping that
- * whole child list. Asked of `Object.prototype` rather than matched against a
- * written list, because the list everyone writes is `__proto__` and
- * `constructor` while `toString` behaves identically.
- */
-function isUsableSlotName(name: string): boolean {
-  return !Object.prototype.hasOwnProperty.call(Object.prototype, name);
-}
 
 function isPatchField(key: string): key is PatchField {
   return Object.hasOwn(PATCH_FIELDS, key);
