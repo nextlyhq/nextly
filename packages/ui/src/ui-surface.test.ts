@@ -342,16 +342,20 @@ describe("ui release tags reach the published types", () => {
   // returns rather than assuming `dist`: the build stays out of `dist` because
   // other packages import this one through it while these tests run.
   //
-  // READ, never built. The build is `build:surface-declarations`, which the
-  // test task depends on — it used to happen here, inside a hook with a
-  // wall-clock budget, and a loaded runner exceeded it and failed a package the
-  // branch had not touched. Nothing here has a deadline now, and the helper
-  // refuses rather than rebuilding if the output is absent or older than the
-  // sources, so a stale guard cannot pass quietly.
+  // Normally a pure READ. The build is `build:surface-declarations`, which the
+  // test and coverage tasks depend on, so under turbo the declarations are
+  // already current when this runs — which is the point: it used to build here
+  // unconditionally, and a loaded runner exceeded the budget and failed a
+  // package the branch had not touched.
+  //
+  // The budget is kept for the runs turbo never sees, where the helper does
+  // build: `pnpm --filter @nextlyhq/ui test`, and the watch and UI runners.
+  // Those are someone's own machine watching a file change, not a runner
+  // executing the rest of the graph, so the wall clock is theirs to spend.
   let builtDir = "";
   beforeAll(() => {
     builtDir = declarationsDir();
-  });
+  }, 120_000);
 
   /** Symbols re-exported from a dependency, whose declarations are not ours. */
   const FOREIGN = new Set(["toast", "ToasterProps"]);

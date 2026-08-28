@@ -144,24 +144,12 @@ function newestUnder(path: string): number {
   return newest;
 }
 
-/**
- * The directory holding the built declarations, or a refusal saying what to do.
- *
- * Never builds. Reporting what is wrong is the point: a guard that quietly
- * rebuilt would be paying for a build inside a test again, and one that quietly
- * read whatever was there would pass against declarations nothing produced.
- */
-export function declarationsDir(): string {
-  const missing = DECLARATION_ENTRIES.filter(
-    entry => !existsSync(join(OUT_DIR, entry))
+/** Whether the built declarations exist and are no older than the sources. */
+function upToDate(): boolean {
+  const present = DECLARATION_ENTRIES.every(entry =>
+    existsSync(join(OUT_DIR, entry))
   );
-  if (missing.length > 0) {
-    throw new Error(
-      `The surface declarations are not built: ${missing.join(", ")} is absent. ` +
-        "Run `pnpm --filter @nextlyhq/ui build:surface-declarations`, or run " +
-        "the suite through `turbo test`, which depends on that task."
-    );
-  }
+  if (!present) return false;
 
   const built = Math.min(
     ...DECLARATION_ENTRIES.map(entry => statSync(join(OUT_DIR, entry)).mtimeMs)
@@ -169,13 +157,28 @@ export function declarationsDir(): string {
   const changed = Math.max(
     ...BUILD_INPUTS.map(input => newestUnder(join(pkgRoot, input)))
   );
-  if (changed > built) {
-    throw new Error(
-      "The surface declarations are older than this package's sources, so the " +
-        "guard would describe code that is no longer here. Run " +
-        "`pnpm --filter @nextlyhq/ui build:surface-declarations`, or run the " +
-        "suite through `turbo test`."
-    );
-  }
-  return OUT_DIR;
+  return changed <= built;
+}
+
+/**
+ * The directory holding the declarations, building them only if it must.
+ *
+ * The turbo task is the normal path and makes this a pure read: it runs before
+ * the suite, so the answer is already there and current. What remains is every
+ * way of reaching this file that turbo never sees — `pnpm --filter @nextlyhq/ui
+ * test`, and the watch and UI runners, where nothing generates anything and the
+ * first edit after a manual build makes what is there stale.
+ *
+ * Refusing with an instruction was the first answer here and it was the wrong
+ * one for those modes: a watch rerun exists to answer a question about the edit
+ * that triggered it, and telling the author to go and run a build by hand after
+ * every keystroke is not an answer to it.
+ *
+ * So it rebuilds when it has to, and the deadline that made a build in a hook
+ * dangerous does not apply to this one: under turbo the declarations are
+ * already current, so the build never runs there. It runs where someone is
+ * watching a file change and can afford two seconds.
+ */
+export function declarationsDir(): string {
+  return upToDate() ? OUT_DIR : buildDeclarations();
 }
