@@ -121,7 +121,32 @@ export type DragSubject =
       readonly kind: "insert";
       readonly blockName: string;
       readonly makeNode: () => BlockNode | null;
+      /**
+       * Notified with the node that landed, after a drop the editor accepted.
+       *
+       * Carried on the subject so the two ways a palette inserts report the
+       * same event. The panel already tells its host about a click insert, and
+       * a host reacting to that — scrolling to the block, opening its settings
+       * — would silently miss every insert made by dragging.
+       */
+      readonly onInserted?: (node: BlockNode) => void;
     };
+
+/**
+ * What a palette hands the drag when a row is pressed.
+ *
+ * Named rather than written inline at both the type and the implementation:
+ * the two used to state it separately, and adding a field to one left the
+ * other rejecting it.
+ */
+export interface InsertDragEntry {
+  /** The block type in flight, which the drop position is resolved for. */
+  blockName: string;
+  /** Builds the node at the release, from the palette's own snapshot. */
+  makeNode: () => BlockNode | null;
+  /** Notified with the node that landed, after a drop the editor accepted. */
+  onInserted?: (node: BlockNode) => void;
+}
 
 /** What a drag is doing right now, for the canvas to draw. */
 export interface CanvasDragState {
@@ -177,7 +202,7 @@ export interface CanvasDrag extends CanvasDragState {
    */
   readonly beginInsertDrag: (
     event: React.PointerEvent<HTMLElement>,
-    entry: { blockName: string; makeNode: () => BlockNode | null }
+    entry: InsertDragEntry
   ) => void;
 }
 
@@ -201,9 +226,54 @@ export interface UseCanvasDragOptions {
   switchPx?: number;
 }
 
+/**
+ * Hand the pointer back, when this transport is the one holding it.
+ *
+ * A node-origin drag captures on the canvas root; a palette drag captures
+ * nowhere and passes `null`. Asked of the element rather than tracked, because
+ * the browser releases capture itself on some endings and a flag would then
+ * describe a capture that is already gone.
+ */
+function releaseCapture(host: HTMLElement | null, pointerId: number): void {
+  if (host !== null && host.hasPointerCapture(pointerId)) {
+    host.releasePointerCapture(pointerId);
+  }
+}
+
+/**
+ * The target a release would commit to, or `undefined` when there is none.
+ *
+ * ONE absent value, not two. Written as `null` for "nothing committed" and
+ * `undefined` for "committed to something no longer drawable", the caller
+ * would have to exclude both — and excluding one reads as complete, so a drag
+ * released over no target would reach `target.at`.
+ */
+function committedTarget(drag: Gesture): DropTarget | undefined {
+  const committed = drag.switchState.committed;
+  return committed === null ? undefined : drag.targets.get(committed);
+}
+
 /** What a drag needs to remember, none of which renders. */
 interface Gesture {
   readonly subject: DragSubject;
+  /**
+   * The pointer that began this gesture, and the only one that may drive it.
+   *
+   * A node-origin drag takes pointer capture, which retargets one pointer and
+   * leaves the rest alone — so this is redundant there and costs nothing. A
+   * palette drag deliberately takes no capture, because the browser resolves a
+   * click against the capturing element and the row must keep inserting on
+   * click. Its events therefore arrive by two transports, the canvas's own
+   * React handlers and the document listeners, and BOTH see every active
+   * pointer on a touch device.
+   *
+   * Kept on the gesture rather than checked in each transport's closure: the
+   * two entry points below are where every pointer event of either transport
+   * converges, so enforcing it there covers a route a closure check would
+   * miss — a second finger moving over the CANVAS reaches the React handler,
+   * not the document listener.
+   */
+  readonly owner: number;
   readonly origin: Point;
   /**
    * Where the press landed in CLIENT pixels.
@@ -405,6 +475,7 @@ export function useCanvasDrag({
       const rects = snapshotRects(root);
       gesture.current = {
         subject: { kind: "move", nodeId },
+        owner: event.pointerId,
         origin: canvasContentPoint(event.clientX, event.clientY, root),
         originClient: { x: event.clientX, y: event.clientY },
         regions: collectRegions(current.document, latest.current.slots, rects),
@@ -586,6 +657,8 @@ export function useCanvasDrag({
     ) => {
       const drag = gesture.current;
       if (drag === null) return;
+      // Another finger, moving anywhere. It may not re-aim this gesture.
+      if (pointerId !== drag.owner) return;
 
       /*
        * ONE measurement of the root, answering this move in both spaces.
@@ -720,9 +793,27 @@ export function useCanvasDrag({
       // path states. It holds because `apply` publishes the document the next
       // `select` resolves against before it returns.
       current.select(node.id);
+      // After the select, so a host reacting to this sees the editor in the
+      // state the click path leaves it in — the same event, whichever way the
+      // block arrived.
+      subject.onInserted?.(node);
     },
     []
   );
+
+  /**
+   * Detaches whatever click suppression is armed, or null when none is.
+   *
+   * Held in a ref rather than left to each closure so that only ONE can be
+   * armed: a second arming replaces the first instead of stacking listeners
+   * that would each swallow a click.
+   */
+  const detachClickSwallow = React.useRef<(() => void) | null>(null);
+
+  const stopSwallowingClick = React.useCallback(() => {
+    detachClickSwallow.current?.();
+    detachClickSwallow.current = null;
+  }, []);
 
   /**
    * Swallow the click the browser synthesises after an activated palette drag.
@@ -740,16 +831,67 @@ export function useCanvasDrag({
    * listening a task later was never going to fire.
    */
   const swallowNextClick = React.useCallback(() => {
+    stopSwallowingClick();
+    const stop = (): void => {
+      document.removeEventListener("click", swallow, true);
+      detachClickSwallow.current = null;
+    };
     const swallow = (event: MouseEvent): void => {
       event.preventDefault();
       event.stopPropagation();
-      document.removeEventListener("click", swallow, true);
+      stop();
     };
     document.addEventListener("click", swallow, true);
-    setTimeout(() => {
-      document.removeEventListener("click", swallow, true);
-    }, 0);
-  }, []);
+    setTimeout(stop, 0);
+    detachClickSwallow.current = stop;
+  }, [stopSwallowingClick]);
+
+  /**
+   * Swallow the click that will follow a pointer STILL DOWN when it releases.
+   *
+   * {@link swallowNextClick} arms for one task, which is right when the release
+   * has already happened: the click the browser synthesises belongs to the same
+   * task, so anything still listening a task later was never going to fire.
+   *
+   * Escape is the other case, and the one-task version is wrong for it. The
+   * author cancels while the finger is still on the row, and the release — with
+   * its click — arrives in some later task of their choosing. Expiring after
+   * the keydown leaves the row's own handler to insert a block from a drag that
+   * was visibly cancelled.
+   *
+   * So this waits for THAT pointer's release, and only then gives the click its
+   * one task. Scoped to the pointer for the same reason the gesture is: another
+   * finger lifting says nothing about this one.
+   */
+  const swallowClickAfterRelease = React.useCallback(
+    (pointerId: number) => {
+      stopSwallowingClick();
+      const stop = (): void => {
+        document.removeEventListener("click", swallow, true);
+        document.removeEventListener("pointerup", released, true);
+        document.removeEventListener("pointercancel", released, true);
+        detachClickSwallow.current = null;
+      };
+      const swallow = (event: MouseEvent): void => {
+        event.preventDefault();
+        event.stopPropagation();
+        stop();
+      };
+      const released = (event: PointerEvent): void => {
+        if (event.pointerId !== pointerId) return;
+        document.removeEventListener("pointerup", released, true);
+        document.removeEventListener("pointercancel", released, true);
+        // The click belongs to the release's task. Given it, and no longer:
+        // a suppressor left armed would eat an unrelated click later.
+        setTimeout(stop, 0);
+      };
+      document.addEventListener("click", swallow, true);
+      document.addEventListener("pointerup", released, true);
+      document.addEventListener("pointercancel", released, true);
+      detachClickSwallow.current = stop;
+    },
+    [stopSwallowingClick]
+  );
 
   /**
    * End the gesture, committing an edit only if it reached a target.
@@ -760,17 +902,12 @@ export function useCanvasDrag({
     (pointerId: number, captureHost: HTMLElement | null) => {
       const drag = gesture.current;
       if (drag === null) return;
-      if (captureHost !== null && captureHost.hasPointerCapture(pointerId)) {
-        captureHost.releasePointerCapture(pointerId);
-      }
+      // Another finger lifting. Ending here would commit THIS gesture's target
+      // while the finger that owns it is still down.
+      if (pointerId !== drag.owner) return;
+      releaseCapture(captureHost, pointerId);
 
-      const committed = drag.switchState.committed;
-      // ONE absent value, not two. Written as `null` for "nothing committed"
-      // and `undefined` for "committed to something no longer drawable", the
-      // guard below would have to exclude both — and excluding one reads as
-      // complete, so a drag released over no target would reach `target.at`.
-      const target =
-        committed === null ? undefined : drag.targets.get(committed);
+      const target = committedTarget(drag);
       // A press that never became a drag, or one released where nothing accepts
       // the block, ends without an edit. Committing "the last valid target" from
       // a pointer that has since moved off it would drop the block somewhere the
@@ -795,10 +932,7 @@ export function useCanvasDrag({
   );
 
   const beginInsertDrag = React.useCallback(
-    (
-      event: React.PointerEvent<HTMLElement>,
-      entry: { blockName: string; makeNode: () => BlockNode | null }
-    ) => {
+    (event: React.PointerEvent<HTMLElement>, entry: InsertDragEntry) => {
       // The primary button only, for the reason `onPointerDown` gives.
       if (event.button !== 0) return;
       const root = canvasRoot?.current ?? null;
@@ -809,10 +943,12 @@ export function useCanvasDrag({
       const { editor: current, slots } = latest.current;
       const rects = snapshotRects(root);
       gesture.current = {
+        owner: event.pointerId,
         subject: {
           kind: "insert",
           blockName: entry.blockName,
           makeNode: entry.makeNode,
+          onInserted: entry.onInserted,
         },
         origin: canvasContentPoint(event.clientX, event.clientY, root),
         originClient: { x: event.clientX, y: event.clientY },
@@ -858,13 +994,17 @@ export function useCanvasDrag({
        */
       const owner = event.pointerId;
       const move = (native: PointerEvent): void => {
-        if (native.pointerId !== owner) return;
         trackMove(native.clientX, native.clientY, native.pointerId, null);
       };
       const up = (native: PointerEvent): void => {
-        if (native.pointerId !== owner) return;
         endGesture(native.pointerId, null);
       };
+      // `cancel` alone checks the pointer here, because it is the one ending
+      // that does not pass through `trackMove` or `endGesture` — the two both
+      // transports converge on, and where ownership is enforced for everything
+      // else. Repeating that check in these closures would put the same rule
+      // in two places, and the copy that mattered would be the one someone
+      // forgot when a third transport arrived.
       const cancel = (native: PointerEvent): void => {
         if (native.pointerId !== owner) return;
         reset();
@@ -895,7 +1035,15 @@ export function useCanvasDrag({
   // frame loop and three document listeners holding a gesture nothing can end.
   // `teardown` rather than `reset`, because a state update here would be one on
   // a component that has gone.
-  React.useEffect(() => teardown, [teardown]);
+  React.useEffect(() => {
+    return () => {
+      teardown();
+      // Cleared HERE and not in `teardown`: Escape arms the suppression and
+      // then resets, so disarming on every ending would undo it in the one
+      // case it exists for.
+      stopSwallowingClick();
+    };
+  }, [teardown, stopSwallowingClick]);
 
   /*
    * Escape abandons the drag, listened for on the DOCUMENT rather than on the
@@ -930,7 +1078,7 @@ export function useCanvasDrag({
       // committed one gets.
       const drag = gesture.current;
       if (drag?.active === true && drag.subject.kind === "insert") {
-        swallowNextClick();
+        swallowClickAfterRelease(drag.owner);
       }
       reset();
     };
@@ -938,7 +1086,7 @@ export function useCanvasDrag({
     return () => {
       document.removeEventListener("keydown", abandon, true);
     };
-  }, [dragging, reset, swallowNextClick]);
+  }, [dragging, reset, swallowClickAfterRelease]);
 
   return {
     ...state,

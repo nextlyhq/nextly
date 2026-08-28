@@ -94,7 +94,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       steps: [],
       dismiss: () => {},
     }),
-    useCanvasDrag: () => ({ handlers: {}, target: null }),
+    // `draggingBlockName` is part of the state this hook reports and is what
+    // the editor asks "is a drag happening" — a stub omitting it answers
+    // `undefined`, which is not `null`, so the editor hides its chrome for a
+    // drag that is not happening.
+    useCanvasDrag: () => ({
+      handlers: {},
+      target: null,
+      draggingId: null,
+      draggingBlockName: null,
+    }),
     useEditorState: () => ({
       document: DOCUMENT,
       selectedId: null,

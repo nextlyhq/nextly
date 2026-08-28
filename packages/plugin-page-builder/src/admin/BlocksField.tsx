@@ -224,10 +224,10 @@ function ensureCoreBlocksRegistered(): void {
  * these are two unrelated causes that happen to share an operator.
  */
 function emptyContainerAppenderHidden(
-  draggingId: string | null,
+  dragging: boolean,
   showEmptyElements: boolean
 ): boolean {
-  return draggingId !== null || !showEmptyElements;
+  return dragging || !showEmptyElements;
 }
 
 /**
@@ -877,6 +877,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // pointerdown has no `currentTarget` the drag could measure against.
   const canvasRoot = useRef<HTMLDivElement | null>(null);
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
+  /*
+   * Is a drag happening — of EITHER kind.
+   *
+   * Not `draggingId`, which is the moving node's id and is null for the whole
+   * of a drag from the palette: the block has no node until the release makes
+   * one. Chrome gated on the id stays up while an author drags a new block in,
+   * and the toolbar sits above the drop indicator, covering the position being
+   * aimed at.
+   *
+   * Derived once and shared by the three surfaces below, so they cannot come to
+   * disagree about what counts as a drag.
+   */
+  const dragging = drag.draggingBlockName !== null;
 
   /*
    * The empty-container appender's only read of a block's definition: its
@@ -1724,19 +1737,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                    <BlockToolbar
-                      editor={editor}
-                      hidden={drag.draggingId !== null}
-                    />
+                    <BlockToolbar editor={editor} hidden={dragging} />
                     {/*
                   Suppressed for the same reason and by the same signal. The
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                    <SpacingOverlay
-                      editor={editor}
-                      hidden={drag.draggingId !== null}
-                    />
+                    <SpacingOverlay editor={editor} hidden={dragging} />
                     {/*
                   Suppressed during a drag for the same reason the toolbar and
                   the bands are: the document is mid-change, so a control
@@ -1754,7 +1761,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                       slots={slots}
                       blocks={blocks}
                       hidden={emptyContainerAppenderHidden(
-                        drag.draggingId,
+                        dragging,
                         showEmptyElements
                       )}
                       onAppend={nodeId => {

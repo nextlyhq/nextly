@@ -30,13 +30,20 @@ const seen: {
   breakpoints: Record<string, unknown> | undefined;
   insertPanel: Record<string, unknown> | undefined;
   dragOptions: Record<string, unknown> | undefined;
+  toolbar: Record<string, unknown> | undefined;
+  spacing: Record<string, unknown> | undefined;
 } = {
   inspector: undefined,
   canvas: undefined,
   breakpoints: undefined,
   insertPanel: undefined,
   dragOptions: undefined,
+  toolbar: undefined,
+  spacing: undefined,
 };
+
+/** What the recorded drag reports as in flight, per test. */
+let draggingBlockName: string | null = null;
 
 /** The starter the recorded drag hands back, for an identity assertion. */
 const beginInsertDrag = (): void => {};
@@ -63,7 +70,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
    */
   const real = await importOriginal<Record<string, unknown>>();
   const record =
-    (key: "inspector" | "canvas" | "insertPanel") =>
+    (key: "inspector" | "canvas" | "insertPanel" | "toolbar" | "spacing") =>
     (props: Record<string, unknown>): React.JSX.Element => {
       seen[key] = props;
       return <div data-recorder={key} />;
@@ -111,7 +118,18 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     ),
     BreakpointManager: record("breakpoints"),
     InspectorPanel: record("inspector"),
-    Canvas: record("canvas"),
+    Canvas: (props: Record<string, unknown>): React.JSX.Element => {
+      seen.canvas = props;
+      /*
+       * The overlay is RENDERED, not dropped. The toolbar and the spacing
+       * bands are passed to the canvas as overlay content, so a recorder that
+       * returned a bare div would leave them unmounted — and every assertion
+       * about whether they are hidden would be an assertion about `undefined`.
+       */
+      return (
+        <div data-recorder="canvas">{props.overlay as React.ReactNode}</div>
+      );
+    },
     BlockKeyboardActions: passthrough,
     /*
      * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
@@ -120,14 +138,14 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
      * provide.
      */
     BlockContextMenu: passthrough,
-    BlockToolbar: nothing,
+    BlockToolbar: record("toolbar"),
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: record("insertPanel"),
     LayersPanel: nothing,
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
-    SpacingOverlay: nothing,
+    SpacingOverlay: record("spacing"),
     useBuilderChecklist: () => ({
       visible: false,
       steps: [],
@@ -135,7 +153,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     }),
     useCanvasDrag: (options: Record<string, unknown>) => {
       seen.dragOptions = options;
-      return { handlers: {}, target: null, beginInsertDrag };
+      return {
+        handlers: {},
+        target: null,
+        beginInsertDrag,
+        // Null throughout a palette drag, deliberately: the block has no node
+        // until the release makes one. That is exactly the state the gates
+        // below must still treat as "a drag is happening".
+        draggingId: null,
+        draggingBlockName,
+      };
     },
     useEditorState: () => ({
       document: { formatVersion: 1, kind: "page", nodes: [] },
@@ -204,6 +231,9 @@ beforeEach(() => {
   seen.insertPanel = undefined;
   seen.dragOptions = undefined;
   seen.canvas = undefined;
+  seen.toolbar = undefined;
+  seen.spacing = undefined;
+  draggingBlockName = null;
   clientConfig = undefined;
   siteStyleRead = { data: undefined, isPending: false, error: null };
 });
@@ -226,6 +256,30 @@ describe("what makes a palette drag reachable at all", () => {
     // Identity, not presence. Two separate refs would satisfy "both defined"
     // while the drag resolved its drop against a canvas nobody is looking at.
     expect(seen.canvas?.rootRef).toBe(forDrag);
+  });
+
+  it("hides the canvas chrome during a palette drag, which has no node id", () => {
+    // The gates used to read `draggingId`, which is null for the whole of a
+    // palette drag — so the toolbar and the spacing bands stayed up while an
+    // author dragged a new block in. The toolbar sits above the drop
+    // indicator, so it covers the position being aimed at.
+    draggingBlockName = "core/heading";
+    openEditor();
+
+    expect(seen.toolbar).toBeDefined();
+    expect(seen.spacing).toBeDefined();
+    expect(seen.toolbar?.hidden).toBe(true);
+    expect(seen.spacing?.hidden).toBe(true);
+  });
+
+  it("leaves the chrome up when nothing is being dragged", () => {
+    // The must-differ control. Gates wired to a constant `true` would satisfy
+    // the case above while hiding the toolbar permanently.
+    draggingBlockName = null;
+    openEditor();
+
+    expect(seen.toolbar?.hidden).toBe(false);
+    expect(seen.spacing?.hidden).toBe(false);
   });
 
   it("gives the panel the drag's own starter", () => {
