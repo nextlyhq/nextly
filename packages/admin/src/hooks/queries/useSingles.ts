@@ -31,6 +31,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
   type UseQueryOptions,
 } from "@tanstack/react-query";
 
@@ -239,6 +240,35 @@ export function useSingle(
  * }
  * ```
  */
+/**
+ * Forget which document each slug named.
+ *
+ * Creating or deleting a Single does not change a document, but it changes
+ * WHICH document a slug names — and `singleKeys` and `singleDocumentKeys` are
+ * separate trees, so clearing the first cannot reach the second. A slug reused
+ * by a recreated Single otherwise goes on serving its predecessor's document,
+ * id and all. That id is a cache scope elsewhere: the version history and its
+ * diffs are keyed on it, so a comparison mounted meanwhile belongs to an
+ * incarnation that no longer exists.
+ *
+ * The document cache is REMOVED, not invalidated. Invalidation marks a query
+ * stale and KEEPS its data, so the next mount synchronously hands out the
+ * predecessor's document while the refetch runs — and a refetch that fails
+ * leaves it on screen indefinitely. Removal has no such window.
+ *
+ * The schema tree is invalidated rather than removed, because showing a
+ * slightly stale LIST while it refetches costs a reader nothing; it is the
+ * identity that must not survive.
+ *
+ * One helper for all three mutations: three copies of an invariant is three
+ * places a later correction has to reach, and the one that gets missed
+ * restores exactly the stale document this exists to prevent.
+ */
+function clearSingleIdentityCaches(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
+  queryClient.removeQueries({ queryKey: singleDocumentKeys.all() });
+}
+
 export function useCreateSingle() {
   const queryClient = useQueryClient();
 
@@ -251,17 +281,7 @@ export function useCreateSingle() {
       return await singleApi.create(singleData);
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-      // The DOCUMENT cache too, and not because this mutation changed a
-      // document. Creating or removing a Single changes which document a slug
-      // refers to, and `singleDocumentKeys` is a separate tree that
-      // `singleKeys` cannot reach — so a slug reused by a recreated Single
-      // kept serving its predecessor's document, id and all, for the stale
-      // window. Anything keyed on that id, a version history among them, then
-      // belonged to an incarnation that no longer exists.
-      void queryClient.invalidateQueries({
-        queryKey: singleDocumentKeys.all(),
-      });
+      clearSingleIdentityCaches(queryClient);
     },
   });
 }
@@ -353,17 +373,7 @@ export function useDeleteSingle() {
       return result;
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-      // The DOCUMENT cache too, and not because this mutation changed a
-      // document. Creating or removing a Single changes which document a slug
-      // refers to, and `singleDocumentKeys` is a separate tree that
-      // `singleKeys` cannot reach — so a slug reused by a recreated Single
-      // kept serving its predecessor's document, id and all, for the stale
-      // window. Anything keyed on that id, a version history among them, then
-      // belonged to an incarnation that no longer exists.
-      void queryClient.invalidateQueries({
-        queryKey: singleDocumentKeys.all(),
-      });
+      clearSingleIdentityCaches(queryClient);
     },
     // Disable retry for delete operations - if deletion succeeds on first attempt,
     // a retry would fail with 404 (already deleted) and incorrectly show an error
@@ -402,17 +412,7 @@ export function useBulkDeleteSingles() {
     },
     defaultOptions: {
       onComplete: () => {
-        void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-        // The DOCUMENT cache too, and not because this mutation changed a
-        // document. Creating or removing a Single changes which document a slug
-        // refers to, and `singleDocumentKeys` is a separate tree that
-        // `singleKeys` cannot reach — so a slug reused by a recreated Single
-        // kept serving its predecessor's document, id and all, for the stale
-        // window. Anything keyed on that id, a version history among them, then
-        // belonged to an incarnation that no longer exists.
-        void queryClient.invalidateQueries({
-          queryKey: singleDocumentKeys.all(),
-        });
+        clearSingleIdentityCaches(queryClient);
       },
     },
   });
