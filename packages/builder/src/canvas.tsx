@@ -104,9 +104,27 @@ export const CHROME_ATTRIBUTE = "data-nx-chrome";
  * So the decision lives here once and both callers ask it, rather than each
  * spelling out three rejections and drifting.
  */
-export function contextMenuTargetOf(target: EventTarget | null): string | null {
+export function contextMenuTargetOf(
+  target: EventTarget | null,
+  root: Element
+): string | null {
   if (isEditableTarget(target) || isChrome(target)) return null;
-  return nodeIdFromEvent(target);
+  if (!(target instanceof Element)) return null;
+  const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
+  if (owner === null) return null;
+  /*
+   * Owned by THIS canvas, not merely by A canvas.
+   *
+   * `nodeIdFromEvent` asks the weaker question — its own comment claims this
+   * one, and it checks only that some canvas is an ancestor. That is enough
+   * for selection, where a foreign id is ignored and nothing happens. It is
+   * not enough here: a canvas rendered inside a block of another canvas sends
+   * its events up through the outer one, which would then let a menu open
+   * while the outer selection stayed where it was — and its verbs would act on
+   * a block nobody was pointing at.
+   */
+  if (owner.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return null;
+  return owner.getAttribute(NODE_ID_ATTRIBUTE);
 }
 
 /**
@@ -607,7 +625,7 @@ function useCanvasPointer(
        * `preventDefault` is deliberately not called, so the browser's own menu
        * still appears wherever this one does not.
        */
-      const id = contextMenuTargetOf(event.target);
+      const id = contextMenuTargetOf(event.target, event.currentTarget);
       if (id === null) {
         event.stopPropagation();
         return;
@@ -634,7 +652,8 @@ function useCanvasPointer(
    */
   const pointerDown = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (contextMenuTargetOf(event.target) === null) event.stopPropagation();
+      if (contextMenuTargetOf(event.target, event.currentTarget) === null)
+        event.stopPropagation();
     },
     []
   );

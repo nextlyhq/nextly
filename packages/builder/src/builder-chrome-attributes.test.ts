@@ -136,10 +136,18 @@ describe("the canvas keeps the platform's own callout for text", () => {
      * The stylesheet is the only place the override exists, so the stylesheet
      * is where it has to be checked.
      */
-    const rule = CHROME.match(
-      /\.nx-canvas \[contenteditable\]:not\(\[contenteditable="false"\]\)\s*\{[^}]*\}/
+    const restored = CHROME.match(
+      /\.nx-canvas \[contenteditable\]\s*\{[^}]*\}/
     );
-    expect(rule).not.toBeNull();
-    expect(rule?.[0]).toContain("-webkit-touch-callout: default");
+    expect(restored).not.toBeNull();
+    expect(restored?.[0]).toContain("-webkit-touch-callout: default");
+
+    // And still suppressed where the editor has marked a region uneditable
+    // inside an editable one, which is a block again rather than text.
+    const suppressed = CHROME.match(
+      /\.nx-canvas \[contenteditable="false"\]\s*\{[^}]*\}/
+    );
+    expect(suppressed).not.toBeNull();
+    expect(suppressed?.[0]).toContain("-webkit-touch-callout: none");
   });
 });

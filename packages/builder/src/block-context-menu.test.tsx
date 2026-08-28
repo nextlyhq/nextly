@@ -323,6 +323,34 @@ describe("the canvas's right-click menu", () => {
     expect(editor.select).not.toHaveBeenCalledWith("a", "replace");
   });
 
+  it("refuses a block that belongs to a canvas nested inside this one", () => {
+    /*
+     * A canvas rendered inside a block of another canvas sends its events up
+     * through the outer one. Answering for them opens the OUTER menu while the
+     * outer selection stays where it was, so its verbs act on a block nobody is
+     * pointing at — and Delete is among them.
+     *
+     * The inner canvas is built directly rather than by mounting a second
+     * editor: what is being asserted is the hit test's answer about ownership,
+     * and the markup is the whole of what it reads.
+     */
+    register();
+    const editor = editorSpy(pair(), "a");
+    const { container } = mount(editor);
+
+    const inner = window.document.createElement("div");
+    inner.className = "nx-canvas";
+    const innerBlock = window.document.createElement("div");
+    innerBlock.setAttribute(NODE_ID_ATTRIBUTE, "inner-block");
+    inner.appendChild(innerBlock);
+    blockElement(container).appendChild(inner);
+
+    fireEvent.contextMenu(innerBlock);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(editor.select).not.toHaveBeenCalledWith("inner-block", "replace");
+  });
+
   it("keeps an unavailable verb, carrying the reason it is unavailable", () => {
     /*
      * A lock is the one reason `toolbarActions` reports, because it is the one
