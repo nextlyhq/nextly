@@ -68,10 +68,7 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
       library={LIBRARY}
       nodeClassIds={initial.nodeClassIds}
       onNodeClassesChange={vi.fn(() => "applied" as const)}
-      onCreateClass={vi.fn(async () => ({
-        ok: true as const,
-        classId: "id-new",
-      }))}
+      onCreateClass={createsClass()}
     />
   );
   return {
@@ -89,6 +86,17 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
       ),
   };
 }
+
+/**
+ * A host that creates successfully, answering the shape the selector awaits.
+ *
+ * The selector AWAITS `onCreateClass` and applies the `classId` it answers
+ * with, so a fake returning anything else — `undefined` from a bare `vi.fn()`
+ * most of all — reads as a rejection or throws on `.then`. Declared once so no
+ * call site can quietly model a contract the host cannot honour.
+ */
+const createsClass = (classId = "id-new") =>
+  vi.fn(async () => ({ ok: true as const, classId }));
 
 const field = (): HTMLElement => screen.getByRole("combobox");
 
@@ -495,10 +503,7 @@ describe("a failure scoped by what the node holds, not by array identity", () =>
      * render, so the author would never see it.
      */
     const onNodeClassesChange = vi.fn(() => "refused" as const);
-    const create = vi.fn(async () => ({
-      ok: true as const,
-      classId: "id-new",
-    }));
+    const create = createsClass();
     const view = render(
       <ClassSelector
         library={LIBRARY}
@@ -526,10 +531,7 @@ describe("a failure scoped by what the node holds, not by array identity", () =>
   it("still drops it when the content actually changes", () => {
     // The control: comparing by content must not make the failure permanent.
     const onNodeClassesChange = vi.fn(() => "refused" as const);
-    const create = vi.fn(async () => ({
-      ok: true as const,
-      classId: "id-new",
-    }));
+    const create = createsClass();
     const view = render(
       <ClassSelector
         library={LIBRARY}
@@ -660,6 +662,64 @@ describe("a creation that lands after the node has moved on", () => {
 
     // `id-hero` must NOT come back: it was removed after the request left.
     expect(onNodeClassesChange).toHaveBeenCalledWith(["id-card", "id-made"]);
+  });
+});
+
+describe("a creation request that rejects rather than answering", () => {
+  it("reports a failure instead of falling silent", async () => {
+    /*
+     * The contract is to answer, but a thrown error or a rejected promise
+     * arrives all the same. Unhandled, the in-flight flag never clears — and
+     * `commit` returns early while it is set, so the surface stays inert for
+     * as long as the editor is open, with nothing on screen to say why.
+     */
+    const create = vi.fn(async () => {
+      throw new Error("network");
+    });
+    render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={create}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    await React.act(async () => {});
+
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be created/i
+    );
+  });
+
+  it("leaves the field usable, rather than guarded forever", async () => {
+    // The half that makes it a stuck state rather than a missing message: the
+    // in-flight guard must clear on the rejected path too.
+    const create = vi
+      .fn<() => Promise<{ ok: true; classId: string }>>()
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValueOnce({ ok: true, classId: "id-second" });
+    const onNodeClassesChange = vi.fn(() => "applied" as const);
+    render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+    type("first-try");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    await React.act(async () => {});
+
+    type("second-try");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    await React.act(async () => {});
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-second"]);
   });
 });
 

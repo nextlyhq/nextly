@@ -129,12 +129,16 @@ export type ClassCreation =
 
 export interface ClassSelectorProps {
   /**
-   * The site's class library, or `undefined` while the host has not read it.
+   * The site's class library, or `undefined` when there is none to show.
    *
    * A real third state rather than an empty library: a site that has stored
    * nothing legitimately has no classes, and drawing the two the same way would
    * invite an author to create a class into a library about to be replaced by
    * the one still loading.
+   *
+   * `undefined` covers two causes — a read in flight and a read that failed —
+   * and {@link ClassSelectorProps.libraryAbsence} says which. They need
+   * different words: one will finish and the other will not.
    */
   library: readonly NamedClass[] | undefined;
   /**
@@ -273,25 +277,45 @@ export function ClassSelector({
        */
       const submitted = query;
       setSaving(true);
-      void onCreateClass(option.slug).then(created => {
-        setSaving(false);
-        if (!created.ok) {
+      void onCreateClass(option.slug)
+        .then(created => {
+          if (!created.ok) {
+            setFailure({
+              about: nodeClassIds,
+              issue: { kind: "not-created", reason: created.reason },
+            });
+            return;
+          }
+          // Applied through the ordinary path, so a node already at its limit
+          // refuses here exactly as it would for an existing class rather than
+          // being special-cased into a second rule — and against the node as
+          // it is NOW, not as it was when the request left.
+          applyExisting(
+            created.classId,
+            currentIds.current,
+            currentQuery.current === submitted
+          );
+        })
+        /*
+         * A REJECTED request is a refusal too. The contract is to answer, but a
+         * thrown error or a rejected promise arrives here all the same — and
+         * without this the in-flight flag never clears, so `commit` returns
+         * early on every later keystroke and the surface is inert for as long
+         * as the editor stays open. Silent, and unrecoverable without a reload.
+         */
+        .catch(() => {
           setFailure({
             about: nodeClassIds,
-            issue: { kind: "not-created", reason: created.reason },
+            issue: {
+              kind: "not-created",
+              reason: "This class could not be created.",
+            },
           });
-          return;
-        }
-        // Applied through the ordinary path, so a node already at its limit
-        // refuses here exactly as it would for an existing class rather than
-        // being special-cased into a second rule — and against the node as it
-        // is NOW, not as it was when the request left.
-        applyExisting(
-          created.classId,
-          currentIds.current,
-          currentQuery.current === submitted
-        );
-      });
+        })
+        // In `finally`, so neither path can leave the field guarded.
+        .finally(() => {
+          setSaving(false);
+        });
       return;
     }
     applyExisting(option.choice.id, nodeClassIds, true);
