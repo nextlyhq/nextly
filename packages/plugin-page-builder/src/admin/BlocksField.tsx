@@ -35,17 +35,20 @@
 
 import {
   resolveSiteTokens,
+  getBlock,
   hasBlock,
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  newId,
   type BlockDocument,
   type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
   type BreakpointId,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { registrySlotSource } from "@nextlyhq/builder";
+import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   authoredBreakpoints,
@@ -57,10 +60,12 @@ import {
   offeredTiers,
   selectableTiers,
   widthForBreakpoint,
+  BlockContextMenu,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
   DropIndicator,
+  EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
   pageStyleTrace,
@@ -72,15 +77,27 @@ import {
   useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
-  useInlineText,
+  useInlineEditing,
+  documentAfter,
+  type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
+  loadInlineRichTextEditor,
   useDocumentCheckpoint,
   usePluginClientConfig,
   useEntryFieldsPanel,
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
+// From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
+// and sonner keeps its queue in module state, so a toast published into another
+// bundled copy would never reach it.
+import {
+  chordMatches,
+  detectApplePlatform,
+  parseKeys,
+  toast,
+} from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -100,6 +117,7 @@ import {
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
+  classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
   siteBreakpoints,
@@ -193,6 +211,23 @@ const PLUGIN_SOURCE = "@nextlyhq/plugin-page-builder";
 function ensureCoreBlocksRegistered(): void {
   const missing = coreBlocks.filter(block => !hasBlock(block.name));
   if (missing.length > 0) registerBlocks(missing, { source: PLUGIN_SOURCE });
+}
+
+/**
+ * Whether the empty-container appender should be suppressed right now.
+ *
+ * Two independent reasons collapse into one boolean here, named, rather than
+ * inlined at the JSX call site: a drag in progress, where the document is
+ * mid-change, and the author having turned empty-container chrome off, where
+ * the container this control would sit over has collapsed to zero height. A
+ * bare `||` at the call site reads as one condition; naming it is what says
+ * these are two unrelated causes that happen to share an operator.
+ */
+function emptyContainerAppenderHidden(
+  draggingId: string | null,
+  showEmptyElements: boolean
+): boolean {
+  return draggingId !== null || !showEmptyElements;
 }
 
 /**
@@ -510,6 +545,121 @@ function TokensStudio({
  * three fields of the record are owned by other studios and are not read here in
  * order to write this one.
  */
+/**
+ * Create a named class in the site's library, answering with its new id.
+ *
+ * Two documents are involved and this owns only one. The class lives in the
+ * site style; putting it on a block is a node write the inspector already
+ * performs, so this returns the id rather than applying it — one application
+ * path, and the per-node bound stays enforced in a single place.
+ *
+ * The id is minted with the engine's own `newId`, which is where every other id
+ * in this repository comes from. Deliberately not derived from the slug:
+ * `NamedClass` keeps `id` and `slug` apart precisely so a rename cannot orphan
+ * the documents referencing it, and a slug-seeded id would be a fossil of
+ * whatever the class was called first.
+ *
+ * `orderIndex` is one past the highest in the library, so a class an author has
+ * just created and applied wins over the ones already there rather than being
+ * silently overridden by them.
+ */
+function useClassSurface(
+  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  pending: boolean,
+  error: unknown,
+  /** The site's own config, whose classes storage layers over. */
+  config: { classes?: readonly NamedClass[] } | undefined
+) {
+  /*
+   * `undefined` while the read is in flight, and the resolved list once it is
+   * not — including an empty one. `useSiteStyle` names `pending` as a real
+   * third state for exactly this reason: the defaults alone are a legitimate
+   * answer, so a surface cannot tell "nothing is stored" from "the read has
+   * not come back" by looking at the value. Decided here rather than in the
+   * markup, so the component that renders the inspector holds no branch.
+   */
+  const failed = !pending && error !== null && error !== undefined;
+  const library = pending || failed ? undefined : (siteStyle?.classes ?? []);
+  return {
+    library,
+    /*
+     * Which absence, so the selector can say so. A read that FAILED will not
+     * finish, and a surface that goes on saying "loading" describes a state
+     * the site is not in — the distinction the tokens studio already draws.
+     */
+    absence: failed ? ("failed" as const) : ("pending" as const),
+    /*
+     * Withheld while the library is unknown. A failed read leaves
+     * `useSiteStyle` answering with the config defaults alone, so creating
+     * against it would compose a library missing everything stored — and the
+     * save would then delete those classes rather than add one.
+     */
+    create: useCreateClass(library, config?.classes),
+  };
+}
+
+function useCreateClass(
+  library: readonly NamedClass[] | undefined,
+  configured: readonly NamedClass[] | undefined
+) {
+  // Its own write handle rather than one passed in. The caller is already the
+  // largest component in this file, and a dependency a hook can obtain for
+  // itself is a statement that does not need to live there.
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (slug: string) => {
+      if (library === undefined) {
+        return {
+          ok: false as const,
+          reason:
+            "This site's classes could not be read, so none can be added.",
+        };
+      }
+      const existing = library;
+      const classId = newId();
+      const next: NamedClass[] = [
+        ...existing,
+        { id: classId, slug, orderIndex: nextOrderIndex(existing), styles: {} },
+      ];
+      /*
+       * Only what DIFFERS from the site's own config classes. `library` is the
+       * MERGED set the canvas compiles, so saving it whole would copy every
+       * config class into the database on the first creation and mask the
+       * site's code from then on — the argument `tokenOverrideOf` already
+       * makes for tokens.
+       */
+      const result = await saveSection(
+        "classes",
+        classOverrideOf(configured, next)
+      );
+      if (result.saved) return { ok: true as const, classId };
+      const reasons = Object.values(result.issues);
+      // An empty `issues` is still a refusal — the transport could not describe
+      // it. Reporting it as saved is the one outcome that must never be silent,
+      // which is the rule the breakpoints writer below follows too.
+      return {
+        ok: false as const,
+        reason:
+          reasons.length > 0
+            ? reasons.join(" ")
+            : "This class could not be saved.",
+      };
+    },
+    [library, configured, saveSection]
+  );
+}
+
+/** One past the highest position in the library, or zero for an empty one. */
+function nextOrderIndex(library: readonly NamedClass[]): number {
+  return library.reduce(
+    (highest, entry) =>
+      Number.isFinite(entry.orderIndex)
+        ? Math.max(highest, entry.orderIndex + 1)
+        : highest,
+    0
+  );
+}
+
 function useBreakpointWriter(
   configSiteStyle: SiteStyleData | undefined
 ): (next: BreakpointSet) => Promise<string | undefined> {
@@ -588,6 +738,104 @@ function siteStyleStatus(
   return error === null ? "ready" : "unavailable";
 }
 
+/**
+ * Whether anything in the editor is work the author has not saved.
+ *
+ * An OPEN inline edit counts, on top of the document's own history. Inline
+ * editing does not touch the document until an edit finishes, so `undoDepth` is
+ * still zero while an author is typing into a block — and a navigation or an
+ * access-driven removal at that moment tears the canvas down without a blur,
+ * leaving the guard as the only thing that could have asked first.
+ *
+ * Reported for an edit that is merely OPEN rather than one known to have
+ * changed something, because nothing here can tell those apart until the write
+ * happens. A prompt an author dismisses costs a click; the other direction
+ * costs the paragraph they were writing.
+ */
+function hasUnsavedWork(
+  editor: { undoDepth: number },
+  inline: { editing: unknown; editingRich: unknown }
+): boolean {
+  return (
+    editor.undoDepth > 0 ||
+    inline.editing !== null ||
+    inline.editingRich !== null
+  );
+}
+
+/**
+ * What to tell the author when an inline edit did not save, or `null` when
+ * there is nothing to say.
+ *
+ * Said at all because nothing else would. An inline edit lives in the element
+ * until it ends, so the document never records it, the dirty flag never moves,
+ * and an edit that could not be written leaves no trace for the author to
+ * notice — they would find the old words back on the page and no reason given.
+ *
+ * The two refusals are separated because only one of them is theirs to act on:
+ * a passage that outgrew the page can be shortened, while one that was edited
+ * elsewhere cannot be reconciled from here, and the useful thing to say is that
+ * their version is still on screen for as long as they leave it there.
+ */
+function inlineEditProblem(outcome: InlineEditOutcome): string | null {
+  if (outcome.status === "unavailable")
+    return "Another block is still holding text that has not been saved. Finish that one first.";
+  if (outcome.status === "discarded")
+    return "That block changed while you were editing it, so your text was not saved.";
+  if (outcome.status !== "refused") return null;
+  return outcome.reason === "moved-on"
+    ? "That block was edited somewhere else while you were typing. Your text is still in it \u2014 copy what you need before you leave."
+    : "Your text could not be saved into this page. Shortening it may help.";
+}
+
+/**
+ * Finish whatever inline edit was open, and say what the host may now do.
+ *
+ * An inline edit lives in the element until it ends — that is what keeps the
+ * caret still while an author types — so the document a caller is holding is
+ * the one from before it, and committing that would save a page missing the
+ * words they were in the middle of writing.
+ *
+ * Says nothing to the author: the surface reports every finished edit through
+ * one callback, including the ones started here, so reporting again from this
+ * return value would announce the same edit twice.
+ *
+ * `mayClose` is separate from the document because the two answers differ: a
+ * refused passage changed nothing, so there is a perfectly good document to
+ * save, and the only thing that must not happen is unmounting the editor still
+ * holding the words.
+ */
+function finishInlineEdit(
+  inline: { commit: () => InlineEditOutcome },
+  held: BlockDocument
+): { document: BlockDocument; mayClose: boolean } {
+  const outcome = inline.commit();
+  return {
+    document: documentAfter(outcome, held),
+    mayClose: outcome.status !== "refused",
+  };
+}
+
+/**
+ * The form's save shortcut, parsed from the SAME spec the form registers.
+ *
+ * Asked of the shortcut library rather than written out here. A hand-rolled
+ * `key === "s" && (metaKey || ctrlKey)` treats modifiers as a minimum, so it
+ * also fires on Ctrl+Shift+S and Ctrl+Alt+S — which the manager rejects,
+ * meaning the form does NOT save. Ctrl+Shift+S is the browser's Save As on
+ * several platforms, so the author would have got a dialog, an inline edit
+ * closed underneath it, and a field changed by a keystroke that saved nothing.
+ */
+const SAVE_CHORD = parseKeys("mod+s")[0];
+
+/** Whether a key event is the form's save shortcut on this platform. */
+function isSaveChord(event: KeyboardEvent): boolean {
+  return (
+    SAVE_CHORD !== undefined &&
+    chordMatches(SAVE_CHORD, event.key, event, detectApplePlatform())
+  );
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -627,10 +875,39 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const drag = useCanvasDrag({ editor, slots, nesting });
 
   /*
-   * Typing a block's text on the canvas. The hook owns the caret; which values
-   * may be typed into is the block's own declaration, read by the builder.
+   * The empty-container appender's only read of a block's definition: its
+   * accessible label. `{ get: getBlock }` satisfies its `BlockLookup` with no
+   * adapter, because `getBlock` already returns `AnyBlockDefinition | undefined`
+   * and that type carries the one field the appender reads.
    */
-  const inline = useInlineText(editor);
+  const blocks = useMemo(() => ({ get: getBlock }), []);
+
+  /*
+   * Typing a block's text on the canvas. The hook owns the caret; which values
+   * may be typed into is the block's own declaration, read by the builder, and
+   * WHICH editor a value gets is that declaration too.
+   *
+   * The rich-text loader is passed rather than imported by the builder, because
+   * it reaches Lexical and the builder must not: one copy of Lexical is what
+   * keeps its node classes recognisable, and this package is already on the
+   * admin side of that line.
+   */
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineEditOutcome) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
    * The entry's other fields, or null when there is no surrounding form. Null
@@ -681,6 +958,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     pending: siteStylePending,
     error: siteStyleError,
   } = useSiteStyle(configSiteStyle);
+
+  // The site-style half of the class surface. The node half stays with the
+  // inspector, which already writes nodes — see `useClassSurface`.
+  const classes = useClassSurface(
+    canvasSiteStyle,
+    siteStylePending,
+    siteStyleError,
+    configSiteStyle
+  );
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -1018,7 +1304,40 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
    */
-  useReportUnsavedWork(`blocks:${name}`, editor.undoDepth > 0);
+  useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
+
+  /*
+   * Finish an open passage before the form is asked to save it.
+   *
+   * An inline edit lives in the element until it ends, so the field still holds
+   * the value from before it. Reporting the edit as unsaved work is what lets
+   * the form submit — and reporting cannot write to the form, by that context's
+   * own contract — so a save taken while a passage is open would send the
+   * previous value and report success.
+   *
+   * Capture phase, so this runs before the form's own handler sees the chord.
+   *
+   * This closes the SHORTCUT. A save started any other way — a button, a
+   * command palette — still leaves an open passage behind, because nothing lets
+   * a surface holding uncommitted work be asked to flush before submission.
+   * That is a contract the form does not have, not something this can reach.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isSaveChord(event)) return;
+      /*
+       * Saved even when the passage was refused, and NOT closed either way.
+       * The document is right and complete for everything except the passage
+       * still open, so withholding the save would lose the rest of their work
+       * to protect a paragraph that is not going anywhere: it stays in the
+       * editor, on screen, and the message is what tells them it is still
+       * there.
+       */
+      onCommit(finishInlineEdit(inline, editor.document).document);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [editor.document, inline, onCommit]);
 
   /*
    * Writing back on the way out rather than on every keystroke.
@@ -1029,9 +1348,60 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * editor's undo two answers to one question.
    */
   const done = useCallback(() => {
-    onCommit(editor.document);
+    /*
+     * The open inline edit is finished FIRST, and the document it produced is
+     * the one handed over.
+     *
+     * An inline edit lives in the element until it ends — that is what keeps
+     * the caret still while an author types — so `editor.document` here is the
+     * one from before it. Committing that would hand the form a document
+     * missing the words the author was in the middle of writing, and the exit
+     * gesture is the most common way to leave a passage open.
+     */
+    const finished = finishInlineEdit(inline, editor.document);
+    /*
+     * A REFUSED commit kept the passage open because the author's words are in
+     * it and nowhere else. Closing unmounts the canvas and takes the editor
+     * with it, so leaving is declined until they deal with it — they have been
+     * told what happened, and their text is still where they left it.
+     */
+    if (!finished.mayClose) return;
+    onCommit(finished.document);
     onClose();
-  }, [editor.document, onCommit, onClose]);
+  }, [editor.document, inline, onCommit, onClose]);
+
+  /*
+   * Opens the insert panel from the canvas itself, for the empty-container
+   * appender: pressing its "+" must select the container AND show the panel
+   * that fills it as one gesture, never two.
+   *
+   * A counter bumped on every press, not a boolean: `BuilderShell` reads this
+   * as "open it AGAIN", including when the author has since closed the panel
+   * by hand, and a value that repeated itself would look unchanged and do
+   * nothing the second time. Starts `undefined` rather than `0` so mounting
+   * the editor is not itself a press.
+   */
+  const [openInsertPanelToken, setOpenInsertPanelToken] = useState<
+    number | undefined
+  >(undefined);
+  const openInsertPanel = useCallback(() => {
+    setOpenInsertPanelToken(current => (current ?? 0) + 1);
+  }, []);
+
+  /*
+   * Whether the author wants empty-container chrome showing at all, mirrored
+   * from the shell so the appender mounted below can answer the same question
+   * the dashed placeholder box's own CSS rule already answers.
+   *
+   * Starts at the preference's own default rather than an assumed `true`: the
+   * shell reports the real value once it has read it, but that report lands
+   * one render after this component's first — an assumed value would be a
+   * SECOND declaration of the default that goes stale the day the shell's own
+   * changes and this one does not.
+   */
+  const [showEmptyElements, setShowEmptyElements] = useState(
+    DEFAULT_PREFERENCES.showEmptyElements
+  );
 
   /*
    * The editor takes the window: the shell draws its own rail, panels, top bar
@@ -1065,6 +1435,14 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
+        // Forces the insert panel open from the empty-container appender,
+        // which lives on the canvas below rather than beside the rail that
+        // normally opens a panel.
+        openInsertPanelToken={openInsertPanelToken}
+        // The read half of the same gap: mirrors the shell's own preference
+        // so the appender below can be suppressed by the SAME switch that
+        // already suppresses the placeholder box it sits over.
+        onShowEmptyElementsChange={setShowEmptyElements}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -1151,6 +1529,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         inspector={
           <InspectorPanel
             editor={editor}
+            classLibrary={classes.library}
+            classLibraryAbsence={classes.absence}
+            onCreateClass={classes.create}
             policy={stylePolicy}
             cascade={styleCascade}
             breakpoints={canvasRender.styleContext.breakpoints}
@@ -1210,7 +1591,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
             );
           }
-          if (panel === "layers") return <LayersPanel editor={editor} />;
+          if (panel === "layers") {
+            /*
+              The panel cannot work this out for itself. It is drawn here, in
+              the shell's panel region, while `BlockKeyboardActions` below wraps
+              the shell's CHILDREN — sibling subtrees, so nothing the panel can
+              read from where it sits reports what this file knows by writing
+              both. Passed as a fact rather than inferred.
+            */
+            return <LayersPanel editor={editor} moveHints />;
+          }
           if (panel === "tokens") {
             return (
               <TokensStudio
@@ -1288,52 +1678,89 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
             </p>
           ) : (
-            <Canvas
-              document={editor.document}
-              siteStyles={siteSheet(canvasSiteStyle)}
-              selectedId={editor.selectedId}
-              selectedIds={editor.selection.ids}
-              onSelect={editor.select}
-              // The style context and the host policy, derived above so both are
-              // one object with one identity rather than rebuilt per render.
-              render={canvasRender}
-              // The box the tiers are compiled against, the width it is asked
-              // to take, and the reporter that closes the loop: the request is
-              // a ceiling, and everything downstream is derived from what the
-              // box actually got rather than from what it was offered.
-              preview={canvasPreview}
-              dragHandlers={drag.handlers}
-              // The pointer route into typing a block's text. Its keyboard
-              // counterpart is the Enter binding above, registered in the same
-              // place so a surface cannot gain one without the other.
-              onDoubleClick={inline.onDoubleClick}
-              // Both pieces of chrome go through the canvas rather than beside it,
-              // because both are positioned in the canvas's own content
-              // coordinates and the canvas root is what establishes them.
-              overlay={
-                <>
-                  <DropIndicator target={drag.target} />
-                  {/*
+            /*
+              Wrapped rather than passed in, because the menu opens over the
+              WHOLE canvas and reads which block from the selection the canvas
+              has already moved. The wrapper generates no box, so the canvas
+              lays out exactly as it did.
+            */
+            <BlockContextMenu editor={editor}>
+              <Canvas
+                document={editor.document}
+                siteStyles={siteSheet(canvasSiteStyle)}
+                selectedId={editor.selectedId}
+                selectedIds={editor.selection.ids}
+                onSelect={editor.select}
+                // The style context and the host policy, derived above so both are
+                // one object with one identity rather than rebuilt per render.
+                render={canvasRender}
+                // The box the tiers are compiled against, the width it is asked
+                // to take, and the reporter that closes the loop: the request is
+                // a ceiling, and everything downstream is derived from what the
+                // box actually got rather than from what it was offered.
+                preview={canvasPreview}
+                dragHandlers={drag.handlers}
+                // The pointer route into typing a block's text. Its keyboard
+                // counterpart is the Enter binding above, registered in the same
+                // place so a surface cannot gain one without the other.
+                onDoubleClick={inline.onDoubleClick}
+                // Both pieces of chrome go through the canvas rather than beside it,
+                // because both are positioned in the canvas's own content
+                // coordinates and the canvas root is what establishes them.
+                overlay={
+                  <>
+                    <DropIndicator target={drag.target} />
+                    {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                  <BlockToolbar
-                    editor={editor}
-                    hidden={drag.draggingId !== null}
-                  />
-                  {/*
+                    <BlockToolbar
+                      editor={editor}
+                      hidden={drag.draggingId !== null}
+                    />
+                    {/*
                   Suppressed for the same reason and by the same signal. The
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                  <SpacingOverlay
-                    editor={editor}
-                    hidden={drag.draggingId !== null}
-                  />
-                </>
-              }
-            />
+                    <SpacingOverlay
+                      editor={editor}
+                      hidden={drag.draggingId !== null}
+                    />
+                    {/*
+                  Suppressed during a drag for the same reason the toolbar and
+                  the bands are: the document is mid-change, so a control
+                  offering to fill a container names a shape that is about to
+                  be different.
+                  ALSO suppressed while the author has turned empty-container
+                  chrome off: the dashed placeholder box collapses to zero
+                  height under the same preference (`builder-chrome.css`'s
+                  `[data-nx-slots]:empty` rule already matches it), and a "+"
+                  left floating over nothing after that would make the
+                  preference lie about what a visitor sees.
+                */}
+                    <EmptyContainerAppenders
+                      document={editor.document}
+                      slots={slots}
+                      blocks={blocks}
+                      hidden={emptyContainerAppenderHidden(
+                        drag.draggingId,
+                        showEmptyElements
+                      )}
+                      onAppend={nodeId => {
+                        // Select first, then open. The inserter derives its
+                        // target from the selection, so selecting the container
+                        // is what makes the next insert land inside it — there
+                        // is no second targeting path to keep in step.
+                        editor.select(nodeId);
+                        openInsertPanel();
+                      }}
+                    />
+                  </>
+                }
+              />
+            </BlockContextMenu>
           )}
         </BlockKeyboardActions>
       </BuilderShell>

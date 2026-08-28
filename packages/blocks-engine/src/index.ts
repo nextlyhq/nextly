@@ -81,6 +81,7 @@ export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
 export {
   newId,
   makeNode,
+  expandSlotDefaults,
   walkNodes,
   findNode,
   locateNode,
@@ -91,7 +92,7 @@ export {
   duplicateNode,
   updateNode,
 } from "./tree";
-export type { NodeLocation, TreePosition } from "./tree";
+export type { NodeLocation, SlotDefaultSource, TreePosition } from "./tree";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
@@ -149,6 +150,14 @@ export { isNodeType, isNodeVersion } from "./validation";
  * gets a different answer for exactly the values that survive JSON badly.
  */
 export { isPlainRecord } from "./plain-record";
+/**
+ * Exported because the renderer and every plain-text projection of a document
+ * must agree on what counts as authored text. They did not: a stored number was
+ * drawn as text on the page and skipped in the description derived from it.
+ * A caller writing its own `typeof x === "string"` reintroduces exactly that
+ * split, so the decision is published rather than restated.
+ */
+export { authoredText, isAuthoredText } from "./authored-text";
 export { declaresNoMarkup, isConditionGated } from "./visibility";
 export type { NoMarkupDefinitionSource } from "./visibility";
 export type {
@@ -189,6 +198,7 @@ export {
   registerSupport,
   getBlock,
   isBlockName,
+  isUsableSlotName,
   hasBlock,
   allBlocks,
   getBlockSource,
@@ -493,11 +503,23 @@ export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
  */
 export { authoredBreakpoints, inCascadeOrder } from "./style/breakpoint-set";
 
-// The remote-host policy: which hosts a compiled page may fetch from. Exported
-// so the React renderer applies the SAME matcher the style compiler does.
+// Two policies about stored URLs, exported for the same reason: every surface
+// that draws or describes a document must reach the same verdict about one
+// stored string.
+//
+// The remote-host policy — `isAllowedRemoteUrl`, `isFetchableUrl`,
+// `isRemoteUrl` — is about which hosts a compiled page may FETCH from, so the
+// React renderer applies the same matcher the style compiler does.
+//
+// `isLinkableUrl` is a separate, format-level question: whether this format can
+// express the destination at all. It governs whether a link is DRAWN, so a
+// consumer restating it as its own scheme check makes a renderer that shows
+// nothing and a projection that still reports the label describe different
+// pages.
 export {
   isAllowedRemoteUrl,
   isFetchableUrl,
+  isLinkableUrl,
   isRemoteUrl,
   normalizeUrl,
   type RemotePattern,
@@ -526,6 +548,7 @@ export {
   hasFormat,
   isRichTextNode,
   isRichTextValue,
+  RICH_TEXT_PROP_TYPE,
   richTextToPlainText,
   TEXT_FORMAT,
   type RichTextNode,

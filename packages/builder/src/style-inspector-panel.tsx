@@ -37,6 +37,7 @@ import {
   type BreakpointId,
   type BreakpointSet,
   type ContrastResult,
+  type NamedClass,
   type NodeStyles,
   type SiteTokenSet,
   type TokenMode,
@@ -71,8 +72,11 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { ClassSelector, type ClassSelectorProps } from "./class-selector";
+import { commitOnEnter } from "./commit-on-enter";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
+import type { BuilderOp } from "./ops";
 import {
   activeTokenMode,
   colourHexOf,
@@ -96,6 +100,7 @@ import {
   inspectStyle,
   type InspectedStyleProperty,
   type StyleSection,
+  type StyleInspection,
 } from "./style-inspector";
 import {
   CSS_NUMBER,
@@ -257,6 +262,192 @@ export interface StyleInspectorPanelProps {
    * than absent.
    */
   onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
+  /**
+   * The site's class library, when the host has one to give.
+   *
+   * Two signals, not one. {@link StyleInspectorPanelProps.onCreateClass} says
+   * whether the host has a class surface at all; this says what it holds. So
+   * `undefined` here means the library is absent rather than unasked-for, and
+   * it covers BOTH a read in flight and a read that failed —
+   * {@link StyleInspectorPanelProps.classLibraryAbsence} says which. They need
+   * different words: one will finish and the other will not, and only the
+   * first has a field about to fill.
+   */
+  classLibrary?: readonly NamedClass[];
+  /** Why the library is absent, when it is. Forwarded to the selector. */
+  classLibraryAbsence?: ClassSelectorProps["libraryAbsence"];
+  /**
+   * Create a class under this slug and put it on the selected block.
+   *
+   * Supplying it is what OPTS IN to the class surface: a host that cannot
+   * write the site style has no way to create one, and a selector that offered
+   * to would report an intent nobody acts on.
+   *
+   * One callback rather than two, because this surface cannot mint an id — the
+   * class has no identity until the host has stored it, so "create it and
+   * apply it" is a single intent and splitting it would leave the caller
+   * correlating them.
+   *
+   * Applying and removing an EXISTING class needs no callback: those are edits
+   * to the selected node, which this panel already writes through the editor.
+   */
+  onCreateClass?: ClassSelectorProps["onCreateClass"];
+}
+
+/**
+ * The op that stores a node's class ids.
+ *
+ * An empty list REMOVES the field rather than storing `[]`. The two mean the
+ * same thing to every reader, and the field is optional, so writing the empty
+ * array would leave a document carrying a key that says nothing — and an
+ * inverse built from it would restore that key on undo.
+ */
+function nodeClassesOp(nodeId: string, classIds: readonly string[]): BuilderOp {
+  if (classIds.length === 0) {
+    return { kind: "update", id: nodeId, patch: {}, unset: ["classes"] };
+  }
+  return { kind: "update", id: nodeId, patch: { classes: [...classIds] } };
+}
+
+/**
+ * Why this panel has nothing to style, drawn, or `null` when it does.
+ *
+ * All four ask ONE question — can an edit here mean what it appears to mean —
+ * and each is refused for a different reason. Gathered so the panel body holds
+ * one branch instead of four: the reasons are stable and the panel is not, and
+ * a large function that grows a branch per release is how one arrives over the
+ * complexity gate without anyone deciding to.
+ */
+type StyleAvailability =
+  | { readonly available: false; readonly reason: React.JSX.Element }
+  | { readonly available: true; readonly inspection: StyleInspection };
+
+function styleUnavailable(
+  editor: EditorState,
+  inspection: StyleInspection | null
+): StyleAvailability {
+  if (editor.selection.ids.length > 1) {
+    return {
+      available: false,
+      reason: (
+        <div className="nx-style-inspector" data-empty="many-selected">
+          <p className="nx-inspector__note">
+            {editor.selection.ids.length} blocks selected. Select one to style
+            it.
+          </p>
+        </div>
+      ),
+    };
+  }
+
+  /*
+   * A block whose id is not unique cannot be styled, and saying so is the only
+   * honest answer this panel has.
+   *
+   * The compiler already reaches this conclusion for the same reason, and its
+   * words are worth keeping: a class is derived from the id, so two nodes
+   * sharing one share a class, and "writing corrupts a node the author did not
+   * touch". It refuses to emit their rules.
+   *
+   * The editor has to refuse for a second reason the compiler does not face. The
+   * cascade is read from the PREPARED tree, where read-time repair has already
+   * dropped the later duplicate — but gating runs first, so a gated first node
+   * leaves a LATER one owning that id there, while every lookup in the stored
+   * document returns the first. The controls would then show and write one
+   * block while the provenance dots describe another, and typing into a field
+   * would silently change a block that is not on screen.
+   *
+   * Refused rather than reconciled: pointing the controls at the rendered node
+   * would not help, because a write is addressed by id and would still land on
+   * the first. There is no edit here that means what it appears to mean.
+   */
+  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
+    return {
+      available: false,
+      reason: (
+        <div className="nx-style-inspector" data-empty="duplicate-id">
+          <p className="nx-inspector__note">
+            Another block on this page has the same id, so styles written here
+            could not be told apart. Give one of them a new id to style either.
+          </p>
+        </div>
+      ),
+    };
+  }
+
+  if (inspection === null) {
+    return {
+      available: false,
+      reason: (
+        <div className="nx-style-inspector" data-empty="no-selection">
+          <p className="nx-inspector__note">Select a block to style it.</p>
+        </div>
+      ),
+    };
+  }
+
+  /*
+   * A block offering no style properties is NOT unavailable, and that is the
+   * distinction this function turns on. The three refusals above are about
+   * there being no single node an edit could address — a multi-selection, an
+   * ambiguous id, nothing selected. This one is only about the block's own
+   * controls, and named classes compile independently of them: such a block
+   * can still carry a class, so the class surface has to survive it.
+   */
+  return { available: true, inspection };
+}
+
+/**
+ * The class surface for the selected block, or nothing.
+ *
+ * Its own component rather than a conditional in the panel body: the panel is
+ * already near the complexity the gate allows, and a branch plus two inline
+ * callbacks is exactly the kind of growth that pushes a large function over
+ * without anyone deciding to.
+ *
+ * `onCreateClass` is what OPTS IN. `library` being undefined then means the
+ * read is in flight, which the selector draws as such — two signals, so a host
+ * mid-load and a host with no class surface are never the same picture.
+ */
+function SelectedNodeClasses({
+  editor,
+  nodeId,
+  library,
+  libraryAbsence,
+  onCreateClass,
+}: {
+  editor: EditorState;
+  nodeId: string;
+  library: readonly NamedClass[] | undefined;
+  libraryAbsence: ClassSelectorProps["libraryAbsence"];
+  onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
+}): React.JSX.Element | null {
+  if (onCreateClass === undefined) return null;
+  return (
+    <ClassSelector
+      nodeId={nodeId}
+      /*
+       * Keyed by NODE, for the reason the style sections are. The typed query
+       * and the highlighted row are state about the node in hand; unkeyed,
+       * React reuses this component when the selection changes and Enter can
+       * apply the previous block's pending choice to the new one.
+       */
+      key={nodeId}
+      library={library}
+      libraryAbsence={libraryAbsence}
+      nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
+      onNodeClassesChange={classIds =>
+        // `applyAll` answers null when the store refuses — a document at its
+        // byte limit rejects an edit the class rules found perfectly valid.
+        // Reported back so the selector keeps the draft rather than clearing
+        // it as though the write had landed.
+        editor.applyAll([nodeClassesOp(nodeId, classIds)]) === null
+          ? "refused"
+          : "applied"
+      }
+      onCreateClass={onCreateClass}
+    />
+  );
 }
 
 export function StyleInspectorPanel({
@@ -270,6 +461,9 @@ export function StyleInspectorPanel({
   previewContainer,
   liveBreakpoints,
   onJumpToBreakpoint,
+  classLibrary,
+  classLibraryAbsence,
+  onCreateClass,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
   // empty string the accordion sends when they collapse the open section. The
@@ -328,65 +522,15 @@ export function StyleInspectorPanel({
    * and writing to every block — is a different surface with its own rules
    * about what a shared value means, and it does not exist yet.
    */
-  if (editor.selection.ids.length > 1) {
-    return (
-      <div className="nx-style-inspector" data-empty="many-selected">
-        <p className="nx-inspector__note">
-          {editor.selection.ids.length} blocks selected. Select one to style it.
-        </p>
-      </div>
-    );
-  }
-
   /*
-   * A block whose id is not unique cannot be styled, and saying so is the only
-   * honest answer this panel has.
-   *
-   * The compiler already reaches this conclusion for the same reason, and its
-   * words are worth keeping: a class is derived from the id, so two nodes
-   * sharing one share a class, and "writing corrupts a node the author did not
-   * touch". It refuses to emit their rules.
-   *
-   * The editor has to refuse for a second reason the compiler does not face. The
-   * cascade is read from the PREPARED tree, where read-time repair has already
-   * dropped the later duplicate — but gating runs first, so a gated first node
-   * leaves a LATER one owning that id there, while every lookup in the stored
-   * document returns the first. The controls would then show and write one
-   * block while the provenance dots describe another, and typing into a field
-   * would silently change a block that is not on screen.
-   *
-   * Refused rather than reconciled: pointing the controls at the rendered node
-   * would not help, because a write is addressed by id and would still land on
-   * the first. There is no edit here that means what it appears to mean.
+   * One branch here, four inside. Narrowed through the RESULT rather than
+   * re-tested afterwards: a second `inspection === null` check in this body
+   * would put the branch back that the extraction removed, and a non-null
+   * assertion would state as fact what the guard already proved.
    */
-  if (editor.selectedId !== null && sharesItsId(editor, editor.selectedId)) {
-    return (
-      <div className="nx-style-inspector" data-empty="duplicate-id">
-        <p className="nx-inspector__note">
-          Another block on this page has the same id, so styles written here
-          could not be told apart. Give one of them a new id to style either.
-        </p>
-      </div>
-    );
-  }
-
-  if (inspection === null) {
-    return (
-      <div className="nx-style-inspector" data-empty="no-selection">
-        <p className="nx-inspector__note">Select a block to style it.</p>
-      </div>
-    );
-  }
-
-  if (inspection.sections.length === 0) {
-    return (
-      <div className="nx-style-inspector" data-empty="no-style-support">
-        <p className="nx-inspector__note">
-          This block does not offer style properties.
-        </p>
-      </div>
-    );
-  }
+  const availability = styleUnavailable(editor, inspection);
+  if (!availability.available) return availability.reason;
+  const inspected = availability.inspection;
 
   /*
    * ONE subject for the whole panel, and one live-breakpoint set.
@@ -406,23 +550,23 @@ export function StyleInspectorPanel({
    * asking about one node at one address.
    */
   const editing: EditedAddress = {
-    nodeId: inspection.nodeId,
+    nodeId: inspected.nodeId,
     blockType: subject?.blockType,
-    state: inspection.state,
-    breakpoint: inspection.breakpoint,
+    state: inspected.state,
+    breakpoint: inspected.breakpoint,
     labelOf: id => breakpointLabel(breakpoints, id),
   };
   const provenanceOf = provenanceReader({
     cascade,
     subject,
     live,
-    state: inspection.state,
-    breakpoint: inspection.breakpoint,
+    state: inspected.state,
+    breakpoint: inspected.breakpoint,
     breakpoints,
     onJumpToBreakpoint,
   });
 
-  const groups = inspection.sections.map(section => section.group);
+  const groups = inspected.sections.map(section => section.group);
   // Held rather than left to the accordion, so the open section survives a
   // change of selection. Falling back to the first is what keeps it valid when
   // the newly selected block does not offer the section that was open — an
@@ -437,22 +581,39 @@ export function StyleInspectorPanel({
 
   return (
     <div className="nx-style-inspector">
+      {/*
+       * Above the sections, because applying a class is the frequent action and
+       * it decides what the controls below are even editing. Webflow puts its
+       * selector field at the top of the Style panel for the same reason.
+       */}
+      <SelectedNodeClasses
+        editor={editor}
+        nodeId={inspected.nodeId}
+        library={classLibrary}
+        libraryAbsence={classLibraryAbsence}
+        onCreateClass={onCreateClass}
+      />
+      {inspected.sections.length === 0 ? (
+        <p className="nx-inspector__note" data-empty="no-style-support">
+          This block does not offer style properties.
+        </p>
+      ) : null}
       <Accordion
         type="single"
         collapsible
         value={open}
         onValueChange={setOpenGroup}
       >
-        {inspection.sections.map(section => (
+        {inspected.sections.map(section => (
           <StyleSectionItem
             // Keyed by node AND group: a bare group would let React reuse one
             // block's inputs for the next block's same-named section, so a field
             // would keep the previous block's uncommitted text.
-            key={`${inspection.nodeId}:${section.group}`}
+            key={`${inspected.nodeId}:${section.group}`}
             section={section}
-            nodeId={inspection.nodeId}
-            state={inspection.state}
-            breakpoint={inspection.breakpoint}
+            nodeId={inspected.nodeId}
+            state={inspected.state}
+            breakpoint={inspected.breakpoint}
             editor={editor}
             policy={policy}
             tokens={tokens}
@@ -3219,11 +3380,7 @@ function TextField({
       onChange={event => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          commit();
-          return;
-        }
+        if (commitOnEnter(event, commit)) return;
         if (onStep === undefined) return;
         const delta = arrowStep(event);
         if (delta === null) return;

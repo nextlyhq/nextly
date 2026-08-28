@@ -110,6 +110,40 @@ export function resolveSiteStyle(
 }
 
 /**
+ * The stored class tier that, merged under the site's config classes, gives
+ * this library.
+ *
+ * The same argument `tokenOverrideOf` makes, for the same reason: what the
+ * canvas holds is the MERGED library, and saving it whole would copy every
+ * config-supplied class into the database on the first creation and mask the
+ * site's own code from then on. Only what differs is stored.
+ *
+ * A class is compared whole rather than by id alone, so an override that
+ * changes a supplied class's name or styles is kept while an untouched copy of
+ * it is dropped.
+ */
+export function classOverrideOf(
+  defaults: readonly NamedClass[] | undefined,
+  edited: readonly NamedClass[]
+): NamedClass[] {
+  const supplied = new Map((defaults ?? []).map(entry => [entry.id, entry]));
+  return edited.filter(entry => {
+    const base = supplied.get(entry.id);
+    return base === undefined || !sameNamedClass(base, entry);
+  });
+}
+
+/** Whether two classes are the same class, to the byte. */
+function sameNamedClass(a: NamedClass, b: NamedClass): boolean {
+  return (
+    a.id === b.id &&
+    a.slug === b.slug &&
+    a.orderIndex === b.orderIndex &&
+    sameJsonValue(a.styles, b.styles)
+  );
+}
+
+/**
  * The stored tier that, merged under the site's config defaults, gives this set.
  *
  * The INVERSE of the token half of {@link resolveSiteStyle}, and the reason a

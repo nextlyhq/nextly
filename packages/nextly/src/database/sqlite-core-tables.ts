@@ -263,6 +263,35 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
       ON "nextly_release_members" ("release_id")`,
+    // Background jobs. Columns match schemas/jobs/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_jobs" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "slug" TEXT NOT NULL,
+      "input" TEXT,
+      "state" TEXT NOT NULL,
+      "run_at" INTEGER,
+      "run_as_user_id" TEXT,
+      "dedupe_key" TEXT,
+      "attempt_count" INTEGER NOT NULL DEFAULT 0,
+      "next_attempt_at" INTEGER,
+      "locked_by" TEXT,
+      "locked_until" INTEGER,
+      "last_error" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    // Separate statements for the reason the release indexes above are: SQLite
+    // skips a CREATE TABLE wholesale once the table exists, so an index folded
+    // into it would never appear on a database built by an earlier boot.
+    `CREATE INDEX IF NOT EXISTS "nextly_jobs_due_idx"
+      ON "nextly_jobs" ("state", "run_at")`,
+    // Nullable and unique: SQLite treats NULL as distinct from NULL, so jobs
+    // that name no dedupe key are never deduplicated, while a job that names
+    // one can be enqueued exactly once. That is what makes duplicate
+    // suppression a constraint rather than a read-then-write two writers can
+    // interleave with.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_jobs_dedupe_idx"
+      ON "nextly_jobs" ("dedupe_key")`,
     // No REFERENCES to "email_providers": that table is not bootstrapped here,
     // and SQLite resolves a foreign key at insert time rather than at CREATE,
     // so declaring one would turn every recorded delivery into a failure on a

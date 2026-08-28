@@ -18,6 +18,8 @@ import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { fieldLabel } from "@admin/lib/field-label";
 
+import { entryTitleField } from "../entry-title";
+
 import { EntryTableCell } from "./EntryTableCell";
 import { LanguageDots } from "./LanguageDots";
 
@@ -307,16 +309,28 @@ export function getEntryTitleField(
   // Resolve from ACTUAL schema fields. `getAvailableColumns` always injects a
   // synthetic "title" column, so testing it would always win and leave
   // collections without a real title field with an empty primary column.
-  const fieldNames = getAllDataFields(collection.fields).map(
-    field => field.name
+  return pickTitleFieldName(
+    collection.admin?.useAsTitle,
+    getAllDataFields(collection.fields).map(field => field.name)
   );
+}
 
-  return (
-    collection.admin?.useAsTitle ||
-    ["title", "name", "label"].find(name => fieldNames.includes(name)) ||
-    fieldNames[0] ||
-    "id"
-  );
+/**
+ * Which COLUMN names an entry.
+ *
+ * The preference order comes from `entry-title`, shared with the editor and
+ * comparison headings so a document is not called one thing by its editor and
+ * another by the page beside it. Only the last resort is decided here, because
+ * a column needs a field that exists where a heading needs text.
+ */
+export function pickTitleFieldName(
+  useAsTitle: string | undefined,
+  fieldNames: readonly string[]
+): string {
+  // A column has to name a field that exists, so where nothing is conventional
+  // this falls back to the first field and finally to `id`: a table with an
+  // empty primary column is worse than one showing an unhelpful field.
+  return entryTitleField(useAsTitle, fieldNames) ?? fieldNames[0] ?? "id";
 }
 
 /**

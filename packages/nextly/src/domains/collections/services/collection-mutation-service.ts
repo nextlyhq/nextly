@@ -64,6 +64,8 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import type { AddressableField } from "../../../shared/addressable-fields";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -111,6 +113,10 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
+  companionWriteVia,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
+import {
   cachedCompanionReadiness,
   companionNotReadyMessage,
   isCompanionReady,
@@ -127,7 +133,6 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
-  addressableFields,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -1221,55 +1226,6 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Upsert the companion `_locales` row for `(parentId, locale)` with the provided localized
-   * columns (i18n M5, updateEntry). Only the provided columns are written — an existing row for
-   * another locale, or other localized fields on this locale's row, are left untouched. Uses the
-   * PK `(_parent, _locale)` conflict target. Runs inside the caller's transaction via `tx.execute`.
-   */
-  private async upsertCompanionRow(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter tx surface
-    tx: any,
-    companionTableName: string,
-    parentId: string,
-    locale: string,
-    companionData: Record<string, unknown>
-  ): Promise<void> {
-    const cols = Object.keys(companionData);
-    if (cols.length === 0) return;
-    const isMysql = this.dialect === "mysql";
-    const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-    const params: unknown[] = [];
-    const ph = () =>
-      this.dialect === "postgresql" ? `$${params.length}` : "?";
-
-    const allCols = ["_parent", "_locale", ...cols];
-    const valuePlaceholders = allCols
-      .map(c => {
-        params.push(
-          c === "_parent"
-            ? parentId
-            : c === "_locale"
-              ? locale
-              : companionData[c]
-        );
-        return ph();
-      })
-      .join(", ");
-
-    const conflict = isMysql
-      ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
-      : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
-          .map(c => `${q(c)} = excluded.${q(c)}`)
-          .join(", ")}`;
-
-    await tx.execute(
-      `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +
-        `VALUES (${valuePlaceholders}) ${conflict}`,
-      params
-    );
-  }
-
-  /**
    * Split `entryData` (snake_case keys) into main-table data and companion data for a localized
    * collection: localized columns move to `companionData` and are removed from `mainData` (the
    * migrated main table no longer has them). Returns `null` when the collection isn't localized
@@ -2069,7 +2025,7 @@ export class CollectionMutationService extends BaseService {
     // single component declared inside such a group stores its value at the
     // enclosing level, so without flattening the lookup would miss it and treat
     // it as a scalar, replacing rather than merging a nested component patch.
-    const byName = new Map<string, FieldConfig>();
+    const byName = new Map<string, AddressableField>();
     for (const f of addressableFields(fields)) {
       const name = (f as { name?: unknown }).name;
       if (typeof name === "string") byName.set(name, f);
@@ -6290,8 +6246,8 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
-            await this.upsertCompanionRow(
-              tx,
+            await upsertCompanionRow(
+              companionWriteVia(tx, this.dialect),
               localizedUpdate.companionTableName,
               params.entryId,
               localizedUpdate.writeLocale,

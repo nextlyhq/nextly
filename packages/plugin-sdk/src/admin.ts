@@ -130,6 +130,82 @@ export { useEntryFieldsPanel } from "@nextlyhq/admin";
 export { loadRichTextEditorKit, type RichTextEditorKit } from "@nextlyhq/admin";
 
 /**
+ * Edit ONE passage in place, anywhere on your own surface (@experimental).
+ *
+ * The companion to {@link loadRichTextEditorKit}, for the case that kit cannot
+ * serve on its own: building an editor from the registry means calling
+ * `createEditor`, which means importing Lexical — and a second declarer of
+ * Lexical is exactly the failure sharing the registry exists to prevent. This
+ * hands over the operations instead, so a consumer edits rich text without ever
+ * naming a Lexical type.
+ *
+ * ONE editor, moved between elements. `attach` releases whatever it held
+ * before and hands back a SESSION, so at most one passage is live at a time —
+ * which is both what Lexical's own ecosystem supports and an honest model of a
+ * caret. A session that has been superseded reads as nothing and detaches as a
+ * no-op, so a consumer that lost the editor cannot read another's passage or
+ * tear down the live one.
+ *
+ * The element is made editable on attach and given back exactly as it arrived
+ * on detach, markup included — `setRootElement` neither sets `contentEditable`
+ * nor undoes the attribute, inline styles and replaced children it writes, and
+ * a consumer should not have to know that.
+ *
+ * `attach` answers with a STATUS, and a caller must narrow it rather than
+ * treating a refusal as a failure to report. It refuses for two unrelated
+ * reasons and says which, because only one of them is anything a caller can
+ * act on:
+ *
+ * - `"unsupported"` — this passage cannot be represented here, and nothing
+ *   about it changes by waiting: a node type this registry does not know, or a
+ *   decorator node whose visible output comes from `decorate()` and is mounted
+ *   by a React plugin this raw editor does not use. Either way the editor would
+ *   hold less than the document does and the next keystroke would write that
+ *   back, so leaving the passage as the page rendered it is the only outcome
+ *   that cannot lose work.
+ * - `"held"` — the editor is busy protecting an edit whose words exist nowhere
+ *   else, because writing it back was refused. Nothing is wrong with the
+ *   passage you asked for; the surface holding on has to finish first. Worth
+ *   SAYING to whoever is looking at the screen, or their gesture appears to do
+ *   nothing at all.
+ *
+ * Its undo history is created at `attach` and given away at `detach`, so it
+ * covers the open passage alone. A surface with its own history — the page
+ * builder's document ops are one — keeps everything larger, and a finished edit
+ * is one entry there rather than one per keystroke.
+ *
+ * Values cross as `unknown` in both directions: the stored shape is defined in
+ * `@nextlyhq/blocks-engine`, which this package does not depend on, and
+ * restating it here would be a second declaration of one format. Narrow a
+ * result with that package's own `isRichTextValue`.
+ *
+ * ASYNC for the same 630KB reason the kit is.
+ *
+ * @example
+ * ```ts
+ * const editor = await loadInlineRichTextEditor();
+ * const attachment = editor.attach(element, node.props.content);
+ * if (attachment.status === "refused") {
+ *   // Only one of the two is worth telling anyone about.
+ *   if (attachment.reason === "held") notify("Finish the other edit first.");
+ *   return;
+ * }
+ * const { session } = attachment;
+ * session.focus();
+ * // ...the author types...
+ * const next = session.read();
+ * session.detach();
+ * ```
+ */
+export {
+  loadInlineRichTextEditor,
+  type InlineRichTextAttachment,
+  type InlineRichTextEditor,
+  type InlineRichTextRefusal,
+  type InlineRichTextSession,
+} from "@nextlyhq/admin";
+
+/**
  * Record a recovery point for the surrounding document (@experimental).
  *
  * For a contributed field that holds its own editing state — a canvas, a

@@ -1,0 +1,147 @@
+import {
+  LANGUAGE_STATE_LABEL,
+  type LanguageState,
+} from "@admin/components/features/entries/translation-meta";
+import type {
+  ListResponse,
+  PaginationMeta,
+} from "@admin/lib/api/response-types";
+
+/**
+ * The translation worklist's wire shape.
+ *
+ * Mirrors what `GET /api/translations` returns. Kept as a type rather than
+ * imported from core because `packages/admin` reads resolved DATA across that
+ * boundary and nothing else — the same rule that keeps it independent of
+ * `blocks-engine` and `plugin-page-builder`.
+ *
+ * @module types/translations/worklist
+ */
+
+/**
+ * The states this page can be asked for, in the order a translator wants them.
+ *
+ * DERIVED from `LANGUAGE_STATES` rather than restated. That catalog already
+ * answers "what states can a language be in" for the header control, the
+ * editor's language panel, its menu and the list's per-language dots, and its
+ * own note says a second spelling would let two surfaces describe the same
+ * document differently. A worklist is a fifth surface, not a new vocabulary.
+ *
+ * Only the ORDER is this page's own, and it is a narrower view of the same
+ * list rather than a second list: `missing` leads because it is the question
+ * the page exists to answer, where the language panel reads best-to-worst.
+ * `WORKLIST_ORDER` names the four exactly once, and the type below is derived
+ * from the canonical catalog, so dropping or renaming a state there stops this
+ * compiling instead of silently leaving a tab behind.
+ *
+ * The LABEL comes from `LANGUAGE_STATE_LABEL` for the same reason, title-cased
+ * because these are buttons rather than prose.
+ */
+const WORKLIST_ORDER = [
+  "missing",
+  "draft",
+  "translated",
+  "published",
+] as const satisfies readonly LanguageState[];
+
+/** Sentence wording into a button label: "not translated" -> "Not translated". */
+function asTabLabel(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export const WORKLIST_STATES: readonly {
+  value: LanguageState;
+  label: string;
+}[] = WORKLIST_ORDER.map(value => ({
+  value,
+  label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
+}));
+
+/**
+ * A state the worklist can show — the canonical language state, not a copy.
+ *
+ * An alias rather than a restatement, so a state added or removed there is a
+ * compile error here rather than a tab that quietly stops matching.
+ */
+export type WorklistState = LanguageState;
+
+/** The state a URL asked for, or the question this page exists for. */
+export function worklistStateFrom(raw: string | undefined): WorklistState {
+  return (
+    WORKLIST_STATES.find(s => s.value === raw)?.value ??
+    WORKLIST_STATES[0].value
+  );
+}
+
+/**
+ * The language this worklist is actually answering for.
+ *
+ * A URL value is a request, not a fact, and the one that matters here is the
+ * SOURCE language. It is a configured locale, so the server accepts it — and
+ * then answers nonsense: nothing is ever "missing" in the language everything
+ * is written in, while "translated" matches every document on the site. Both
+ * are confident, neither is true, and nothing on the screen suggests the
+ * language was the problem. A saved link outliving a change of default locale
+ * is enough to produce it.
+ *
+ * So the URL is honoured only when it names a real target, and otherwise the
+ * first target answers. Returns `undefined` only when there is no target at
+ * all, which is a site with one language — a worklist that can never have a
+ * row, and which the component reports as such.
+ */
+export function resolveActiveTarget(
+  requested: string | undefined,
+  targets: readonly string[]
+): string | undefined {
+  if (requested !== undefined && targets.includes(requested)) return requested;
+  return targets[0];
+}
+
+/** One document's outstanding work in one language. */
+export interface TranslationWorkRow {
+  /** Collection slug — also how the row is opened. */
+  collection: string;
+  /** Its plural label, because a person reads this, not a route. */
+  collectionLabel: string;
+  id: string;
+  /** The document's title in the DEFAULT language: the thing being translated. */
+  title: string;
+  /** ISO 8601. */
+  updatedAt: string;
+}
+
+/**
+ * The canonical list envelope, as every other list read in this admin receives
+ * it. The worklist is capped rather than paged, so its meta describes a single
+ * synthetic page.
+ */
+/**
+ * Pagination meta for this read: the canonical shape, plus what only it needs.
+ *
+ * An INTERSECTION rather than a rewritten object, so every field the admin's
+ * `PaginationMeta` gains arrives here automatically and a change to one cannot
+ * leave the other compiling against a stale shape.
+ */
+export type TranslationWorklistMeta = PaginationMeta & {
+  /**
+   * Collections the server's fan-out did not consult, named rather than
+   * dropped.
+   *
+   * Carried all the way to the screen on purpose. A worklist that quietly
+   * omits a collection reads as "nothing to do there", which is
+   * indistinguishable from the truth at a glance and is the one way this page
+   * can lie. Absent entirely when everything was consulted, so its PRESENCE is
+   * the signal.
+   *
+   * Optional here rather than added to `PaginationMeta` itself: every other
+   * admin list consults everything it lists, so a field they can never populate
+   * would invite a reader to check it and conclude something from its absence.
+   */
+  notConsulted?: string[];
+};
+
+/** The canonical list envelope, carrying this read's own meta. */
+export type TranslationWorklistResponse = Omit<
+  ListResponse<TranslationWorkRow>,
+  "meta"
+> & { meta: TranslationWorklistMeta };

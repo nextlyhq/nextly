@@ -103,3 +103,8 @@ export {
   nextlyReleasesPg as nextlyReleases,
   nextlyReleaseMembersPg as nextlyReleaseMembers,
 } from "../releases/postgres";
+
+// Background jobs; in the bundle for the reason the releases note above
+// gives — getCoreSchema makes a table diffable, this map is what apply
+// actually pushes.
+export { nextlyJobsPg as nextlyJobs } from "../jobs/postgres";

@@ -3,7 +3,11 @@ import { randomUUID } from "crypto";
 import { eq } from "drizzle-orm";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  type TestDb,
+  testLogger,
+} from "../../../__tests__/fixtures/db";
 import { userFactory } from "../../../__tests__/fixtures/users";
 import { hashPassword } from "../../../auth/password";
 import { AuthService } from "../services/auth-service";
@@ -14,18 +18,41 @@ const HOUR_IN_MS = 60 * 60 * 1000; // 1 hour in milliseconds
 const TOKEN_EXPIRY_HOURS = 24; // Token expiry time in hours
 const TIME_TOLERANCE_MS = 2000; // ±2 seconds tolerance for time comparisons (CI stability)
 
+/**
+ * bcrypt cost for hashes this suite CREATES as fixtures.
+ *
+ * Production uses 12, which is the point of a KDF and which bcryptjs — a pure-JS
+ * implementation with no native binding — pays in full: roughly a second per hash
+ * on a developer machine and several times that on a loaded runner. A test that
+ * seeds a user and then exercises a path which hashes again was measured at
+ * ~2.9s locally and ~9.8s on CI, against a 10s testTimeout. That is not a
+ * failure yet; it is a test whose passing depends on the machine.
+ *
+ * A fixture's hash strength protects nothing: the value never leaves the
+ * in-memory database, and what these tests exercise is the code path, not the
+ * KDF. bcrypt encodes its cost inside the hash, so `verifyPassword` reads a
+ * cost-4 hash exactly as it reads a cost-12 one — the production verifier is
+ * still the thing under test.
+ *
+ * This does NOT lower the cost the SERVICE uses when it hashes; that is
+ * `defaultSaltRounds` in `auth/password`, whose own comment says it should
+ * become env-tunable. Until it is, a service-side hash still costs full price
+ * and this only removes the fixture's share.
+ */
+const FIXTURE_SALT_ROUNDS = 4;
+
 describe("AuthService", () => {
   let testDb: TestDb;
   let service: AuthService;
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new AuthService(testDb.db, testDb.schema);
+    service = new AuthService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   describe("registerUser()", () => {
@@ -46,7 +73,6 @@ describe("AuthService", () => {
       const result = await service.registerUser(userData);
 
       // Assert
-      expect(result.success).toBe(true);
       expect(result.statusCode).toBe(201);
       expect(result.message).toBe("User registered successfully");
       expect(result.data).toBeDefined();
@@ -70,13 +96,10 @@ describe("AuthService", () => {
       };
 
       // Act
-      const result = await service.registerUser(userData);
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(400);
-      expect(result.message).toContain("Password");
-      expect(result.data).toBeNull();
+      await expect(service.registerUser(userData)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
 
       // Verify user was NOT created
       const dbUser = await testDb.db.query.users.findFirst({
@@ -88,7 +111,10 @@ describe("AuthService", () => {
     it("should reject registration with duplicate email", async () => {
       // Arrange: Create existing user
       const existingEmail = "existing@test.com";
-      const passwordHash = await hashPassword("ValidPassword123!");
+      const passwordHash = await hashPassword(
+        "ValidPassword123!",
+        FIXTURE_SALT_ROUNDS
+      );
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
           email: existingEmail,
@@ -97,16 +123,15 @@ describe("AuthService", () => {
       );
 
       // Act: Try to register with same email
-      const result = await service.registerUser({
-        email: existingEmail,
-        password: "DifferentPassword123!",
+      await expect(
+        service.registerUser({
+          email: existingEmail,
+          password: "DifferentPassword123!",
+        })
+      ).rejects.toMatchObject({
+        code: "DUPLICATE",
+        statusCode: 409,
       });
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.statusCode).toBe(409);
-      expect(result.message).toContain("already exists");
-      expect(result.data).toBeNull();
     });
 
     it.skip("should register user without name (name is optional)", async () => {
@@ -120,7 +145,6 @@ describe("AuthService", () => {
       const result = await service.registerUser(userData);
 
       // Assert
-      expect(result.success).toBe(true);
       expect(result.statusCode).toBe(201);
       expect(result.data).toBeDefined();
       expect(result.data!.email).toBe("noname@test.com");
@@ -133,7 +157,7 @@ describe("AuthService", () => {
       // Arrange: Create user with known password
       const email = "user@test.com";
       const password = "ValidPassword123!";
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -147,32 +171,29 @@ describe("AuthService", () => {
       const result = await service.verifyCredentials(email, password);
 
       // Assert
-      expect(result.success).toBe(true);
-      expect(result.user).toBeDefined();
-      expect(result.user!.email).toBe(email);
-      expect(result.user!.name).toBe("Test User");
-      expect(result.user!.passwordHash).toBeNull(); // Should never return password hash
-      expect(result.error).toBeUndefined();
+      expect(result.email).toBe(email);
+      expect(result.name).toBe("Test User");
+      expect(result.passwordHash).toBeNull(); // Should never return password hash
     });
 
     it("should fail verification with invalid email", async () => {
       // Act
-      const result = await service.verifyCredentials(
-        "nonexistent@test.com",
-        "anypassword"
-      );
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.user).toBeUndefined();
-      expect(result.error).toBe("Invalid email or password");
+      await expect(
+        service.verifyCredentials("nonexistent@test.com", "anypassword")
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should fail verification with invalid password", async () => {
       // Arrange: Create user
       const email = "user@test.com";
       const correctPassword = "ValidPassword123!";
-      const passwordHash = await hashPassword(correctPassword);
+      const passwordHash = await hashPassword(
+        correctPassword,
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -182,12 +203,12 @@ describe("AuthService", () => {
       );
 
       // Act: Try with wrong password
-      const result = await service.verifyCredentials(email, "WrongPassword!");
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.user).toBeUndefined();
-      expect(result.error).toBe("Invalid email or password");
+      await expect(
+        service.verifyCredentials(email, "WrongPassword!")
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should fail verification for user without password (OAuth user)", async () => {
@@ -201,19 +222,19 @@ describe("AuthService", () => {
       );
 
       // Act
-      const result = await service.verifyCredentials(email, "anypassword");
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.user).toBeUndefined();
-      expect(result.error).toBe("Invalid email or password");
+      await expect(
+        service.verifyCredentials(email, "anypassword")
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should normalize email (case-insensitive)", async () => {
       // Arrange: Create user with lowercase email
       const email = "user@test.com";
       const password = "ValidPassword123!";
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -226,9 +247,7 @@ describe("AuthService", () => {
       const result = await service.verifyCredentials("User@TEST.com", password);
 
       // Assert: Should still work
-      expect(result.success).toBe(true);
-      expect(result.user).toBeDefined();
-      expect(result.user!.email).toBe(email);
+      expect(result.email).toBe(email);
     });
   });
 
@@ -238,7 +257,10 @@ describe("AuthService", () => {
       const userId = randomUUID();
       const currentPassword = "CurrentPassword123!";
       const newPassword = "NewPassword456!";
-      const passwordHash = await hashPassword(currentPassword);
+      const passwordHash = await hashPassword(
+        currentPassword,
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -247,16 +269,12 @@ describe("AuthService", () => {
         })
       );
 
-      // Act
-      const result = await service.changePassword(
-        userId,
-        currentPassword,
-        newPassword
-      );
-
-      // Assert
-      expect(result.success).toBe(true);
-      expect(result.error).toBeUndefined();
+      // Act + Assert: the method resolves to void. Its failure mode is a
+      // thrown NextlyError(AUTH_INVALID_CREDENTIALS), so completing without
+      // throwing IS the success signal — there is no envelope to inspect.
+      await expect(
+        service.changePassword(userId, currentPassword, newPassword)
+      ).resolves.toBeUndefined();
 
       // Verify password was actually changed
       const updatedUser = await testDb.db.query.users.findFirst({
@@ -265,19 +283,25 @@ describe("AuthService", () => {
       expect(updatedUser!.passwordHash).not.toBe(passwordHash);
       expect(updatedUser!.passwordUpdatedAt).toBeDefined();
 
-      // Verify new password works
+      // Verify new password works. `verifyCredentials` returns the user and
+      // throws AUTH_INVALID_CREDENTIALS otherwise, so resolving to THIS user
+      // is the assertion — and it is stronger than a boolean, because a stub
+      // returning some other account would satisfy a truthy check.
       const verifyResult = await service.verifyCredentials(
         updatedUser!.email,
         newPassword
       );
-      expect(verifyResult.success).toBe(true);
+      expect(verifyResult.email).toBe(updatedUser!.email);
     });
 
     it("should fail to change password with wrong current password", async () => {
       // Arrange
       const userId = randomUUID();
       const currentPassword = "CurrentPassword123!";
-      const passwordHash = await hashPassword(currentPassword);
+      const passwordHash = await hashPassword(
+        currentPassword,
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -287,15 +311,12 @@ describe("AuthService", () => {
       );
 
       // Act: Try with wrong current password
-      const result = await service.changePassword(
-        userId,
-        "WrongPassword123!",
-        "NewPassword456!"
-      );
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Current password is incorrect");
+      await expect(
+        service.changePassword(userId, "WrongPassword123!", "NewPassword456!")
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
 
       // Verify password was NOT changed
       const user = await testDb.db.query.users.findFirst({
@@ -309,15 +330,12 @@ describe("AuthService", () => {
       const nonExistentUserId = randomUUID();
 
       // Act
-      const result = await service.changePassword(
-        nonExistentUserId,
-        "anypassword",
-        "newpassword"
-      );
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("User not found or no password set");
+      await expect(
+        service.changePassword(nonExistentUserId, "anypassword", "newpassword")
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should fail to change password for user without password (OAuth user)", async () => {
@@ -331,15 +349,12 @@ describe("AuthService", () => {
       );
 
       // Act
-      const result = await service.changePassword(
-        userId,
-        "anypassword",
-        "newpassword"
-      );
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("User not found or no password set");
+      await expect(
+        service.changePassword(userId, "anypassword", "newpassword")
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
   });
 
@@ -357,10 +372,8 @@ describe("AuthService", () => {
       const result = await service.generatePasswordResetToken(email);
 
       // Assert
-      expect(result.success).toBe(true);
       expect(result.token).toBeDefined();
       expect(result.token!.length).toBe(EXPECTED_TOKEN_LENGTH);
-      expect(result.error).toBeUndefined();
 
       // Verify token was stored in database (hashed)
       const tokens = await testDb.db.query.passwordResetTokens.findMany({
@@ -380,9 +393,7 @@ describe("AuthService", () => {
       );
 
       // Assert: Should still return success (don't leak user existence)
-      expect(result.success).toBe(true);
       expect(result.token).toBeUndefined(); // But no token generated
-      expect(result.error).toBeUndefined();
 
       // Verify no token was created
       const tokens = await testDb.db.query.passwordResetTokens.findMany();
@@ -454,7 +465,7 @@ describe("AuthService", () => {
       const email = "user@test.com";
       const oldPassword = "OldPassword123!";
       const newPassword = "NewPassword456!";
-      const passwordHash = await hashPassword(oldPassword);
+      const passwordHash = await hashPassword(oldPassword, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -464,7 +475,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Act
@@ -474,9 +484,7 @@ describe("AuthService", () => {
       );
 
       // Assert
-      expect(result.success).toBe(true);
       expect(result.email).toBe(email);
-      expect(result.error).toBeUndefined();
 
       // Verify password was changed
       const verifyResult = await service.verifyCredentials(email, newPassword);
@@ -495,15 +503,12 @@ describe("AuthService", () => {
       const invalidToken = "invalid-token-12345";
 
       // Act
-      const result = await service.resetPasswordWithToken(
-        invalidToken,
-        "NewPassword123!"
-      );
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Invalid or expired reset token");
-      expect(result.email).toBeUndefined();
+      await expect(
+        service.resetPasswordWithToken(invalidToken, "NewPassword123!")
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject expired token", async () => {
@@ -517,7 +522,6 @@ describe("AuthService", () => {
 
       // Generate token
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Manually expire the token by updating the database
@@ -534,21 +538,21 @@ describe("AuthService", () => {
         .where(eq(testDb.schema.passwordResetTokens.tokenHash, tokenHash));
 
       // Act
-      const result = await service.resetPasswordWithToken(
-        tokenResult.token!,
-        "NewPassword123!"
-      );
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("expired");
-      expect(result.email).toBeUndefined();
+      await expect(
+        service.resetPasswordWithToken(tokenResult.token!, "NewPassword123!")
+      ).rejects.toMatchObject({
+        code: "TOKEN_EXPIRED",
+        statusCode: 401,
+      });
     });
 
     it.skip("should only allow token to be used once", async () => {
       // Arrange: Create user and generate reset token
       const email = "user@test.com";
-      const passwordHash = await hashPassword("OldPassword123!");
+      const passwordHash = await hashPassword(
+        "OldPassword123!",
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -558,7 +562,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Act: Use token once
@@ -590,7 +593,7 @@ describe("AuthService", () => {
       // Arrange: Create user and generate reset token
       const email = "user@test.com";
       const oldPassword = "OldPassword123!";
-      const passwordHash = await hashPassword(oldPassword);
+      const passwordHash = await hashPassword(oldPassword, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -600,21 +603,22 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
-      // Act: Try to reset with an invalid/weak password
-      const result = await service.resetPasswordWithToken(
-        tokenResult.token!,
-        "weak" // Should fail validation
-      );
+      // Act + Assert: a weak new password is rejected with
+      // NextlyError(VALIDATION_ERROR) before the transaction commits.
+      await expect(
+        service.resetPasswordWithToken(tokenResult.token!, "weak")
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
 
-      // Assert: Operation should fail
-      expect(result.success).toBe(false);
-
-      // Verify original password still works (transaction rolled back)
+      // Verify original password still works (transaction rolled back).
+      // This is the actual subject of the test: the refusal must leave the
+      // account exactly as it was, so the old credentials still resolve.
       const verifyResult = await service.verifyCredentials(email, oldPassword);
-      expect(verifyResult.success).toBe(true);
+      expect(verifyResult.email).toBe(email);
 
       // Verify token wasn't marked as used (can try again)
       const { createHash } = await import("crypto");
@@ -633,18 +637,19 @@ describe("AuthService", () => {
   });
 
   describe("generateEmailVerificationToken()", () => {
-    it("should generate verification token for any email", async () => {
+    it("issues a token for a registered email, and nothing for an unknown one", async () => {
       // Arrange
       const email = "user@test.com";
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email }));
 
       // Act
       const result = await service.generateEmailVerificationToken(email);
 
       // Assert
-      expect(result.success).toBe(true);
       expect(result.token).toBeDefined();
       expect(result.token!.length).toBe(EXPECTED_TOKEN_LENGTH);
-      expect(result.error).toBeUndefined();
 
       // Verify token was stored in database (hashed)
       const tokens = await testDb.db.query.emailVerificationTokens.findMany({
@@ -653,11 +658,28 @@ describe("AuthService", () => {
       expect(tokens).toHaveLength(1);
       expect(tokens[0].expires).toBeInstanceOf(Date);
       expect(tokens[0].expires.getTime()).toBeGreaterThan(Date.now());
+
+      // The other half of the contract, and the reason the old name ("for any
+      // email") was wrong: an UNKNOWN address gets silent success — no token
+      // and no row — so this endpoint cannot be used to discover which
+      // addresses are registered.
+      const unknown =
+        await service.generateEmailVerificationToken("nobody@test.com");
+      expect(unknown.token).toBeUndefined();
+      expect(
+        await testDb.db.query.emailVerificationTokens.findMany({
+          where: { identifier: "nobody@test.com" },
+        })
+      ).toHaveLength(0);
     });
 
     it("should delete old verification tokens when generating new one", async () => {
       // Arrange
       const email = "user@test.com";
+
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email }));
 
       // Generate first token
       await service.generateEmailVerificationToken(email);
@@ -675,6 +697,9 @@ describe("AuthService", () => {
     it("should set correct expiry time (24 hours)", async () => {
       // Arrange
       const email = "user@test.com";
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email }));
 
       const beforeGeneration = Date.now();
 
@@ -715,16 +740,13 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Act
       const result = await service.verifyEmail(tokenResult.token!);
 
       // Assert
-      expect(result.success).toBe(true);
       expect(result.email).toBe(email);
-      expect(result.error).toBeUndefined();
 
       // Verify user's email is now verified
       const user = await testDb.db.query.users.findFirst({
@@ -745,12 +767,10 @@ describe("AuthService", () => {
       const invalidToken = "invalid-verification-token";
 
       // Act
-      const result = await service.verifyEmail(invalidToken);
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Invalid or expired verification token");
-      expect(result.email).toBeUndefined();
+      await expect(service.verifyEmail(invalidToken)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject expired token", async () => {
@@ -765,7 +785,6 @@ describe("AuthService", () => {
 
       // Generate token
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Manually expire the token
@@ -782,12 +801,12 @@ describe("AuthService", () => {
         .where(eq(testDb.schema.emailVerificationTokens.tokenHash, tokenHash));
 
       // Act
-      const result = await service.verifyEmail(tokenResult.token!);
-
-      // Assert
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("expired");
-      expect(result.email).toBeUndefined();
+      await expect(
+        service.verifyEmail(tokenResult.token!)
+      ).rejects.toMatchObject({
+        code: "TOKEN_EXPIRED",
+        statusCode: 401,
+      });
 
       // Verify user's email is still not verified
       const user = await testDb.db.query.users.findFirst({
@@ -807,7 +826,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
 
       // Verify token exists before verification
       const tokensBefore =
@@ -838,7 +856,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Store original token count

@@ -14,7 +14,7 @@ import type { BlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
 
 import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
-import { columns, INITIAL_COLUMNS } from "./columns";
+import { columns } from "./columns";
 import { box } from "./box";
 import { coreBlocks } from "./index";
 import { section } from "./section";
@@ -43,27 +43,24 @@ describe("the columns pair", () => {
     });
   });
 
-  describe("the template", () => {
-    it("is EMPTY, because nothing can mint per-instance ids yet", () => {
-      // A seeded template needs its ids minted per INSTANCE: two rows expanded
-      // from one literal template carry the same node ids, and the engine
-      // reports `duplicate-node-id` on the second. Nothing reads
-      // `SlotSpec.template`, so no expansion path exists to do that minting.
-      //
-      // Naming the ids "placeholders" was the first attempt and changed no
-      // behaviour — the collision is a property of the nodes, not of what they
-      // are called. Empty makes it unreachable.
-      //
-      // A RATCHET: whoever adds an expander fails this test and has to seed
-      // the row deliberately, with per-instance ids, rather than inheriting
-      // literal ones that were only ever safe because nothing read them.
-      expect(columns.slots?.children.template).toEqual([]);
+  describe("what a fresh row starts with", () => {
+    it("declares two columns, by TYPE rather than as stored nodes", () => {
+      // The declaration names a type and carries no id, which is what makes it
+      // safe to expand more than once: `expandSlotDefaults` mints a fresh id
+      // per child per instance, so two rows on a page cannot repeat each
+      // other's ids. A stored node list would carry literal ids and collide on
+      // `duplicate-node-id` the second time it was used.
+      expect(columns.slots?.children.defaultBlock).toEqual([
+        { type: COLUMN_BLOCK },
+        { type: COLUMN_BLOCK },
+      ]);
     });
 
-    it("still records how many columns a fresh row wants", () => {
-      // The default did not stop being true; it moved to the layer that can
-      // implement it. Losing the number would make the expander re-derive it.
-      expect(INITIAL_COLUMNS).toBe(2);
+    it("starts with two, because a row of one is a box", () => {
+      // The count lives in the declaration above and nowhere else — it was
+      // previously also spelled as an `INITIAL_COLUMNS` constant, which was a
+      // second answer to one question. Read it from the list.
+      expect(columns.slots?.children.defaultBlock).toHaveLength(2);
     });
   });
 

@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { DEFAULT_OWNER_FIELD } from "../../../services/access/types";
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { normalizeLocalization } from "../../i18n/config/normalize";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -36,9 +37,17 @@ import {
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
+// `get` THROWS for an unregistered name, exactly as the real container does
+// (di/container.ts). That is not a detail: `recordMutationActivity` treats an
+// absent registration as a boot-time fact rather than a failed write, and it
+// recognises it by CATCHING. A bare `vi.fn()` returns undefined instead, so
+// the catch never fires and the write dies on `undefined.logActivityInTx` --
+// reporting a 500 from a service this suite never meant to involve.
 vi.mock("../../../di/container", () => ({
   container: {
-    get: vi.fn(),
+    get: vi.fn((name: string) => {
+      throw new Error(`Service "${name}" is not registered in container`);
+    }),
     has: vi.fn().mockReturnValue(false),
   },
 }));
@@ -502,12 +511,19 @@ describe("CollectionEntryService — Access Control Contracts", () => {
         user: { id: "user-1" },
       });
 
+      // The sixth argument is `defaultOwnerField`. It decides which column a
+      // rule-less `owner-only` default reads, and collections pass
+      // DEFAULT_OWNER_FIELD ("created_by") rather than the generic camelCase
+      // fallback, because a collection carries the auto-stamped system column.
+      // Asserting the constant rather than the literal keeps this true if the
+      // column is ever renamed in one place.
       expect(acs.evaluateAccess).toHaveBeenCalledWith(
         expect.objectContaining({ read: { type: "authenticated" } }),
         "read",
         expect.any(Object),
         undefined,
-        undefined
+        undefined,
+        DEFAULT_OWNER_FIELD
       );
     });
 
@@ -555,13 +571,17 @@ describe("CollectionEntryService — Access Control Contracts", () => {
         user: { id: "user-1" },
       });
 
-      // evaluateAccess should receive undefined rules (defaults to public)
+      // evaluateAccess should receive undefined rules (defaults to public),
+      // and still the collection's owner column as the sixth argument -- the
+      // default is what a rule-less `owner-only` would read, so it matters
+      // most precisely when no rules are defined.
       expect(acs.evaluateAccess).toHaveBeenCalledWith(
         undefined,
         "read",
         expect.any(Object),
         undefined,
-        undefined
+        undefined,
+        DEFAULT_OWNER_FIELD
       );
     });
   });

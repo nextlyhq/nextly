@@ -78,3 +78,7 @@ export {
   nextlyReleasesSqlite as nextlyReleases,
   nextlyReleaseMembersSqlite as nextlyReleaseMembers,
 } from "../releases/sqlite";
+
+// Background jobs; see the releases note above for why the bundle entry is
+// required and not merely tidy.
+export { nextlyJobsSqlite as nextlyJobs } from "../jobs/sqlite";

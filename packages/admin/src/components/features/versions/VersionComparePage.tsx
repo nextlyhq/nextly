@@ -65,6 +65,13 @@ const NO_PAIR_MESSAGE: Record<
   "no-history": "There is nothing to compare yet.",
   "only-version":
     "There is only one version so far, so there is nothing to compare it with.",
+  // Deliberately different from the line above. Saying "there is only one
+  // version" beside a rail listing several would leave a reader unable to tell
+  // which surface to believe; this says which language is meant, and that
+  // there is somewhere else to look.
+  "only-in-locale":
+    "This is the only version in this language, so there is nothing to compare " +
+    "it with. Versions in other languages have their own history.",
   "not-loaded":
     "The version before this one has not been loaded yet. Choose Load more in the list to fetch it.",
 };
@@ -150,6 +157,13 @@ export function VersionComparePage({
     [list.data]
   );
   const pair = resolvePair(versions, from, to, list.hasNextPage ?? false);
+  // Derived once and given to BOTH surfaces. An infinite query flips to
+  // `isError` when a LATER page fails while keeping the pages it already holds,
+  // so the aggregate state says "this failed" about a page nobody asked for.
+  // Passed raw, it erases the rail's rows on one surface and unmounts a valid
+  // comparison on the other — two different lies about the same event. Only a
+  // failure that left nothing on screen is a failure of the history itself.
+  const historyUnavailable = list.isError && versions.length === 0;
 
   // Choosing a row compares it against the version before it IN ITS OWN LOCALE,
   // and writes that choice to the URL so the comparison on screen is the one the
@@ -164,14 +178,36 @@ export function VersionComparePage({
         list.hasNextPage ?? false
       );
       if (previous.kind !== "version") return;
+      // Compared as the VALUES that decide the comparison, not as URL text.
+      // `navigateTo` skips a push only when its argument equals
+      // `window.location.pathname`, which a target carrying a query never does,
+      // so choosing the row already on screen stacked another identical entry
+      // and Back walked through indistinguishable copies of one comparison.
+      // Comparing serialized text instead would answer differently for
+      // `?to=9&from=8`, or for a link carrying an unrelated parameter, and
+      // reinstate exactly that — these two numbers are what `resolvePair`
+      // reads, so they are what "the same comparison" means.
+      if (previous.versionNo === from && versionNo === to) return;
+      // Built through the same `versionsHref` the history sheet uses, so one
+      // place decides what a comparison's address looks like. Hand-building it
+      // here is how the locale came to be dropped: the address was assembled
+      // from the two numbers this callback happens to hold, and a language is
+      // not one of them.
+      //
+      // The locale is taken from the SELECTED version rather than carried from
+      // the current address, so choosing a row in another language moves the
+      // page to that language instead of keeping the previous one. The rail
+      // interleaves locales, so the row a reader clicks is routinely not in the
+      // language now on screen.
       navigateTo(
-        withQuery(window.location.pathname, {
-          from: previous.versionNo,
-          to: versionNo,
-        })
+        versionsHref(
+          scope,
+          { from: previous.versionNo, to: versionNo },
+          versions.find(v => v.versionNo === versionNo)?.locale
+        )
       );
     },
-    [versions, list.hasNextPage]
+    [versions, list.hasNextPage, from, to, scope]
   );
 
   return (
@@ -197,18 +233,29 @@ export function VersionComparePage({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="w-72 shrink-0 overflow-y-auto border-r border-border">
+      {/* Stacked below `lg`, side by side above it. The rail is a fixed 18rem,
+          and at a 375px viewport that leaves the comparison roughly 87px before
+          borders and padding — its pair description, filter and field values
+          all clipped. `DashboardLayout` already switches to a mobile header at
+          the same breakpoint, so the split is what has to give, not the
+          content beside it. Stacked, the rail keeps a bounded height so the
+          comparison is reachable without scrolling past the whole history. */}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border lg:max-h-none lg:w-72 lg:border-r lg:border-b-0">
           <VersionTimelineRail
             scope={scope}
             versions={versions}
             selected={pair.kind === "pair" ? pair.to : null}
             onSelect={selectPair}
             isLoading={list.isLoading}
-            isError={list.isError}
+            isError={historyUnavailable}
             hasNextPage={list.hasNextPage}
             isFetchingNextPage={list.isFetchingNextPage}
             onLoadMore={() => void list.fetchNextPage()}
+            // Page-specific, not the aggregate: `historyUnavailable` above
+            // answers whether the history could be read at all, and a later
+            // page failing is a different event with a different remedy.
+            nextPageError={list.isFetchNextPageError ? list.error : null}
           />
         </aside>
 
@@ -222,7 +269,7 @@ export function VersionComparePage({
           <ComparisonPane
             scope={scope}
             pair={pair}
-            isError={list.isError}
+            isError={historyUnavailable}
             isLoading={list.isLoading}
             onRetry={() => void list.refetch()}
           />
@@ -232,10 +279,18 @@ export function VersionComparePage({
   );
 }
 
-/** The address of a document's history, with an optional pair already chosen. */
+/**
+ * The address of a document's history, with an optional pair already chosen.
+ *
+ * The locale travels with the pair. A localized document holds different text
+ * per language, so the versions being compared and the name the page gives the
+ * document are both questions the language answers — and a link that omits it
+ * opens the French comparison under the English title.
+ */
 export function versionsHref(
   scope: VersionScope,
-  pair?: { from: number; to: number }
+  pair?: { from: number; to: number },
+  locale?: string | null
 ): string {
   const path =
     scope.kind === "single"
@@ -244,5 +299,12 @@ export function versionsHref(
           slug: scope.slug,
           id: scope.entryId ?? "",
         });
-  return pair ? withQuery(path, { from: pair.from, to: pair.to }) : path;
+  const query = {
+    ...(pair ? { from: pair.from, to: pair.to } : {}),
+    // Omitted rather than sent empty when there is none: a non-localized
+    // document should carry no locale, and `?locale=` reads as one that failed
+    // to resolve rather than one that was never asked for.
+    ...(locale ? { locale } : {}),
+  };
+  return Object.keys(query).length > 0 ? withQuery(path, query) : path;
 }

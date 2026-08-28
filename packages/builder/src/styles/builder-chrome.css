@@ -1357,7 +1357,13 @@
  * the two fields share what is left, which keeps a long token name from
  * pushing the remove button out of reach.
  */
-.nx-tokens {
+/*
+ * The body layout every rail panel uses. One rule rather than a copy per
+ * panel: a second copy drifts, and the panels would then disagree about their
+ * own padding for no reason a reader could find.
+ */
+.nx-tokens,
+.nx-classman {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -1768,4 +1774,309 @@
   font-size: var(--text-xs);
   font-weight: 400;
   color: var(--nx-muted-foreground);
+}
+
+/**
+ * The "+" drawn over an empty container.
+ *
+ * BASE tokens rather than the `--nx-builder-*` set several sections above,
+ * matching the drop indicator: this control belongs to the canvas's own
+ * palette, which is the page's rather than the chrome's, so the token it takes
+ * its colour from should be the one every other canvas affordance uses.
+ *
+ * A builder token would in fact resolve here — the empty-container rule above
+ * is scoped to `.nx-builder-chrome`, so a container carrying this control is
+ * always inside the element those tokens are declared on. That is a reason the
+ * choice is safe either way rather than a reason to change it.
+ *
+ * Positioned exactly like `.nx-spacing-overlay`: a full-bleed layer over the
+ * canvas root's own content box, so the pixel numbers the component computes
+ * through `canvasContentRect` land on the containers they were measured from.
+ */
+.nx-empty-container-appenders {
+  position: absolute;
+  inset: 0;
+  /* Above the spacing bands, which only describe what already is; below the
+     floating toolbar, which can be showing for the same selected-but-empty
+     container and should not be covered by this. */
+  z-index: 2;
+  /*
+   * Never a pointer target ITSELF. This layer spans the whole canvas root, and
+   * a hit-test that could land on the empty space between controls would make
+   * every block underneath it unclickable — exactly the failure
+   * `.nx-spacing-overlay` avoids the same way. Each button below opts back in.
+   */
+  pointer-events: none;
+}
+
+/*
+ * The button itself: transparent at rest, so it does not double up on the
+ * dashed `[data-nx-slots]:empty` box already drawn under it, and picking up
+ * colour only on hover and focus — where the two states share a treatment
+ * because both are ways of saying "this is interactive", pointer and keyboard
+ * alike.
+ */
+.nx-empty-container-appenders__button {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--nx-muted-foreground);
+  cursor: pointer;
+}
+
+.nx-empty-container-appenders__button:hover {
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+}
+
+.nx-empty-container-appenders__button:focus-visible {
+  outline: 2px solid var(--nx-primary);
+  outline-offset: -2px;
+  color: var(--nx-foreground);
+}
+
+/*
+ * The class selector, at the top of the style inspector.
+ *
+ * Chips wrap rather than scroll: the rail is narrow and a horizontal scroller
+ * hides the classes furthest from the start, which are the ones that override
+ * the others.
+ */
+.nx-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-classes__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-classes__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  padding-inline-start: 0.5rem;
+  background: var(--nx-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5rem;
+}
+
+.nx-classes__chip-name {
+  font-family: var(--font-mono, monospace);
+}
+
+.nx-classes__chip-remove {
+  height: 1.25rem;
+  min-width: 1.25rem;
+  padding: 0;
+  line-height: 1;
+}
+
+.nx-classes__options {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+/*
+ * The row IS the target. It carries no nested button, because with
+ * `aria-activedescendant` the input owns the tab sequence and a focusable
+ * child would take rows into it.
+ */
+.nx-classes__option {
+  padding: 0.25rem 0.5rem;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono, monospace);
+  cursor: pointer;
+}
+
+/*
+ * ONE highlighted row, and it is the React state that draws it — never :hover.
+ * The pointer moves that same state as it passes over a row, so hovering and
+ * arrowing cannot disagree. Adding `:hover` to this rule instead would paint a
+ * second row while Enter still committed the first, which is the exact
+ * confusion the shared state exists to prevent.
+ */
+.nx-classes__option--active {
+  background: var(--nx-accent);
+}
+
+/*
+ * The class manager, a rail panel beside the tokens studio.
+ *
+ * A rail panel rather than the top-bar dialog the breakpoint manager uses,
+ * because a class library grows without bound and an author reads this list
+ * WHILE looking at the canvas to see what a filter selected. A modal forecloses
+ * that.
+ */
+.nx-classman__title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.nx-classman__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.nx-classman__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.nx-classman__fields {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.nx-classman__name {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/*
+ * The trailing note on a row: either what the index holds, or the marker on a
+ * class the site's config supplies and storage therefore cannot delete. One
+ * rule, because they occupy the same slot and a second copy would drift.
+ */
+.nx-classman__usage,
+.nx-classman__origin {
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  white-space: nowrap;
+}
+
+.nx-classman__issue {
+  margin: 0.25rem 0 0;
+  font-size: var(--text-xs);
+  color: var(--nx-destructive);
+}
+
+/*
+ * The confirmation sits in the row rather than in a modal. It names a number
+ * the index cannot guarantee, so it has to be read beside the class it is
+ * about — a dialog would separate the claim from its subject.
+ */
+.nx-classman__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1px solid var(--nx-destructive);
+  border-radius: 0.375rem;
+}
+
+/*
+ * Text being edited keeps the platform's own long-press callout.
+ *
+ * The context menu's trigger wraps the canvas, and Radix sets
+ * `-webkit-touch-callout: none` on it so a long press opens the block menu
+ * rather than the browser's. That property INHERITS, so it reaches the
+ * `contenteditable` inside a block as well — and the canvas withholds the
+ * press there, so a long press on text would open neither menu: the platform's
+ * spelling, selection and clipboard callout suppressed, and nothing put in its
+ * place. Restored on the editable subtree only, so the block menu keeps the
+ * whole of the canvas that is not text.
+ *
+ * `[contenteditable="false"]` is excluded for the reason the canvas excludes
+ * it: it marks a region deliberately made uneditable inside an editable one,
+ * which is a block again rather than text.
+ */
+.nx-canvas [contenteditable] {
+  -webkit-touch-callout: default;
+}
+
+/*
+ * ...except a region the editor has deliberately made uneditable inside an
+ * editable one. That is a block again rather than text, so the block menu is
+ * the right menu there and the suppression stands. Written as its own rule
+ * rather than as a `:not()` on the one above: two plain selectors say the same
+ * thing, and the negated form was complex enough to be flagged.
+ */
+.nx-canvas [contenteditable="false"] {
+  -webkit-touch-callout: none;
+}
+
+/*
+ * The reordering hint under the layers tree.
+ *
+ * Quiet by construction: it is a standing legend rather than a message, so it
+ * has to be readable without competing with the tree it describes. Kept at the
+ * panel's own text size floor rather than smaller, because a hint nobody can
+ * read is the same as the missing hint it replaced.
+ */
+.nx-layers-panel__hint {
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border-top: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  list-style: none;
+}
+
+/*
+ * One binding per row, with the keystroke in a column of its own.
+ *
+ * A run of them separated inline wraps mid-binding at this width — the key and
+ * the words it belongs to end up on different lines — which turns a legend
+ * meant to be scanned into a paragraph to be read.
+ */
+.nx-layers-panel__hint-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/* Wide enough that the four labels start on one line rather than four. */
+.nx-layers-panel__hint-row .nx-layers-panel__hint-key {
+  flex: none;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+/*
+ * The keystroke reads as a key, so it is set apart from the words around it.
+ * `inline-block` rather than a bare span: the glyphs are narrow and the label
+ * beside them is not, and without a box the two run together at small sizes.
+ */
+.nx-layers-panel__hint-key {
+  display: inline-block;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
 }

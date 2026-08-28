@@ -11,7 +11,10 @@
  * @module domains/i18n/runtime/companion-io
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SqlParam,
+  SupportedDialect,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
@@ -193,6 +196,43 @@ export async function upsertCompanionRow(
       `VALUES (${valuePlaceholders}) ${conflict}`,
     params
   );
+}
+
+/**
+ * Present a transaction as the write surface {@link upsertCompanionRow} takes.
+ *
+ * There is exactly one difference between an adapter and a transaction here: the NAME of the
+ * raw-SQL method. `CompanionWriteAdapter.executeQuery` and `TransactionContext.execute` have the
+ * same `(sql, params) => Promise<T[]>` shape; only the dialect has to be supplied separately,
+ * because a transaction does not carry one.
+ *
+ * That difference is the entire reason a SECOND hand-written companion upsert existed inside
+ * `collection-mutation-service.ts` — the collection write path holds a `tx`, could not pass it
+ * here, and grew its own copy of the same INSERT ... ON CONFLICT. Naming the difference in one
+ * place is what lets one upsert serve both, so a column added to the companion row (i18n B2's
+ * `_updated_at`) is written by every path rather than by whichever one the author remembered.
+ *
+ * @param tx - The caller's open transaction; writes land on its connection, not a pooled one.
+ * @param dialect - Read from the calling service, since a transaction does not expose it.
+ */
+export function companionWriteVia(
+  tx: {
+    execute<T = unknown>(sql: string, params?: SqlParam[]): Promise<T[]>;
+  },
+  dialect: SupportedDialect
+): CompanionWriteAdapter {
+  return {
+    dialect,
+    // The cast is the one place the two surfaces disagree: `executeQuery` declares `unknown[]`
+    // and `execute` declares `SqlParam[]`. The values are companion column values plus the
+    // parent id and locale, which is exactly what the previous call site already passed — it
+    // simply passed them through a `tx: any`, so nothing checked them at all. Narrowing here
+    // is stricter than what it replaces, not looser.
+    executeQuery: <T = unknown>(
+      sql: string,
+      params?: unknown[]
+    ): Promise<T[]> => tx.execute<T>(sql, params as SqlParam[] | undefined),
+  };
 }
 
 /**

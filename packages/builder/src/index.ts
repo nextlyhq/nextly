@@ -130,8 +130,16 @@ export type { BuilderShellProps } from "./builder-shell";
 /**
  * @experimental The shell's own decisions: which panels the rail offers, the
  * bounds handed to the panel library, and the preference port.
+ *
+ * `DEFAULT_PREFERENCES` travels with them for a host that mirrors ONE
+ * preference outside the shell — `BuilderShellProps.onShowEmptyElementsChange`
+ * reports `showEmptyElements` after the shell has read it, which is later than
+ * such a host's own first render. Reading the default from here rather than
+ * restating `true` is what keeps that first render honest, and keeps it that
+ * way if the default here ever changes.
  */
 export {
+  DEFAULT_PREFERENCES,
   EMPTY_ELEMENTS_ATTRIBUTE,
   LEFT_PANELS,
   MIN_CANVAS_WIDTH,
@@ -193,6 +201,7 @@ export {
 } from "./drop-targets";
 export {
   blockAllowedAt,
+  registryBlockSource,
   registrySlotSource,
   type InsertTarget,
   type SlotSource,
@@ -322,6 +331,7 @@ export {
   BLOCK_GROUP,
   EDITOR_GROUP,
   HISTORY_GROUP,
+  blockActionRunners,
   builderCommands,
   type BuilderCommandsInput,
   type CommandVerbs,

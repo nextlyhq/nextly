@@ -39,9 +39,11 @@
  * @module use-inline-text
  */
 
+import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { EditorState } from "./editor-state";
+import { namedTarget } from "./inline-target";
 import { inlineTarget, inlineTargets, inlineTextOp } from "./inline-text";
 
 /** The attribute naming the element an author is currently typing into. */
@@ -63,8 +65,14 @@ export interface UseInlineTextResult {
    * a keyboard caller wants: it has a selected block and no element.
    */
   begin: (nodeId: string, prop?: string) => boolean;
-  /** Finish, writing whatever the author left behind. */
-  commit: () => void;
+  /**
+   * Finish, writing whatever the author left behind.
+   *
+   * Returns the document the write produced, or `null` when there was nothing
+   * to write — a caller about to hand the document elsewhere holds the one from
+   * before this commit.
+   */
+  commit: () => BlockDocument | null;
   /** Finish, discarding it. */
   cancel: () => void;
   /**
@@ -195,7 +203,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     // last would store markup this value cannot hold.
     const next = element?.textContent ?? null;
     release();
-    if (current === null || next === null) return;
+    if (current === null || next === null) return null;
     const op = inlineTextOp(
       editorRef.current.document,
       current.nodeId,
@@ -204,7 +212,7 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
     );
     // `null` for an unchanged value and for one that stopped being editable
     // while the caret was in it — see `inlineTextOp`.
-    if (op !== null) editorRef.current.apply(op);
+    return op === null ? null : editorRef.current.apply(op);
   }, [release]);
 
   const cancel = useCallback(() => {
@@ -225,9 +233,10 @@ export function useInlineText(editor: EditorState): UseInlineTextResult {
   }, [release]);
 
   const begin = useCallback((nodeId: string, prop?: string) => {
-    const targets = inlineTargets(editorRef.current.document, nodeId);
-    const target =
-      prop === undefined ? targets[0] : targets.find(t => t.prop === prop);
+    const target = namedTarget(
+      inlineTargets(editorRef.current.document, nodeId),
+      prop
+    );
     if (target === undefined) return false;
     setEditing({ nodeId: target.nodeId, prop: target.prop });
     return true;

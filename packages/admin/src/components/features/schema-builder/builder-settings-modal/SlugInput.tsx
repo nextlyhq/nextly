@@ -1,11 +1,15 @@
-// Why: slug auto-derives from the singular name (kebab for singles,
-// snake for collections/components — branching lives in BasicsTab). PR B
-// dropped the loud "AUTO" badge + "Edit" text button in favor of a
-// quieter, more dev-focused presentation: bold value + Lucide Pencil
-// icon button. PR G (feedback 2) removed the dim "Slug:" prefix --
-// the parent Label already says "Slug" so the prefix was redundant.
-// Once the user clicks the pencil, the value becomes an inline
-// editable input with a "Done" button.
+// A monospaced text input for an entity's slug, which the parent renders
+// read-only once the entity exists.
+//
+// The slug auto-derives from the singular name — kebab for singles, snake for
+// collections and components — and that branching lives in BasicsTab, because
+// the case rule is the only genuinely kind-specific part of this field.
+//
+// `readOnly` rather than `disabled` is the one decision here worth stating, and
+// the reason is on the prop itself: a disabled input is skipped by keyboard
+// navigation and read as unavailable, while this value still has to be
+// selectable, copyable and reachable by a screen reader. It is not unavailable;
+// it is settled.
 import { Input } from "@nextlyhq/ui";
 
 import { cn } from "@admin/lib/utils";

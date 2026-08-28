@@ -14,6 +14,7 @@ import { COMPONENT_INSTANCE_TYPE, isBlockType } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
+import { isPlainRecord } from "./plain-record";
 import { styleSupportDefinitions } from "./style/supports-map";
 import type { BlockTypeLookup } from "./validation";
 
@@ -93,6 +94,43 @@ export function isBlockName(value: unknown): value is string {
 }
 
 /**
+ * Whether every index of an array is an OWN element rather than a hole.
+ *
+ * An explicit index loop, because every callback-based array method skips
+ * holes — `every`, `some`, `filter` and `forEach` alike — so a predicate
+ * written with one cannot observe the thing it is being asked about. That is
+ * not a detail of this check: it is the reason a sparse array survives
+ * validation and then reaches a `for...of`, which does NOT skip, and yields
+ * `undefined`.
+ */
+function hasNoHoles(values: readonly unknown[]): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Object.hasOwn(values, index)) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a slot name can be stored and read back as its own key.
+ *
+ * The rejected names are the ones `Object.prototype` OWNS. Reading
+ * `slots[name]` for one of those answers with an inherited member instead of
+ * `undefined`, and assigning it — which a slot-map rebuild does — sets the
+ * prototype rather than creating an own property, dropping that whole child
+ * list. Asked of `Object.prototype` rather than matched against a written
+ * list, because the list everyone writes is `__proto__` and `constructor`
+ * while `toString` behaves identically.
+ *
+ * Exported for the same reason {@link isBlockName} is: a slot name is judged
+ * at a block's DECLARATION and again on every op that carries one, and those
+ * two gates answering differently is how a name a position could not use gets
+ * in through a subtree.
+ */
+export function isUsableSlotName(name: string): boolean {
+  return !Object.prototype.hasOwnProperty.call(Object.prototype, name);
+}
+
+/**
  * The highest version a block may declare. Migration chains a bounded number of
  * steps, so a version above this could never carry its oldest stored nodes
  * forward — registration refuses it rather than promise an upgrade path that
@@ -111,11 +149,6 @@ const SUPPORT_KEY_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
 
 function fail(code: string, message: string): never {
   throw new Error(`${code}: ${message}`);
-}
-
-/** A key/value object — not null, not an array, not a function. */
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -206,26 +239,73 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
           `block "${def.name}" slot "${slotName}" must be a plain object.`
         );
       }
-      const allow = (spec as { allow?: unknown }).allow;
-      if (allow === undefined) continue;
-      // A namespace wildcard is permitted here and is not a block NAME, so this cannot reuse
-      // `isBlockName`: `core/*` names a set rather than a block.
-      const wellFormed =
-        Array.isArray(allow) &&
-        allow.every(entry => {
-          if (typeof entry !== "string") return false;
-          // A wildcard is checked by substituting a placeholder segment, so the name grammar is
-          // asked ONCE. Testing both forms as alternatives narrows the value to `never` on the
-          // second branch, because the predicate is a type guard.
-          const asName = entry.endsWith("/*")
-            ? `${entry.slice(0, -2)}/x`
-            : entry;
-          return isBlockName(asName);
-        });
-      if (!wellFormed) {
+      // A slot whose NAME cannot hold children is not a slot. The op layer
+      // refuses any node carrying one, so a block declaring it offers a
+      // palette row whose insert is always refused — and, where the slot
+      // declares starting children, that refusal is silent: the row is
+      // clicked and nothing appears.
+      if (!isUsableSlotName(slotName)) {
         fail(
           "NEXTLY_BLOCK_INVALID",
-          `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
+          `block "${def.name}" slot "${slotName}" is a name Object.prototype owns, so it cannot be stored and read back. Rename the slot.`
+        );
+      }
+      const allow = (spec as { allow?: unknown }).allow;
+      // Each field is validated on its own rather than behind the other's
+      // presence: a slot may declare `defaultBlock` and no `allow` at all,
+      // which is the ordinary case, and a `continue` here would carry the
+      // defaultBlock check past every one of them.
+      if (allow !== undefined) {
+        // A namespace wildcard is permitted here and is not a block NAME, so this cannot reuse
+        // `isBlockName`: `core/*` names a set rather than a block.
+        const wellFormed =
+          Array.isArray(allow) &&
+          allow.every(entry => {
+            if (typeof entry !== "string") return false;
+            // A wildcard is checked by substituting a placeholder segment, so the name grammar is
+            // asked ONCE. Testing both forms as alternatives narrows the value to `never` on the
+            // second branch, because the predicate is a type guard.
+            const asName = entry.endsWith("/*")
+              ? `${entry.slice(0, -2)}/x`
+              : entry;
+            return isBlockName(asName);
+          });
+        if (!wellFormed) {
+          fail(
+            "NEXTLY_BLOCK_INVALID",
+            `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
+          );
+        }
+      }
+      // `defaultBlock` is read when an author INSERTS this block, which is the
+      // worst place for a definition error to surface: a non-array is iterated
+      // by the expansion and throws `TypeError: declared is not iterable` at
+      // the click, naming neither the plugin nor the block that declared it.
+      // Checked here for exactly the reason `allow` above is — the type rejects
+      // it at the authoring site, and definitions also arrive from JavaScript
+      // plugins and from JSON, where it does not.
+      const defaultBlock = (spec as { defaultBlock?: unknown }).defaultBlock;
+      if (defaultBlock === undefined) continue;
+      // A HOLE is not a missing element to `Array.prototype.every`, which skips
+      // it, while `for...of` visits it and yields `undefined` — so a sparse
+      // array validated by the first is read by the second. Checked by index
+      // because no callback-based method can see what it does not visit.
+      const dense = Array.isArray(defaultBlock) && hasNoHoles(defaultBlock);
+      const entriesWellFormed =
+        dense &&
+        defaultBlock.every(entry => {
+          if (!isPlainRecord(entry)) return false;
+          // Only `type` is required. `props` is optional and the child's own
+          // defaults stand underneath it, so an entry naming just a type is the
+          // ordinary case rather than an incomplete one.
+          if (!isBlockName((entry as { type?: unknown }).type)) return false;
+          const props = (entry as { props?: unknown }).props;
+          return props === undefined || isPlainRecord(props);
+        });
+      if (!entriesWellFormed) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" defaultBlock must be an array of entries like { type: "core/column" }, each with an optional plain-object props.`
         );
       }
     }

@@ -31,6 +31,17 @@ describe("core/gallery", () => {
     expect(image.parent).toBeUndefined();
   });
 
+  it("declares no starting children, which follows from that asymmetry", () => {
+    // A row and an accordion declare a default because their allowed child
+    // names them back as its only parent, so the container is unusable until it
+    // holds one. `core/image` declares no parent — the test above is that same
+    // fact — so nothing about a gallery makes an image hard to reach, and a
+    // seeded image with no source would be a placeholder to replace rather
+    // than a container to fill.
+    expect(gallery.slots?.children?.defaultBlock).toBeUndefined();
+    expect(image.parent).toBeUndefined();
+  });
+
   it("is registered after the block its slot allows", () => {
     const names = coreBlocks.map(block => block.name);
     expect(names).toContain(gallery.name);

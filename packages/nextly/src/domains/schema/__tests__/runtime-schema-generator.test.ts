@@ -220,18 +220,35 @@ describe("generateRuntimeSchema", () => {
       expect(columns).toHaveProperty("ref");
     });
 
-    it("skips layout-only fields (tabs, collapsible, row)", () => {
+    it("skips the fields whose values live in another table", () => {
+      // Was "skips layout-only fields (tabs, collapsible, row)". None of those
+      // three types exists: they are absent from the FieldType union, from the
+      // legacy-alias map exercised in the test above, and from the two
+      // LAYOUT_FIELD_TYPES sets meant to name them -- which are empty and
+      // unreachable (finding:layout-field-type-sets-are-empty-and-dead). So
+      // they took the unrecognised-type path and became text columns, which is
+      // the DOCUMENTED choice: `fieldProducesColumn` keeps an unregistered
+      // plugin type inside the rules a column carries rather than letting it
+      // escape them silently.
+      //
+      // The rule the test was reaching for is real, so it is asserted through
+      // the mechanisms that implement it: a component stores its values in its
+      // own comp_ table, and a many-to-many stores its links in a junction
+      // table. Neither takes a column on the parent row.
       const fields: FieldDefinition[] = [
         { name: "title", type: "text", required: true },
-        { name: "layout", type: "tabs" as FieldDefinition["type"] },
-        { name: "section", type: "collapsible" as FieldDefinition["type"] },
-        { name: "row1", type: "row" as FieldDefinition["type"] },
+        { name: "hero", type: "component" as FieldDefinition["type"] },
+        {
+          name: "tags",
+          type: "relationship" as FieldDefinition["type"],
+          options: { relationType: "manyToMany" },
+        } as FieldDefinition,
       ];
       const result = generateRuntimeSchema("dc_test", fields, "postgresql");
       const columns = getColumns(result.table);
-      expect(columns).not.toHaveProperty("layout");
-      expect(columns).not.toHaveProperty("section");
-      expect(columns).not.toHaveProperty("row1");
+      expect(columns).toHaveProperty("title");
+      expect(columns).not.toHaveProperty("hero");
+      expect(columns).not.toHaveProperty("tags");
     });
   });
 

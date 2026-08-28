@@ -16,6 +16,7 @@ import {
   clearBlocks,
   registerBlocks,
   registryNestingSource,
+  type AnyBlockDefinition,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
@@ -23,6 +24,7 @@ import {
   UNCATEGORISED,
   type SlotSource,
   allowedEntries,
+  blockSourceFor,
   catalogFrom,
   entryAllowedAt,
   filterEntries,
@@ -701,6 +703,15 @@ describe("insertionPointFor", () => {
   });
 });
 
+/**
+ * A definition source resolving nothing, for the cases about props and ids.
+ *
+ * Those blocks declare no starting children, so expansion has nothing to do and
+ * an empty source says exactly that. It also keeps them off the global
+ * registry, which no test here registers into.
+ */
+const noDefaults = { get: () => undefined };
+
 describe("nodeForEntry", () => {
   it("stamps the type and the version the entry carries", () => {
     // Version 3 with its migration steps, rather than the default 1: a stamp
@@ -716,7 +727,7 @@ describe("nodeForEntry", () => {
         },
       },
     ]);
-    const node = nodeForEntry(entry(entries, "acme/text"));
+    const node = nodeForEntry(entry(entries, "acme/text"), noDefaults);
 
     expect(node.type).toBe("acme/text");
     expect(node.version).toBe(3);
@@ -737,7 +748,7 @@ describe("nodeForEntry", () => {
       },
     ]);
 
-    const node = nodeForEntry(entry(entries, "acme/card#loud"));
+    const node = nodeForEntry(entry(entries, "acme/card#loud"), noDefaults);
 
     expect(node.type).toBe("acme/card");
     expect(node.props).toEqual({ tone: "shout" });
@@ -757,8 +768,8 @@ describe("nodeForEntry", () => {
     ]);
     const source = entry(entries, "acme/list");
 
-    const first = nodeForEntry(source);
-    const second = nodeForEntry(source);
+    const first = nodeForEntry(source, noDefaults);
+    const second = nodeForEntry(source, noDefaults);
     (first.props.items as string[]).push("two");
     (first.props.meta as { deep: boolean }).deep = false;
 
@@ -771,6 +782,192 @@ describe("nodeForEntry", () => {
     const entries = catalog([{ ...base, name: "acme/text" }]);
     const source = entry(entries, "acme/text");
 
-    expect(nodeForEntry(source).id).not.toBe(nodeForEntry(source).id);
+    expect(nodeForEntry(source, noDefaults).id).not.toBe(
+      nodeForEntry(source, noDefaults).id
+    );
+  });
+
+  describe("a block that declares what its slot starts with", () => {
+    /**
+     * A row declaring two columns, and the column it names.
+     *
+     * Mirrors `core/columns` without depending on it: the property under test
+     * is that the inserter EXPANDS a declaration, which must hold for a plugin
+     * container nobody here wrote.
+     */
+    const rowDefinitions = {
+      get: (type: string) =>
+        type === "acme/row"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  defaultBlock: [{ type: "acme/cell" }, { type: "acme/cell" }],
+                },
+              },
+            }
+          : type === "acme/cell"
+            ? { version: 2 }
+            : undefined,
+    };
+
+    const rowEntry = () =>
+      entry(catalog([{ ...base, name: "acme/row" }]), "acme/row");
+
+    it("arrives carrying the children the block declares", () => {
+      const node = nodeForEntry(rowEntry(), rowDefinitions);
+
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/cell",
+        "acme/cell",
+      ]);
+      // The child's own version, not the row's.
+      expect(node.slots?.children?.map(child => child.version)).toEqual([2, 2]);
+    });
+
+    it("gives the two children of ONE insert distinct ids", () => {
+      const node = nodeForEntry(rowEntry(), rowDefinitions);
+      const ids = (node.slots?.children ?? []).map(child => child.id);
+
+      // Length alone passes on an implementation that expands one child and
+      // repeats the reference, which is the collision this design removes.
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    });
+
+    it("gives TWO inserted rows no id in common, parents included", () => {
+      // The collision that matters is across instances, and one parent cannot
+      // produce it: an implementation caching the expanded children per type
+      // passes the test above and fails here. Two rows dropped on one page are
+      // exactly this situation, and `duplicate-node-id` is what the document
+      // validator answers if it is got wrong.
+      const source = rowEntry();
+      const first = nodeForEntry(source, rowDefinitions);
+      const second = nodeForEntry(source, rowDefinitions);
+
+      const everyId = [
+        first.id,
+        second.id,
+        ...(first.slots?.children ?? []).map(child => child.id),
+        ...(second.slots?.children ?? []).map(child => child.id),
+      ];
+
+      expect(everyId).toHaveLength(6);
+      expect(new Set(everyId).size).toBe(6);
+    });
+
+    it("leaves a block declaring no default with no slots key at all", () => {
+      // Not an empty record: the editor's empty-container check reads the
+      // absence of `slots`, so a container claiming an empty slot it never
+      // filled would be a different state to it.
+      const plain = entry(
+        catalog([{ ...base, name: "acme/text" }]),
+        "acme/text"
+      );
+
+      expect(nodeForEntry(plain, rowDefinitions).slots).toBeUndefined();
+    });
+  });
+
+  describe("choosing the definitions an insert expands from", () => {
+    /**
+     * A container and its child that are NEVER registered.
+     *
+     * `catalogFrom` rather than the `catalog` helper above, because that helper
+     * REGISTERS what it is handed — which would erase the very condition under
+     * test. The palette offers whatever a caller supplies, so these are blocks
+     * an author can see and choose while the registry knows nothing about them.
+     */
+    const suppliedRow = {
+      ...base,
+      name: "acme/supplied-row",
+      slots: { children: { defaultBlock: [{ type: "acme/supplied-cell" }] } },
+    };
+    const suppliedCell = { ...base, name: "acme/supplied-cell", version: 4 };
+
+    /** Supplied, but naming a child only the registry holds. */
+    const mixedRow = {
+      ...base,
+      name: "acme/mixed-row",
+      slots: { children: { defaultBlock: [{ type: "acme/registered-cell" }] } },
+    };
+    // Version 1: registration refuses a higher version with no migration
+    // chain, so the registered fixtures cannot carry a distinguishing version
+    // the way the supplied ones do. The child's PRESENCE is the proof of
+    // resolution anyway — an unresolvable type contributes no child at all.
+    const registeredCell = { ...base, name: "acme/registered-cell" };
+
+    it("expands a supplied definition the registry does not hold", () => {
+      const source = blockSourceFor([
+        suppliedRow,
+        suppliedCell,
+      ] as unknown as readonly AnyBlockDefinition[]);
+      const node = nodeForEntry(
+        entry(catalogFrom([suppliedRow] as never), "acme/supplied-row"),
+        source
+      );
+
+      // The separating property is the CHILD being there. Resolving only
+      // through the registry finds no declaration for a supplied block, and an
+      // absent declaration is indistinguishable from a declared emptiness — so
+      // the block is offered and then inserted stripped of what it declares,
+      // with nothing reported.
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/supplied-cell",
+      ]);
+      // The child's own version, which proves the CHILD resolved through the
+      // supplied list too rather than the parent alone.
+      expect(node.slots?.children?.[0]?.version).toBe(4);
+    });
+
+    it("falls back to the registry for a type the supplied list omits", () => {
+      registerBlocks([registeredCell] as never, { source: "acme" });
+      const source = blockSourceFor([
+        mixedRow,
+      ] as unknown as readonly AnyBlockDefinition[]);
+      const node = nodeForEntry(
+        entry(catalogFrom([mixedRow] as never), "acme/mixed-row"),
+        source
+      );
+
+      // A declaration names child TYPES the supplied list has no reason to
+      // carry. Consulting the supplied list FIRST must not stop the registry
+      // answering for the rest, or the fix for the case above would break
+      // every ordinary insert.
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/registered-cell",
+      ]);
+    });
+
+    it("expands from the snapshot it was built with, not the live registry", () => {
+      // The row is registered BEFORE the source is built; the child it names is
+      // registered AFTER. A source that resolved live would find the child and
+      // seed it.
+      registerBlocks([mixedRow] as never, { source: "acme" });
+      const source = blockSourceFor(undefined);
+      registerBlocks([registeredCell] as never, { source: "acme" });
+
+      const node = nodeForEntry(
+        entry(catalogFrom([mixedRow] as never), "acme/mixed-row"),
+        source
+      );
+
+      // The panel documents its palette as read once per mount, and the row an
+      // author sees must be the row an insert builds. A live source would let a
+      // plugin registering while the panel is open change what a stale row
+      // inserts — same version and props, different children.
+      expect(node.slots).toBeUndefined();
+    });
+
+    it("uses the registry when no definitions are supplied", () => {
+      const node = nodeForEntry(
+        entry(catalog([mixedRow, registeredCell]), "acme/mixed-row"),
+        blockSourceFor(undefined)
+      );
+
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/registered-cell",
+      ]);
+    });
   });
 });

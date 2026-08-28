@@ -112,6 +112,75 @@ describe("InsertPanel", () => {
     expect(onInsert).toHaveBeenCalledWith(op.node);
   });
 
+  it("judges a supplied block's declared children by the supplied rules", () => {
+    /*
+     * The palette is handed definitions the REGISTRY does not hold, and no
+     * nesting source. The container declares a starting child that its own
+     * slot's `allow` excludes, so the child must not be seeded.
+     *
+     * What makes this discriminate: the registry cannot see either type, and
+     * an unknown type reports as unrestricted rather than as forbidden — so a
+     * panel that defaults its nesting source to the registry before handing it
+     * on gets "allowed" for a placement the supplied declarations forbid, and
+     * seeds it. Only the definitions themselves carry the rule.
+     */
+    const supplied = [
+      {
+        ...base,
+        name: "acme/row",
+        editor: { label: "Row" },
+        slots: {
+          children: {
+            allow: ["acme/cell"],
+            defaultBlock: [{ type: "acme/stray" }],
+          },
+        },
+      },
+      { ...base, name: "acme/stray", editor: { label: "Stray" } },
+    ] as never;
+
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} definitions={supplied} />);
+
+    fireEvent.click(screen.getByText("Row"));
+
+    const op = editor.apply.mock.calls[0][0];
+    expect(op.node.type).toBe("acme/row");
+    // The row itself still inserts; only the illegal child is refused, and a
+    // slot left with no children carries no `slots` key at all.
+    expect(op.node.slots).toBeUndefined();
+  });
+
+  it("seeds a supplied block's declared child when the supplied rules permit it", () => {
+    // The control on the assertion above. Without it, an implementation that
+    // seeded NOTHING from a supplied definition would satisfy the refusal and
+    // look correct.
+    const supplied = [
+      {
+        ...base,
+        name: "acme/row",
+        editor: { label: "Row" },
+        slots: {
+          children: {
+            allow: ["acme/cell"],
+            defaultBlock: [{ type: "acme/cell" }],
+          },
+        },
+      },
+      { ...base, name: "acme/cell", editor: { label: "Cell" } },
+    ] as never;
+
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} definitions={supplied} />);
+
+    fireEvent.click(screen.getByText("Row"));
+
+    const op = editor.apply.mock.calls[0][0];
+    expect(
+      op.node.slots?.children?.map((c: { type: string }) => c.type)
+    ).toEqual(["acme/cell"]);
+  });
+
   it("draws a mark on every row, so the rows are distinguishable at a glance", () => {
     /*
      * The palette is scanned rather than read: an author looking for a layout

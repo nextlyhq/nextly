@@ -31,9 +31,7 @@
  * restore corrupted, are unreachable by every query it makes. Singles have no
  * rebuild at all, because a plugin has no supported way to read a Single's
  * document.
- *
- * Note that the LEGACY `rebuildClassUsage` is a different thing: it rewrites
- * the per-page `usedClasses` column and never touches `nx_pb_class_usage`.
+
  *
  * That is not the same as the event bus, which was rejected for this job: an
  * event handler's failure is never surfaced to anybody, while this one reaches
@@ -82,10 +80,9 @@ import { readStoredJson } from "./stored-json";
 /**
  * The store operations maintenance needs, declared structurally.
  *
- * Not the generated Direct API types, for the same reason `PageUsageStore` is
- * not: those describe the HOST app's collections, which may not have been
- * generated when this plugin is wired. The index collection is this plugin's
- * own to know.
+ * Not the generated Direct API types: those describe the HOST app's
+ * collections, which may not have been generated when this plugin is wired.
+ * The index collection is this plugin's own to know.
  */
 /**
  * The index, as everything above it sees it.

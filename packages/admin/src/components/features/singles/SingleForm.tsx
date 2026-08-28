@@ -60,7 +60,6 @@ import { TranslationPanes } from "@admin/components/features/entries/Translation
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
@@ -71,11 +70,7 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import {
-  computeMainFields,
-  takeoverControllerNames,
-  takeoverTypesFromBranding,
-} from "@admin/lib/builder/takeoverLayout";
+import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import { cn } from "@admin/lib/utils";
@@ -421,14 +416,8 @@ export function SingleForm({
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
   // body to itself + its condition controller. Generic — driven by field-type metadata.
-  const branding = useBranding();
-  const takeoverTypes = takeoverTypesFromBranding(branding.plugins);
-  const controllerNames = takeoverControllerNames(allFields, takeoverTypes);
-  const watched = controllerNames.length ? form.watch(controllerNames) : [];
-  const values = Object.fromEntries(
-    controllerNames.map((n, i) => [n, watched[i]])
-  );
-  const mainFields = computeMainFields(allFields, { takeoverTypes, values });
+  // Asked of the shared hook so the entry editor cannot answer it differently.
+  const { mainFields, controllerNames } = useTakeoverLayout(allFields, form);
 
   // Status flag — singles can opt into Draft/Published via schema.status.
   // When true, EntrySystemHeader shows Save Draft / Update split, and
@@ -593,17 +582,8 @@ export function SingleForm({
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
+    form,
   });
-  const restoreRecovery = useCallback(() => {
-    if (!recovery.offer) return;
-    // `keepDefaultValues` so the form goes DIRTY: the recovered values are not
-    // what the server holds, and treating them as the new baseline would let
-    // the reader navigate away believing they were stored.
-    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
-      keepDefaultValues: true,
-    });
-    recovery.dismiss();
-  }, [recovery, form]);
 
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
@@ -777,7 +757,7 @@ export function SingleForm({
                           {recovery.offer ? (
                             <AutosaveRecoveryBanner
                               savedAt={recovery.offer.savedAt}
-                              onRestore={restoreRecovery}
+                              onRestore={recovery.restore}
                               onDismiss={recovery.dismiss}
                               className="mx-6 mt-3"
                             />

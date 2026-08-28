@@ -92,6 +92,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     InspectorPanel: record("inspector"),
     Canvas: record("canvas"),
     BlockKeyboardActions: passthrough,
+    /*
+     * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
+     * a stub would take the recorder below out of the tree along with it. The
+     * real one reads the verbs context, which the passthrough above does not
+     * provide.
+     */
+    BlockContextMenu: passthrough,
     BlockToolbar: nothing,
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
@@ -124,6 +131,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
 });
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  /*
+   * Never awaited by these cases: the loader is reached only when an author
+   * double-clicks a passage, and none of them do. Present because the mock
+   * REPLACES the module wholesale, so an export the subject imports and this
+   * omits is a missing-export error rather than an unused stub.
+   */
+  loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
   useDocumentCheckpoint: () => ({ record: () => {}, clear: () => {} }),
   useEntryFieldsPanel: () => null,
