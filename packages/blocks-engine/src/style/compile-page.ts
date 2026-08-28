@@ -1035,6 +1035,27 @@ interface EnvelopeContext {
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
   mayFetchUrl?: MayFetchUrl;
+  /**
+   * Whether this envelope's rules carry NO specificity, by wrapping each
+   * finished selector in `:where()`.
+   *
+   * Set for a block type's DEFAULTS and for nothing else. The page-root prefix
+   * is doubled so an AUTHOR's values beat ordinary host CSS, and defaults
+   * inherited that contract without it ever being argued for them — but a
+   * default nobody can override is not a default. Builder.io shipped
+   * compound-class component defaults and answered the resulting complaints
+   * with a global opt-out; every low-friction precedent that ships
+   * rendered-block typography keeps it at the floor instead, Webflow on bare
+   * tags and Tailwind Typography inside `:where()`.
+   *
+   * It also orders the three tiers by CONSTRUCTION rather than by emission
+   * order: a type's default loses to a named class and to a node's own value
+   * because it weighs nothing, not because it happens to be written first.
+   *
+   * `:where()` changes what a match WEIGHS and never what it selects, so the
+   * same elements are styled either way.
+   */
+  weightless?: boolean;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -1058,7 +1079,7 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl } = about;
+  const { origin, trace, mayFetchUrl, weightless = false } = about;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1143,7 +1164,15 @@ function envelopeRules(
       for (const rule of groupByDescendant(compiled.declarations)) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-          selector: `${selector}${STATE_SELECTORS[state]}${rule.descendant}`,
+          // Wrapped AFTER the state and the descendant are appended, never
+          // around the base alone: `:where(root .type) a` leaves the `a`
+          // outside and weighing 0-0-1, so a block default that styles
+          // something inside itself would still outrank a host rule of the
+          // same shape. The whole selector goes in or the guarantee is
+          // partial.
+          selector: weightless
+            ? `:where(${selector}${STATE_SELECTORS[state]}${rule.descendant})`
+            : `${selector}${STATE_SELECTORS[state]}${rule.descendant}`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1611,7 +1640,12 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { origin: { kind: "blockType", type }, trace, mayFetchUrl }
+        {
+          origin: { kind: "blockType", type },
+          trace,
+          mayFetchUrl,
+          weightless: true,
+        }
       )
     );
   }
