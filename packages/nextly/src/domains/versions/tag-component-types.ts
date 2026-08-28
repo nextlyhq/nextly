@@ -18,6 +18,8 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
+import type { AddressableField } from "../../shared/addressable-fields";
+import { addressableFields } from "../../shared/addressable-fields";
 import { storageTypeToken } from "../../shared/lib/plugin-storage";
 import {
   clearFieldGroupType,
@@ -38,36 +40,8 @@ export type ComponentFieldResolver = (
   slug: string
 ) => FieldConfig[] | undefined;
 
-/**
- * Fields addressable at this level, with presentational groups flattened.
- *
- * A group with no name exists to lay fields out: its children are stored at the
- * level the group sits in, not under it. Skipping the group without descending
- * would leave a component inside a layout group untagged, and that grouping is
- * common enough to be the usual case rather than an edge one.
- */
-export function addressableFields(fields: FieldConfig[]): FieldConfig[] {
-  const flat: FieldConfig[] = [];
-
-  for (const field of fields) {
-    const named = typeof field.name === "string" && field.name.length > 0;
-    if (named) {
-      flat.push(field);
-      continue;
-    }
-
-    // Presentational groups nest, so one inside another still resolves.
-    const children = (field as { fields?: unknown }).fields;
-    if (Array.isArray(children)) {
-      flat.push(...addressableFields(children as FieldConfig[]));
-    }
-  }
-
-  return flat;
-}
-
 /** The component slug a field names, when it names exactly one. */
-function singleComponentSlug(field: FieldConfig): string | undefined {
+function singleComponentSlug(field: AddressableField): string | undefined {
   // Only the single-component shape. A dynamic zone declares `components` and
   // already stores a type per row, chosen by the editor rather than implied.
   const slug = (field as { component?: unknown }).component;
@@ -75,7 +49,7 @@ function singleComponentSlug(field: FieldConfig): string | undefined {
 }
 
 /** The component slugs a dynamic zone allows, when the field is one. */
-function dynamicZoneSlugs(field: FieldConfig): string[] | undefined {
+function dynamicZoneSlugs(field: AddressableField): string[] | undefined {
   const many = (field as { components?: unknown }).components;
   if (!Array.isArray(many)) return undefined;
   return many.filter((slug): slug is string => typeof slug === "string");
@@ -434,19 +408,30 @@ export async function resolveComponentFieldMap(
 ): Promise<Map<string, FieldConfig[]>> {
   const resolved = new Map<string, FieldConfig[]>();
 
-  const slugsIn = (list: FieldConfig[]): string[] => {
+  // Iterative, with a visited set, for the same two reasons the addressable-
+  // fields walk is: a config whose group contains itself overflowed the call
+  // stack here, and a list wider than the engine's argument limit threw out of
+  // `push(...slugsIn(children))`. This runs BEFORE the tagging walk on the
+  // save path, so hardening only that one left both failures reachable one
+  // function earlier — a throw here reports a failed save for one that
+  // succeeded, since it happens after the row is written.
+  const slugsIn = (list: readonly unknown[]): string[] => {
     const found: string[] = [];
-    for (const field of list) {
-      const one = (field as { component?: unknown }).component;
-      const many = (field as { components?: unknown }).components;
-      if (typeof one === "string") found.push(one);
-      if (Array.isArray(many)) {
-        for (const slug of many) if (typeof slug === "string") found.push(slug);
-      }
+    const pending: unknown[] = [];
+    for (let i = list.length - 1; i >= 0; i--) pending.push(list[i]);
+    const walked = new WeakSet<object>();
+
+    while (pending.length > 0) {
+      const field = pending.pop();
+      if (typeof field !== "object" || field === null) continue;
+      if (walked.has(field)) continue;
+      walked.add(field);
+
+      for (const slug of componentSlugsOn(field)) found.push(slug);
+
       const children = (field as { fields?: unknown }).fields;
-      if (Array.isArray(children)) {
-        found.push(...slugsIn(children as FieldConfig[]));
-      }
+      if (!Array.isArray(children)) continue;
+      for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]);
     }
     return found;
   };
@@ -540,6 +525,133 @@ export function rehydrateSnapshotDates(
  * password field", including inline groups and repeaters, has one definition
  * rather than two that would drift.
  */
+/**
+ * The component slugs one field names, from either shape it can name them in.
+ *
+ * Separate from the walk that finds them because it answers a different
+ * question: this reads one field, the walk decides which fields to read.
+ */
+function componentSlugsOn(field: object): string[] {
+  const found: string[] = [];
+  const one = (field as { component?: unknown }).component;
+  if (typeof one === "string") found.push(one);
+
+  const many = (field as { components?: unknown }).components;
+  if (Array.isArray(many)) {
+    for (const slug of many) if (typeof slug === "string") found.push(slug);
+  }
+  return found;
+}
+
+/** What a descent needs beyond the field it is looking at. */
+interface StripContext {
+  entry: Record<string, unknown>;
+  componentFields: Map<string, FieldConfig[]>;
+  strip: (entry: Record<string, unknown>, fields: FieldConfig[]) => void;
+  onUnresolvedComponent: (slug: string) => void;
+  openContainers: WeakSet<object>;
+}
+
+/**
+ * Descend through an unnamed container into the level it sits in.
+ *
+ * The only descent here that recurses on the SAME value with a different field
+ * list, and so the only one that can loop: a container whose `fields` reaches
+ * itself recurses forever. `openContainers` holds what is currently open ON
+ * THIS PATH and is released on the way out, so a container shared by several
+ * rows is still walked once per row — a set that only ever grew would walk the
+ * first row and leave every later row's password in the snapshot.
+ */
+function stripThroughUnnamed(field: unknown, ctx: StripContext): void {
+  const nested = (field as { fields?: unknown }).fields;
+  if (!Array.isArray(nested)) return;
+  if (typeof field !== "object" || field === null) return;
+  if (ctx.openContainers.has(field)) return;
+
+  ctx.openContainers.add(field);
+  stripPasswordsThroughComponents(
+    ctx.entry,
+    nested as FieldConfig[],
+    ctx.componentFields,
+    ctx.strip,
+    ctx.onUnresolvedComponent,
+    ctx.openContainers
+  );
+  ctx.openContainers.delete(field);
+}
+
+/**
+ * Descend through a field that REFERENCES one or more component schemas.
+ *
+ * Separate from the walk because it decides which schema a value is judged
+ * against, which the walk itself does not: a dynamic-zone row carries its own
+ * type tag and must be judged by that alone, while an untagged one falls back
+ * to the union of every candidate.
+ */
+function stripThroughComponentRef(
+  name: string,
+  slugs: readonly string[],
+  ctx: StripContext
+): void {
+  const { entry, componentFields, strip, onUnresolvedComponent } = ctx;
+  const fieldsFor = (slug: string): FieldConfig[] => {
+    const resolved = componentFields.get(slug);
+    if (resolved === undefined) {
+      onUnresolvedComponent(slug);
+      return [];
+    }
+    return resolved;
+  };
+
+  // A dynamic-zone row carries its OWN `_componentType`, so judge it
+  // against that component's schema rather than the union of every
+  // candidate. The union is safe against leaks but not against damage:
+  // where two alternatives share a field name and only one declares it a
+  // password, unioning deletes that field from rows of the OTHER
+  // alternative, quietly emptying a legitimate value out of the recovery
+  // point. The tag is present, so there is no reason to guess.
+  const rows = entry[name];
+  if (Array.isArray(rows)) {
+    for (const row of rows) {
+      // ASKED, not read. The storage migration renames this key inside
+      // stored JSON, so a snapshot written under the other spelling would
+      // read as untyped -- and an untyped row falls back to the union,
+      // which is exactly the over-stripping this per-row selection exists
+      // to avoid. The accessor tries both spellings in the migration's own
+      // order.
+      const tagged =
+        row && typeof row === "object"
+          ? readFieldGroupType(row as Record<string, unknown>)
+          : undefined;
+      const rowFields =
+        typeof tagged === "string" && slugs.includes(tagged)
+          ? fieldsFor(tagged)
+          : // Untagged rows fall back to the union: without a tag there is
+            // nothing to select on, and over-stripping beats leaking.
+            slugs.flatMap(fieldsFor);
+      stripPasswordsThroughComponents(
+        row,
+        rowFields,
+        componentFields,
+        strip,
+        onUnresolvedComponent,
+        new WeakSet()
+      );
+    }
+    return;
+  }
+
+  const inner: FieldConfig[] = slugs.flatMap(fieldsFor);
+  stripPasswordsThroughComponents(
+    entry[name],
+    inner,
+    componentFields,
+    strip,
+    onUnresolvedComponent,
+    new WeakSet()
+  );
+}
+
 export function stripPasswordsThroughComponents(
   value: unknown,
   fields: FieldConfig[],
@@ -557,7 +669,15 @@ export function stripPasswordsThroughComponents(
     throw NextlyError.internal({
       logContext: { reason: "unresolved-component-schema", slug },
     });
-  }
+  },
+  /**
+   * The unnamed containers currently open ON THIS PATH, so a container whose
+   * `fields` reaches itself terminates. Defaulted because no caller outside
+   * this walk supplies it, and released on the way out rather than accumulated:
+   * a set that only grew would walk the first row of a repeater and leave every
+   * later row's password in the snapshot.
+   */
+  openContainers: WeakSet<object> = new WeakSet()
 ): void {
   if (!value || typeof value !== "object") return;
 
@@ -589,84 +709,29 @@ export function stripPasswordsThroughComponents(
     // declared inside it, or inside a component it references, untouched at
     // the parent level. Recurse into the same entry with the child list.
     if (typeof name !== "string") {
-      const nested = (field as { fields?: unknown }).fields;
-      if (Array.isArray(nested)) {
-        stripPasswordsThroughComponents(
-          entry,
-          nested as FieldConfig[],
-          componentFields,
-          strip,
-          onUnresolvedComponent
-        );
-      }
+      stripThroughUnnamed(field, {
+        entry,
+        componentFields,
+        strip,
+        onUnresolvedComponent,
+        openContainers,
+      });
       continue;
     }
 
     if (!(name in entry)) continue;
 
-    const slugs: string[] = [];
-    const one = (field as { component?: unknown }).component;
-    if (typeof one === "string") slugs.push(one);
-    const many = (field as { components?: unknown }).components;
-    if (Array.isArray(many)) {
-      for (const slug of many) if (typeof slug === "string") slugs.push(slug);
-    }
-
+    // The same reading the resolver does. Two functions deciding which
+    // components a field names is two functions that can disagree about it.
+    const slugs = componentSlugsOn(field);
     if (slugs.length > 0) {
-      const fieldsFor = (slug: string): FieldConfig[] => {
-        const resolved = componentFields.get(slug);
-        if (resolved === undefined) {
-          onUnresolvedComponent(slug);
-          return [];
-        }
-        return resolved;
-      };
-
-      // A dynamic-zone row carries its OWN `_componentType`, so judge it
-      // against that component's schema rather than the union of every
-      // candidate. The union is safe against leaks but not against damage:
-      // where two alternatives share a field name and only one declares it a
-      // password, unioning deletes that field from rows of the OTHER
-      // alternative, quietly emptying a legitimate value out of the recovery
-      // point. The tag is present, so there is no reason to guess.
-      const rows = entry[name];
-      if (Array.isArray(rows)) {
-        for (const row of rows) {
-          // ASKED, not read. The storage migration renames this key inside
-          // stored JSON, so a snapshot written under the other spelling would
-          // read as untyped -- and an untyped row falls back to the union,
-          // which is exactly the over-stripping this per-row selection exists
-          // to avoid. The accessor tries both spellings in the migration's own
-          // order.
-          const tagged =
-            row && typeof row === "object"
-              ? readFieldGroupType(row as Record<string, unknown>)
-              : undefined;
-          const rowFields =
-            typeof tagged === "string" && slugs.includes(tagged)
-              ? fieldsFor(tagged)
-              : // Untagged rows fall back to the union: without a tag there is
-                // nothing to select on, and over-stripping beats leaking.
-                slugs.flatMap(fieldsFor);
-          stripPasswordsThroughComponents(
-            row,
-            rowFields,
-            componentFields,
-            strip,
-            onUnresolvedComponent
-          );
-        }
-        continue;
-      }
-
-      const inner: FieldConfig[] = slugs.flatMap(fieldsFor);
-      stripPasswordsThroughComponents(
-        entry[name],
-        inner,
+      stripThroughComponentRef(name, slugs, {
+        entry,
         componentFields,
         strip,
-        onUnresolvedComponent
-      );
+        onUnresolvedComponent,
+        openContainers,
+      });
       continue;
     }
 
@@ -677,7 +742,8 @@ export function stripPasswordsThroughComponents(
         children as FieldConfig[],
         componentFields,
         strip,
-        onUnresolvedComponent
+        onUnresolvedComponent,
+        new WeakSet()
       );
     }
   }

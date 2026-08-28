@@ -328,12 +328,54 @@ const INTERACTIVE_NODES: ReadonlySet<string> = new Set([
 
 /** Whether anything drawn inside a container is itself interactive. */
 function holdsInteractive(nodes: readonly RichTextNode[] | undefined): boolean {
+  return anyDescendant(nodes, node => INTERACTIVE_NODES.has(node.type));
+}
+
+/**
+ * Whether any node in this subtree satisfies a test.
+ *
+ * ITERATIVE, with an explicit stack, and that is load-bearing rather than a
+ * style choice. Nesting here is bounded by what an editor or an import
+ * produced, not by anything the document limits enforce: those count BLOCK
+ * nodes, and this is the tree inside one prop. A value far below the byte cap
+ * can nest thousands of levels deep, and a recursive scan over it exhausts the
+ * call stack — which throws while rendering rather than returning an answer,
+ * taking the whole page route down instead of degrading to a placeholder.
+ *
+ * Measured on this renderer: about five thousand nested containers that neither
+ * scan short-circuits on is enough. The engine's own plain-text walk is
+ * iterative for exactly this reason and says so; these scans are reached from
+ * the same values and had not followed.
+ *
+ * A node that MATCHES ends the walk, and a node whose children are not an array
+ * simply contributes none — both preserve what the recursive form answered.
+ */
+function anyDescendant(
+  nodes: readonly RichTextNode[] | undefined,
+  matches: (node: RichTextNode) => boolean
+): boolean {
+  // Array-checked for the reason {@link children} gives: this is stored JSON.
   if (!Array.isArray(nodes)) return false;
-  return nodes.some(child => {
-    if (!isRichTextNode(child)) return false;
-    if (INTERACTIVE_NODES.has(child.type)) return true;
-    return holdsInteractive(child.children);
-  });
+  const stack: RichTextNode[] = [];
+  pushAll(stack, nodes);
+  while (stack.length > 0) {
+    const child = stack.pop();
+    if (child === undefined || !isRichTextNode(child)) continue;
+    if (matches(child)) return true;
+    if (Array.isArray(child.children)) pushAll(stack, child.children);
+  }
+  return false;
+}
+
+/**
+ * Pushes nodes onto a walk stack.
+ *
+ * One at a time rather than by spreading, because a spread passes every element
+ * as an argument and a stored array large enough would exceed the call's own
+ * argument limit — trading one stack overflow for another.
+ */
+function pushAll(stack: RichTextNode[], nodes: readonly RichTextNode[]): void {
+  for (const node of nodes) if (node !== undefined) stack.push(node);
 }
 
 const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
@@ -350,19 +392,12 @@ const BLOCK_LEVEL: ReadonlySet<string> = new Set(BLOCK_LEVEL_NODES);
  * children land in whatever encloses IT.
  *
  * A block node ends the walk instead of being descended into, because it has
- * already answered the question. The recursion is therefore bounded by the
- * document's own depth, which the renderer walks anyway.
+ * already answered the question.
  */
 function holdsBlockContent(
   nodes: readonly RichTextNode[] | undefined
 ): boolean {
-  // Array-checked for the reason {@link children} gives: this is stored JSON.
-  if (!Array.isArray(nodes)) return false;
-  return nodes.some(child => {
-    if (!isRichTextNode(child)) return false;
-    if (BLOCK_LEVEL.has(child.type)) return true;
-    return holdsBlockContent(child.children);
-  });
+  return anyDescendant(nodes, node => BLOCK_LEVEL.has(node.type));
 }
 
 /** Heading levels Lexical serializes; anything else is a document from a version this does not know. */
@@ -386,38 +421,96 @@ function kidsOf(node: RichTextNode): readonly RichTextNode[] {
 }
 
 /**
+ * How deep this partition will descend before it stops rearranging.
+ *
+ * The walk REBUILDS the tree as it goes — each level returns wrappers holding
+ * the children that stayed and the children that moved — so unlike the scans it
+ * cannot be flattened into a stack without changing what it produces. It is
+ * therefore bounded instead.
+ *
+ * Beyond the bound the node is kept where it is rather than partitioned. That
+ * yields markup this function would otherwise have corrected, in a passage
+ * nested a hundred wrappers deep inside one heading — a shape no editor
+ * produces and no author writes. The alternative is `RangeError` thrown out of
+ * the render, which takes the page route down rather than one passage's layout,
+ * and nothing bounds this depth from outside: the document limits count block
+ * nodes, not the tree inside a prop.
+ *
+ * A hundred is far above any authored nesting and far below the call stack.
+ */
+const MAX_PARTITION_DEPTH = 100;
+
+/**
+ * Where ONE child of a phrasing-only container belongs.
+ *
+ * Answered per child so the walk above stays a walk: the decision has five
+ * cases and the sequencing rule has its own, and reading them interleaved is
+ * how a case comes to be judged against the wrong container.
+ *
+ * See {@link PhrasingOnly} for why each branch answers the way it does.
+ */
+function partitionChild(
+  child: RichTextNode,
+  permits: ReadonlySet<string>,
+  depth: number
+): { keeps: RichTextNode[]; moves: RichTextNode[] } {
+  if (!isRichTextNode(child)) return { keeps: [child], moves: [] };
+  if (permits.has(child.type)) {
+    // Kept, but its OWN block content still may not live here. Moved out
+    // unwrapped: a second copy of this heading would be a second outline entry.
+    const inner = partitionPhrasing(kidsOf(child), PERMITS_NOTHING, depth + 1);
+    return { keeps: [{ ...child, children: inner.keeps }], moves: inner.moves };
+  }
+  if (BLOCK_LEVEL.has(child.type)) return { keeps: [], moves: [child] };
+  // Kept whole past the bound: rearranging it is what would recurse.
+  if (depth >= MAX_PARTITION_DEPTH || !holdsBlockContent(child.children))
+    return { keeps: [child], moves: [] };
+  // An inline wrapper holding both. Split it, keeping the wrapper on each side
+  // so the words stay linked and the media stays linked.
+  const inner = partitionPhrasing(kidsOf(child), permits, depth + 1);
+  return {
+    keeps: inner.keeps.length > 0 ? [{ ...child, children: inner.keeps }] : [],
+    moves: inner.moves.length > 0 ? [{ ...child, children: inner.moves }] : [],
+  };
+}
+
+/**
  * Children split into what a phrasing-only container keeps and what follows it.
  *
  * See {@link PhrasingOnly} for why each branch answers the way it does.
  */
 function partitionPhrasing(
   nodes: readonly RichTextNode[],
-  permits: ReadonlySet<string>
+  permits: ReadonlySet<string>,
+  depth = 0
 ): { keeps: RichTextNode[]; moves: RichTextNode[] } {
   const keeps: RichTextNode[] = [];
   const moves: RichTextNode[] = [];
   for (const child of nodes) {
-    if (!isRichTextNode(child)) {
-      keeps.push(child);
-    } else if (permits.has(child.type)) {
-      // Kept, but its OWN block content still may not live here. Moved out
-      // unwrapped: a second copy of this heading would be a second outline entry.
-      const inner = partitionPhrasing(kidsOf(child), PERMITS_NOTHING);
-      keeps.push({ ...child, children: inner.keeps });
-      moves.push(...inner.moves);
-    } else if (BLOCK_LEVEL.has(child.type)) {
+    /*
+     * Once anything has moved out, everything after it goes with it.
+     *
+     * The container's phrasing is not a SET to be gathered; it is a sequence
+     * the author wrote. Collecting every phrasing child regardless of position
+     * reorders the passage — `Before`, an image, `After` renders as one heading
+     * reading "BeforeAfter" followed by the image, which has walked backwards
+     * past text that came after it.
+     *
+     * Following the block out rather than splitting the container around it,
+     * because a second copy of the tag is a second entry in the document
+     * outline — the same reason a permitted heading's own block content leaves
+     * unwrapped. Trailing phrasing lands in the flow after the container, where
+     * phrasing content is legal, and in the author's order.
+     */
+    if (moves.length > 0) {
       moves.push(child);
-    } else if (!holdsBlockContent(child.children)) {
-      keeps.push(child);
-    } else {
-      // An inline wrapper holding both. Split it, keeping the wrapper on each
-      // side so the words stay linked and the media stays linked.
-      const inner = partitionPhrasing(kidsOf(child), permits);
-      if (inner.keeps.length > 0)
-        keeps.push({ ...child, children: inner.keeps });
-      if (inner.moves.length > 0)
-        moves.push({ ...child, children: inner.moves });
+      continue;
     }
+    const placed = partitionChild(child, permits, depth);
+    // One at a time: a spread passes every element as an argument, and a stored
+    // passage large enough exceeds the call's own argument limit.
+    pushAll(keeps, placed.keeps);
+    pushAll(moves, placed.moves);
   }
   return { keeps, moves };
 }

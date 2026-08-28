@@ -128,6 +128,34 @@ export { text, textarea, checkbox, upload, group } from "nextly";
 export type { FieldConfig } from "nextly";
 
 /**
+ * Which fields a level addresses, with presentational groups flattened.
+ *
+ * An unnamed group lays fields out and stores its children at the level it sits
+ * in; a named one stores them under itself. A plugin walking a collection's
+ * fields has to make that distinction to find where a value is actually kept,
+ * and reimplementing it is a second answer to one question.
+ *
+ * @experimental
+ */
+export { addressableFields } from "nextly";
+
+/**
+ * What a caller passes to control the walk, and what it emits.
+ *
+ * `descendInto` chooses which unnamed containers are transparent, and the
+ * choice has to be made during the walk: the result holds the flattened
+ * children themselves, so a field reached through one container is the same
+ * object as the same field reached through another.
+ *
+ * @experimental
+ */
+export type {
+  AddressableFieldsOptions,
+  AddressableField,
+  UnvalidatedAddressableField,
+} from "nextly";
+
+/**
  * Declaring a field of a type the plugin itself contributes. The built-in
  * factories cover only the built-in types, so a contributed type has no factory
  * to build its field with; `pluginField` brands one so the authoring surfaces

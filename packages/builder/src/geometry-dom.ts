@@ -296,6 +296,65 @@ export function layoutFragments(element: Element): number {
 }
 
 /**
+ * Whether the render SKIPS this element, so a rectangle read from it describes
+ * nothing that is on the page.
+ *
+ * `getBoundingClientRect` and `getClientRects` answer for a skipped element as
+ * readily as for a drawn one, and what they answer is not always the zero
+ * rectangle {@link layoutFragments} refuses on. A closed `<details>` is the
+ * case that makes the difference visible: an engine that removes the contents
+ * from the rendering reports NO fragments for a descendant, while one that
+ * gives the contents `content-visibility: hidden` — which is what the HTML
+ * rendering section now describes — reports ONE, sized and positioned as though
+ * the disclosure were open. That rectangle overlaps whatever the page actually
+ * draws at those coordinates, so chrome anchored to it is chrome placed on
+ * somebody else's content.
+ *
+ * The element cannot answer this about itself. The skip is a property of a box
+ * ABOVE it — for a disclosure, the `::details-content` box the engine generates
+ * for the parent — so the element's own computed `content-visibility` reads
+ * `visible` throughout, and no property read from the element separates the two
+ * renderings.
+ *
+ * `checkVisibility()` is the standard question and it is asked with NO options,
+ * which is a narrowing rather than a default. Un-optioned it refuses exactly
+ * two things: an element with no box at all, and an element under an ancestor
+ * with `content-visibility: hidden`. Each option would widen it to "is this
+ * PAINTED", which is a different question and the wrong one here:
+ *
+ * - `contentVisibilityAuto` refuses a subtree the engine is skipping only
+ *   because it is off-screen. The box is real, reserved in flow and correctly
+ *   placed; the skip ends when it is scrolled to. Nothing between the canvas
+ *   root and the window reports that scroll, so a refusal taken on it would not
+ *   be re-decided when it stopped being true.
+ * - `opacityProperty` (and its historical alias `checkOpacity`) refuses a
+ *   transparent element. A transparent element still lays out where it says it
+ *   does and still takes pointer events, so chrome anchored to it is anchored
+ *   correctly.
+ * - `visibilityProperty` (`checkVisibilityCSS`) refuses `visibility: hidden`,
+ *   which likewise reserves its box in flow at the position it reports.
+ *
+ * An ancestor walk for a closed disclosure — `closest("details:not([open])")` —
+ * needs no new API and is rejected on two counts. It identifies the case by one
+ * element's spelling rather than by the property that makes it wrong, so it
+ * says nothing about `content-visibility: hidden` arriving any other way; and
+ * it over-refuses, because a `<summary>` and its descendants are rendered while
+ * the disclosure is closed and are inside that same `<details>`.
+ *
+ * An engine with no `checkVisibility` reports NOT SKIPPED, so it behaves as it
+ * did before this question existed. That is a deliberate posture rather than a
+ * fallback: the method predates the author-visible `::details-content` in every
+ * engine that ships it, and an engine old enough to lack the method removes a
+ * closed disclosure's contents from the rendering instead, where the fragment
+ * count already answers. Refusing on absence would instead delete an affordance
+ * from every container on such an engine, on no evidence at all.
+ */
+export function renderSkips(element: Element): boolean {
+  if (typeof element.checkVisibility !== "function") return false;
+  return !element.checkVisibility();
+}
+
+/**
  * The cumulative transform between an element and the canvas root, reduced to
  * the two things axis-aligned chrome can use.
  *
