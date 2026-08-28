@@ -119,6 +119,10 @@ import {
 } from "../../i18n/resolve-locale";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
 import {
+  NO_DECISIONS,
+  type ReleaseDecisions,
+} from "../../releases/release-scope";
+import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
@@ -302,15 +306,16 @@ export class CollectionQueryService extends BaseService {
    * — so the common case is not paying for a query it cannot use. Only asked
    * for a PUBLISHED read: an unbounded or draft-only read has nothing to reveal.
    */
-  private async releaseRevealIds(
+  private async releaseDecisions(
     collectionName: string,
-    statusFilter: { value: StatusFilterValue } | null
-  ): Promise<readonly string[]> {
-    if (statusFilter?.value !== "published") return [];
-    return this.releaseVisibility.revealIds({
+    statusFilter: { value: StatusFilterValue } | null,
+    now: Date
+  ): Promise<ReleaseDecisions> {
+    if (statusFilter?.value !== "published") return NO_DECISIONS;
+    return this.releaseVisibility.decisions({
       scopeKind: "collection",
       scopeSlug: collectionName,
-      now: new Date(),
+      now,
     });
   }
 
@@ -1174,13 +1179,19 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
       });
+      // ONE instant for this read. Each release lookup taking its own
+      // `new Date()` let a release become due between the row query and a
+      // sibling condition, so one response could carry pre-release rows beside
+      // a post-release count.
+      const readNow = new Date();
       const releaseCondition = statusCondition({
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
-        revealIds: await this.releaseRevealIds(
+        decisions: await this.releaseDecisions(
           params.collectionName,
-          statusFilter
+          statusFilter,
+          readNow
         ),
       });
       if (releaseCondition) whereConditions.push(releaseCondition);
@@ -1515,6 +1526,9 @@ export class CollectionQueryService extends BaseService {
             collectionName: params.collectionName,
             user: params.user,
             search: params.search,
+            // This count is part of THIS read, so it resolves releases against
+            // the same instant the rows did.
+            releaseNow: readNow,
             // Resolved once for this request; see the parameter's own note.
             resolvedComponentTables: componentTables,
             resolvedComponentTypeColumns: componentTypeColumns,
@@ -2092,6 +2106,15 @@ export class CollectionQueryService extends BaseService {
   async countEntries(params: {
     collectionName: string;
     user?: UserContext;
+    /**
+     * The instant the enclosing read resolved releases against.
+     *
+     * Set only by `listEntries`, which calls this as its own continuation. A
+     * standalone count takes its own clock; a nested one MUST take its
+     * parent's, or a release becoming due between the two makes the page report
+     * pre-release rows beside a post-release `totalDocs`.
+     */
+    releaseNow?: Date;
     /** Search query to filter entries by searchable fields */
     search?: string;
     /** Where clause for advanced filtering */
@@ -2275,13 +2298,21 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
       });
+      // ONE instant for this read. Each release lookup taking its own
+      // `new Date()` let a release become due between the row query and a
+      // sibling condition, so one response could carry pre-release rows beside
+      // a post-release count.
+      // The enclosing read's instant when this count is its continuation,
+      // and this count's own clock when it was called directly.
+      const readNow = params.releaseNow ?? new Date();
       const releaseCondition = statusCondition({
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
-        revealIds: await this.releaseRevealIds(
+        decisions: await this.releaseDecisions(
           params.collectionName,
-          statusFilter
+          statusFilter,
+          readNow
         ),
       });
       if (releaseCondition) whereConditions.push(releaseCondition);
@@ -2797,15 +2828,17 @@ export class CollectionQueryService extends BaseService {
         draftOverlayPossible && statusFilter?.value === "draft";
       // Named `lifecycleCondition` rather than shadowing the imported
       // `statusCondition` helper it now delegates to.
+      const readNow = new Date();
       const lifecycleCondition = suppressDraftStatusFilter
         ? undefined
         : statusCondition({
             filter: statusFilter,
             statusColumn: schema.status,
             idColumn: schema.id,
-            revealIds: await this.releaseRevealIds(
+            decisions: await this.releaseDecisions(
               params.collectionName,
-              statusFilter
+              statusFilter,
+              readNow
             ),
           });
       const whereParts = [

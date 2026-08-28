@@ -28,6 +28,8 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 
 import { PendingTransitionCache } from "./pending-transition-cache";
 import type { DueCheck } from "./release-read";
+import { NO_DECISIONS } from "./release-scope";
+import type { ReleaseDecisions } from "./release-scope";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
 
@@ -39,16 +41,17 @@ export interface RevealQuery {
 
 export interface ReleaseVisibility {
   /**
-   * The ids of documents in this scope that a due release would PUBLISH.
+   * What a due release does to the documents in this scope — both directions.
    *
-   * Empty is the overwhelmingly common answer, and is reached without a query.
+   * Two empty sets are the overwhelmingly common answer, and are reached
+   * without a query.
    */
-  revealIds(query: RevealQuery): Promise<readonly string[]>;
+  decisions(query: RevealQuery): Promise<ReleaseDecisions>;
 }
 
 /** The lookup half, satisfied by `ReleasesRepository`. */
 export interface RevealSource {
-  findDuePublishTargets(input: RevealQuery): Promise<string[]>;
+  findDueDecisions(input: RevealQuery): Promise<ReleaseDecisions>;
 }
 
 /**
@@ -59,9 +62,9 @@ export interface RevealSource {
  * remembers to handle.
  */
 export const NO_RELEASE_VISIBILITY: ReleaseVisibility = {
-  // Not `async () => []`: there is nothing to await, and declaring it async
+  // Not `async () => ...`: there is nothing to await, and declaring it async
   // only to satisfy the interface trips the rule that asks why.
-  revealIds: () => Promise.resolve([]),
+  decisions: () => Promise.resolve(NO_DECISIONS),
 };
 
 export function createReleaseVisibility(deps: {
@@ -69,12 +72,12 @@ export function createReleaseVisibility(deps: {
   repository: RevealSource;
 }): ReleaseVisibility {
   return {
-    async revealIds(query: RevealQuery): Promise<readonly string[]> {
+    async decisions(query: RevealQuery): Promise<ReleaseDecisions> {
       // The cheap check first, always. Reversing these two turns the common
       // case — nothing scheduled anywhere — from a memo read into a query
       // against the members table on every read of every collection.
-      if (!(await deps.cache.mayHaveDue(query.now))) return [];
-      return deps.repository.findDuePublishTargets(query);
+      if (!(await deps.cache.mayHaveDue(query.now))) return NO_DECISIONS;
+      return deps.repository.findDueDecisions(query);
     },
   };
 }

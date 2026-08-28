@@ -110,6 +110,42 @@ async function postWithDraftAuthor(
   return postId;
 }
 
+/** A published post whose PUBLISHED author is being withdrawn by a release. */
+async function postWithWithdrawnAuthor(
+  t: TestNextly,
+  scheduledAt: Date | null
+): Promise<string> {
+  const handler = handlerOf(t);
+  const author = await handler.createEntry(
+    { collectionName: AUTHORS, overrideAccess: true },
+    { name: "Ada", status: "published" }
+  );
+  const authorId = (author.data as { id?: string } | undefined)?.id;
+  if (typeof authorId !== "string") throw new Error("no author id");
+
+  const post = await handler.createEntry(
+    { collectionName: POSTS, overrideAccess: true },
+    { title: "live", status: "published", author: authorId }
+  );
+  const postId = (post.data as { id?: string } | undefined)?.id;
+  if (typeof postId !== "string") throw new Error("no post id");
+
+  const repo = new ReleasesRepository(t.adapter);
+  const release = await repo.createRelease({ title: "Take the author down" });
+  await repo.addMember({
+    releaseId: release.id,
+    scopeKind: "collection",
+    scopeSlug: AUTHORS,
+    entryId: authorId,
+    locale: null,
+    action: "unpublish",
+  });
+  if (scheduledAt !== null) {
+    await repo.scheduleRelease(release.id, scheduledAt, "UTC");
+  }
+  return postId;
+}
+
 /** Whether an ordinary untrusted read of the post carries its author. */
 async function authorExpanded(t: TestNextly, postId: string): Promise<boolean> {
   const result = await handlerOf(t).getEntry({
@@ -137,6 +173,27 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const postId = await postWithDraftAuthor(t, FUTURE);
       expect(await authorExpanded(t, postId)).toBe(false);
+    });
+
+    it("stops expanding an author whose takedown has come due", async () => {
+      // The withdrawal direction through the expansion, which had no test.
+      // Deleting `hidden.has(id)` from the in-memory filter failed nothing:
+      // the row's stored status still says `published`, which is precisely
+      // what the release is undoing, so the filter admitted it and an
+      // anonymous reader kept seeing a withdrawn author through any post
+      // pointing at one.
+      const t = await boot(dialect);
+      const postId = await postWithWithdrawnAuthor(t, PAST);
+      expect(await authorExpanded(t, postId)).toBe(false);
+    });
+
+    it("still expands it before the takedown is due", async () => {
+      // The control. An expansion that dropped every target named by any
+      // release member would satisfy the case above while hiding authors whose
+      // takedown has not arrived.
+      const t = await boot(dialect);
+      const postId = await postWithWithdrawnAuthor(t, FUTURE);
+      expect(await authorExpanded(t, postId)).toBe(true);
     });
   }
 );

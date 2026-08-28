@@ -84,6 +84,36 @@ async function draftedSingleInRelease(
   }
 }
 
+/** A PUBLISHED Single, and the release that will withdraw it. */
+async function publishedSingleInTakedown(
+  t: TestNextly,
+  scheduledAt: Date | null
+): Promise<void> {
+  const singles = singlesOf(t);
+  await singles.update(
+    SLUG,
+    { headline: "live", status: "published" },
+    { overrideAccess: true }
+  );
+
+  const row = await t.adapter.selectOne<{ id: string }>(`single_${SLUG}`, {});
+  if (!row?.id) throw new Error("the Single has no stored row");
+
+  const repo = new ReleasesRepository(t.adapter);
+  const release = await repo.createRelease({ title: "Take it down" });
+  await repo.addMember({
+    releaseId: release.id,
+    scopeKind: "single",
+    scopeSlug: SLUG,
+    entryId: row.id,
+    locale: null,
+    action: "unpublish",
+  });
+  if (scheduledAt !== null) {
+    await repo.scheduleRelease(release.id, scheduledAt, "UTC");
+  }
+}
+
 /** Whether an ordinary untrusted read can see the Single at all. */
 async function visibleToPublic(t: TestNextly): Promise<boolean> {
   const result = await singlesOf(t).get(SLUG, { overrideAccess: false });
@@ -111,6 +141,35 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await draftedSingleInRelease(t, null);
       expect(await visibleToPublic(t)).toBe(false);
+    });
+
+    it("WITHDRAWS a published Single whose takedown has come due", async () => {
+      // The other half of the guarantee, and the half that had no test at all.
+      // Deleting the hide check in `isSingleVisible` failed nothing: the
+      // repository still returned the right shape and the SQL tests still
+      // passed, so a computed-then-discarded takedown would have returned in
+      // silence. The stored row still says `published` here — that is exactly
+      // what the release is undoing.
+      const t = await boot(dialect);
+      await publishedSingleInTakedown(t, PAST);
+      expect(await visibleToPublic(t)).toBe(false);
+    });
+
+    it("keeps a published Single visible before its takedown is due", async () => {
+      // The control. Without it, a gate that refused every Single with any
+      // release member would satisfy the case above while hiding content whose
+      // takedown has not arrived.
+      const t = await boot(dialect);
+      await publishedSingleInTakedown(t, FUTURE);
+      expect(await visibleToPublic(t)).toBe(true);
+    });
+
+    it("keeps it visible while the takedown is still being assembled", async () => {
+      // An unscheduled release is somebody still deciding. Consulting it would
+      // make adding a document to a draft release take it off the site.
+      const t = await boot(dialect);
+      await publishedSingleInTakedown(t, null);
+      expect(await visibleToPublic(t)).toBe(true);
     });
   }
 );

@@ -357,12 +357,12 @@ describe.each(getConfiguredTestDialects())(
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
-        const targets = await repo.findDuePublishTargets({
+        const decisions = await repo.findDueDecisions({
           scopeKind: "collection",
           scopeSlug: "posts",
           now: new Date(),
         });
-        expect(targets).toEqual(["e1"]);
+        expect(decisions.reveal).toEqual(["e1"]);
       });
 
       it("does NOT name one whose release is still in the future", async () => {
@@ -377,12 +377,12 @@ describe.each(getConfiguredTestDialects())(
         await repo.scheduleRelease(release.id, FUTURE, "UTC");
 
         expect(
-          await repo.findDuePublishTargets({
+          await repo.findDueDecisions({
             scopeKind: "collection",
             scopeSlug: "posts",
             now: new Date(),
           })
-        ).toEqual([]);
+        ).toMatchObject({ reveal: [] });
       });
 
       it("does NOT name one whose release was never scheduled", async () => {
@@ -399,12 +399,12 @@ describe.each(getConfiguredTestDialects())(
         });
 
         expect(
-          await repo.findDuePublishTargets({
+          await repo.findDueDecisions({
             scopeKind: "collection",
             scopeSlug: "posts",
             now: new Date(),
           })
-        ).toEqual([]);
+        ).toMatchObject({ reveal: [] });
       });
 
       it("does NOT name one whose LATER due release takes it down again", async () => {
@@ -440,12 +440,135 @@ describe.each(getConfiguredTestDialects())(
         );
 
         expect(
-          await repo.findDuePublishTargets({
+          await repo.findDueDecisions({
             scopeKind: "collection",
             scopeSlug: "posts",
             now: new Date(),
           })
-        ).toEqual([]);
+        ).toMatchObject({ reveal: [] });
+      });
+
+      it("names a document whose due release WITHDRAWS it", async () => {
+        // The direction that was computed and then thrown away. `unpublish` was
+        // resolved correctly and the id was simply left out of the reveal set,
+        // so every read went on returning the row the release was supposed to
+        // take down — a scheduled takedown that silently did nothing.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "unpublish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        const decisions = await repo.findDueDecisions({
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          now: new Date(),
+        });
+        expect(decisions.hide).toEqual(["e1"]);
+        // Disjoint: one winning member per document, so nothing is in both.
+        expect(decisions.reveal).toEqual([]);
+      });
+
+      it("does NOT withdraw one whose release is still in the future", async () => {
+        // The control for the case above: a repository that reported every
+        // unpublish member would satisfy it while withdrawing content whose
+        // takedown has not arrived.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "unpublish",
+        });
+        await repo.scheduleRelease(release.id, FUTURE, "UTC");
+
+        expect(
+          await repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).toEqual({ reveal: [], hide: [] });
+      });
+
+      it("ignores a member scoped to ONE LANGUAGE", async () => {
+        // Per-locale lifecycle does not live on the row this answer filters. A
+        // localized document is public through its main row OR through any one
+        // of its translations, and the mutation service keeps a German
+        // unpublish from taking the document down for everyone by writing the
+        // companion's `_status` and leaving the main row alone. Honouring a
+        // locale member here would contradict that write path in both
+        // directions. Per-locale release visibility belongs on companion
+        // selection and is not built yet.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "German launch" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1", "de"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toEqual({ reveal: [], hide: [] });
+      });
+
+      it("lets a later LOCALE takedown decide nothing about the document", async () => {
+        // The exact shape that produced the defect this replaced: members were
+        // grouped by document AND locale, so a document-wide publish and a
+        // later locale-scoped takedown formed two groups, each resolving its
+        // own winner, and the same id landed in `reveal` AND `hide`.
+        // `statusCondition` re-admitted it through the reveal while the Single
+        // path hid it, so the two read paths disagreed about one document.
+        //
+        // Guards the FILTER, not the grouping: once locale members are excluded
+        // every remaining member of a document groups together, so the overlap
+        // is then structurally impossible. Break-verified — restoring the old
+        // grouping key alone does not fail this, and that is the honest reason
+        // why.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const up = await repo.createRelease({ title: "wide publish" });
+        await repo.addMember({
+          releaseId: up.id,
+          ...ref("e1", null),
+          action: "publish",
+        });
+        await repo.scheduleRelease(up.id, PAST, "UTC");
+
+        const down = await repo.createRelease({ title: "de takedown" });
+        await repo.addMember({
+          releaseId: down.id,
+          ...ref("e1", "de"),
+          action: "unpublish",
+        });
+        await repo.scheduleRelease(
+          down.id,
+          new Date("2021-01-01T00:00:00Z"),
+          "UTC"
+        );
+
+        const decisions = await repo.findDueDecisions({
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          now: new Date(),
+        });
+        const both = decisions.reveal.filter(id => decisions.hide.includes(id));
+        expect(both).toEqual([]);
+        // The control: the assertion above is satisfied by two empty sets, so
+        // pin what the document-wide member actually decides.
+        expect(decisions.reveal).toEqual(["e1"]);
       });
 
       it("scopes to the collection asked about", async () => {
@@ -462,12 +585,12 @@ describe.each(getConfiguredTestDialects())(
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
         expect(
-          await repo.findDuePublishTargets({
+          await repo.findDueDecisions({
             scopeKind: "collection",
             scopeSlug: "other_collection",
             now: new Date(),
           })
-        ).toEqual([]);
+        ).toMatchObject({ reveal: [] });
       });
     });
   }
