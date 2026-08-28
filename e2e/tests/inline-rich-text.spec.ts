@@ -229,10 +229,13 @@ test.describe("a passage edited on the canvas", () => {
     const size = await rendered.evaluate(
       element => getComputedStyle(element).fontSize
     );
-    // The baseline's own `2.25rem`, which at the default root size is 36px. Not
-    // merely "larger than a paragraph": that is satisfied by any styling at
+    // The baseline's own `2.25em` against an unstyled 16px ancestor, so 36px.
+    // Not merely "larger than a paragraph": that is satisfied by any styling at
     // all, including a host's, and this has to be THIS library's value or the
-    // test is not exercising the change.
+    // test is not exercising the change. The unit matters to the number — `em`
+    // multiplies whatever this heading inherits, which is what lets an author's
+    // page or block typography reach it, so a size set anywhere above the
+    // canvas would move this figure rather than break the mechanism.
     expect(size).toBe("36px");
 
     await enterPassage(page, 0.55);

@@ -26,11 +26,29 @@
  * Shipping only what every precedent agrees on is what keeps this a baseline
  * rather than a design system nobody chose.
  *
- * **Every value is relative.** `rem` for size so the scale follows the reader's
- * own font size, and `em` for margins so the space around a heading is
- * proportional to that heading rather than fixed — which is what lets one
- * override of `font-size` move the whole block coherently instead of leaving
- * the spacing behind.
+ * **Every value is relative, and sizes are `em` rather than `rem`.** This is
+ * what lets an author's typography reach a heading at all. These defaults are
+ * emitted as `:where(h1)`, a rule on the ELEMENT, while anything an author sets
+ * on the page or on a containing block arrives by INHERITANCE — and a direct
+ * rule beats an inherited value no matter what either weighs, so no amount of
+ * specificity work makes the authored value win. `em` sidesteps the contest by
+ * making the default a MULTIPLE of whatever was inherited.
+ *
+ * Measured in a browser, page setting `20px` and block value `18px` against a
+ * host reset: with `rem` the `h1` was 36px in both, ignoring each author value
+ * completely; with `em` it was 45px and 40.5px. Where nobody has set anything
+ * the two are identical — 36px from a 16px root — and a host's own
+ * `.content h1` still wins at 11px either way. So `em` costs nothing in the
+ * case the baseline exists for and restores authored control in the rest.
+ *
+ * Margins are `em` for the neighbouring reason: the space around a heading is
+ * proportional to that heading, so one override of `font-size` moves the whole
+ * block coherently instead of leaving the spacing behind.
+ *
+ * `fontWeight` has no relative form and stays absolute, so an author's weight
+ * on a container does not reach a heading. That is the same limitation every
+ * precedent here carries, and it is the one property where a fixed default is
+ * closest to universal.
  *
  * @module blocks/typography-defaults
  */
@@ -77,12 +95,12 @@ function heading(size: string, lineHeight: number): NodeStyles {
 export const TYPOGRAPHY_DEFAULTS: NonNullable<
   StyleCompileContext["elementBases"]
 > = {
-  h1: heading("2.25rem", 1.15),
-  h2: heading("1.75rem", 1.2),
-  h3: heading("1.375rem", 1.3),
-  h4: heading("1.125rem", 1.4),
-  h5: heading("1rem", 1.45),
-  h6: heading("0.875rem", 1.5),
+  h1: heading("2.25em", 1.15),
+  h2: heading("1.75em", 1.2),
+  h3: heading("1.375em", 1.3),
+  h4: heading("1.125em", 1.4),
+  h5: heading("1em", 1.45),
+  h6: heading("0.875em", 1.5),
   /**
    * Paragraph rhythm, and only rhythm: no size, because a paragraph should
    * inherit the reader's body size rather than have this library pick one.
