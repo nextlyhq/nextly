@@ -49,6 +49,7 @@ function draw(overrides: Partial<ClassSelectorProps> = {}): {
   }));
   render(
     <ClassSelector
+      nodeId="node-a"
       library={LIBRARY}
       nodeClassIds={[]}
       onNodeClassesChange={onNodeClassesChange}
@@ -65,6 +66,7 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
 } {
   const view = render(
     <ClassSelector
+      nodeId="node-a"
       library={LIBRARY}
       nodeClassIds={initial.nodeClassIds}
       onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -75,6 +77,7 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
     rerender: nodeClassIds =>
       view.rerender(
         <ClassSelector
+          nodeId="node-a"
           library={LIBRARY}
           nodeClassIds={nodeClassIds}
           onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -110,6 +113,7 @@ describe("a library that has not been read yet", () => {
     // two the same way invites a create into a library about to be replaced.
     render(
       <ClassSelector
+        nodeId="node-a"
         library={undefined}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -352,6 +356,7 @@ describe("a write the document refuses", () => {
     const onNodeClassesChange = vi.fn(() => "refused" as const);
     render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
@@ -394,6 +399,7 @@ describe("a write the document refuses", () => {
     const onNodeClassesChange = vi.fn(() => "refused" as const);
     render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={["id-hero"]}
         onNodeClassesChange={onNodeClassesChange}
@@ -427,6 +433,7 @@ describe("a failure that must not outlive the node it describes", () => {
      */
     const view = render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "refused" as const)}
@@ -442,6 +449,7 @@ describe("a failure that must not outlive the node it describes", () => {
 
     view.rerender(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={["id-card"]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -457,6 +465,7 @@ describe("a failure that must not outlive the node it describes", () => {
   it("drops a refused CREATION the same way", async () => {
     const view = render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -472,6 +481,7 @@ describe("a failure that must not outlive the node it describes", () => {
 
     view.rerender(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={["id-card"]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -506,6 +516,7 @@ describe("a failure scoped by what the node holds, not by array identity", () =>
     const create = createsClass();
     const view = render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
@@ -519,6 +530,7 @@ describe("a failure scoped by what the node holds, not by array identity", () =>
     // Same CONTENT, different array — an ordinary parent re-render.
     view.rerender(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
@@ -534,6 +546,7 @@ describe("a failure scoped by what the node holds, not by array identity", () =>
     const create = createsClass();
     const view = render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
@@ -546,6 +559,7 @@ describe("a failure scoped by what the node holds, not by array identity", () =>
 
     view.rerender(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={["id-card"]}
         onNodeClassesChange={onNodeClassesChange}
@@ -572,6 +586,7 @@ describe("a query typed while a creation is still in flight", () => {
     );
     render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -600,6 +615,7 @@ describe("a query typed while a creation is still in flight", () => {
     );
     render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -614,6 +630,70 @@ describe("a query typed while a creation is still in flight", () => {
     });
 
     expect((field() as HTMLInputElement).value).toBe("");
+  });
+});
+
+describe("two blocks that look identical from the class list alone", () => {
+  it("drops a refusal when the node changes but its class list does not", () => {
+    /*
+     * The case content comparison cannot see, and the commonest one: two
+     * blocks with no classes both present an empty list. Scoped by content
+     * alone, a refusal raised against the first goes on being shown against
+     * the second — an alert about an element the author is no longer editing.
+     */
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+    const view = render(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={createsClass()}
+      />
+    );
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    // A DIFFERENT block, with the same (empty) class list.
+    view.rerender(
+      <ClassSelector
+        nodeId="node-b"
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={createsClass()}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps it when neither the node nor its classes changed", () => {
+    // The control: identity scoping must not discard a failure on an ordinary
+    // re-render, which is what the content check exists to prevent.
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+    const view = render(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={createsClass()}
+      />
+    );
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    view.rerender(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={createsClass()}
+      />
+    );
+    expect(screen.getByRole("alert")).toBeTruthy();
   });
 });
 
@@ -636,6 +716,7 @@ describe("a creation that lands after the node has moved on", () => {
 
     const view = render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={["id-hero", "id-card"]}
         onNodeClassesChange={onNodeClassesChange}
@@ -649,6 +730,7 @@ describe("a creation that lands after the node has moved on", () => {
     // The author removes a chip while the save is still out.
     view.rerender(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={["id-card"]}
         onNodeClassesChange={onNodeClassesChange}
@@ -678,6 +760,7 @@ describe("a creation request that rejects rather than answering", () => {
     });
     render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
@@ -704,6 +787,7 @@ describe("a creation request that rejects rather than answering", () => {
     const onNodeClassesChange = vi.fn(() => "applied" as const);
     render(
       <ClassSelector
+        nodeId="node-a"
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
@@ -727,6 +811,7 @@ describe("why the library is absent", () => {
   it("says a read is loading when it is still in flight", () => {
     render(
       <ClassSelector
+        nodeId="node-a"
         library={undefined}
         libraryAbsence="pending"
         nodeClassIds={[]}
@@ -748,6 +833,7 @@ describe("why the library is absent", () => {
      */
     render(
       <ClassSelector
+        nodeId="node-a"
         library={undefined}
         libraryAbsence="failed"
         nodeClassIds={[]}

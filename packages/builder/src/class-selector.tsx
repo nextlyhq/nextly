@@ -71,12 +71,22 @@ type SelectorFailure =
  * full would then be describing a state it is no longer in.
  */
 function liveFailure(
-  failure: { about: readonly string[]; issue: SelectorFailure } | null,
+  failure: {
+    about: string;
+    whenIds: readonly string[];
+    issue: SelectorFailure;
+  } | null,
+  nodeId: string,
   nodeClassIds: readonly string[]
 ): SelectorFailure | null {
-  if (failure === null || !sameClassIds(failure.about, nodeClassIds)) {
-    return null;
-  }
+  if (failure === null) return null;
+  // BOTH, because neither settles it alone. Identity catches the case content
+  // cannot see — two blocks with no classes present the same empty list, so a
+  // refusal raised against one would go on being shown against the other.
+  // Content catches the case identity cannot — the same block whose classes
+  // have since changed, where the refusal describes a state it has left.
+  if (failure.about !== nodeId) return null;
+  if (!sameClassIds(failure.whenIds, nodeClassIds)) return null;
   if (failure.issue.kind === "node-full" && nodeHasRoom(nodeClassIds)) {
     return null;
   }
@@ -84,14 +94,11 @@ function liveFailure(
 }
 
 /**
- * Whether two class lists are the same list.
+ * Whether two class lists are the same list, by CONTENT.
  *
- * By CONTENT, not by reference. A caller that has no stored classes hands over
- * a fresh `[]` on every render — `?? []` in the style inspector does exactly
- * that — so an identity comparison would discard a failure on the next
- * unrelated re-render, which is every render. Content also gets the intended
- * behaviour for free: removing a chip changes the list, and that is precisely
- * when a stale failure should go.
+ * A caller with no stored classes hands over a fresh `[]` on every render —
+ * `?? []` in the style inspector does exactly that — so comparing by reference
+ * would discard a failure on the next render, which is every render.
  */
 function sameClassIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, index) => id === b[index]);
@@ -140,6 +147,17 @@ export interface ClassSelectorProps {
    * and {@link ClassSelectorProps.libraryAbsence} says which. They need
    * different words: one will finish and the other will not.
    */
+  /**
+   * Which block this is editing.
+   *
+   * Required, and used only to scope a failure to the element it is about.
+   * Comparing the class ids instead was a proxy for identity and it fails on
+   * the commonest case: two blocks with no classes both present an empty list,
+   * so a refusal raised against one goes on being shown against the other.
+   * Keyed mounting protects a caller that remembers to key; a prop cannot be
+   * forgotten.
+   */
+  nodeId: string;
   library: readonly NamedClass[] | undefined;
   /**
    * Why there is no library, when there is none.
@@ -184,6 +202,7 @@ export interface ClassSelectorProps {
 
 /** The classes on the selected node, with a field for adding another. */
 export function ClassSelector({
+  nodeId,
   library,
   libraryAbsence,
   nodeClassIds,
@@ -203,7 +222,8 @@ export function ClassSelector({
    * remembered.
    */
   const [failure, setFailure] = React.useState<{
-    readonly about: readonly string[];
+    readonly about: string;
+    readonly whenIds: readonly string[];
     readonly issue: SelectorFailure;
   } | null>(null);
   // In flight, so a second Enter cannot queue a duplicate class while the
@@ -251,7 +271,7 @@ export function ClassSelector({
    * node may have gained room since, through a removal, an undo, or the host
    * selecting a smaller element.
    */
-  const shown = liveFailure(failure, nodeClassIds);
+  const shown = liveFailure(failure, nodeId, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps a
   // highlight instead of silently sending Enter back to the first row.
   const highlighted = Math.min(active, Math.max(options.length - 1, 0));
@@ -266,7 +286,11 @@ export function ClassSelector({
        * is checked directly rather than left for the host to rediscover.
        */
       if (!nodeHasRoom(nodeClassIds)) {
-        setFailure({ about: nodeClassIds, issue: { kind: "node-full" } });
+        setFailure({
+          about: nodeId,
+          whenIds: nodeClassIds,
+          issue: { kind: "node-full" },
+        });
         return;
       }
       /*
@@ -281,7 +305,8 @@ export function ClassSelector({
         .then(created => {
           if (!created.ok) {
             setFailure({
-              about: nodeClassIds,
+              about: nodeId,
+              whenIds: nodeClassIds,
               issue: { kind: "not-created", reason: created.reason },
             });
             return;
@@ -305,7 +330,8 @@ export function ClassSelector({
          */
         .catch(() => {
           setFailure({
-            about: nodeClassIds,
+            about: nodeId,
+            whenIds: nodeClassIds,
             issue: {
               kind: "not-created",
               reason: "This class could not be created.",
@@ -338,14 +364,22 @@ export function ClassSelector({
     // append would keep working after that place learned to refuse.
     const outcome = withClassApplied(against, classId);
     if (!outcome.ok) {
-      setFailure({ about: against, issue: { kind: "node-full" } });
+      setFailure({
+        about: nodeId,
+        whenIds: nodeClassIds,
+        issue: { kind: "node-full" },
+      });
       return;
     }
     if (onNodeClassesChange(outcome.classIds) === "refused") {
       // The draft survives, deliberately. An author whose write was refused
       // has lost nothing they typed, and the next thing they do is likely to
       // be trying it again.
-      setFailure({ about: against, issue: { kind: "not-written" } });
+      setFailure({
+        about: nodeId,
+        whenIds: nodeClassIds,
+        issue: { kind: "not-written" },
+      });
       return;
     }
     setFailure(null);
@@ -364,7 +398,11 @@ export function ClassSelector({
           );
           setFailure(
             landed === "refused"
-              ? { about: nodeClassIds, issue: { kind: "not-written" } }
+              ? {
+                  about: nodeId,
+                  whenIds: nodeClassIds,
+                  issue: { kind: "not-written" as const },
+                }
               : null
           );
         }}

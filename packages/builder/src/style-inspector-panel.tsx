@@ -425,6 +425,7 @@ function SelectedNodeClasses({
   if (onCreateClass === undefined) return null;
   return (
     <ClassSelector
+      nodeId={nodeId}
       /*
        * Keyed by NODE, for the reason the style sections are. The typed query
        * and the highlighted row are state about the node in hand; unkeyed,
