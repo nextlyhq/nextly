@@ -58,7 +58,6 @@ import {
   Input,
   TreeView,
   detectApplePlatform,
-  useActiveShortcuts,
   type TreeNode,
 } from "@nextlyhq/ui";
 import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
@@ -67,13 +66,31 @@ import * as React from "react";
 import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
 import { keyHint } from "./key-hint";
-import { BLOCK_ACTIONS_LAYER, MOVE_KEYS } from "./keyboard-actions";
+import { MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */
   editor: EditorState;
+  /**
+   * Whether the block-move keystrokes are bound for THIS editor.
+   *
+   * Asked of the host rather than worked out here, and that is the third answer
+   * to this question — the first two were wrong in instructive ways. A React
+   * context said no in the product, because `BlocksField` draws this panel
+   * through the shell's panel region while the bindings wrap the shell's
+   * children, and those are sibling subtrees. Asking the shortcut manager fixed
+   * that and broke two other things: it made a `ShortcutProvider` mandatory for
+   * a panel that never needed one, and it cannot tell one editor's bindings
+   * from another's, so a second editor's enabled keys advertised themselves in
+   * a panel whose own were off.
+   *
+   * The host is the only place that knows, because the host is what mounts both
+   * halves. Defaults to `false`: a panel told nothing says nothing, which is
+   * the safe direction for a claim that pressing something does something.
+   */
+  moveHints?: boolean;
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
@@ -174,7 +191,10 @@ const DIRECTION_LABEL: Readonly<Record<MoveDirection, string>> = {
   outdent: "Move out",
 };
 
-export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
+export function LayersPanel({
+  editor,
+  moveHints = false,
+}: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
 
@@ -253,44 +273,15 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
   }, []);
 
   /*
-   * The keystrokes the manager is actually holding right now.
-   *
-   * Asked of the SHORTCUT MANAGER rather than of a React context, because the
-   * question is not "is a provider above me" — this panel is drawn through the
-   * shell's own panel region, which is a sibling of the subtree the bindings
-   * are registered in, so a context would answer no while the keys worked
-   * perfectly. The manager is shell-wide and knows what is registered wherever
-   * it was registered from.
-   *
-   * It also answers the harder half for free: a disabled layer is dropped from
-   * this list, so a host that turns the bindings off while something modal is
-   * over the canvas stops being advertised at the same moment it stops working.
-   */
-  const activeShortcuts = useActiveShortcuts();
-  const liveKeys = React.useMemo(
-    () =>
-      new Set(
-        activeShortcuts
-          .filter(shortcut => shortcut.layer === BLOCK_ACTIONS_LAYER)
-          .map(shortcut => shortcut.keys)
-      ),
-    [activeShortcuts]
-  );
-
-  /*
    * Built from the binding table, so a rebound keystroke moves the hint with
    * it. A binding this cannot spell is dropped rather than guessed at — see
    * `keyHint` for why a wrong hint is worse than no hint.
    */
   const hints = React.useMemo(
     () =>
-      apple === null
+      apple === null || !moveHints
         ? []
         : MOVE_KEYS.flatMap(({ keys, direction, description }) => {
-            // Named by the move table, HELD by the manager. Either alone is a
-            // claim about something else: the table says what the editor
-            // intends, and the manager says what is bound at this moment.
-            if (!liveKeys.has(keys)) return [];
             const shown = keyHint(keys, apple);
             return shown === null
               ? []
@@ -303,7 +294,7 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
                   },
                 ];
           }),
-    [apple, liveKeys]
+    [apple, moveHints]
   );
 
   return (
