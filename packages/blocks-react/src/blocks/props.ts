@@ -10,7 +10,7 @@
  *
  * @module blocks/props
  */
-import { isFetchableUrl, normalizeUrl } from "@nextlyhq/blocks-engine";
+import { isFetchableUrl, isLinkableUrl } from "@nextlyhq/blocks-engine";
 import type { RemotePatternInput } from "@nextlyhq/blocks-engine";
 
 /** A string prop, or the fallback when the stored value is not usable text. */
@@ -84,8 +84,6 @@ export function number(
  * accepts a wider set for what an author may TYPE; that is an input affordance
  * and not the boundary, which is here.
  */
-const ALLOWED_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
-
 /**
  * Any leading `scheme:`, which is what decides whether the list above applies.
  *
@@ -95,8 +93,6 @@ const ALLOWED_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
  * WHICH hosts may be reached is a separate question, asked of the host policy
  * by the blocks that fetch, not of this list.
  */
-const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
-
 /**
  * Whether a string still holds a control character.
  *
@@ -106,14 +102,6 @@ const URL_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
  * it next. `0x20` is deliberately excluded — a space is not a control character,
  * and an interior one belongs to the path.
  */
-function hasControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
-
 /**
  * A URL safe to place in an attribute, or `undefined`.
  *
@@ -139,19 +127,13 @@ function hasControlCharacter(value: string): boolean {
  * a legitimate URL is never silently rewritten.
  */
 export function url(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  if (trimmed === "") return undefined;
-
-  const normalized = normalizeUrl(trimmed);
-  if (normalized === "") return undefined;
-  if (hasControlCharacter(normalized)) return undefined;
-
-  const scheme = URL_SCHEME.exec(normalized);
-  if (scheme === null) return trimmed;
-  const name = scheme[1];
-  if (name === undefined) return undefined;
-  return ALLOWED_SCHEMES.includes(name.toLowerCase()) ? trimmed : undefined;
+  // The DECISION belongs to the engine, which owns what the stored format can
+  // express — otherwise a renderer that draws nothing for an unusable link and
+  // a flattener that still reports its label describe different pages. What
+  // stays here is the return value: the original trimmed string, so a
+  // legitimate URL is never silently rewritten into its normalised form.
+  if (!isLinkableUrl(value)) return undefined;
+  return typeof value === "string" ? value.trim() : undefined;
 }
 
 /**

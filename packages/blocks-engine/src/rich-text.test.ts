@@ -327,6 +327,36 @@ describe("richTextToPlainText around a block-like leaf", () => {
     ).toBe("Choose Basic Pro today");
   });
 
+  it("omits a label the renderer would not draw", () => {
+    /*
+     * A reader draws nothing for a button whose URL this format cannot express
+     * — a missing one, or a scheme outside the allowed set — so reporting its
+     * label would describe the page by a word that never appears on it. That is
+     * the mirror of the defect that made these labels worth reading at all.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "javascript:alert(1)", text: "Danger" },
+                  { text: "No link at all" },
+                  { url: "/real", text: "Real" },
+                ],
+              },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only Real this");
+  });
+
   it("skips a button group carrying no labels rather than inventing a gap", () => {
     // The control: a group with nothing readable must not contribute, and must
     // not throw on shapes storage can hold.

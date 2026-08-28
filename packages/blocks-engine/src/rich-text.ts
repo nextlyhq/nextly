@@ -49,6 +49,8 @@
  * mismatch is silent in the worst possible way — the editor treats a tree as
  * text, reads no text out of it, and commits an empty string over the passage.
  */
+import { isLinkableUrl } from "./url-policy";
+
 export const RICH_TEXT_PROP_TYPE = "richText";
 
 /**
@@ -319,7 +321,13 @@ function labelOf(item: unknown): string | null {
   if (typeof item !== "object" || item === null || Array.isArray(item)) {
     return null;
   }
-  const text = (item as { text?: unknown }).text;
+  const fields = item as { text?: unknown; url?: unknown };
+  // Only what a reader would actually SHOW. A button whose URL this format
+  // cannot express is not drawn, so reporting its label would describe a page
+  // by a word that never appears on it — the mirror of the defect that made
+  // these labels worth reading in the first place.
+  if (!isLinkableUrl(fields.url)) return null;
+  const text = fields.text;
   return typeof text === "string" && text.length > 0 ? text : null;
 }
 
