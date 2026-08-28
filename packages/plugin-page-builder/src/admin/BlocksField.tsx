@@ -40,8 +40,10 @@ import {
   registerBlocks,
   registryNestingSource,
   previewContainerFor,
+  newId,
   type BlockDocument,
   type BreakpointSet,
+  type NamedClass,
   type SiteTokenSet,
   type BreakpointId,
 } from "@nextlyhq/blocks-engine";
@@ -541,6 +543,82 @@ function TokensStudio({
  * three fields of the record are owned by other studios and are not read here in
  * order to write this one.
  */
+/**
+ * Create a named class in the site's library, answering with its new id.
+ *
+ * Two documents are involved and this owns only one. The class lives in the
+ * site style; putting it on a block is a node write the inspector already
+ * performs, so this returns the id rather than applying it — one application
+ * path, and the per-node bound stays enforced in a single place.
+ *
+ * The id is minted with the engine's own `newId`, which is where every other id
+ * in this repository comes from. Deliberately not derived from the slug:
+ * `NamedClass` keeps `id` and `slug` apart precisely so a rename cannot orphan
+ * the documents referencing it, and a slug-seeded id would be a fossil of
+ * whatever the class was called first.
+ *
+ * `orderIndex` is one past the highest in the library, so a class an author has
+ * just created and applied wins over the ones already there rather than being
+ * silently overridden by them.
+ */
+function useClassSurface(
+  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  pending: boolean
+) {
+  /*
+   * `undefined` while the read is in flight, and the resolved list once it is
+   * not — including an empty one. `useSiteStyle` names `pending` as a real
+   * third state for exactly this reason: the defaults alone are a legitimate
+   * answer, so a surface cannot tell "nothing is stored" from "the read has
+   * not come back" by looking at the value. Decided here rather than in the
+   * markup, so the component that renders the inspector holds no branch.
+   */
+  const library = pending ? undefined : (siteStyle?.classes ?? []);
+  return { library, create: useCreateClass(siteStyle?.classes) };
+}
+
+function useCreateClass(library: readonly NamedClass[] | undefined) {
+  // Its own write handle rather than one passed in. The caller is already the
+  // largest component in this file, and a dependency a hook can obtain for
+  // itself is a statement that does not need to live there.
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (slug: string) => {
+      const existing = library ?? [];
+      const classId = newId();
+      const next: NamedClass[] = [
+        ...existing,
+        { id: classId, slug, orderIndex: nextOrderIndex(existing), styles: {} },
+      ];
+      const result = await saveSection("classes", next);
+      if (result.saved) return { ok: true as const, classId };
+      const reasons = Object.values(result.issues);
+      // An empty `issues` is still a refusal — the transport could not describe
+      // it. Reporting it as saved is the one outcome that must never be silent,
+      // which is the rule the breakpoints writer below follows too.
+      return {
+        ok: false as const,
+        reason:
+          reasons.length > 0
+            ? reasons.join(" ")
+            : "This class could not be saved.",
+      };
+    },
+    [library, saveSection]
+  );
+}
+
+/** One past the highest position in the library, or zero for an empty one. */
+function nextOrderIndex(library: readonly NamedClass[]): number {
+  return library.reduce(
+    (highest, entry) =>
+      Number.isFinite(entry.orderIndex)
+        ? Math.max(highest, entry.orderIndex + 1)
+        : highest,
+    0
+  );
+}
+
 function useBreakpointWriter(
   configSiteStyle: SiteStyleData | undefined
 ): (next: BreakpointSet) => Promise<string | undefined> {
@@ -839,6 +917,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     pending: siteStylePending,
     error: siteStyleError,
   } = useSiteStyle(configSiteStyle);
+
+  // The site-style half of the class surface. The node half stays with the
+  // inspector, which already writes nodes — see `useClassSurface`.
+  const classes = useClassSurface(canvasSiteStyle, siteStylePending);
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -1401,6 +1483,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         inspector={
           <InspectorPanel
             editor={editor}
+            classLibrary={classes.library}
+            onCreateClass={classes.create}
             policy={stylePolicy}
             cascade={styleCascade}
             breakpoints={canvasRender.styleContext.breakpoints}

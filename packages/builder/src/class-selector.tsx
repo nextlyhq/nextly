@@ -53,6 +53,24 @@ import {
 /** Whether a write to the selected node's classes reached the document. */
 export type ClassWriteOutcome = "applied" | "refused";
 
+/**
+ * What creating a class produced: its new id, or why it could not be created.
+ *
+ * The ID comes back rather than the host applying the class itself. Creating
+ * is a SITE-STYLE write and applying is a NODE write — two documents — and the
+ * host owns only the first. Returning the id lets the application go through
+ * the same path every other apply takes, so the per-node bound and the store's
+ * own refusal are enforced once instead of twice.
+ *
+ * A REASON rather than a bare refusal, because this one has words available:
+ * the site-style save reports per-section issues, where a node write can only
+ * answer null. `breakpoints` in the page-builder admin already returns its
+ * refusal this way.
+ */
+export type ClassCreation =
+  | { readonly ok: true; readonly classId: string }
+  | { readonly ok: false; readonly reason: string };
+
 export interface ClassSelectorProps {
   /**
    * The site's class library, or `undefined` while the host has not read it.
@@ -81,8 +99,17 @@ export interface ClassSelectorProps {
    * Create a class under this slug and put it on the selected node.
    *
    * One intent, for the reason in the module note: the id does not exist yet.
+   *
+   * Asynchronous and answering, because creating a class is a SITE-STYLE write
+   * — a different document from the one the node lives in, saved over the
+   * network and refusable. A void contract would clear the typed name on a
+   * refusal exactly as it does on success, which is the same failure
+   * {@link ClassSelectorProps.onNodeClassesChange} returns an outcome to avoid.
+   *
+   * It creates only. Putting the class ON the node is this component's job,
+   * through the same callback every other application uses.
    */
-  onCreateClass: (slug: string) => void;
+  onCreateClass: (slug: string) => Promise<ClassCreation>;
 }
 
 /** The classes on the selected node, with a field for adding another. */
@@ -99,6 +126,11 @@ export function ClassSelector({
   // that one is predictable from the ids in hand, this one is only knowable by
   // asking the document. Kept apart so the message can say which happened.
   const [writeRefused, setWriteRefused] = React.useState(false);
+  // In flight, so a second Enter cannot queue a duplicate class while the
+  // first save is still on the network.
+  const [saving, setSaving] = React.useState(false);
+  // The site-style save's own words, which a node write cannot produce.
+  const [createIssue, setCreateIssue] = React.useState<string | null>(null);
   const listId = React.useId();
 
   if (library === undefined) {
@@ -125,7 +157,7 @@ export function ClassSelector({
   const highlighted = Math.min(active, Math.max(options.length - 1, 0));
 
   const commit = (option: ClassOption | undefined): void => {
-    if (option === undefined) return;
+    if (option === undefined || saving) return;
     if (option.kind === "create") {
       /*
        * The same node bound the apply path observes, asked before the class
@@ -137,29 +169,59 @@ export function ClassSelector({
         setRefused(true);
         return;
       }
-      onCreateClass(option.slug);
-    } else {
-      // Through the shared helper rather than an append written here. The
-      // bound on how many classes a node may carry belongs to one place, and a
-      // second append would keep working after that place learned to refuse.
-      const outcome = withClassApplied(nodeClassIds, option.choice.id);
-      if (!outcome.ok) {
-        setRefused(true);
-        return;
-      }
-      if (onNodeClassesChange(outcome.classIds) === "refused") {
-        // The draft survives, deliberately. An author whose write was refused
-        // has lost nothing they typed, and the next thing they do is likely to
-        // be trying it again.
-        setWriteRefused(true);
-        return;
-      }
+      /*
+       * Not awaited here, and the query is not cleared until it answers. A
+       * site-style save is a network write: clearing on dispatch would lose
+       * the typed name the moment the author pressed Enter, before anything
+       * knew whether it had landed.
+       */
+      setSaving(true);
+      void onCreateClass(option.slug).then(created => {
+        setSaving(false);
+        if (!created.ok) {
+          setCreateIssue(created.reason);
+          return;
+        }
+        setCreateIssue(null);
+        // Applied through the ordinary path, so a node already at its limit
+        // refuses here exactly as it would for an existing class rather than
+        // being special-cased into a second rule.
+        applyExisting(created.classId);
+      });
+      return;
+    }
+    applyExisting(option.choice.id);
+  };
+
+  /**
+   * Put a class the library already holds onto the node.
+   *
+   * One path for both kinds of apply. A newly created class reaches it with
+   * the id the host just minted, so the per-node bound and the store's refusal
+   * are enforced in one place rather than once per caller.
+   */
+  function applyExisting(classId: string): void {
+    // Through the shared helper rather than an append written here. The bound
+    // on how many classes a node may carry belongs to one place, and a second
+    // append would keep working after that place learned to refuse.
+    const outcome = withClassApplied(nodeClassIds, classId);
+    if (!outcome.ok) {
+      setRefused(true);
+      return;
+    }
+    if (onNodeClassesChange(outcome.classIds) === "refused") {
+      // The draft survives, deliberately. An author whose write was refused
+      // has lost nothing they typed, and the next thing they do is likely to
+      // be trying it again.
+      setWriteRefused(true);
+      return;
     }
     setRefused(false);
     setWriteRefused(false);
+    setCreateIssue(null);
     setQuery("");
     setActive(0);
-  };
+  }
 
   return (
     <div className="nx-classes">
@@ -206,6 +268,11 @@ export function ClassSelector({
       {hidden > 0 ? (
         <p className="nx-inspector__note">
           {`${hidden} more — keep typing to narrow the list.`}
+        </p>
+      ) : null}
+      {createIssue !== null ? (
+        <p className="nx-classes__issue" role="alert">
+          {createIssue}
         </p>
       ) : null}
       {writeRefused ? (

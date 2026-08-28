@@ -72,7 +72,7 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
-import { ClassSelector } from "./class-selector";
+import { ClassSelector, type ClassSelectorProps } from "./class-selector";
 import { commitOnEnter } from "./commit-on-enter";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
@@ -287,7 +287,7 @@ export interface StyleInspectorPanelProps {
    * Applying and removing an EXISTING class needs no callback: those are edits
    * to the selected node, which this panel already writes through the editor.
    */
-  onCreateClass?: (slug: string) => void;
+  onCreateClass?: ClassSelectorProps["onCreateClass"];
 }
 
 /**
@@ -414,7 +414,7 @@ function SelectedNodeClasses({
   editor: EditorState;
   nodeId: string;
   library: readonly NamedClass[] | undefined;
-  onCreateClass: ((slug: string) => void) | undefined;
+  onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
 }): React.JSX.Element | null {
   if (onCreateClass === undefined) return null;
   return (
