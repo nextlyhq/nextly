@@ -26,14 +26,14 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Report a translation whose source language changed after it was written, so a
-stale translation stops looking like a finished one. Each language now records
-when it was last written, the translation worklist gains a "Needs review" tab,
-and the language panel marks a translation whose source has moved on -- while
-still reporting it as published, because it is.
+Record when each language of a document was last written, so a later change can
+tell a finished translation from one whose source has moved on since.
 
-Databases created before this keep no history of when each language was
-written, so the column is seeded from version history where that exists and
-left unknown where it does not. Unknown is never reported as up to date: a
-translation the system cannot vouch for is left alone rather than being
-described as current.
+This release is the groundwork only: the timestamp is recorded on every write
+and seeded, where version history allows, for documents that already exist.
+Nothing surfaces it yet.
+
+A database created before this keeps no history of when each language was
+written, so the value is seeded from version history where that exists and left
+unknown where it does not. Unknown is never treated as up to date: a language
+the system cannot vouch for is left alone rather than described as current.
