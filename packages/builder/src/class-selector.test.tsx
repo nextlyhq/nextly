@@ -684,6 +684,117 @@ describe("a refusal raised by a creation that landed after an edit", () => {
   });
 });
 
+describe("a failure that must be invalidated, not merely hidden", () => {
+  it("stays gone when the node returns to a class list it held before", () => {
+    /*
+     * Hiding leaves the refusal stored, so a list the node held before can
+     * bring it back — an external edit adding a class and an undo removing it
+     * is enough. The alert would then describe an operation that did not just
+     * fail. A test that stops after the first rerender cannot tell hiding from
+     * invalidating, which is exactly what mine did.
+     */
+    const refuse = vi.fn(() => "refused" as const);
+    const at = (ids: readonly string[]) => (
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={ids}
+        onNodeClassesChange={refuse}
+        onCreateClass={createsClass()}
+      />
+    );
+    const view = render(at([]));
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    view.rerender(at(["id-card"]));
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // Back to the list the refusal was recorded against.
+    view.rerender(at([]));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("a creation resolving after the selection moved to another block", () => {
+  it("does not write one node's classes through another node's callback", async () => {
+    /*
+     * The handler captures the node and the write callback from the render
+     * that began the request, and reads the class list live. Unkeyed, a
+     * consumer can rerender to a different block mid-flight — and applying
+     * then puts the new block's classes through the old block's writer.
+     */
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const create = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    const writeA = vi.fn(() => "applied" as const);
+    const writeB = vi.fn(() => "applied" as const);
+
+    const view = render(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={["id-hero"]}
+        onNodeClassesChange={writeA}
+        onCreateClass={create}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    view.rerender(
+      <ClassSelector
+        nodeId="node-b"
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={writeB}
+        onCreateClass={create}
+      />
+    );
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-made" });
+    });
+
+    expect(writeA).not.toHaveBeenCalled();
+    expect(writeB).not.toHaveBeenCalled();
+  });
+
+  it("still applies when the selection has NOT moved", async () => {
+    // The control: discarding on a node change must not discard every creation.
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const create = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    const write = vi.fn(() => "applied" as const);
+    render(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={["id-hero"]}
+        onNodeClassesChange={write}
+        onCreateClass={create}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-made" });
+    });
+
+    expect(write).toHaveBeenCalledWith(["id-hero", "id-made"]);
+  });
+});
+
 describe("two blocks that look identical from the class list alone", () => {
   it("drops a refusal when the node changes but its class list does not", () => {
     /*
