@@ -21,6 +21,7 @@ import { SQUARE_CORNERS } from "./border-radii";
 import {
   canvasContentPoint,
   canvasContentRect,
+  canvasPointerPoints,
   clippedByAncestor,
   clippedByAncestorRect,
   frameInsetOf,
@@ -283,6 +284,42 @@ describe("a canvas that is PAINTED smaller than it is laid out", () => {
     ).toEqual({ x: rect.x, y: rect.y });
   });
 
+  it("leaves the PAINTED point undivided and unmoved by the scroll", () => {
+    /*
+     * The half that reads as correct while being wrong, because the two spaces
+     * COINCIDE at every default: unscaled, they differ by nothing; unscrolled,
+     * they differ only by the scale. So the separating fixture is a scale that
+     * is not 1 TOGETHER WITH a non-zero scroll, and either one alone leaves a
+     * painted point that had quietly acquired the division, or the scroll, or
+     * both, agreeing with a correct one.
+     *
+     * What each space is for: the painted point is the distance from the
+     * canvas's painted top-left, which is what the HAND moved, so a drag's
+     * hysteresis threshold measured in it stays a threshold about the hand
+     * however far the canvas is zoomed out. The content point is that same
+     * distance in the canvas's own pixels, past everything already scrolled,
+     * which is the space the rectangles a drop is resolved against live in.
+     */
+    const root = scaledRoot(
+      { x: 100, y: 50, width: 912, height: 570 },
+      { width: 1280, height: 800 },
+      { left: 0, top: 250 }
+    );
+
+    const points = canvasPointerPoints(
+      100 + 200 * SCALE,
+      50 + 300 * SCALE,
+      root
+    );
+
+    // The fixture is CAPABLE of telling them apart. Without this the two
+    // assertions below could both hold on an implementation that answered one
+    // point twice, which is exactly the confusion they exist to catch.
+    expect(points.painted).not.toEqual(points.content);
+    expect(points.painted).toEqual({ x: 200 * SCALE, y: 300 * SCALE });
+    expect(points.content).toEqual({ x: 200, y: 550 });
+  });
+
   it("is the IDENTITY when nothing has been laid out", () => {
     /*
      * jsdom lays nothing out, so `offsetWidth` is 0 and a ratio taken from it
@@ -319,6 +356,65 @@ describe("canvasContentPoint", () => {
       x: rect.x,
       y: rect.y,
     });
+  });
+});
+
+describe("what a mapped pointer costs", () => {
+  /**
+   * Count the reads of ONE element's rectangle.
+   *
+   * Wraps the fixture's own stub rather than the prototype, so a read of some
+   * other element cannot satisfy the count — which is the way a second
+   * implementation would hide, since it needs this root and no other.
+   */
+  function countingRoot(scroll: { left: number; top: number }) {
+    const root = canvasRoot({ x: 100, y: 50, width: 400, height: 800 }, scroll);
+    const counter = { reads: 0 };
+    const measured = root.getBoundingClientRect.bind(root);
+    root.getBoundingClientRect = () => {
+      counter.reads += 1;
+      return measured();
+    };
+    return { root, counter };
+  }
+
+  it("reads the root ONCE for both spaces", () => {
+    /*
+     * The reason the two points are returned together rather than fetched one
+     * at a time. `getBoundingClientRect` forces the layout the browser was
+     * deferring, and a drag asks on every pointer move — so a caller that
+     * wanted both spaces and called two mappings paid a second synchronous
+     * reflow per move for an answer it already held.
+     *
+     * Exact rather than a bound, so it fails in both directions: a second read
+     * regresses it, and an implementation that answered without measuring at
+     * all — which would place every overlay at a nonsense coordinate — does not
+     * pass it either.
+     */
+    const { root, counter } = countingRoot({ left: 0, top: 250 });
+
+    canvasPointerPoints(140, 150, root);
+
+    expect(counter.reads).toBe(1);
+  });
+
+  it("costs the same when only the content point is wanted", () => {
+    /*
+     * The projection must not measure a second time on its way to discarding
+     * the painted half. Its own case rather than a second assertion above,
+     * because the two paths regress independently: a read added here fails only
+     * this one.
+     *
+     * What it does NOT see, stated so the green is not read as more than it is:
+     * this function's body replaced by an equivalent mapping with ONE read of
+     * its own costs exactly the same and passes. That is a duplicate rather
+     * than a cost, and no read count can tell the two apart.
+     */
+    const { root, counter } = countingRoot({ left: 0, top: 250 });
+
+    canvasContentPoint(140, 150, root);
+
+    expect(counter.reads).toBe(1);
   });
 });
 

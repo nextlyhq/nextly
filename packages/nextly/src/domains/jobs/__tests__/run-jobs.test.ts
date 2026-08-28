@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { buildUserContext } from "../../../auth/user-context";
 import type { JobRow } from "../jobs-repository";
 import { JobRegistry, defineJob } from "../job-registry";
 import type { RunAsDeps } from "../resolve-run-as";
@@ -125,7 +126,14 @@ describe("runJobs", () => {
       contentApi: noContentApi,
       now: () => NOW,
     });
-    expect(seen).toEqual({ id: "u1", roles: ["editor"] });
+    expect(seen).toEqual(
+      buildUserContext({
+        id: "u1",
+        name: undefined,
+        email: undefined,
+        roles: ["editor"],
+      })
+    );
   });
 
   it("fails a job whose identity is gone TERMINALLY, never retrying it", async () => {
@@ -376,6 +384,41 @@ describe("runJobs", () => {
     expect(calls).toBeLessThanOrEqual(2);
   });
 
+  it("refuses to start the handler when the lease lapsed while the identity was resolving", async () => {
+    // `markAttempt` fences the row, but resolving the identity is two database
+    // reads and renewal does not begin until the handler is already running.
+    // A lease that expires in that window is claimed by a successor, and this
+    // runner would otherwise wake up and do the work a second time — the fence
+    // it passed describes a lease it no longer holds.
+    const handler = vi.fn(async () => {});
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row({ runAsUserId: "u1" })]),
+      // Refuse from the first call: the successor took the row during the
+      // identity reads below.
+      renewLease: async () => false,
+    };
+
+    const result = await runJobs({
+      store: s,
+      registry: registryWith(defineJob({ slug: "test:noop", handler })),
+      runAs: runAs({
+        listRoleSlugs: async () => {
+          // Stand in for identity reads slow enough to outlive the lease.
+          await new Promise(resolve => setTimeout(resolve, 5));
+          return ["editor"];
+        },
+      }),
+      contentApi: noContentApi,
+      now: () => NOW,
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    // Nothing is written either: the row belongs to whoever holds it now, and
+    // a finalize from this runner would overwrite their outcome.
+    expect(s.finalized).toEqual([]);
+    expect(result).toMatchObject({ claimed: 1, done: 0 });
+  });
+
   it("hands the handler a content client already bound to the resolved user", async () => {
     // The identity is only real if it reaches the CALLS. The Direct API
     // defaults to overrideAccess: true, so a handler importing `nextly`
@@ -390,7 +433,9 @@ describe("runJobs", () => {
         defineJob({
           slug: "test:noop",
           handler: async (_input, ctx) => {
-            await ctx.content.find({ collection: "posts" } as never);
+            // No cast: the bound client carries the Direct API's own
+            // signatures, so a handler calls it the way it calls `nextly`.
+            await ctx.content.find({ collection: "posts" });
           },
         })
       ),
@@ -403,7 +448,12 @@ describe("runJobs", () => {
       expect.objectContaining({
         collection: "posts",
         overrideAccess: false,
-        user: { id: "u1", roles: ["editor"] },
+        user: buildUserContext({
+          id: "u1",
+          name: undefined,
+          email: undefined,
+          roles: ["editor"],
+        }),
       })
     );
   });

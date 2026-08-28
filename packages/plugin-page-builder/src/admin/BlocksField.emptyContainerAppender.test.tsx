@@ -128,7 +128,27 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/*
+ * A closed object literal rather than the real module spread, unlike the shell
+ * mock above — the two modules are not interchangeable here. Importing
+ * `@nextlyhq/plugin-sdk/admin` for real under jsdom throws
+ * `ReferenceError: EventSource is not defined` while the module is still
+ * evaluating: the admin bundle it re-exports opens a dev-mode SSE connection at
+ * module scope behind a `window` guard that jsdom satisfies. So `importOriginal`
+ * here would not fill the gaps in this list, it would take the whole file down
+ * before a single test ran. The shared `scripts/vitest-dom-setup.ts` this
+ * package loads stubs no `EventSource` — `plugin-form-builder`'s own setup file
+ * is where one exists — so until these suites have one, every export the
+ * subject imports has to be named below.
+ */
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  /*
+   * Never awaited by these cases: the loader is reached only when an author
+   * double-clicks a passage, and none of them do. Present because the mock
+   * REPLACES the module wholesale, so an export the subject imports and this
+   * omits is a missing-export error rather than an unused stub.
+   */
+  loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => ({ siteStyle: undefined }),
   useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,

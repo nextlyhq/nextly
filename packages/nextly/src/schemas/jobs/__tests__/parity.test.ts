@@ -10,6 +10,7 @@ import { Column, is, type Table } from "drizzle-orm";
 import { describe, it, expect } from "vitest";
 
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
+import { users as mysqlUsers } from "../../users/mysql";
 import { my, pg, sl } from "../index";
 import { JOB_STATES } from "../types";
 
@@ -73,6 +74,36 @@ describe("the job table is identical across dialects", () => {
     ]) {
       expect(columnNames(table)).toContain("runAsUserId:run_as_user_id");
     }
+  });
+
+  it("stores a run-as id as wide as MySQL stores a user id", () => {
+    // MySQL is the only dialect that bounds these; PostgreSQL and SQLite use
+    // unbounded text. A narrower column here refuses a job queued by a
+    // legitimate user whose id is longer, and truncates it otherwise — and a
+    // truncated id resolves to no user, which `resolveRunAs` reports as a
+    // DELETED ACCOUNT. The job then fails terminally with a reason naming the
+    // wrong cause.
+    //
+    // Compared against the users table rather than a literal, so widening
+    // `users.id` later cannot silently re-open the gap this closes.
+    const columnNamed = (table: object, name: string): Column | undefined =>
+      Object.entries(table).find(
+        (entry): entry is [string, Column] =>
+          is(entry[1], Column) && entry[1].name === name
+      )?.[1];
+
+    const usersId = columnNamed(mysqlUsers, "id");
+    const runAs = columnNamed(my.nextlyJobsMysql, "run_as_user_id");
+    // The control: a lookup that found nothing would make both reads
+    // `undefined` and the comparison below trivially true. An earlier version
+    // of this test compared a property neither column has and passed against a
+    // deliberately narrowed column for exactly that reason.
+    expect(usersId).toBeDefined();
+    expect(runAs).toBeDefined();
+
+    // Compared as the RENDERED type rather than an internal field: that string
+    // is what reaches the database, so it cannot agree while the DDL differs.
+    expect(runAs?.getSQLType()).toBe(usersId?.getSQLType());
   });
 });
 

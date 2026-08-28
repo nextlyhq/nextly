@@ -117,55 +117,100 @@ export function canvasContentRect(element: Element, root: HTMLElement): Rect {
 }
 
 /**
+ * One pointer position, in the two canvas spaces a drag reads it in.
+ *
+ * Both are taken from a SINGLE measurement of the root, and that is the whole
+ * reason they arrive together. They are the same offset expressed twice — the
+ * painted one IS the numerator the content one divides — so a caller that
+ * measured the root once for each would be free to answer the same move from
+ * two rectangles, and a drag would compare its pointer against rectangles the
+ * hysteresis had already stopped agreeing with.
+ */
+export interface CanvasPointerPoints {
+  /**
+   * The point in the canvas's own content coordinates.
+   *
+   * The exact counterpart of {@link canvasContentRect} rather than a second
+   * mapping written to match: a pointer event arrives in viewport coordinates
+   * and has to be compared against rectangles measured there, and the two
+   * disagreeing by a scroll offset is the fault this pairing exists to prevent.
+   */
+  readonly content: Point;
+  /**
+   * The point relative to the canvas's PAINTED top-left corner.
+   *
+   * A third space, and it exists because the other two each lose one of the two
+   * things a drag's hysteresis has to see.
+   *
+   * CLIENT coordinates are hand-scale — 8px of them is 8px of real movement,
+   * whatever the canvas is painted at — but they do not move when the page
+   * scrolls under a stationary pointer, which is exactly what autoscroll does.
+   * Measured there, a rival target's distance from its anchor stays zero
+   * however far the page travels, so the committed target never advances and
+   * the indicator stays on a position that has scrolled off screen.
+   *
+   * CANVAS CONTENT coordinates move with the scroll but are divided by the
+   * canvas scale, so the same threshold asks for less hand movement the further
+   * the canvas is zoomed out.
+   *
+   * This one moves with the scroll — the root's own painted rectangle travels —
+   * and is not divided, so a threshold in it stays a threshold about the hand.
+   * It is NOT interchangeable with {@link canvasContentRect}: nothing may be
+   * drawn from it, because it does not survive a scroll.
+   */
+  readonly painted: Point;
+}
+
+/**
+ * Map a viewport point into the canvas, in both spaces, from one rect read.
+ *
+ * `getBoundingClientRect` is the expensive part — it forces the layout the
+ * browser was hoping to defer — so a pointer handler that wants both spaces
+ * asks once here rather than calling two mappings that each measure.
+ *
+ * The pair describes the root as it was AT THE MOMENT OF THE READ, and it stops
+ * being true the next time anything moves the canvas. Callers that scroll,
+ * resize or restyle between using the two halves must measure again.
+ */
+export function canvasPointerPoints(
+  clientX: number,
+  clientY: number,
+  root: HTMLElement
+): CanvasPointerPoints {
+  const rootBox = root.getBoundingClientRect();
+  const scale = paintedScale(root, rootBox);
+  const painted = { x: clientX - rootBox.x, y: clientY - rootBox.y };
+  return {
+    painted,
+    // DERIVED from the painted offset rather than subtracting the root a second
+    // time: the two spaces differ only by the canvas scale and the root's
+    // scroll, so written apart they would be two subtractions to keep in step.
+    //
+    // The SCROLL is added after the division, exactly as in canvasContentRect.
+    // A scroll offset is already in content pixels — it counts the root's own
+    // laid-out content, which a transform never touches — so dividing it would
+    // shrink a real offset by the zoom.
+    content: {
+      x: painted.x / scale.x + root.scrollLeft,
+      y: painted.y / scale.y + root.scrollTop,
+    },
+  };
+}
+
+/**
  * A viewport point in the canvas's own content coordinates.
  *
- * The exact counterpart of {@link canvasContentRect} rather than a second
- * mapping written to match: a pointer event arrives in viewport coordinates and
- * has to be compared against rectangles measured above, and the two disagreeing
- * by a scroll offset is the fault this pairing exists to prevent.
+ * For the callers that need only that space, and a projection of
+ * {@link canvasPointerPoints} rather than a mapping of its own — a second
+ * subtraction here would be free to disagree with the one a drag reads.
+ * The discarded half costs nothing: the root is measured once either way.
  */
 export function canvasContentPoint(
   clientX: number,
   clientY: number,
   root: HTMLElement
 ): Point {
-  const rootBox = root.getBoundingClientRect();
-  const scale = paintedScale(root, rootBox);
-  return {
-    x: (clientX - rootBox.x) / scale.x + root.scrollLeft,
-    y: (clientY - rootBox.y) / scale.y + root.scrollTop,
-  };
-}
-
-/**
- * A viewport point relative to the canvas's PAINTED top-left corner.
- *
- * A third space, and it exists because the other two each lose one of the two
- * things a drag's hysteresis has to see.
- *
- * CLIENT coordinates are hand-scale — 8px of them is 8px of real movement,
- * whatever the canvas is painted at — but they do not move when the page
- * scrolls under a stationary pointer, which is exactly what autoscroll does.
- * Measured there, a rival target's distance from its anchor stays zero however
- * far the page travels, so the committed target never advances and the
- * indicator stays on a position that has scrolled off screen.
- *
- * CANVAS CONTENT coordinates move with the scroll but are divided by the canvas
- * scale, so the same threshold asks for less hand movement the further the
- * canvas is zoomed out.
- *
- * This one moves with the scroll — the root's own painted rectangle travels —
- * and is not divided, so a threshold in it stays a threshold about the hand.
- * It is NOT interchangeable with {@link canvasContentRect}: nothing may be
- * drawn from it, because it does not survive a scroll.
- */
-export function canvasPaintedPoint(
-  clientX: number,
-  clientY: number,
-  root: HTMLElement
-): Point {
-  const rootBox = root.getBoundingClientRect();
-  return { x: clientX - rootBox.x, y: clientY - rootBox.y };
+  return canvasPointerPoints(clientX, clientY, root).content;
 }
 
 /**

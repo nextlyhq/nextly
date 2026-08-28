@@ -37,6 +37,7 @@
  * @module domains/jobs/resolve-run-as
  */
 
+import { buildUserContext } from "../../auth/user-context";
 import type { UserContext } from "../collections/services/collection-types";
 
 /** The minimum a user must look like for a job to act as them. */
@@ -88,14 +89,22 @@ export async function resolveRunAs(
   if (!user.isActive) return { ok: false, reason: "JOB_IDENTITY_DISABLED" };
 
   const roles = await deps.listRoleSlugs(user.id);
-  // Every attribute the user carries, not just id and roles. Access predicates
-  // in this repository inspect `user.email`; a context missing it evaluates
-  // such a rule against `undefined`, which denies authorized work — or, for a
-  // negative predicate like `email !== blocked`, GRANTS work it should refuse.
-  // Either way the job is not running with the named person's authority, which
-  // is the one thing this function exists to guarantee.
-  const context: UserContext = { id: user.id, roles };
-  if (user.name !== undefined) context.name = user.name;
-  if (user.email !== undefined) context.email = user.email;
-  return { ok: true, user: context };
+  // The canonical constructor, not a second one that happens to agree. A
+  // `UserContext` is an open record an access rule is evaluated against, so a
+  // path that assembles it differently authorizes differently — which is why
+  // `auth/user-context` states that every path builds it there. Building it by
+  // hand here dropped `role`, the single-role alias `buildUserContext` derives
+  // from `roles[0]`: a rule reading `user.role` then saw `undefined`, denying
+  // authorized work, and a negative one like `user.role !== "suspended"`
+  // GRANTED work it should have refused. The same argument covers `claims`,
+  // which a hand-built context omits entirely.
+  return {
+    ok: true,
+    user: buildUserContext({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      roles,
+    }),
+  };
 }
