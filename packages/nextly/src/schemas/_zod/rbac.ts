@@ -25,6 +25,15 @@ export const SYSTEM_RESOURCES = [
   "email-templates",
   "api-keys",
   "webhooks",
+  // NOT "releases". Registering a system resource RESERVES its name, and
+  // "releases" is a word real sites use for content — "press releases" is one
+  // of the most common collections on a corporate site. The other reserved
+  // names read as system concepts; this one reads as content, which is exactly
+  // why it would collide. An existing collection called `releases` would fail
+  // slug validation at boot, and a Schema-Builder one would have its
+  // permissions reclassified as system permissions, silently costing preset
+  // roles their access.
+  "content-releases",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];

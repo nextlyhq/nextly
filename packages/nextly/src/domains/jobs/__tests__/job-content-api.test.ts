@@ -112,6 +112,47 @@ describe("createJobContentApi", () => {
   });
 });
 
+describe("how the source is called", () => {
+  it("calls the operation ON the source, so a method keeping `this` works", async () => {
+    // The Direct API has two shapes and this client's type admits both: the
+    // module-level facade is arrow functions and survives being extracted,
+    // while a real `Nextly` INSTANCE reaches its context through `this`.
+    // Extracting the method breaks the second — the call then fails deep inside
+    // `mergeConfig`, reading `defaultConfig` of undefined, which reads as a
+    // broken content API rather than a broken wrapper.
+    //
+    // Every other case here passes a plain object literal, which cannot tell
+    // the two apart. This one deliberately does.
+    class ApiWithContext {
+      private readonly ctx = { defaultConfig: { locale: "en" } };
+      seen: Record<string, unknown> | undefined;
+      async find(args: Record<string, unknown>): Promise<{ items: never[] }> {
+        // Throws exactly as the real API does when `this` is lost.
+        this.seen = { ...this.ctx.defaultConfig, ...args };
+        return { items: [] };
+      }
+    }
+    const source = new ApiWithContext();
+    const client = createJobContentApi({ id: "u1", roles: ["editor"] }, {
+      find: source.find,
+    } as never);
+
+    // Bound from a detached reference, which is the worst case a caller can
+    // hand this: it must still reach the instance.
+    const detached = createJobContentApi(
+      { id: "u1", roles: ["editor"] },
+      source as never
+    );
+    await (detached.find as (args: unknown) => Promise<unknown>)({
+      collection: "posts",
+    });
+
+    expect(source.seen).toMatchObject({ collection: "posts" });
+    expect(source.seen?.overrideAccess).toBe(false);
+    void client;
+  });
+});
+
 describe("the options this client OWNS", () => {
   it("strips EVERY authorization-bearing option, not just the two it sets", async () => {
     // Every authority-bearing option is owned by this client, not just the two

@@ -296,7 +296,8 @@ describe.each(getConfiguredTestDialects())(
       const soonRelease = await repo.createRelease({ title: "Soon" });
       await repo.scheduleRelease(soonRelease.id, soon, "UTC");
 
-      const earliest = await repo.findEarliestScheduledTransition();
+      const instants = await repo.findScheduledTransitions();
+      const earliest = instants[0];
 
       // The PAST release wins, and that is the point: a release whose time has
       // passed but which nothing has materialised yet is affecting reads right
@@ -321,7 +322,134 @@ describe.each(getConfiguredTestDialects())(
       await repo.scheduleRelease(release.id, PAST, "UTC");
       await repo.cancelRelease(release.id);
 
-      await expect(repo.findEarliestScheduledTransition()).resolves.toBeNull();
+      await expect(repo.findScheduledTransitions()).resolves.toEqual([]);
+    });
+
+    it("returns EVERY scheduled instant, so an overdue one cannot mask a later", async () => {
+      // The cheap check wants an instant at or before now; a cache lifetime
+      // wants the next one strictly AFTER. Those differ exactly when an overdue
+      // release is still `scheduled` — which is what a release held open by a
+      // failed member looks like. Returning only the earliest made the second
+      // question unanswerable: it would report "nothing ahead" forever while a
+      // genuinely future release went unbounded.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const stuck = await repo.createRelease({ title: "Overdue" });
+      await repo.scheduleRelease(stuck.id, PAST, "UTC");
+      const ahead = await repo.createRelease({ title: "Ahead" });
+      await repo.scheduleRelease(ahead.id, FUTURE, "UTC");
+
+      const instants = await repo.findScheduledTransitions();
+
+      expect(instants).toHaveLength(2);
+      // Ascending, so a caller can take the first strictly after now without
+      // sorting it again.
+      expect(instants[0]!.getTime()).toBeLessThan(instants[1]!.getTime());
+    });
+
+    it("flushes the members' cache tags when a release is SCHEDULED", async () => {
+      // A page cached while nothing was scheduled was stored tag-only, and the
+      // bound computed at read time cannot reach back into an entry that
+      // already exists. Scheduling has to flush those tags itself, or the page
+      // serves pre-release content past the transition until some unrelated
+      // write happens to bust it.
+      const app = await boot(dialect);
+      const flushed: unknown[] = [];
+      const repo = new ReleasesRepository(app.adapter, {
+        flush: intents => {
+          flushed.push(...intents);
+        },
+      });
+      const release = await repo.createRelease({ title: "Spring launch" });
+      await repo.addMember({
+        releaseId: release.id,
+        ...ref("e1"),
+        action: "publish",
+      });
+      // `addMember` flushes too, for its own reason. Cleared so this case
+      // measures what SCHEDULING flushed rather than the sum of both.
+      flushed.length = 0;
+
+      await repo.scheduleRelease(release.id, PAST, "UTC");
+
+      expect(flushed).toHaveLength(1);
+      expect((flushed[0] as { tags: string[] }).tags.sort()).toEqual(
+        ["nextly:posts", "nextly:posts:id:e1"].sort()
+      );
+    });
+
+    it("flushes them again when the release is CANCELLED", async () => {
+      // Cancelling changes what a read returns just as scheduling does: a page
+      // cached with a lifetime derived from this release is now bounded by an
+      // instant that will never arrive.
+      const app = await boot(dialect);
+      const flushed: unknown[] = [];
+      const repo = new ReleasesRepository(app.adapter, {
+        flush: intents => {
+          flushed.push(...intents);
+        },
+      });
+      const release = await repo.createRelease({ title: "Called off" });
+      await repo.addMember({
+        releaseId: release.id,
+        ...ref("e1"),
+        action: "publish",
+      });
+      await repo.scheduleRelease(release.id, PAST, "UTC");
+      flushed.length = 0;
+
+      await repo.cancelRelease(release.id);
+
+      expect(flushed).toHaveLength(1);
+    });
+
+    it("flushes tags when a member is ADDED to a scheduled release", async () => {
+      // Membership can change after scheduling. Without this the document's
+      // cached pages stay bounded by a schedule that did not include it.
+      const app = await boot(dialect);
+      const flushed: unknown[] = [];
+      const repo = new ReleasesRepository(app.adapter, {
+        flush: intents => {
+          flushed.push(...intents);
+        },
+      });
+      const release = await repo.createRelease({ title: "Spring launch" });
+      await repo.scheduleRelease(release.id, PAST, "UTC");
+      flushed.length = 0;
+
+      await repo.addMember({
+        releaseId: release.id,
+        ...ref("e1"),
+        action: "publish",
+      });
+
+      expect(flushed).toHaveLength(1);
+    });
+
+    it("flushes the REMOVED member's own tags", async () => {
+      // Read before the delete: afterwards nothing says which document's tags
+      // to flush, so the projection that release was producing would stay
+      // cached with no write left to clear it.
+      const app = await boot(dialect);
+      const flushed: { tags: string[] }[] = [];
+      const repo = new ReleasesRepository(app.adapter, {
+        flush: intents => {
+          flushed.push(...(intents as { tags: string[] }[]));
+        },
+      });
+      const release = await repo.createRelease({ title: "Spring launch" });
+      const member = await repo.addMember({
+        releaseId: release.id,
+        ...ref("e1"),
+        action: "publish",
+      });
+      await repo.scheduleRelease(release.id, PAST, "UTC");
+      flushed.length = 0;
+
+      await repo.removeMember(member.id);
+
+      expect(flushed).toHaveLength(1);
+      expect(flushed[0]!.tags).toContain("nextly:posts:id:e1");
     });
 
     it("removes a member", async () => {

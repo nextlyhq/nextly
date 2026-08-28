@@ -26,14 +26,19 @@
  */
 
 /**
- * The earliest instant any scheduled release takes effect, or `null` when no
- * release is scheduled at all.
+ * Every instant a scheduled release takes effect, ascending.
  *
- * Satisfied by `ReleasesRepository.findEarliestScheduledTransition`. Taken as
- * a function rather than the repository so this holds no opinion about where
- * the answer comes from.
+ * The whole list, because two callers ask different questions of it: "is
+ * anything due?" wants an instant at or before now, and "when could this page
+ * next go stale?" wants the next one strictly after. Those answers differ
+ * exactly when an overdue release is still scheduled, and loading only the
+ * earliest would make the second unanswerable.
+ *
+ * Satisfied by `ReleasesRepository.findScheduledTransitions`. Taken as a
+ * function rather than the repository so this holds no opinion about where the
+ * answer comes from.
  */
-export type EarliestScheduledTransitionLoader = () => Promise<Date | null>;
+export type ScheduledTransitionsLoader = () => Promise<Date[]>;
 
 /**
  * How long an unrefreshed memo may be trusted.
@@ -47,14 +52,14 @@ export const DEFAULT_TTL_MS = 30_000;
 /**
  * A loaded answer.
  *
- * `earliest` being `null` is a VALUE — "nothing is scheduled" — so it is held
- * inside a memo object rather than represented by the absence of one. Folding
- * the two together would make every read on a site with no releases reload,
- * which is the exact cost this class exists to remove, and no returned boolean
- * would differ.
+ * An EMPTY list is a VALUE — "nothing is scheduled" — so it is held inside a
+ * memo object rather than represented by the absence of one. Folding the two
+ * together would make every read on a site with no releases reload, which is
+ * the exact cost this class exists to remove, and no returned answer would
+ * differ.
  */
 interface TransitionMemo {
-  earliest: Date | null;
+  instants: Date[];
   loadedAtMs: number;
 }
 
@@ -69,14 +74,14 @@ export class PendingTransitionCache {
    * request; without the tag, a load that began before an invalidation could
    * commit the answer that invalidation just discarded.
    */
-  private inFlight: Promise<Date | null> | null = null;
+  private inFlight: Promise<Date[]> | null = null;
   private inFlightGeneration = -1;
   private generation = 0;
 
   private readonly ttlMs: number;
 
   constructor(
-    private readonly load: EarliestScheduledTransitionLoader,
+    private readonly load: ScheduledTransitionsLoader,
     options?: { ttlMs?: number }
   ) {
     this.ttlMs = options?.ttlMs ?? DEFAULT_TTL_MS;
@@ -91,11 +96,42 @@ export class PendingTransitionCache {
    */
   async mayHaveDue(now: Date): Promise<boolean> {
     const nowMs = now.getTime();
+    return (await this.transitions(now)).some(at => at.getTime() <= nowMs);
+  }
+
+  /**
+   * The memoized instants, loading them when the memo has lapsed.
+   *
+   * Both public questions come through here, so a read asking each of them
+   * issues ONE query rather than two.
+   */
+  private async transitions(now: Date): Promise<Date[]> {
+    const nowMs = now.getTime();
     const memo = this.memo;
-    if (memo !== null && isFresh(memo, nowMs, this.ttlMs)) {
-      return isDue(memo.earliest, nowMs);
+    if (memo !== null && isFresh(memo, nowMs, this.ttlMs)) return memo.instants;
+    return this.loadInstants(nowMs);
+  }
+
+  /**
+   * The earliest instant any scheduled release takes effect, memoized.
+   *
+   * The same answer {@link mayHaveDue} reduces to a boolean, returned whole
+   * for the caller that needs the INSTANT rather than the verdict: a cache
+   * lifetime derived from the schedule. Sharing the memo is the point — a
+   * read that asks both questions must not issue two queries, and a second
+   * loader would be a second answer to drift from this one.
+   */
+  async nextTransition(now: Date): Promise<Date | null> {
+    // Deliberately NOT the earliest instant. The earliest may already be in the
+    // past — a release held open by a failed member stays `scheduled` — and a
+    // bound derived from it would report "nothing to wait for" forever while a
+    // genuinely future release went unbounded. This asks the question the cache
+    // actually has: what is the next instant a page could go stale AT.
+    const nowMs = now.getTime();
+    for (const instant of await this.transitions(now)) {
+      if (instant.getTime() > nowMs) return instant;
     }
-    return isDue(await this.loadEarliest(nowMs), nowMs);
+    return null;
   }
 
   /**
@@ -110,22 +146,28 @@ export class PendingTransitionCache {
     this.generation++;
   }
 
-  private async loadEarliest(nowMs: number): Promise<Date | null> {
+  private async loadInstants(nowMs: number): Promise<Date[]> {
     if (this.inFlight !== null && this.inFlightGeneration === this.generation) {
       return this.inFlight;
     }
 
     const generation = this.generation;
     const pending = this.load().then(
-      earliest => {
+      instants => {
         // Commit only if nothing invalidated while this was running: an answer
         // read before a local write describes the state that write replaced,
         // and storing it would reinstate it for a full TTL.
         if (generation === this.generation) {
-          this.memo = { earliest, loadedAtMs: nowMs };
+          this.memo = { instants, loadedAtMs: nowMs };
         }
         if (this.inFlight === pending) this.inFlight = null;
-        return earliest;
+        // Not just "do not memoize it" — do not RETURN it either. A caller
+        // handed the pre-invalidation answer caches its page against a schedule
+        // that has already changed, and the flush that accompanied the
+        // invalidation has by then already run. Reload instead, so the answer
+        // this caller acts on is the one the write left behind.
+        if (generation !== this.generation) return this.loadInstants(nowMs);
+        return instants;
       },
       error => {
         // A rejected promise left in `inFlight` would be handed to every later
@@ -161,6 +203,3 @@ function isFresh(memo: TransitionMemo, nowMs: number, ttlMs: number): boolean {
  * scheduled for exactly `now` is due. Answering otherwise here would hide it
  * from the rule that would have applied it.
  */
-function isDue(earliest: Date | null, nowMs: number): boolean {
-  return earliest !== null && earliest.getTime() <= nowMs;
-}

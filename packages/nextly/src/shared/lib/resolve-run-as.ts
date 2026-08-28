@@ -34,11 +34,11 @@
  * read path "nothing is due" is the worst thing to say by accident, because it
  * is indistinguishable from a correct answer.
  *
- * @module domains/jobs/resolve-run-as
+ * @module shared/lib/resolve-run-as
  */
 
 import { buildUserContext } from "../../auth/user-context";
-import type { UserContext } from "../collections/services/collection-types";
+import type { UserContext } from "../../domains/collections/services/collection-types";
 
 /** The minimum a user must look like for a job to act as them. */
 export interface RunAsUser {
