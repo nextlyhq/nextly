@@ -79,7 +79,7 @@ export interface ClassManagerPanelProps {
    * The classes something ELSE supplies, which the stored library layers over.
    *
    * Needed because these two are not equally editable, exactly as the tokens
-   * studio found for tokens. `resolveSiteStyle` merges the site'"'"'s configured
+   * studio found for tokens. `resolveSiteStyle` merges the site's configured
    * classes back over the stored tier BY ID, so absence from storage means "no
    * override" rather than "deleted" — a supplied class reappears on the next
    * read while the delete callback has already stripped it from every document

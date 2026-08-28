@@ -690,8 +690,8 @@ describe("a failure that must be invalidated, not merely hidden", () => {
      * Hiding leaves the refusal stored, so a list the node held before can
      * bring it back — an external edit adding a class and an undo removing it
      * is enough. The alert would then describe an operation that did not just
-     * fail. A test that stops after the first rerender cannot tell hiding from
-     * invalidating, which is exactly what mine did.
+     * fail. A test that stops after the first rerender cannot distinguish
+     * hiding from invalidating.
      */
     const refuse = vi.fn(() => "refused" as const);
     const at = (ids: readonly string[]) => (
