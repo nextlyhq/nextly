@@ -130,18 +130,24 @@ function Host({
   editorRef = editor;
   const panel = <LayersPanel editor={editor} />;
   /*
-   * The bindings are part of the composition under test, not scenery.
+   * The bindings are part of the composition under test, not scenery — and the
+   * SHAPE of that composition is load-bearing.
    *
-   * The panel now says which keystrokes reorder a block, and that sentence is
-   * only true while something is listening for them. A harness that rendered
-   * the panel alone could not tell a hint that is honest from one advertising
-   * keys nothing is bound to — it would assert the words and never the claim.
+   * The product does not wrap this panel in the bindings. `BlocksField` draws
+   * it through the shell's panel region while `BlockKeyboardActions` wraps the
+   * shell's children, so the two are SIBLING subtrees. A harness that wrapped
+   * the panel directly proved the hint appears in an arrangement the product
+   * never builds, and would have stayed green while the legend was invisible
+   * to every real author.
+   *
+   * So the panel is rendered beside the bindings here, never inside them.
    */
-  if (keys === "absent") return panel;
+  if (keys === "absent") return <ShortcutProvider>{panel}</ShortcutProvider>;
   return (
     <ShortcutProvider>
+      {panel}
       <BlockKeyboardActions editor={editor} enabled={keys === "bound"}>
-        {panel}
+        <span />
       </BlockKeyboardActions>
     </ShortcutProvider>
   );
@@ -153,6 +159,19 @@ function renderPanel(
 ) {
   register();
   return render(<Host document={document} keys={keys} />);
+}
+
+/**
+ * The legend, found the way assistive technology finds it.
+ *
+ * Through the tree's own `aria-describedby` rather than by a known id: the id
+ * is per instance now, so a fixed one would be a second answer to which element
+ * describes this tree — and looking it up by that fixed name is exactly what
+ * would keep passing if the wiring broke.
+ */
+function hintFor(tree: HTMLElement): HTMLElement | null {
+  const id = tree.getAttribute("aria-describedby");
+  return id === null ? null : window.document.getElementById(id);
 }
 
 /** The rows currently on screen, by their accessible name. */
@@ -171,7 +190,7 @@ describe("LayersPanel", () => {
      */
     renderPanel();
 
-    const hint = window.document.getElementById("nx-layers-move-hint");
+    const hint = hintFor(screen.getByRole("tree"));
     expect(hint).not.toBeNull();
     // The DESCRIPTION every binding already carries, not a second wording.
     expect(hint?.textContent).toContain("Move the selected block up");
@@ -187,7 +206,7 @@ describe("LayersPanel", () => {
      */
     renderPanel();
 
-    const hint = window.document.getElementById("nx-layers-move-hint");
+    const hint = hintFor(screen.getByRole("tree"));
     for (const { keys, description } of MOVE_KEYS) {
       const shown = keyHint(keys, false);
       expect(shown).not.toBeNull();
@@ -221,6 +240,42 @@ describe("LayersPanel", () => {
     expect(html).not.toContain("Move up");
     expect(html).not.toContain("Alt");
     expect(html).not.toContain("\u2325");
+  });
+
+  it("gives each panel its own description to point at", () => {
+    /*
+     * A host can mount two editors on one page. With a fixed id both trees
+     * point at the same element and the lookup is ambiguous, so assistive
+     * technology can read one panel's tree the OTHER panel's description —
+     * which is worse than no description, because it is confidently wrong.
+     *
+     * Two panels is the whole of the case: one panel with a fixed id behaves
+     * perfectly, which is why a single-panel fixture cannot see this.
+     */
+    register();
+    render(
+      <ShortcutProvider>
+        <Host document={nestedDocument()} keys="absent" />
+        <Host document={nestedDocument()} keys="bound" />
+      </ShortcutProvider>
+    );
+
+    const [first, second] = screen.getAllByRole("tree");
+    if (first === undefined || second === undefined) {
+      throw new Error("expected two trees");
+    }
+    const firstId = first.getAttribute("aria-describedby");
+    const secondId = second.getAttribute("aria-describedby");
+    expect(firstId).not.toBe(secondId);
+    // And each id resolves to a legend that is inside ITS OWN panel, which is
+    // the property a mere difference of strings does not establish.
+    for (const tree of [first, second]) {
+      const hint = hintFor(tree);
+      if (hint === null) continue;
+      expect(hint.closest(".nx-layers-panel")).toBe(
+        tree.closest(".nx-layers-panel")
+      );
+    }
   });
 
   it("says nothing about keys nothing is listening for", () => {
@@ -259,7 +314,13 @@ describe("LayersPanel", () => {
     renderPanel();
 
     const tree = screen.getByRole("tree");
-    expect(tree.getAttribute("aria-describedby")).toBe("nx-layers-move-hint");
+    const id = tree.getAttribute("aria-describedby");
+    expect(id).not.toBeNull();
+    // It points at an element that EXISTS and is the legend, which a bare
+    // string comparison against a known id never established.
+    expect(
+      hintFor(tree)?.querySelectorAll(".nx-layers-panel__hint-row").length
+    ).toBe(MOVE_KEYS.length);
   });
 
   it("shows the top level, and hides what is inside a collapsed block", () => {
