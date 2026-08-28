@@ -291,6 +291,92 @@ describe("richTextToPlainText around a block-like leaf", () => {
     ).toBe("Before Buy now After");
   });
 
+  it("reads the labels a button group keeps in a list of its own", () => {
+    /*
+     * `button-group` stores each label under `buttons[].text`, and the renderer
+     * draws every one. A walk reading only `text` and `children` sees neither,
+     * so the words on the page are missing from the description of it.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Choose" },
+              {
+                type: "button-group",
+                // The REAL serialized shape: a button group's items are not
+                // nodes and carry no `type`. A fixture that invents one gets
+                // past a node-shaped guard and proves nothing about storage.
+                buttons: [
+                  {
+                    url: "/basic",
+                    text: "Basic",
+                    variant: "filled",
+                    size: "md",
+                  },
+                  { url: "/pro", text: "Pro", variant: "outline", size: "md" },
+                ],
+              },
+              { type: "text", text: "today" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Choose Basic Pro today");
+  });
+
+  it("omits a label the renderer would not draw", () => {
+    /*
+     * A reader draws nothing for a button whose URL this format cannot express
+     * — a missing one, or a scheme outside the allowed set — so reporting its
+     * label would describe the page by a word that never appears on it. That is
+     * the mirror of the defect that made these labels worth reading at all.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "javascript:alert(1)", text: "Danger" },
+                  { text: "No link at all" },
+                  { url: "/real", text: "Real" },
+                ],
+              },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only Real this");
+  });
+
+  it("skips a button group carrying no labels rather than inventing a gap", () => {
+    // The control: a group with nothing readable must not contribute, and must
+    // not throw on shapes storage can hold.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              { type: "button-group", buttons: [] },
+              { type: "button-group", buttons: [{ url: "/x", text: "" }] },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only this");
+  });
+
   it("separates one between root paragraphs too", () => {
     // The shape a stored document can also hold, kept because the two travel
     // different paths through the walk.

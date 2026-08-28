@@ -17,6 +17,7 @@ import {
 import { cn } from "@nextlyhq/ui/utils";
 import {
   Blocks,
+  Braces,
   FileText,
   Layers,
   Palette,
@@ -78,6 +79,7 @@ const PANEL_CHROME: Record<
   layers: { label: "Layers", Icon: Layers },
   components: { label: "Components", Icon: Blocks },
   tokens: { label: "Tokens", Icon: Palette },
+  classes: { label: "Classes", Icon: Braces },
   fonts: { label: "Fonts", Icon: Type },
   pages: { label: "Pages", Icon: FileText },
   settings: { label: "Settings", Icon: Settings },
@@ -99,9 +101,9 @@ export interface BuilderShellProps {
   /**
    * Which panels the host can actually fill.
    *
-   * The rail always shows all seven, because the set is the editor's shape and
-   * hiding the unbuilt ones would make the chrome change under an author as
-   * features land. What it must not do is OPEN one nothing renders into: that
+   * The rail always shows every panel, because the set is the editor's shape
+   * and hiding the unbuilt ones would make the chrome change under an author
+   * as features land. What it must not do is OPEN one nothing renders into: that
    * reserves a panel and shrinks the canvas to display nothing, which reads as a
    * broken control rather than an absent feature.
    *

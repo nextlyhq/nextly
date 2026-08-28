@@ -61,10 +61,11 @@ import type { EditorState } from "./editor-state";
 import type { Point, Rect } from "./geometry";
 import {
   canvasContentPoint,
-  canvasPaintedPoint,
   canvasContentRect,
+  canvasPointerPoints,
   containerEdges,
   scrollableAncestor,
+  type CanvasPointerPoints,
 } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
 import { lockBlockingMove } from "./locking";
@@ -302,16 +303,23 @@ export function useCanvasDrag({
   );
 
   /**
-   * Re-aim the drag at a content point, and draw the result.
+   * Re-aim the drag at a pointer position, and draw the result.
    *
    * Shared by the pointer handler and the autoscroll frame because they ask the
    * same question at different moments: a move changes where the pointer is, and
    * a scroll changes what is under it. Computing the answer twice is how the
    * indicator and the committed target come apart — the frame would draw one
    * thing and the release would apply another.
+   *
+   * Takes the pointer already MAPPED, in both spaces, rather than mapping it
+   * here. Both callers hold a rectangle of the root at the instant they aim —
+   * the move because it has just measured, the frame because it has just
+   * scrolled — and measuring again inside would answer this one drag step from
+   * two rectangles: `resolveDrop` placing the pointer among the snapshotted
+   * blocks by one, and the switch rule measuring travel by the other.
    */
   const aim = React.useCallback(
-    (drag: Gesture, pointer: Point) => {
+    (drag: Gesture, pointer: CanvasPointerPoints) => {
       const resolution = resolveDrop(
         {
           blockName: drag.blockName,
@@ -320,7 +328,9 @@ export function useCanvasDrag({
           rects: drag.rects,
           nesting: latest.current.nesting,
         },
-        pointer
+        // CONTENT coordinates: the rects were snapshotted in that space at drag
+        // start, and a scroll deliberately does not invalidate them.
+        pointer.content
       );
 
       if (resolution.kind === "none") {
@@ -364,11 +374,11 @@ export function useCanvasDrag({
          * hand, and they move with the scroll because the root's own rectangle
          * does.
          *
-         * Read from the GESTURE rather than from an event, because this is
-         * shared with the autoscroll frame, which has no event of its own — and
-         * both callers keep these current before they aim.
+         * The same measurement the content point above came from, so the
+         * position this rule anchors on and the position the drop was resolved
+         * at are one pointer rather than two.
          */
-        canvasPaintedPoint(drag.clientX, drag.clientY, drag.root),
+        pointer.painted,
         switchPx
       );
 
@@ -424,7 +434,10 @@ export function useCanvasDrag({
       // assignment is clamped to what it already was, and re-aiming then costs
       // a full resolve per frame to arrive at the answer already on screen.
       if (scroller.scrollTop !== before) {
-        aim(drag, canvasContentPoint(drag.clientX, drag.clientY, drag.root));
+        // Measured AFTER the assignment above, which is the one thing in this
+        // module that moves the canvas: the root's rectangle has just travelled
+        // and the pointer has to be placed against where it is now.
+        aim(drag, canvasPointerPoints(drag.clientX, drag.clientY, drag.root));
       }
     }
     drag.frame = requestAnimationFrame(pump);
@@ -435,8 +448,30 @@ export function useCanvasDrag({
       const drag = gesture.current;
       if (drag === null) return;
 
-      const root = event.currentTarget;
-      const pointer = canvasContentPoint(event.clientX, event.clientY, root);
+      /*
+       * ONE measurement of the root, answering this move in both spaces.
+       *
+       * Against `drag.root`, not `event.currentTarget`: the rects were
+       * snapshotted against the element the press landed on, and the frame loop
+       * re-aims against it too, so that is the element this pointer has to be
+       * expressed relative to. Capture makes the two the same element for the
+       * whole of a drag, which is why reading either used to work.
+       *
+       * The pair stays true for the rest of this handler because nothing below
+       * moves the canvas: the assignments are bookkeeping, `setPointerCapture`
+       * retargets events rather than laying anything out, `requestAnimationFrame`
+       * only schedules, and `select` and the draw inside `aim` are React state
+       * that flushes after this returns. The one thing that DOES move layout is
+       * `pump`'s scroll, and it runs in a frame callback of its own, so it
+       * cannot land between this read and the aim below. Anything added here
+       * that scrolls, resizes or writes a style invalidates the pair and has to
+       * measure again.
+       */
+      const pointer = canvasPointerPoints(
+        event.clientX,
+        event.clientY,
+        drag.root
+      );
       // Recorded for the frame loop, which runs between moves and has no event
       // of its own to read a position from.
       drag.clientX = event.clientX;

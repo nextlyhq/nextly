@@ -156,3 +156,53 @@ describe("defaultPair", () => {
     expect(defaultPair(plain(9), true)).toEqual({ kind: "not-loaded" });
   });
 });
+
+describe("defaultPair — a locale's first is not the document's only", () => {
+  /**
+   * `predecessorOf` answers a LOCALE-SCOPED question: `first` means nothing
+   * older exists in this language, not that the document holds one version.
+   * Reported as `only-version`, the pane told a reader "there is only one
+   * version so far" while the rail beside it listed two — and the two surfaces
+   * contradicting each other is worse than either being wrong alone, because
+   * the reader cannot tell which to believe.
+   */
+  it("does not claim one version when another language has its own", () => {
+    // v2 English is newest; v1 French is the whole of the French history.
+    // Nothing older in English, and no further pages.
+    const history = [
+      { versionNo: 2, locale: "en" },
+      { versionNo: 1, locale: "fr" },
+    ];
+
+    expect(defaultPair(history, false)).toEqual({ kind: "only-in-locale" });
+  });
+
+  /**
+   * The control, and it decides the whole distinction: a document that really
+   * does hold one version still says so. Without it the fix could report
+   * `only-in-locale` everywhere and every assertion here would pass.
+   */
+  it("still claims one version when that is the whole history", () => {
+    expect(defaultPair(plain(1), false)).toEqual({ kind: "only-version" });
+    expect(defaultPair([{ versionNo: 1, locale: "en" }], false)).toEqual({
+      kind: "only-version",
+    });
+  });
+
+  /** Unchanged: nothing older LOADED is still distinct from nothing older. */
+  it("still separates an unfetched predecessor from an absent one", () => {
+    expect(defaultPair(plain(9), true)).toEqual({ kind: "not-loaded" });
+  });
+
+  it("still pairs within a locale when there is something to pair with", () => {
+    expect(defaultPair(interleaved, false)).toEqual({
+      kind: "pair",
+      from: 3,
+      to: 5,
+    });
+  });
+
+  it("still reports an empty history as having nothing to compare", () => {
+    expect(defaultPair([], false)).toEqual({ kind: "no-history" });
+  });
+});

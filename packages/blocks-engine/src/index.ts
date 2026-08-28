@@ -498,6 +498,7 @@ export { authoredBreakpoints, inCascadeOrder } from "./style/breakpoint-set";
 export {
   isAllowedRemoteUrl,
   isFetchableUrl,
+  isLinkableUrl,
   isRemoteUrl,
   normalizeUrl,
   type RemotePattern,
