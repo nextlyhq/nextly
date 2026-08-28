@@ -64,7 +64,6 @@ const WORKLIST_ORDER = [
  * is as legitimate a question as "which are drafts". So the worklist's tab list is one entry wider
  * than the state catalog, and that difference is the honest one rather than an oversight.
  */
-const WORKLIST_STALE = "stale" as const;
 
 /** Sentence wording into a button label: "not translated" -> "Not translated". */
 function asTabLabel(label: string): string {
@@ -79,13 +78,18 @@ export const WORKLIST_STATES: readonly {
     value,
     label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
   })),
-  {
-    value: WORKLIST_STALE,
-    // "Needs review", not "Stale". The wire value says what the system measured; the label says
-    // what the translator should DO about it. A translation whose source moved may well still be
-    // correct, so the instruction is to look, not to assume it is wrong.
-    label: "Needs review",
-  },
+  // 🔴 The "Needs review" tab is NOT offered yet, and the entry is kept here rather than deleted
+  // because the vocabulary decision it carries is the durable part.
+  //
+  // The server currently answers this state with "nothing is known to be stale" — deliberately,
+  // because nothing can yet establish whether a given companion physically carries the timestamp
+  // the answer depends on. A tab that is always empty is worse than no tab: it reads as "this site
+  // has no stale translations", which is a claim, and the wrong one.
+  //
+  // Restored alongside the capability check that lets the server answer it. When it is,
+  // "Needs review" is the label — not "Stale" or "Outdated": the wire value says what the system
+  // measured, the label says what the translator should DO, and a translation whose source moved
+  // may well still be correct.
 ];
 
 /**
@@ -93,9 +97,10 @@ export const WORKLIST_STATES: readonly {
  *
  * The language half is an ALIAS rather than a restatement, so a state added or removed there is a
  * compile error here rather than a tab that quietly stops matching. The union's second member is
- * the deliberate widening documented on {@link WORKLIST_STALE}.
+ * the deliberate widening documented above: a FILTER is a question, and "which documents need
+ * review" is as legitimate a question as "which are drafts", even while no tab asks it.
  */
-export type WorklistState = LanguageState | typeof WORKLIST_STALE;
+export type WorklistState = LanguageState | "stale";
 
 /** The state a URL asked for, or the question this page exists for. */
 export function worklistStateFrom(raw: string | undefined): WorklistState {

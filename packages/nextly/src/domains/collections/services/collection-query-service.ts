@@ -458,14 +458,19 @@ export class CollectionQueryService extends BaseService {
       locales: this.localization.locales.map(l => l.code),
       defaultLocale: this.localization.defaultLocale,
       hasStatus: companion.hasStatus,
-      // i18n B2. Supplied together, because the column is not on the companion's Drizzle table:
-      // it is not declared there, so that a companion predating it cannot break the ORDINARY
-      // localized read, whose bare select would otherwise name a column those tables lack.
-      // Omitting this reports every locale's staleness as UNKNOWN rather than as current.
-      staleness: {
-        companionTableName: companion.companionTableName,
-        dialect: this.dialect,
-      },
+      // 🔴 `staleness` is deliberately NOT supplied yet, so every locale reports its staleness as
+      // UNKNOWN (i18n B2).
+      //
+      // The stamp is written on every companion write and seeded by the migration, so the DATA is
+      // accumulating correctly. What is not ready is the READ: nothing here can yet establish
+      // whether a given companion physically carries `_updated_at`, and a companion created before
+      // the column exists has no upgrade path that adds it. Reporting staleness from a capability
+      // that cannot be checked is the one thing this feature must not do, since a wrong "needs
+      // review" is indistinguishable from a right one to the person reading it.
+      //
+      // Omission is the mechanism rather than a flag, because it is already the defined answer for
+      // a caller that cannot ask — see `readCompanionStamps`. Supplying it is what turns the badge
+      // on, and that belongs with the capability probe rather than ahead of it.
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValue:
         companion.hasStatus && statusFilterValue
@@ -579,11 +584,18 @@ export class CollectionQueryService extends BaseService {
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
       hasStatus: companion.hasStatus,
-      // Carried beside `hasStatus` rather than defaulted inside the builder: an absent
-      // value there means "cannot answer", which makes the `stale` filter match nothing.
-      // Defaulting it to true instead would let a caller that never considered the column
-      // emit SQL naming it, so the safe default has to be the one a forgetful caller gets.
-      hasUpdatedAt: companion.hasUpdatedAt,
+      // 🔴 Left absent, which makes the `stale` filter answer `1=0` — nothing here is KNOWN to be
+      // stale (i18n B2).
+      //
+      // `companion.hasUpdatedAt` reports the DECLARED shape and is unconditionally true, which is
+      // a claim about a physical column that nothing has checked. A companion created before the
+      // column exists has no upgrade path that adds it, so emitting SQL naming it would fail the
+      // query for that collection — and a filter that cannot be evaluated is worse than one that
+      // returns nothing, because the worklist would present every document as needing review.
+      //
+      // Absent is already the defined answer for "cannot answer", so this is the designed
+      // conservative path rather than a flag. It is supplied once the capability can be
+      // established from the database instead of from configuration.
       defaultLocale: this.localization.defaultLocale,
       filter,
     });
