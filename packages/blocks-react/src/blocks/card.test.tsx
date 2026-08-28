@@ -65,17 +65,15 @@ describe("core/card", () => {
     });
   });
 
-  describe("the template", () => {
-    it("is EMPTY, because nothing can mint per-instance ids yet", () => {
-      // A seeded template needs its ids minted per INSTANCE: two cards expanded
-      // from one literal template carry the same node ids, and the engine
-      // reports `duplicate-node-id` on the second. Nothing reads
-      // `SlotSpec.template`, so no expansion path exists to do that minting.
-      //
-      // A RATCHET: whoever adds an expander fails here and has to seed the card
-      // deliberately rather than inheriting literal ids that were only ever
-      // safe because nothing read them.
-      expect(card.slots?.children.template).toEqual([]);
+  describe("what a fresh card starts with", () => {
+    it("declares no starting children, unlike a row", () => {
+      // A row declares two columns because its slot admits only `core/column`,
+      // and that block names the row as its only parent — so an empty row is a
+      // container whose one legal child can be placed nowhere else. A card's
+      // slot admits every block, so no starting child is more correct than
+      // none, and seeding one would put a block on the page to be deleted.
+      expect(card.slots?.children.defaultBlock).toBeUndefined();
+      expect(card.slots?.children.allow).toBeUndefined();
     });
   });
 

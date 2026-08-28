@@ -121,10 +121,18 @@ export const accordion = defineBlock<ContainerProps, PageContext>({
   slots: {
     children: {
       allow: [ACCORDION_ITEM_BLOCK],
-      // Empty, as everywhere in this library: a literal template carries
-      // literal ids and two groups expanded from one collide on
-      // `duplicate-node-id`. Nothing reads `SlotSpec.template` yet.
-      template: [],
+      // One section to start, because an empty accordion is unusable in the
+      // precise sense a row is: this slot admits only `core/accordion-item`,
+      // and that block names this one as its only parent, so the single block
+      // that may go here can be placed nowhere else on the page.
+      //
+      // ONE rather than the row's two, and the difference is the same rule read
+      // the other way. A row of one is a box, and `core/box` already exists, so
+      // one column is a degenerate spelling of a block the author could have
+      // reached for instead. An accordion of one is not a spelling of anything:
+      // a lone `core/accordion-item` cannot stand on a page at all, so a single
+      // disclosure REQUIRES this wrapper and is a finished document.
+      defaultBlock: [{ type: ACCORDION_ITEM_BLOCK }],
     },
   },
   baseStyles: ACCORDION_BASE_STYLES,
