@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest";
 
 import * as boundaryModule from "./block-boundary";
 import * as blocksEntry from "./blocks/index";
+import * as typographyDefaultsModule from "./blocks/typography-defaults";
 import * as contextModule from "./context";
 import * as richTextModule from "./rich-text";
 import * as pageRendererModule from "./page-renderer";
@@ -87,6 +88,15 @@ const SOURCE_MODULES: ReadonlyArray<{
   /** Values that exist for this package's own use, and why. */
   internal: readonly string[];
 }> = [
+  {
+    name: "blocks/typography-defaults",
+    module: typographyDefaultsModule,
+    // Both values are the consumer surface: the baseline itself, so a host
+    // can read what it is replacing, and the function that applies it, so a
+    // host assembling its own compile context reaches the same answer the
+    // renderer does rather than spreading the record in by hand.
+    internal: [],
+  },
   { name: "context", module: contextModule, internal: [] },
   {
     name: "rich-text",
@@ -369,12 +379,17 @@ describe("the root entry", () => {
     // The list above is the guard's own coverage, and a guard that covers five
     // of six modules leaves the sixth exactly as exposed as before. Read the
     // entry's own relative imports rather than trusting the list to keep pace.
+    //
+    // The path pattern admits a `/`. Without it a nested re-export matched
+    // NOTHING rather than matching wrongly, so the module was absent from
+    // `reExported`, the difference below came out empty, and a guard reporting
+    // full coverage was checking one module fewer than the entry uses.
     const source = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "index.ts"),
       "utf8"
     );
     const reExported = new Set(
-      [...source.matchAll(/from "\.\/([\w-]+)"/g)].map(match => match[1])
+      [...source.matchAll(/from "\.\/([\w/-]+)"/g)].map(match => match[1])
     );
     const covered = new Set(SOURCE_MODULES.map(entry => entry.name));
 

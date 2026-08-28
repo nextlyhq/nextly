@@ -1612,7 +1612,17 @@ export function compilePageCss(
   // doubling. `PAGE_ROOT_SELECTOR` repeats the class so an author's values
   // outrank host CSS; a default anchored to one class weighs `0-1-0`, which
   // clears a bare element reset and still yields to a host's own class rule.
-  const defaultsAnchor = `.${PAGE_ROOT_CLASS}${scope}`;
+  //
+  // A scope CONSTRAINS this anchor without adding to it. Appended plainly the
+  // pair weighs `0-2-0`, and a default that outranks a host's `.content h1`
+  // (`0-1-1`) is no longer something the site can override — so a scoped
+  // document would keep defaults precisely where an unscoped one yields, which
+  // is the opposite of what scoping means. Inside `:where()` the class still
+  // has to match and contributes nothing, so both documents weigh the same.
+  const defaultsAnchor =
+    scope === ""
+      ? `.${PAGE_ROOT_CLASS}`
+      : `.${PAGE_ROOT_CLASS}:where(${scope})`;
 
   const nodes = documentNodes(
     doc,
