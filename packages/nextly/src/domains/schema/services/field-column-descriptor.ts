@@ -108,10 +108,7 @@ export type ColumnKind =
   | "timestamp" // PG/MySQL: timestamp, SQLite: integer(timestamp mode)
   | "json" // PG: jsonb, MySQL: json, SQLite: text
   | "fkSingle" // single-target foreign key — text/varchar(36)
-  | "skip"; // layout-only field types — no column emitted
-
-// Layout-only field types don't create database columns.
-const LAYOUT_FIELD_TYPES = new Set<string>();
+  | "skip"; // the field keeps its values in another table — no column emitted
 
 export function toSnakeCase(name: string): string {
   return name
@@ -167,7 +164,6 @@ export function fieldProducesColumn(field: {
   options?: unknown;
 }): boolean {
   if (typeof field.type !== "string") return true;
-  if (LAYOUT_FIELD_TYPES.has(field.type)) return false;
   // Component values live in their own comp_{slug} tables and are stripped from the parent row on
   // write, so the parent needs no column.
   if (field.type === "component") return false;
@@ -223,7 +219,8 @@ export function getColumnDescriptor(
   builtBy: ColumnOrigin
 ): ColumnDescriptor | null {
   const name = toSnakeCase(field.name);
-  // "skip" covers every column-less field type, layout ones included, via fieldProducesColumn.
+  // "skip" covers every column-less field type via fieldProducesColumn: a component
+  // and a many-to-many, both of which keep their values in another table.
   const kind = classifyFieldKind(field, builtBy);
   // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
   // and the Drizzle runtime builder). `required` is enforced at the application layer.
