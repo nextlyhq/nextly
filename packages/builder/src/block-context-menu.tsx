@@ -164,20 +164,25 @@ export function BlockContextMenu({
    * update here would rerender the canvas on every contact.
    */
   const pressedTarget = React.useRef<string | null>(null);
-  const notePress = React.useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
+  const noteTarget = React.useCallback(
+    (event: React.SyntheticEvent<HTMLDivElement>) => {
       pressedTarget.current = contextMenuTargetOf(event.target);
     },
     []
   );
   const opened = React.useCallback(
     (open: boolean) => {
-      if (!open) return;
+      // CONSUMED, whether or not this is an opening. A value left behind is a
+      // value some later opening can read: a keyboard menu key arrives as a
+      // context event with no press before it, and would otherwise be answered
+      // with whatever the last press happened to be pointing at.
       const id = pressedTarget.current;
-      // Already chosen means already correct — the mouse route selected on the
-      // context event — and replacing would drop the rest of a multiple
+      pressedTarget.current = null;
+      if (!open || id === null) return;
+      // Already chosen means already correct — every route selects through the
+      // canvas first — and replacing would drop the rest of a multiple
       // selection the gesture was meant to act on.
-      if (id === null || selectedIds.includes(id)) return;
+      if (selectedIds.includes(id)) return;
       select(id, "replace");
     },
     [select, selectedIds]
@@ -186,7 +191,11 @@ export function BlockContextMenu({
   return (
     <ContextMenu onOpenChange={opened}>
       <ContextMenuTrigger asChild>
-        <div style={TRANSPARENT_WRAPPER} onPointerDown={notePress}>
+        <div
+          style={TRANSPARENT_WRAPPER}
+          onPointerDown={noteTarget}
+          onContextMenu={noteTarget}
+        >
           {children}
         </div>
       </ContextMenuTrigger>

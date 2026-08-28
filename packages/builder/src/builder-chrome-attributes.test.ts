@@ -120,3 +120,26 @@ describe("the empty-container affordance is keyed off the exported constants", (
     expect(CHROME).not.toContain("[data-nx-nonexistent-marker]");
   });
 });
+
+describe("the canvas keeps the platform's own callout for text", () => {
+  it("restores the touch callout the menu trigger suppresses", () => {
+    /*
+     * The context menu's trigger wraps the canvas, and Radix sets
+     * `-webkit-touch-callout: none` on it. That property INHERITS, so it
+     * reaches the `contenteditable` inside a block — and the canvas withholds
+     * the press there, so a long press on text opens neither the platform's
+     * spelling and clipboard callout nor the block menu.
+     *
+     * Asserted here because no test that renders the editor can see it: jsdom
+     * computes no inherited `-webkit-` property, and the suppression comes
+     * from a library's inline style rather than from anything in this package.
+     * The stylesheet is the only place the override exists, so the stylesheet
+     * is where it has to be checked.
+     */
+    const rule = CHROME.match(
+      /\.nx-canvas \[contenteditable\]:not\(\[contenteditable="false"\]\)\s*\{[^}]*\}/
+    );
+    expect(rule).not.toBeNull();
+    expect(rule?.[0]).toContain("-webkit-touch-callout: default");
+  });
+});

@@ -297,6 +297,32 @@ describe("the canvas's right-click menu", () => {
     expect(editor.select).not.toHaveBeenCalled();
   });
 
+  it("opens on the block the gesture named, not the one pressed before it", () => {
+    /*
+     * A rendered block can be focusable on its own — `core/button` draws a real
+     * `button` — so a menu key reaches this as a context event with NO press
+     * before it. A target remembered from an earlier press would still be
+     * sitting there, and the menu would open on that block instead: Delete and
+     * Duplicate then act on something the author is not looking at, which is
+     * the same defect as the touch case arriving by the opposite route.
+     */
+    register();
+    const editor = editorSpy(pair(), "b");
+    const { container } = mount(editor);
+    const first = blockElement(container);
+    const second = container.querySelector(`[${NODE_ID_ATTRIBUTE}="b"]`);
+    if (second === null) throw new Error("expected the second block");
+
+    // A press on one block, which opens nothing.
+    fireEvent.pointerDown(first, { pointerType: "touch" });
+    // Then the gesture that DOES open, aimed somewhere else.
+    fireEvent.contextMenu(second);
+
+    // Never "a", which is what the stale press was pointing at. `b` is already
+    // the selection, so the correct behaviour is to leave it alone entirely.
+    expect(editor.select).not.toHaveBeenCalledWith("a", "replace");
+  });
+
   it("keeps an unavailable verb, carrying the reason it is unavailable", () => {
     /*
      * A lock is the one reason `toolbarActions` reports, because it is the one
