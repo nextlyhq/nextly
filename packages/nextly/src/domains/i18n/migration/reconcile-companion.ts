@@ -141,6 +141,29 @@ export function buildCompanionReconcileSql(
  * rather than skipping it. The failure degrades to the answer the design already gives instead
  * of to a false one.
  *
+ * ## What it seeds from, and the limit that follows
+ *
+ * "This locale had a durable version", NOT "this locale's translatable content changed" — and
+ * those differ. A version row records what the document WAS, not which columns moved, so a
+ * shared-field-only edit made while in the source language looks here like a source content
+ * change and can flag a translation that is in fact current.
+ *
+ * The largest such case is already excluded rather than tolerated: the publish path records its
+ * version with `locale: null`, and this statement requires `versions.locale = <companion>._locale`,
+ * so a publish contributes to no locale's stamp. What remains is the shared-field edit.
+ *
+ * Not fixed, because the fix is not available at this layer: distinguishing a version that
+ * changed companion content needs a comparison between consecutive snapshots, which is not one
+ * portable UPDATE across PostgreSQL, MySQL and SQLite — and three dialect-specific JSON
+ * traversals inside the statement whose failure mode is silently plausible timestamps is a worse
+ * trade than the error they remove.
+ *
+ * Accepted by the founder (2026-08-28) against the alternative of leaving pre-migration
+ * chronology unknown. The error is bounded to rows that predate the migration, runs in one
+ * direction, and clears the moment that language is next saved; the alternative is an established
+ * site seeing an empty worklist on the day it upgrades, which is the feature not working for
+ * exactly the content that has had time to go stale.
+ *
  * ## What it deliberately does not do
  *
  * ## Durable versions only, because the runtime counts only durable writes
