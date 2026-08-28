@@ -26,9 +26,7 @@ import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
 import { buildCompanionRuntimeTable } from "./companion-registration";
-
-/** Physical name of the runtime key/value table the transition claim lives in. */
-const META_TABLE = "nextly_meta";
+import { buildCompanionStampTable } from "./companion-stamp-table";
 
 /** Minimal field shape these copies need. */
 export interface CopyableField {
@@ -298,33 +296,26 @@ async function clearLocaleStamp(
     guard?: { key: string; value: string };
   }
 ): Promise<void> {
-  const isPg = adapter.dialect === "postgresql";
-  const q = (id: string) =>
-    adapter.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
-  const params: unknown[] = [args.locale];
-  const hole = () => (isPg ? `$${params.length}` : "?");
-  const localeHole = hole();
-
-  // The claim condition, in the SAME statement. A separate pre-check would leave exactly the
-  // window the guard exists to close: the claim can be superseded between reading it and issuing
-  // the update.
-  let guardClause = "";
-  if (args.guard) {
-    params.push(args.guard.key);
-    const keyHole = hole();
-    params.push(args.guard.value);
-    const valueHole = hole();
-    guardClause =
-      ` AND EXISTS (SELECT 1 FROM ${q(META_TABLE)} ` +
-      `WHERE ${q("key")} = ${keyHole} AND ${q("value")} = ${valueHole})`;
-  }
+  const stamp = buildCompanionStampTable(
+    args.companionTableName,
+    adapter.dialect
+  );
+  const meta = metaTableFor(adapter.dialect);
+  const thisLocale = eq(stamp.locale as never, args.locale);
 
   try {
-    await adapter.executeQuery(
-      `UPDATE ${q(args.companionTableName)} SET ${q(COMPANION_UPDATED_AT_COLUMN)} = NULL ` +
-        `WHERE ${q("_locale")} = ${localeHole}${guardClause}`,
-      params
-    );
+    await adapter
+      .getDrizzle<UpdatableDb>()
+      .update(stamp.table)
+      .set({ [COMPANION_UPDATED_AT_COLUMN]: null })
+      .where(
+        args.guard
+          ? and(
+              thisLocale,
+              sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+            )
+          : thisLocale
+      );
   } catch (error) {
     if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return;
     throw error;
