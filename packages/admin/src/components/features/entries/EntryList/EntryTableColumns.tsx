@@ -307,12 +307,29 @@ export function getEntryTitleField(
   // Resolve from ACTUAL schema fields. `getAvailableColumns` always injects a
   // synthetic "title" column, so testing it would always win and leave
   // collections without a real title field with an empty primary column.
-  const fieldNames = getAllDataFields(collection.fields).map(
-    field => field.name
+  return pickTitleFieldName(
+    collection.admin?.useAsTitle,
+    getAllDataFields(collection.fields).map(field => field.name)
   );
+}
 
+/**
+ * Which field names an entry, from the author's choice and the field names.
+ *
+ * Separated from {@link getEntryTitleField} because the same rule is asked of
+ * collections carrying two different field types — the list has schema fields,
+ * the comparison page has the shape `useCollection` answers with — and neither
+ * is convertible to the other. The rule reads only a setting and a list of
+ * names, so it is stated once here and given a typed front door per caller,
+ * rather than restated where a second copy would drift into naming an entry
+ * differently on two pages.
+ */
+export function pickTitleFieldName(
+  useAsTitle: string | undefined,
+  fieldNames: readonly string[]
+): string {
   return (
-    collection.admin?.useAsTitle ||
+    useAsTitle ||
     ["title", "name", "label"].find(name => fieldNames.includes(name)) ||
     fieldNames[0] ||
     "id"
