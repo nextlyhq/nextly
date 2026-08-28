@@ -359,6 +359,13 @@ export function ClassSelector({
     against: readonly string[],
     clearQuery: boolean
   ): void {
+    /*
+     * Every failure raised here is scoped to `against`, not to the ids this
+     * closure was created with. On the asynchronous path those differ — a chip
+     * removed while a creation was in flight — and scoping to the stale list
+     * makes `liveFailure` discard the alert the moment it is set, so a refused
+     * apply reports nothing at all.
+     */
     // Through the shared helper rather than an append written here. The bound
     // on how many classes a node may carry belongs to one place, and a second
     // append would keep working after that place learned to refuse.
@@ -366,7 +373,7 @@ export function ClassSelector({
     if (!outcome.ok) {
       setFailure({
         about: nodeId,
-        whenIds: nodeClassIds,
+        whenIds: against,
         issue: { kind: "node-full" },
       });
       return;
@@ -377,7 +384,7 @@ export function ClassSelector({
       // be trying it again.
       setFailure({
         about: nodeId,
-        whenIds: nodeClassIds,
+        whenIds: against,
         issue: { kind: "not-written" },
       });
       return;
