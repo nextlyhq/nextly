@@ -32,6 +32,24 @@
  * clearing it returns the tree to what the author had open. Only the author's
  * set is stored.
  *
+ * ## The panel says how to reorder, because nothing else does
+ *
+ * The bindings that move a block already work here — the tree holds focus and
+ * the editor's own keystrokes act on the selection, so an author standing in
+ * this panel can already reorder and nest without touching the canvas. Nothing
+ * told them so, and a capability nobody can find reads exactly like a missing
+ * one.
+ *
+ * The hint is DERIVED from the bindings rather than written beside them. A
+ * retyped "Alt+Up" is correct until someone rebinds the keystroke, and then it
+ * is a label that teaches a key which does nothing — with no test that can
+ * fail, because the two are only related by having been typed by the same
+ * person on the same day.
+ *
+ * It is also the tree's accessible description, not merely text near it. A
+ * sighted author reads it because it sits under the tree; a screen-reader user
+ * hears it on entering the tree, which is the moment the question arises.
+ *
  * @module layers-panel
  */
 
@@ -42,6 +60,9 @@ import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
+import { keyHint } from "./key-hint";
+import { MOVE_KEYS } from "./keyboard-actions";
+import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 
 export interface LayersPanelProps {
@@ -123,6 +144,33 @@ function rowOf(
   };
 }
 
+/** One id, so the tree's description and the hint cannot drift apart. */
+const MOVE_HINT_ID = "nx-layers-move-hint";
+
+/**
+ * The short label each direction gets in the legend.
+ *
+ * The binding's own `description` is a SENTENCE — "Move the selected block into
+ * the container above it" — because it is written to be announced after the
+ * move happens, where the subject has to be named. Four of those stacked under
+ * a tree is a paragraph rather than a legend, and it reads as prose to be
+ * waded through rather than a key to be scanned.
+ *
+ * So the legend names the DIRECTION, which the binding table already carries as
+ * an enum. That keeps this a projection of something the editor decided rather
+ * than a second wording of it: total over `MoveDirection`, so a direction added
+ * to the move rule fails to compile here instead of silently drawing nothing.
+ *
+ * One verb across all four, matching the arrow that runs them, so the pairs
+ * read as opposites rather than as four unrelated commands.
+ */
+const DIRECTION_LABEL: Readonly<Record<MoveDirection, string>> = {
+  up: "Move up",
+  down: "Move down",
+  indent: "Move in",
+  outdent: "Move out",
+};
+
 export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
@@ -179,6 +227,22 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
     [search.roots, icons]
   );
 
+  /*
+   * Built from the binding table, so a rebound keystroke moves the hint with
+   * it. A binding this cannot spell is dropped rather than guessed at — see
+   * `keyHint` for why a wrong hint is worse than no hint.
+   */
+  const hints = React.useMemo(
+    () =>
+      MOVE_KEYS.flatMap(({ keys, direction, description }) => {
+        const shown = keyHint(keys);
+        return shown === null
+          ? []
+          : [{ keys, shown, label: DIRECTION_LABEL[direction], description }];
+      }),
+    []
+  );
+
   return (
     <div className="nx-layers-panel">
       <div className="nx-layers-panel__search">
@@ -219,7 +283,39 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
           onExpandedChange={next =>
             setOpened(next.filter(id => !search.expand.includes(id)))
           }
+          // The hint is the tree's DESCRIPTION, so it is announced on entering
+          // the tree rather than only readable by someone who can see it below.
+          aria-describedby={hints.length === 0 ? undefined : MOVE_HINT_ID}
         />
+      )}
+
+      {/*
+        Outside the empty and no-match branches deliberately: the bindings are
+        what an author reaches for once there ARE layers to move, and a page
+        with none has nothing to say this about.
+      */}
+      {tree.length === 0 || nodes.length === 0 || hints.length === 0 ? null : (
+        <ul className="nx-layers-panel__hint" id={MOVE_HINT_ID}>
+          {hints.map(({ keys, shown, label, description }) => (
+            <li className="nx-layers-panel__hint-row" key={keys}>
+              <span className="nx-layers-panel__hint-key" aria-hidden="true">
+                {shown}
+              </span>
+              {/*
+                The short label is what is DRAWN; the binding's own sentence is
+                what is read out, because a description announced without its
+                subject — "Move in" — says less than the sentence the shortcut
+                manager already carries for exactly this.
+              */}
+              <span className="nx-layers-panel__hint-label" aria-hidden="true">
+                {label}
+              </span>
+              <span className="nx-sr-only">
+                {shown}: {description}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
