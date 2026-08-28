@@ -145,6 +145,7 @@ function openEditor(): void {
 /** What the inspector was handed for the class surface. */
 function classProps(): {
   classLibrary?: readonly { id: string; slug: string }[];
+  classLibraryAbsence?: "pending" | "failed";
   onCreateClass?: (
     slug: string
   ) => Promise<{ ok: true; classId: string } | { ok: false; reason: string }>;
@@ -198,6 +199,37 @@ describe("the library reaching the inspector", () => {
     openEditor();
 
     expect(typeof classProps().onCreateClass).toBe("function");
+  });
+});
+
+describe("why the library is absent", () => {
+  it("reports a pending read as pending", () => {
+    storedRead = { data: undefined, isPending: true, error: null };
+    openEditor();
+
+    expect(classProps().classLibrary).toBeUndefined();
+    expect(classProps().classLibraryAbsence).toBe("pending");
+  });
+
+  it("reports a FAILED read as failed, not as still loading", () => {
+    /*
+     * A failed read will not finish. Passed as pending, the selector says
+     * "loading" for as long as the editor is open — a state the site is not in,
+     * with nothing the author can do about it.
+     */
+    storedRead = { data: undefined, isPending: false, error: new Error("403") };
+    openEditor();
+
+    expect(classProps().classLibrary).toBeUndefined();
+    expect(classProps().classLibraryAbsence).toBe("failed");
+  });
+
+  it("reports a successful empty read as a library, not an absence", () => {
+    // The control: a site with no classes has READ them. Treating that as an
+    // absence would hide the surface that creates the first one.
+    openEditor();
+
+    expect(classProps().classLibrary).toEqual([]);
   });
 });
 
