@@ -191,92 +191,141 @@
 }
 
 /*
- * Two lines per row, so the block's description is readable without a hover.
- * A palette that shows only labels makes an author guess what "Section" holds,
- * and the description is already required on every block definition.
+ * Tiles, three to a row.
+ *
+ * The count comes from the panel as `--nx-insert-columns` rather than being
+ * spelled here, because the arrow keys step by the same number: written in
+ * both places, a change to the layout would move the tiles and leave the
+ * keyboard stepping by the old count.
+ *
+ * Applied to the primitives\' OWN items container rather than to a wrapper of
+ * this file\'s. The primitives register an item through the group that
+ * contains it, and an element interposed between the two leaves the group
+ * holding no items at all — a panel that renders headings and nothing under
+ * them.
+ *
+ * `minmax(0, 1fr)` rather than `1fr`. A grid track's default minimum is its
+ * content, so a block whose name has no break opportunity — a plugin naming
+ * one "CollectionLoop" — would push its column wider than a third and squeeze
+ * the other two rather than wrapping.
  */
+.nx-insert-panel [cmdk-group-items] {
+  display: grid;
+  grid-template-columns: repeat(var(--nx-insert-columns, 3), minmax(0, 1fr));
+  gap: 0.375rem;
+  padding: 0.125rem 0.5rem 0.5rem;
+}
+
 .nx-insert-panel__label {
   display: block;
+  font-size: 0.6875rem;
   font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--nx-foreground);
+  /*
+   * Broken anywhere rather than at spaces only. A tile is about 86px at the
+   * panel's default width, which is narrower than several block names, and a
+   * name that cannot break overflows its tile instead of wrapping inside it.
+   */
+  overflow-wrap: anywhere;
+}
+
+/*
+ * The description stays in the option and stops being drawn.
+ *
+ * Clipped rather than `display: none` or `visibility: hidden`, both of which
+ * remove it from the accessible name as well — and the name is the whole
+ * reason it is still here. A screen reader moving between tiles reads the
+ * block's sentence exactly as it did when the panel was a list; only sighted
+ * authors read it from the strip below.
+ */
+.nx-insert-panel__description {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The strip: what the tile under the cursor or the keyboard is for.
+ *
+ * Pinned below the list rather than floating over it, because a tooltip is
+ * mouse-only — it never reaches a keyboard, and on a touch screen there is no
+ * hover to open it at all. This follows focus as well as the pointer, so
+ * arrowing through the grid reads the same as pointing at it.
+ *
+ * `min-height` sized for three lines rather than a fixed height. Descriptions
+ * are prose from block authors and the longest in the first-party library runs
+ * to five lines here; a fixed box would clip exactly the blocks whose
+ * behaviour needs the most explaining. The list above holds the flexible
+ * space, so a longer sentence takes room from the list rather than pushing the
+ * panel.
+ */
+.nx-insert-panel__describes {
+  flex: none;
+  min-height: 4.25rem;
+  padding: 0.5rem 0.75rem 0.625rem;
+  border-top: 1px solid var(--nx-border);
+  background: var(--nx-muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-insert-panel__describes-name {
+  font-weight: 600;
   color: var(--nx-foreground);
 }
 
-.nx-insert-panel__description {
-  display: block;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  color: var(--nx-muted-foreground);
-  /*
-   * Clamped rather than truncated at one line: descriptions are prose written
-   * by block authors and the first few words are often a category name shared
-   * with a sibling block, so one line can render two rows indistinguishable.
-   */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
 /*
- * Rows grow to their content.
+ * A tile: the mark above the name, both centred.
  *
- * The command primitives size an item for a single line, which clips any label
- * that wraps — "Collection loop" lost its second line. Labels come from block
- * authors and cannot be assumed short, and a clipped row is worse than a taller
- * one: the author reads a truncated name with nothing indicating it was cut.
+ * Every geometry the primitives set for a LIST ITEM is restated rather than
+ * inherited — height, padding, the flex row, the 12px gap they put between an
+ * icon and its label. Those are correct for a row and wrong for a tile, and
+ * leaving any one of them turns the tile into a squat row with a glyph beside
+ * a clipped word.
  *
- * `align-items: start` so a two-line label does not drag its description to the
- * vertical centre, which reads as misalignment against the single-line rows
- * above and below it.
+ * `position: relative` because the description inside is clipped out of view by
+ * absolute positioning, and it has to be positioned against the tile rather
+ * than against whatever ancestor happens to be positioned — the scrolling list,
+ * which would leave a 1px sliver following the scroll.
  */
 .nx-insert-panel [cmdk-item] {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.3125rem;
   height: auto;
-  min-height: 2.5rem;
-  align-items: start;
-  padding-block: 0.375rem;
+  min-height: 3.75rem;
+  padding: 0.5rem 0.25rem 0.4375rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.3125rem;
+  text-align: center;
 }
 
 /*
- * Mark, then the two lines of text beside it.
+ * The current tile, marked with a BORDER as well as a background.
  *
- * A GRID rather than a flex row, because the row holds three children on two
- * lines: laid out as a flex row the label and the description sit side by side,
- * and the two-line reading the panel is built around disappears. The mark spans
- * both rows so it stays level with the label whether the description wraps to
- * one line or two.
+ * The primitives tint the background of a highlighted item, which reads clearly
+ * across a full-width row and barely at all on an 86px tile sitting in a grid
+ * of them. The border is what makes the current tile findable at a glance, and
+ * it replaces an existing border rather than adding one, so nothing reflows.
  */
-.nx-insert-panel [cmdk-item] {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 0.5rem;
-  /*
-   * ZERO, stated rather than inherited. The command primitive sets `gap-3` on
-   * every item, which is a column gap while the item is a flex ROW and becomes
-   * a row gap as well the moment it is a grid — pushing 12px between a label
-   * and the description belonging to it, so the two lines of one entry read as
-   * two entries and the row grows by the height of a line.
-   */
-  row-gap: 0;
+.nx-insert-panel [cmdk-item][data-selected="true"] {
+  border-color: var(--nx-primary);
 }
 
-/*
- * Nudged down by the difference between the glyph's box and the label's first
- * line: `align-items: start` above puts both at the top of the row, where a
- * 16px mark reads as sitting slightly high against 13px text.
- */
 .nx-insert-panel .nx-block-icon {
-  grid-row: 1 / span 2;
-  align-self: start;
-  padding-block-start: 0.125rem;
-}
-
-/*
- * The label keeps its own column and never wraps mid-word. A block named
- * "Collection loop" breaks at the space; one named "Collectionloop" would
- * otherwise break mid-word and read as two words.
- */
-.nx-insert-panel__label {
-  overflow-wrap: break-word;
+  flex: none;
 }
 
 /*

@@ -30,8 +30,10 @@ import {
   filterEntries,
   groupByCategory,
   insertionPointFor,
+  gridNeighbour,
   nodeForEntry,
   type InsertEntry,
+  type InsertGroup,
 } from "./inserter";
 
 const base = {
@@ -969,5 +971,147 @@ describe("nodeForEntry", () => {
         "acme/registered-cell",
       ]);
     });
+  });
+});
+
+describe("moving the highlight through a grid", () => {
+  /**
+   * A group whose entries are named by position, so a failure names the tile
+   * it landed on rather than a block whose place has to be looked up.
+   *
+   * Only `id` is read by the arithmetic. The rest is filled to the real shape
+   * rather than cast away, so a change to what an entry must carry breaks this
+   * fixture instead of leaving it quietly describing an entry that no longer
+   * exists.
+   */
+  function group(category: string, ...ids: string[]): InsertGroup {
+    return {
+      category,
+      entries: ids.map<InsertEntry>(id => ({
+        id,
+        blockName: `acme/${id}`,
+        label: id,
+        description: "",
+        category,
+        keywords: [],
+        version: 1,
+        props: {},
+      })),
+    };
+  }
+
+  // Three columns, and both groups deliberately end on a SHORT row: the last
+  // row of "a" holds one tile and the last row of "b" holds two, which is
+  // where every off-by-one in this arithmetic shows up.
+  const GROUPS = [
+    group("a", "a0", "a1", "a2", "a3", "a4"),
+    group("b", "b0", "b1", "b2", "b3", "b4"),
+  ];
+
+  it("steps DOWN by a row inside a group", () => {
+    expect(gridNeighbour(GROUPS, "a0", "down", 3)).toBe("a3");
+  });
+
+  it("steps UP by a row inside a group", () => {
+    expect(gridNeighbour(GROUPS, "a3", "up", 3)).toBe("a0");
+  });
+
+  it("crosses into the next group's FIRST row, keeping the column", () => {
+    /*
+     * "a2" is the third column of a's first row, and a's last row holds only
+     * "a3" — so there is nothing below it in this group. The tile visually
+     * below is b's third column, which flat index arithmetic across the whole
+     * list cannot produce: each heading starts a fresh grid, so +3 from "a2"
+     * would land on "b1".
+     */
+    expect(gridNeighbour(GROUPS, "a2", "down", 3)).toBe("b2");
+  });
+
+  it("clamps to the last tile when the next group's row is SHORTER", () => {
+    // "a2" is the third column of a full row, and the group it moves into
+    // holds a single tile. Landing on that tile is the clamp; falling through
+    // to whatever follows, as though the group had no third column, is the
+    // failure this excludes.
+    expect(
+      gridNeighbour(
+        [group("a", "a0", "a1", "a2"), group("b", "b0")],
+        "a2",
+        "down",
+        3
+      )
+    ).toBe("b0");
+  });
+
+  it("crosses UP into the previous group's LAST row, keeping the column", () => {
+    /*
+     * From b's first row, up leaves the group. The landing is a's last ROW —
+     * not its last entry and not its first. Group "a" holds five tiles, so its
+     * last row is "a3", "a4" and the two columns answer differently: an
+     * implementation returning the group's FINAL entry answers "a4" for both.
+     * A group whose last row held one tile could not tell those apart, which
+     * is why this one does not.
+     */
+    expect(gridNeighbour(GROUPS, "b0", "up", 3)).toBe("a3");
+    expect(gridNeighbour(GROUPS, "b1", "up", 3)).toBe("a4");
+  });
+
+  it("moves LEFT and RIGHT in reading order, across group boundaries", () => {
+    // Horizontal movement is deliberately flat: running off the end of a row
+    // onto the start of the next is what a row of text does.
+    expect(gridNeighbour(GROUPS, "a2", "right", 3)).toBe("a3");
+    expect(gridNeighbour(GROUPS, "a4", "right", 3)).toBe("b0");
+    expect(gridNeighbour(GROUPS, "b0", "left", 3)).toBe("a4");
+  });
+
+  it("answers NULL at the ends rather than the id it was given", () => {
+    /*
+     * A caller that moved "to itself" would still consume the key, so an
+     * author holding an arrow at the end of the list would get no indication
+     * they had arrived — and the key would stop reaching whatever else wanted
+     * it.
+     */
+    expect(gridNeighbour(GROUPS, "a0", "up", 3)).toBeNull();
+    expect(gridNeighbour(GROUPS, "a0", "left", 3)).toBeNull();
+    expect(gridNeighbour(GROUPS, "b4", "down", 3)).toBeNull();
+    expect(gridNeighbour(GROUPS, "b4", "right", 3)).toBeNull();
+  });
+
+  it("answers NULL for an id the groups do not hold", () => {
+    // A filter can remove the highlighted entry between renders, and moving
+    // from an entry that is gone has no defined answer.
+    expect(gridNeighbour(GROUPS, "gone", "down", 3)).toBeNull();
+    expect(gridNeighbour(GROUPS, undefined, "down", 3)).toBeNull();
+  });
+
+  it("skips an EMPTY group rather than stopping at it", () => {
+    const withHole = [group("a", "a0"), group("empty"), group("c", "c0")];
+    expect(gridNeighbour(withHole, "a0", "down", 3)).toBe("c0");
+    expect(gridNeighbour(withHole, "c0", "up", 3)).toBe("a0");
+    expect(gridNeighbour(withHole, "a0", "right", 3)).toBe("c0");
+  });
+
+  it("refuses a column count that is not a whole number of columns", () => {
+    /*
+     * Zero would divide the layout into nothing and a fraction would put
+     * entries at fractional indices. Refusing is what keeps a bad caller from
+     * getting movement that looks like a working grid and is not.
+     */
+    // Each of these is a case where dropping the guard produces a WRONG
+    // ANSWER rather than an out-of-range read that happens to be null. A zero
+    // column count steps down onto the tile it started from; a negative or
+    // fractional one is ignored entirely by horizontal movement, which does
+    // not consult it.
+    expect(gridNeighbour(GROUPS, "a0", "down", 0)).toBeNull();
+    expect(gridNeighbour(GROUPS, "a0", "right", -3)).toBeNull();
+    expect(gridNeighbour(GROUPS, "a0", "right", 2.5)).toBeNull();
+  });
+
+  it("matches an id the command primitives handed back TRIMMED", () => {
+    // cmdk trims the value it reports, so an id carrying surrounding
+    // whitespace would otherwise never match itself and every arrow key
+    // would be inert.
+    expect(
+      gridNeighbour([group("a", " a0 ", "a1", "a2", "a3")], "a0", "down", 3)
+    ).toBe("a3");
   });
 });

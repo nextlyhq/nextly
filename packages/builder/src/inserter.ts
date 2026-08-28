@@ -609,3 +609,168 @@ export function registrySlotSource(): SlotSource {
     },
   };
 }
+
+/** A direction an author can move the highlight in, laid out as a grid. */
+export type GridStep = "up" | "down" | "left" | "right";
+
+/**
+ * Where the highlight lands when an author presses an arrow key in a grid.
+ *
+ * Here rather than in the panel because it is arithmetic over the groups, and
+ * arithmetic is the part worth asserting. A panel deciding it would only be
+ * checkable by rendering, and the cases that matter are the boundaries — the
+ * last row of a group, a next group narrower than the current column — which
+ * are laborious to reach through a DOM and trivial to state as data.
+ *
+ * `null` means there is nowhere to go, and the caller leaves the highlight
+ * where it is. Distinct from returning the current id: a caller that moved
+ * "to itself" would still consume the key, and an author holding the arrow at
+ * the end of the list would get no indication they had arrived.
+ *
+ * Vertical movement is GROUP-LOCAL, because each category heading starts its
+ * own grid: an index arithmetic that ran across the whole flat list would step
+ * from the last row of one group into the middle of the next, landing on a
+ * tile that is not the one below. Horizontal movement is flat by design — it
+ * is reading order, and running off the end of a row onto the start of the
+ * next is what a row of text does.
+ */
+export function gridNeighbour(
+  groups: readonly InsertGroup[],
+  activeId: string | undefined,
+  step: GridStep,
+  columns: number
+): string | null {
+  // A column count of zero or less would divide the layout into nothing; a
+  // fractional one would put entries at fractional indices. Refusing is what
+  // keeps a bad caller from silently getting linear movement that looks like
+  // a working grid.
+  if (!Number.isInteger(columns) || columns < 1) return null;
+  const located = locate(groups, activeId);
+  if (located === null) return null;
+  const { group, index } = located;
+  const entries = groups[group]?.entries ?? [];
+  if (step === "left" || step === "right") {
+    return flatNeighbour(groups, group, index, step === "right" ? 1 : -1);
+  }
+  const column = index % columns;
+  if (step === "down") {
+    const below = index + columns;
+    if (below < entries.length) return entries[below]?.id ?? null;
+    return columnOfGroup(groups, group + 1, 1, column, columns, "first");
+  }
+  const above = index - columns;
+  if (above >= 0) return entries[above]?.id ?? null;
+  return columnOfGroup(groups, group - 1, -1, column, columns, "last");
+}
+
+/**
+ * Whether two entry ids name the same entry.
+ *
+ * Trimmed on both sides because the command primitives hand back a TRIMMED
+ * value, so an id carrying surrounding whitespace would never match itself and
+ * every arrow key would be inert. One function rather than a `.trim()` at each
+ * comparison, so the lookup the panel does and the lookup the arithmetic does
+ * cannot disagree about what "the same entry" means.
+ */
+function sameId(a: string, b: string): boolean {
+  return a.trim() === b.trim();
+}
+
+/**
+ * The entry an id names, or `undefined` where the groups no longer hold it.
+ *
+ * A filter can remove the highlighted entry between renders, so a caller
+ * holding an id has to be able to find out that it is gone rather than being
+ * handed something adjacent.
+ */
+export function entryById(
+  groups: readonly InsertGroup[],
+  id: string | undefined
+): InsertEntry | undefined {
+  if (id === undefined) return undefined;
+  for (const group of groups) {
+    for (const entry of group.entries) {
+      if (sameId(entry.id, id)) return entry;
+    }
+  }
+  return undefined;
+}
+
+/** Which group an id sits in, and where within it. */
+function locate(
+  groups: readonly InsertGroup[],
+  activeId: string | undefined
+): { group: number; index: number } | null {
+  if (activeId === undefined) return null;
+  for (let group = 0; group < groups.length; group += 1) {
+    const entries = groups[group]?.entries ?? [];
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      if (entry !== undefined && sameId(entry.id, activeId)) {
+        return { group, index };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The nearest group in one direction that actually holds entries.
+ *
+ * ONE walk, asked by both the horizontal and the vertical step. They ask it
+ * for different reasons — one to continue reading order past a heading, the
+ * other to find the row above or below — and each had its own loop until they
+ * were the same loop with a different landing rule. An empty group is skipped
+ * rather than stopped at: a category whose blocks are all disallowed here
+ * renders nothing, and an author arrowing past it should not stop on a heading
+ * with no tiles under it.
+ */
+function nonEmptyGroupFrom(
+  groups: readonly InsertGroup[],
+  from: number,
+  by: 1 | -1
+): readonly InsertEntry[] | null {
+  for (let at = from; at >= 0 && at < groups.length; at += by) {
+    const entries = groups[at]?.entries;
+    if (entries !== undefined && entries.length > 0) return entries;
+  }
+  return null;
+}
+
+/** The next or previous entry in reading order, across group boundaries. */
+function flatNeighbour(
+  groups: readonly InsertGroup[],
+  group: number,
+  index: number,
+  by: 1 | -1
+): string | null {
+  const within = groups[group]?.entries[index + by];
+  if (within !== undefined) return within.id;
+  const entries = nonEmptyGroupFrom(groups, group + by, by);
+  if (entries === null) return null;
+  const landing = by === 1 ? entries[0] : entries[entries.length - 1];
+  return landing?.id ?? null;
+}
+
+/**
+ * The entry in `column` of an adjacent group's first or last row.
+ *
+ * Clamped to the row's last entry rather than skipped, because a group's final
+ * row is usually short: an author in column three moving into a group whose
+ * last row holds one tile should land on that tile, not fall through to the
+ * group beyond it as though the group were empty.
+ */
+function columnOfGroup(
+  groups: readonly InsertGroup[],
+  from: number,
+  by: 1 | -1,
+  column: number,
+  columns: number,
+  row: "first" | "last"
+): string | null {
+  const entries = nonEmptyGroupFrom(groups, from, by);
+  if (entries === null) return null;
+  const last = entries.length - 1;
+  const start = row === "first" ? 0 : last - (last % columns);
+  return entries[Math.min(start + column, last)]?.id ?? null;
+}

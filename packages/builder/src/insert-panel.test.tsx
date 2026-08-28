@@ -89,6 +89,19 @@ function editorSpy(document: BlockDocument): EditorState & {
   };
 }
 
+/**
+ * The tile offering a block, addressed as the option it is.
+ *
+ * By ROLE and by an EXACT name, rather than by text. A text query matches the
+ * tile and the description strip alike — the strip repeats the name of
+ * whichever tile is current — and refuses on the ambiguity. The exact name is
+ * available because the tile states its own: the block's sentence is its
+ * description now, not part of what it is called.
+ */
+function tile(name: string): HTMLElement {
+  return screen.getByRole("option", { name });
+}
+
 describe("InsertPanel", () => {
   it("inserts the block a chosen row names, at the derived position", () => {
     registerBlocks(
@@ -99,7 +112,7 @@ describe("InsertPanel", () => {
     const onInsert = vi.fn();
     render(<InsertPanel editor={editor} onInsert={onInsert} />);
 
-    fireEvent.click(screen.getByText("Text"));
+    fireEvent.click(tile("Text"));
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
     const op = editor.apply.mock.calls[0][0];
@@ -142,7 +155,7 @@ describe("InsertPanel", () => {
     const editor = editorSpy(documentOf());
     render(<InsertPanel editor={editor} definitions={supplied} />);
 
-    fireEvent.click(screen.getByText("Row"));
+    fireEvent.click(tile("Row"));
 
     const op = editor.apply.mock.calls[0][0];
     expect(op.node.type).toBe("acme/row");
@@ -173,7 +186,7 @@ describe("InsertPanel", () => {
     const editor = editorSpy(documentOf());
     render(<InsertPanel editor={editor} definitions={supplied} />);
 
-    fireEvent.click(screen.getByText("Row"));
+    fireEvent.click(tile("Row"));
 
     const op = editor.apply.mock.calls[0][0];
     expect(
@@ -239,7 +252,7 @@ describe("InsertPanel", () => {
     );
     render(<InsertPanel editor={editor} />);
 
-    fireEvent.click(screen.getByText("Text"));
+    fireEvent.click(tile("Text"));
 
     expect(editor.apply.mock.calls[0][0].at).toEqual({ index: 2 });
   });
@@ -252,7 +265,7 @@ describe("InsertPanel", () => {
     const editor = editorSpy(documentOf());
     render(<InsertPanel editor={editor} />);
 
-    fireEvent.click(screen.getByText("Text"));
+    fireEvent.click(tile("Text"));
 
     const inserted = editor.apply.mock.calls[0][0].node;
     expect(editor.select).toHaveBeenCalledWith(inserted.id);
@@ -268,7 +281,7 @@ describe("InsertPanel", () => {
     const onInsert = vi.fn();
     render(<InsertPanel editor={editor} onInsert={onInsert} />);
 
-    fireEvent.click(screen.getByText("Text"));
+    fireEvent.click(tile("Text"));
 
     // A refusal means the document moved underneath the panel. Announcing it as
     // an insert would have the host record an edit that never happened.
@@ -295,8 +308,10 @@ describe("InsertPanel", () => {
       target: { value: "Picture" },
     });
 
-    expect(screen.getByText("Picture")).toBeTruthy();
-    expect(screen.queryByText("Heading")).toBeNull();
+    expect(tile("Picture")).toBeTruthy();
+    expect(
+      screen.queryAllByRole("option", { name: /^Heading\b/ })
+    ).toHaveLength(0);
   });
 
   it("says nothing matched, distinctly from nothing being placeable", () => {
@@ -334,7 +349,160 @@ describe("InsertPanel", () => {
     // Both halves: the refused entry is absent AND the permitted one is
     // present. Asserting only the absence passes on a panel that renders
     // nothing at all.
-    expect(screen.getByText("Columns")).toBeTruthy();
-    expect(screen.queryByText("Column")).toBeNull();
+    expect(tile("Columns")).toBeTruthy();
+    expect(screen.queryAllByRole("option", { name: /^Column\b/ })).toHaveLength(
+      0
+    );
+  });
+});
+
+describe("the grid, and the strip that describes it", () => {
+  /**
+   * Seven blocks in one category, named so their position is readable.
+   *
+   * Seven rather than three because the grid is three wide: with a single row
+   * "down by a row" and "down by one" land on the same tile, and every case
+   * about the difference would pass either way.
+   */
+  function sevenBlocks(): void {
+    registerBlocks(
+      Array.from({ length: 7 }, (_, index) => ({
+        ...base,
+        name: `acme/b${index}`,
+        description: `Block number ${index}.`,
+        editor: { label: `B${index}`, category: "Layout" },
+      })) as never,
+      { source: "acme" }
+    );
+  }
+
+  /** The strip's text, or null where it is not rendered at all. */
+  function strip(): string | null {
+    return (
+      document.querySelector(".nx-insert-panel__describes")?.textContent ?? null
+    );
+  }
+
+  function search(): HTMLElement {
+    return screen.getByPlaceholderText("Search blocks");
+  }
+
+  it("names a tile by its BLOCK and describes it with its sentence", () => {
+    /*
+     * Two separate things rather than one run-on name. The name computation
+     * joins adjacent nodes with no separator, so a tile that let its contents
+     * speak for it is announced as "B0Block number 0." — and whether a
+     * separator appears at all depends on the stylesheet, which is not loaded
+     * here and is not loaded by a screen reader's own reasoning either.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    const first = tile("B0");
+    const describedBy = first.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    // Resolved rather than merely present: an id pointing at nothing is the
+    // failure this is built to exclude, and it reads identically on the
+    // element itself.
+    const description =
+      describedBy === null ? null : document.getElementById(describedBy);
+    expect(description?.textContent).toBe("Block number 0.");
+  });
+
+  it("describes the tile the highlight is on, before anything is touched", () => {
+    // The strip is the only place a sighted author reads the sentence now, so
+    // a panel that opened with it blank would have removed the information
+    // rather than moved it.
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    expect(strip()).toBe("B0 Block number 0.");
+  });
+
+  it("moves DOWN by a row, not by one tile", () => {
+    /*
+     * The whole point of the grid being a grid. Three columns, so the tile
+     * below B0 is B3 — a panel that kept the list's linear navigation would
+     * answer B1, which is the tile to its RIGHT.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    fireEvent.keyDown(search(), { key: "ArrowDown" });
+
+    expect(strip()).toBe("B3 Block number 3.");
+  });
+
+  it("moves RIGHT by one tile once the search field has no use for the key", () => {
+    // The field is empty, so there is no caret to move and the key is the
+    // grid's.
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    fireEvent.keyDown(search(), { key: "ArrowRight" });
+
+    expect(strip()).toBe("B1 Block number 1.");
+  });
+
+  it("leaves a horizontal arrow to the SEARCH FIELD while a caret can move", () => {
+    /*
+     * Focus stays in the search box while the highlight moves, so a panel that
+     * claimed Left and Right outright would make the box uneditable: an author
+     * correcting a typo would move the tile selection instead of the caret.
+     *
+     * Asserted against the same key succeeding once the caret is at the end,
+     * because an assertion that the highlight did not move is satisfied by a
+     * handler that never runs at all.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    const input = search();
+    fireEvent.change(input, { target: { value: "b" } });
+    (input as HTMLInputElement).setSelectionRange(0, 0);
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(strip()).toBe("B0 Block number 0.");
+
+    (input as HTMLInputElement).setSelectionRange(1, 1);
+    fireEvent.keyDown(input, { key: "ArrowRight" });
+    expect(strip()).toBe("B1 Block number 1.");
+  });
+
+  it("leaves a MODIFIED arrow to the command primitives", () => {
+    /*
+     * They bind first, last and by-group to the modified arrows, and this
+     * handler runs before theirs — so claiming a modified key would remove a
+     * binding silently. Meta+Down is theirs and means "last".
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    fireEvent.keyDown(search(), { key: "ArrowDown", metaKey: true });
+
+    expect(strip()).toBe("B6 Block number 6.");
+  });
+
+  it("follows the POINTER as well as the keyboard, through one piece of state", () => {
+    // The primitives highlight on pointer move and report it the same way they
+    // report an arrow key, which is what lets one value drive the strip. A
+    // panel tracking hover separately would hold a second answer.
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    fireEvent.pointerMove(tile("B4"));
+
+    expect(strip()).toBe("B4 Block number 4.");
+  });
+
+  it("shows NO strip when nothing can be offered", () => {
+    // There is no tile to describe, and a strip left standing would describe
+    // whichever block was current before the search emptied the list.
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    fireEvent.change(search(), { target: { value: "nothing matches this" } });
+
+    expect(strip()).toBeNull();
+    expect(screen.getByText(/No blocks match/)).toBeTruthy();
   });
 });

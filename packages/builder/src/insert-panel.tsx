@@ -48,11 +48,14 @@ import {
   allowedEntries,
   blockSourceFor,
   catalogFrom,
+  entryById,
   filterEntries,
+  gridNeighbour,
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
   registrySlotSource,
+  type GridStep,
   type InsertionPoint,
   type InsertEntry,
 } from "./inserter";
@@ -92,6 +95,91 @@ export interface InsertPanelProps {
   categoryOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
+}
+
+/**
+ * How many tiles sit in a row.
+ *
+ * A CONSTANT rather than a count derived from the panel's measured width, and
+ * both consumers read this one value: the stylesheet through the custom
+ * property set on each grid, and the arrow-key arithmetic through
+ * `gridNeighbour`. Measured from a width would need the layout to have
+ * happened before the keyboard could answer, and the two would disagree for
+ * the frame after a drag.
+ *
+ * Three because the panel opens at 300px and its padding and gaps leave about
+ * 86px per tile there — a glyph and a short word. It is also what keeps the
+ * grid from REFLOWING while the author drags the panel's edge: a column count
+ * that changed with the width would move a tile out from under the cursor
+ * mid-drag.
+ */
+const GRID_COLUMNS = 3;
+
+/**
+ * Which arrow key means which direction, or `undefined` where the panel wants
+ * nothing to do with the key.
+ *
+ * A table rather than a switch so the set is enumerable: the command
+ * primitives bind their own meanings to Home, End and the modified arrows, and
+ * a handler that claimed a key by pattern would take one of those the day it
+ * was added.
+ */
+const ARROW_STEPS: Readonly<Record<string, GridStep>> = {
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "left",
+  ArrowRight: "right",
+};
+
+/**
+ * Whether the caret in the search field would move if this key reached it.
+ *
+ * Horizontal arrows belong to the TEXT FIELD first. Focus stays in the search
+ * input while the highlight moves — that is how the command primitives work —
+ * so a panel that claimed Left and Right outright would make the search box
+ * uneditable: an author correcting a typo would move the tile selection
+ * instead of the caret.
+ *
+ * So the panel takes those keys only once the field has no use for them:
+ * nothing selected, and the caret already at the end it is being asked to move
+ * past. That is the same rule a browser's address bar follows, and it never
+ * takes a keystroke the field would have consumed.
+ */
+function caretWouldMove(target: EventTarget | null, back: boolean): boolean {
+  if (!(target instanceof HTMLInputElement)) return false;
+  const { selectionStart, selectionEnd } = target;
+  // A field that reports no selection at all cannot say where its caret is, so
+  // the safe answer is that it might move — leaving the key with the field.
+  if (selectionStart === null || selectionEnd === null) return true;
+  // A range collapses to one end before the caret travels, so the first press
+  // is the field's.
+  if (selectionStart !== selectionEnd) return true;
+  return back ? selectionStart > 0 : selectionStart < target.value.length;
+}
+
+/**
+ * Which direction a key press means for the grid, or `undefined` where the key
+ * is not the grid's to take.
+ *
+ * Three separate reasons to decline, gathered here rather than spread through
+ * the handler: the key is not an arrow; the key is MODIFIED, and the command
+ * primitives bind first, last and by-group to those — this runs before theirs,
+ * so claiming one would remove it silently; or the key is horizontal and the
+ * search field still has a caret to move with it.
+ */
+function stepFor(
+  event: React.KeyboardEvent<HTMLElement>
+): GridStep | undefined {
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
+    return undefined;
+  }
+  const step = ARROW_STEPS[event.key];
+  if (step === undefined) return undefined;
+  const horizontal = step === "left" || step === "right";
+  if (horizontal && caretWouldMove(event.target, step === "left")) {
+    return undefined;
+  }
+  return step;
 }
 
 /** Sentence describing where the next insert will land. */
@@ -169,6 +257,64 @@ export function InsertPanel({
           categoryOrder
         );
 
+  /*
+   * Which tile the panel is describing, held here rather than read back out of
+   * the DOM.
+   *
+   * ONE piece of state for hover and for the keyboard, because the command
+   * primitives already collapse them: an item highlights on `pointermove` and
+   * on arrow navigation alike, and reports both through `onValueChange`. A
+   * panel tracking hover separately would hold a second answer to "which tile
+   * is the author on", and the two would disagree the moment a pointer rested
+   * over one tile while the keyboard moved to another — which is what happens
+   * every time somebody types after reaching for the mouse.
+   */
+  const [active, setActive] = React.useState<string>();
+
+  /*
+   * One document-unique id per entry, for `aria-describedby` to point at.
+   *
+   * Prefixed from `useId` rather than built from the entry id alone, because
+   * two inserters can be mounted at once — a panel and a palette, or two
+   * editors side by side — and duplicate ids would have every tile in one
+   * describe itself with the other's sentence.
+   *
+   * Keyed off the CATALOG rather than the filtered groups, so an id belongs to
+   * an entry for the life of the mount instead of changing as an author types.
+   */
+  const idPrefix = React.useId();
+  const descriptionIds = React.useMemo(() => {
+    const ids = new Map<string, string>();
+    for (const entry of catalog) ids.set(entry.id, `${idPrefix}-${entry.id}`);
+    return ids;
+  }, [catalog, idPrefix]);
+
+  /*
+   * The entry the strip describes, falling back to the first one offered.
+   *
+   * The fallback is what keeps the strip from being blank on the pass before
+   * anything has been highlighted, and after a search removes the entry that
+   * was. It is DERIVED rather than written into state: a fallback that stored
+   * itself would be a second writer racing the primitives' own selection.
+   */
+  const described =
+    entryById(groups, active) ?? groups[0]?.entries[0] ?? undefined;
+
+  const onArrow = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = stepFor(event);
+    if (step === undefined) return;
+    const next = gridNeighbour(groups, described?.id, step, GRID_COLUMNS);
+    if (next === null) return;
+    setActive(next);
+    /*
+     * Consuming the key is what stands the primitives' own handler down: it
+     * calls this one first and then skips its own work when the event has been
+     * defaulted. Left standing, its linear "next item" would run as well and
+     * the highlight would end up one tile past wherever this put it.
+     */
+    event.preventDefault();
+  };
+
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
     // `nesting` rather than `source`. They differ exactly when the caller
@@ -203,8 +349,25 @@ export function InsertPanel({
   }
 
   return (
-    <div className="nx-insert-panel">
-      <Command shouldFilter={false} label="Insert a block">
+    <div
+      className="nx-insert-panel"
+      /* The one column count, handed to the stylesheet rather than spelled
+         again in it. Written twice, a change to the layout would move the
+         tiles and leave the arrow keys stepping by the old number.
+
+         On the PANEL rather than on each group, because the primitives own the
+         element the grid is applied to — their items container — and a
+         property set on a wrapper inside it would be inherited by the tiles
+         instead of read by the grid. */
+      style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
+    >
+      <Command
+        shouldFilter={false}
+        label="Insert a block"
+        value={described?.id}
+        onValueChange={setActive}
+        onKeyDown={onArrow}
+      >
         <CommandInput
           value={query}
           onValueChange={setQuery}
@@ -236,10 +399,36 @@ export function InsertPanel({
                   key={entry.id}
                   value={entry.id}
                   onSelect={() => insert(entry)}
+                  /*
+                   * NAMED by the block and DESCRIBED by its sentence, rather
+                   * than named by the two run together.
+                   *
+                   * An element with no label is named from its CONTENTS, and
+                   * that computation trims each node and joins them with no
+                   * separator — so a label and a description in adjacent spans
+                   * are announced as "TextA paragraph of plain text". Whether
+                   * any separator appears depends on the elements' `display`,
+                   * which makes the spoken name a property of the stylesheet
+                   * rather than of the markup.
+                   *
+                   * Stating both removes the guess: the block's name, then its
+                   * sentence, in that order and as two separate things. The
+                   * label is exactly the visible text, so a spoken command
+                   * still matches what is written on the tile.
+                   */
+                  aria-label={entry.label}
+                  aria-describedby={descriptionIds.get(entry.id)}
                 >
                   <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>
-                  <span className="nx-insert-panel__description">
+                  {/* Kept in the tile and no longer drawn: `aria-describedby`
+                      needs an element to point at, and keeping it here is what
+                      stops a tile and the sentence describing it from being
+                      rendered apart. */}
+                  <span
+                    className="nx-insert-panel__description"
+                    id={descriptionIds.get(entry.id)}
+                  >
                     {entry.description}
                   </span>
                 </CommandItem>
@@ -247,6 +436,17 @@ export function InsertPanel({
             </CommandGroup>
           ))}
         </CommandList>
+        {described === undefined ? null : (
+          /* Sighted authors only, and deliberately so. The sentence it shows
+             is already the accessible name of the tile it describes, so
+             exposing it here as well would have a screen reader read every
+             description twice — once on the option and once from a region
+             that changed because of it. */
+          <p className="nx-insert-panel__describes" aria-hidden="true">
+            <b className="nx-insert-panel__describes-name">{described.label}</b>
+            {` ${described.description}`}
+          </p>
+        )}
       </Command>
     </div>
   );
