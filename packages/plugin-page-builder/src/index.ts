@@ -97,7 +97,6 @@ export type { SiteStyleReader } from "./site-style-storage";
 // cache with no reachable way to rebuild it is a second source of truth.
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
-export { rebuildClassUsage } from "./class-usage-rebuild";
 export {
   rebuildClassUsageIndex,
   type ClassUsageDocumentStore,
@@ -108,7 +107,6 @@ export type { ClassUsageIndexStore } from "./class-usage-maintenance";
 // the rebuild without naming the variant, and a caller left to spell it as a
 // string can spell it wrong.
 export type { ClassUsageVariant } from "./collections/class-usage-index";
-export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *
