@@ -51,6 +51,7 @@ import {
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
+  registryBlockSource,
   registrySlotSource,
   type InsertionPoint,
   type InsertEntry,
@@ -130,6 +131,13 @@ export function InsertPanel({
   // changing — a memo keyed on the selection alone would keep a position whose
   // index no longer names the same place.
   const slotSource = React.useMemo(registrySlotSource, []);
+
+  // The definitions an inserted node's declared starting children are expanded
+  // from. Separate from `definitions` above, which is the palette's catalog and
+  // may be a caller-supplied subset: a block's default names child TYPES, and
+  // those must resolve against everything registered rather than against
+  // whatever the palette was told to offer.
+  const blockSource = React.useMemo(registryBlockSource, []);
   const point = insertionPointFor(
     editor.document,
     editor.selectedId,
@@ -155,7 +163,7 @@ export function InsertPanel({
 
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
-    const node = nodeForEntry(entry);
+    const node = nodeForEntry(entry, blockSource);
     // `apply` is the only path a document changes by, so undo covers this
     // insert for free. It answers null when the op is refused, and a refusal
     // must not be reported as an insert — the panel offers only placements the

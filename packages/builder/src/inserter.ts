@@ -28,6 +28,7 @@ import {
   canBeRoot,
   canNest,
   canNestInSlot,
+  expandSlotDefaults,
   findNode,
   getBlock,
   locateNode,
@@ -37,6 +38,7 @@ import {
   type BlockNode,
   type NestingSource,
   type NestingVerdict,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
@@ -505,24 +507,51 @@ export function insertionPointFor(
 }
 
 /**
- * The node an entry inserts.
+ * The node an entry inserts, carrying whatever children its block declares it
+ * starts with.
  *
  * Props are deep-copied. The entry outlives every insert made from it, so
  * handing out its own object would let an edit to one inserted block reach the
  * catalog — and through it every block inserted from that entry afterwards.
  * A shallow copy is not enough, because a default value may be an array or a
  * nested object and those would still be shared.
+ *
+ * The children come from `expandSlotDefaults` rather than from anything written
+ * here, so "what does this slot start with" is answered in one place: the block
+ * declares it, the engine expands it with ids minted per instance, and a
+ * container that declares nothing still arrives with no `slots` key at all.
+ * Building the children here instead would put a second answer beside the
+ * declaration, and the two would agree only until one of them changed.
  */
-export function nodeForEntry(entry: InsertEntry): BlockNode {
-  return makeNode(entry.blockName, entry.version, structuredClone(entry.props));
+export function nodeForEntry(
+  entry: InsertEntry,
+  definitions: SlotDefaultSource
+): BlockNode {
+  return makeNode(
+    entry.blockName,
+    entry.version,
+    structuredClone(entry.props),
+    expandSlotDefaults(entry.blockName, definitions)
+  );
+}
+
+/**
+ * The registry as a block-definition source.
+ *
+ * Reads the DEFINITION rather than the node, because a container inserted from
+ * the palette has no `slots` key until something is put in it — which is
+ * precisely the container that needs filling.
+ */
+export function registryBlockSource(): SlotDefaultSource {
+  return { get: type => getBlock(type) };
 }
 
 /**
  * The registry as a slot source.
  *
- * Reads the DEFINITION's declared slots rather than the node's, because a
- * container inserted from the palette has no `slots` key until something is put
- * in it — which is precisely the container that needs filling.
+ * DERIVED from `registryBlockSource` rather than reading the registry again:
+ * the names of a block's slots are a narrower view of its declaration, and two
+ * readings of one registry would agree until one of them learned to filter.
  *
  * Here rather than beside either caller. The palette asks it where an insert
  * would land and the canvas asks it which regions a drag can aim at, and those
@@ -530,9 +559,10 @@ export function nodeForEntry(entry: InsertEntry): BlockNode {
  * is a block that behaves differently depending on how an author reached it.
  */
 export function registrySlotSource(): SlotSource {
+  const definitions = registryBlockSource();
   return {
     slotsOf: type => {
-      const declared = getBlock(type)?.slots;
+      const declared = definitions.get(type)?.slots;
       return declared === undefined ? undefined : Object.keys(declared);
     },
   };
