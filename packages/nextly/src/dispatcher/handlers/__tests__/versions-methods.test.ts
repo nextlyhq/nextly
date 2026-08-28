@@ -15,6 +15,12 @@ vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: (...a: unknown[]) => assertReadableSpy(...a),
   redactSnapshotForUser: (...a: unknown[]) => redactSpy(...a),
   resolveSingleDocumentId: (...a: unknown[]) => resolveSingleIdSpy(...a),
+  // A factory mock replaces the whole module, so anything the handler imports
+  // and this object omits is undefined at the call site rather than falling
+  // through to the real export. The real one returns `Promise<void>` and
+  // mutates the snapshot in place, so a mock that RETURNED one would describe a
+  // contract the module does not have.
+  hydrateVersionSnapshot: () => Promise.resolve(),
 }));
 
 vi.mock("../../../di", () => ({
