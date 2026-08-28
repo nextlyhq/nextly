@@ -184,6 +184,150 @@ describe("the Style tab beside Content", () => {
   });
 });
 
+describe("when there is nothing to style", () => {
+  it("says to select a block, rather than rendering an empty panel", () => {
+    /*
+     * The one guard of the four with no direct test until now — the wrapper's
+     * no-selection case covers `InspectorPanel`, not this panel, and the two
+     * say different words. Found by breaking the shared guard and watching
+     * only three of the four fail.
+     */
+    register({ spacing: true });
+    const { container } = render(
+      <StyleInspectorPanel editor={editorFor(documentOf(), null)} />
+    );
+    expect(
+      container.querySelector('[data-empty="no-selection"]')
+    ).not.toBeNull();
+    expect(screen.getByText(/select a block to style it/i)).toBeDefined();
+  });
+});
+
+describe("the class selector, mounted above the style sections", () => {
+  const LIBRARY = [
+    { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+    { id: "id-card", slug: "card", orderIndex: 1, styles: {} },
+  ];
+
+  /** The panel with a node carrying classes, and a host that opted in. */
+  function mountWithClasses(
+    options: {
+      classIds?: string[];
+      library?: typeof LIBRARY | undefined;
+      optIn?: boolean;
+    } = {}
+  ) {
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "a",
+          type: "acme/box",
+          version: 1,
+          props: {},
+          ...(options.classIds === undefined
+            ? {}
+            : { classes: options.classIds }),
+        },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    const onCreateClass = vi.fn();
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(options.optIn === false ? {} : { onCreateClass })}
+        {...(options.library === undefined
+          ? {}
+          : { classLibrary: options.library })}
+      />
+    );
+    return { editor, onCreateClass };
+  }
+
+  it("is absent entirely when the host never opted in", () => {
+    /*
+     * `onCreateClass` is what opts in, NOT the library. A host that cannot
+     * write the site style has no way to create a class, and a selector that
+     * offered to would report an intent nobody acts on.
+     */
+    mountWithClasses({ optIn: false, library: LIBRARY });
+    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  });
+
+  it("shows the loading state when the host opted in but is still reading", () => {
+    // The distinction that would otherwise collapse: an absent library means
+    // "in flight" only BECAUSE opting in is signalled separately. Drawn the
+    // same way, a host mid-load and a host with no class surface at all would
+    // be indistinguishable, and only one of them has a field about to fill.
+    mountWithClasses({ library: undefined });
+    expect(screen.getByText(/loading classes/i)).toBeDefined();
+  });
+
+  it("shows the classes the selected node carries", () => {
+    mountWithClasses({ classIds: ["id-card"], library: LIBRARY });
+    expect(screen.getByRole("button", { name: /remove card/i })).toBeDefined();
+  });
+
+  it("writes an applied class through the editor, with no host callback", () => {
+    // Applying an EXISTING class is a node edit, which this panel already
+    // knows how to write. Requiring a callback for it would make the host
+    // rebuild an op the panel is holding all the parts of.
+    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
+    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
+      target: { value: "hero" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
+      key: "Enter",
+    });
+
+    expect(onCreateClass).not.toHaveBeenCalled();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["id-hero"] },
+    });
+  });
+
+  it("UNSETS the field when the last class is removed", () => {
+    /*
+     * Not `classes: []`. The field is optional and the two mean the same to
+     * every reader, so writing the empty array leaves a key that says nothing
+     * — and an inverse built from it would restore that key on undo.
+     */
+    const { editor } = mountWithClasses({
+      classIds: ["id-hero"],
+      library: LIBRARY,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /remove hero/i }));
+
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: {},
+      unset: ["classes"],
+    });
+  });
+
+  it("reports a creation to the host rather than writing it", () => {
+    // The class has no id until the host has stored it, so a node write here
+    // would have to invent one.
+    const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
+    fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
+      target: { value: "call-to-action" },
+    });
+    fireEvent.keyDown(screen.getByRole("combobox", { name: /add a class/i }), {
+      key: "Enter",
+    });
+
+    expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
+
 describe("sections", () => {
   it("opens one section at a time", () => {
     mount({ spacing: true, effects: true });
