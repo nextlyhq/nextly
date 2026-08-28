@@ -5,6 +5,7 @@ import { countNodes, treeDepth } from "./limits";
 import { measureBytes } from "./measure-bytes";
 import {
   duplicateNode,
+  expandSlotDefaults,
   findNode,
   insertNode,
   locateNode,
@@ -1097,5 +1098,180 @@ describe("a record keyed by a stored `__proto__`", () => {
     expect(Object.keys(next[0]!.slots!)).toContain("__proto__");
     expect(Object.getPrototypeOf(next[0]!.slots!)).toBe(Object.prototype);
     expect(next[0]!.slots!.__proto__).toHaveLength(1);
+  });
+});
+
+describe("expanding a slot's declared default", () => {
+  /**
+   * A resolver over three types: a container declaring two identical starting
+   * children, one declaring two DIFFERENT ones, and a leaf declaring none.
+   *
+   * `core/quote` is deliberately absent, so a declaration naming it exercises
+   * the unresolvable-entry branch.
+   */
+  const definitions = {
+    get: (type: string) =>
+      ({
+        "core/columns": {
+          version: 1,
+          slots: {
+            children: {
+              defaultBlock: [{ type: "core/column" }, { type: "core/column" }],
+            },
+          },
+        },
+        "core/split": {
+          version: 3,
+          slots: {
+            children: {
+              defaultBlock: [
+                { type: "core/column", props: { width: "wide" } },
+                { type: "core/column", props: { width: "narrow" } },
+              ],
+            },
+          },
+        },
+        "core/column": { version: 7 },
+      })[type],
+  };
+
+  it("mints a fresh id for every expanded child", () => {
+    const slots = expandSlotDefaults("core/columns", definitions);
+    const ids = slots?.children?.map(node => node.id) ?? [];
+
+    expect(ids).toHaveLength(2);
+    // DISTINCT, not merely present. Two children sharing an id is exactly the
+    // failure a stored node list produces, and the whole reason this layer
+    // exists — `toHaveLength` alone passes on an implementation that expands
+    // one node and repeats the reference.
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("gives two parents built from one declaration no id in common", () => {
+    // The collision this design makes unreachable is ACROSS instances, and one
+    // parent cannot produce it: an implementation that mints per child but
+    // caches the finished slot record per type passes the test above and fails
+    // here. Both parents are expanded from the same declaration, which is the
+    // situation two rows on one page are in.
+    const first = expandSlotDefaults("core/columns", definitions);
+    const second = expandSlotDefaults("core/columns", definitions);
+
+    const firstIds = (first?.children ?? []).map(node => node.id);
+    const secondIds = (second?.children ?? []).map(node => node.id);
+
+    expect(firstIds).toHaveLength(2);
+    expect(secondIds).toHaveLength(2);
+    expect(new Set([...firstIds, ...secondIds]).size).toBe(4);
+  });
+
+  it("carries each entry's own props, so the children may differ", () => {
+    // What a count with one shared props object cannot express, and the reason
+    // the declaration is a list.
+    const slots = expandSlotDefaults("core/split", definitions);
+
+    expect(slots?.children?.map(node => node.props)).toEqual([
+      { width: "wide" },
+      { width: "narrow" },
+    ]);
+  });
+
+  it("stamps each child with ITS OWN type's version, not the parent's", () => {
+    // `core/split` is version 3 and `core/column` version 7. Reading the
+    // version from the parent would produce nodes the migration runner treats
+    // as older or newer than they are.
+    const slots = expandSlotDefaults("core/split", definitions);
+
+    expect(slots?.children?.map(node => node.version)).toEqual([7, 7]);
+  });
+
+  it("keeps the declared order", () => {
+    const slots = expandSlotDefaults("core/split", definitions);
+
+    expect(slots?.children?.map(node => node.props.width)).toEqual([
+      "wide",
+      "narrow",
+    ]);
+  });
+
+  it("skips an entry naming a type the resolver does not know", () => {
+    // A node of an unregistered type renders as a placeholder, which is worse
+    // than a shorter slot: the author gets a block they did not ask for and
+    // cannot fix. `core/quote` is not in the fixture.
+    const unknownEntry = {
+      get: (type: string) =>
+        type === "core/box"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  defaultBlock: [
+                    { type: "core/quote" },
+                    { type: "core/column" },
+                  ],
+                },
+              },
+            }
+          : type === "core/column"
+            ? { version: 7 }
+            : undefined,
+    };
+
+    const slots = expandSlotDefaults("core/box", unknownEntry);
+
+    expect(slots?.children?.map(node => node.type)).toEqual(["core/column"]);
+  });
+
+  it("answers undefined when no slot declares a default", () => {
+    // Distinct from an empty record: `makeNode` writes a `slots` key only when
+    // one is supplied, so a container with no declared default must arrive
+    // carrying no `slots` at all.
+    expect(expandSlotDefaults("core/column", definitions)).toBeUndefined();
+  });
+
+  it("answers undefined for a type the resolver does not know", () => {
+    expect(expandSlotDefaults("core/nonexistent", definitions)).toBeUndefined();
+  });
+
+  it("omits a slot whose every entry was unresolvable", () => {
+    // The empty-slot case must not become `{ children: [] }`, which would make
+    // a container claim children it does not have.
+    const allUnknown = {
+      get: (type: string) =>
+        type === "core/box"
+          ? {
+              version: 1,
+              slots: { children: { defaultBlock: [{ type: "core/quote" }] } },
+            }
+          : undefined,
+    };
+
+    expect(expandSlotDefaults("core/box", allUnknown)).toBeUndefined();
+  });
+
+  it("does not let a declaration's props object reach the built node", () => {
+    // The declaration outlives every expansion made from it. Handing out its
+    // own object would let an edit to one inserted block reach the block
+    // definition, and through it every block expanded from it afterwards.
+    const declared = { width: "wide" };
+    const shared = {
+      get: (type: string) =>
+        type === "core/box"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  defaultBlock: [{ type: "core/column", props: declared }],
+                },
+              },
+            }
+          : type === "core/column"
+            ? { version: 7 }
+            : undefined,
+    };
+
+    const slots = expandSlotDefaults("core/box", shared);
+
+    expect(slots?.children?.[0]?.props).toEqual({ width: "wide" });
+    expect(slots?.children?.[0]?.props).not.toBe(declared);
   });
 });
