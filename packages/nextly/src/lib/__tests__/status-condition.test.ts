@@ -40,7 +40,7 @@ describe("statusCondition", () => {
         filter: null,
         statusColumn: table.status,
         idColumn: table.id,
-        revealIds: ["e1"],
+        decisions: { reveal: ["e1"], hide: [] },
       })
     ).toBeUndefined();
   });
@@ -51,7 +51,7 @@ describe("statusCondition", () => {
         filter: { value: "published" },
         statusColumn: table.status,
         idColumn: table.id,
-        revealIds: [],
+        decisions: { reveal: [], hide: [] },
       })
     );
     expect(only.params).toEqual(["published"]);
@@ -66,7 +66,7 @@ describe("statusCondition", () => {
         filter: { value: "published" },
         statusColumn: table.status,
         idColumn: table.id,
-        revealIds: ["e1", "e2"],
+        decisions: { reveal: ["e1", "e2"], hide: [] },
       })
     );
     expect(widened.params).toEqual(["published", "e1", "e2"]);
@@ -75,6 +75,59 @@ describe("statusCondition", () => {
     expect(widened.sql).toContain('"status"');
     expect(widened.sql).toContain('"id"');
     expect(widened.sql.toLowerCase()).toContain(" or ");
+  });
+
+  it("NARROWS a PUBLISHED read by what a due release withdraws", () => {
+    // The direction that was missing entirely. The decision said `unpublish`,
+    // the id was simply left out of the reveal set, and the ordinary
+    // `status = published` comparison went on returning the row the release
+    // was supposed to take down.
+    const narrowed = rendered(
+      statusCondition({
+        filter: { value: "published" },
+        statusColumn: table.status,
+        idColumn: table.id,
+        decisions: { reveal: [], hide: ["gone"] },
+      })
+    );
+    expect(narrowed.params).toEqual(["published", "gone"]);
+    expect(narrowed.sql.toLowerCase()).toContain("not in (");
+    // Not an OR: a withdrawal must survive beside the status comparison, and
+    // an OR would re-admit every published row regardless.
+    expect(narrowed.sql.toLowerCase()).not.toContain(" or ");
+  });
+
+  it("applies both directions in one condition", () => {
+    // One release publishes some documents and withdraws others in the same
+    // pass. A condition carrying only whichever half was written last would
+    // pass each single-direction case above.
+    const both = rendered(
+      statusCondition({
+        filter: { value: "published" },
+        statusColumn: table.status,
+        idColumn: table.id,
+        decisions: { reveal: ["new"], hide: ["gone"] },
+      })
+    );
+    expect(both.params).toEqual(["published", "gone", "new"]);
+    expect(both.sql.toLowerCase()).toContain("not in (");
+    expect(both.sql.toLowerCase()).toContain(" or ");
+  });
+
+  it("does NOT withdraw from a draft-only read", () => {
+    // A draft read is asking for pending work. A document a release is about
+    // to withdraw is not pending work, and removing it here would answer a
+    // question nobody asked — the mirror of the reveal rule below.
+    const draft = rendered(
+      statusCondition({
+        filter: { value: "draft" },
+        statusColumn: table.status,
+        idColumn: table.id,
+        decisions: { reveal: [], hide: ["gone"] },
+      })
+    );
+    expect(draft.params).toEqual(["draft"]);
+    expect(draft.sql.toLowerCase()).not.toContain("in (");
   });
 
   it("does NOT widen a draft-only read", () => {
@@ -86,7 +139,7 @@ describe("statusCondition", () => {
         filter: { value: "draft" },
         statusColumn: table.status,
         idColumn: table.id,
-        revealIds: ["e1"],
+        decisions: { reveal: ["e1"], hide: [] },
       })
     );
     expect(draft.params).toEqual(["draft"]);
@@ -101,7 +154,7 @@ describe("statusCondition", () => {
         filter: { value: "published" },
         statusColumn: table.status,
         idColumn: undefined,
-        revealIds: ["e1"],
+        decisions: { reveal: ["e1"], hide: [] },
       })
     );
     expect(noId.params).toEqual(["published"]);

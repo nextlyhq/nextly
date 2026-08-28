@@ -67,6 +67,10 @@ import {
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import {
+  NO_DECISIONS,
+  type ReleaseDecisions,
+} from "../../releases/release-scope";
+import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
@@ -1313,15 +1317,16 @@ export class CollectionRelationshipService extends BaseService {
    * already returns the row, so there is nothing to reveal and nothing to pay
    * for.
    */
-  private async targetRevealIds(
+  private async targetDecisions(
     targetCollection: string,
-    statusValue: string | undefined
-  ): Promise<readonly string[]> {
-    if (statusValue !== "published") return [];
-    return this.releaseVisibility.revealIds({
+    statusValue: string | undefined,
+    now: Date
+  ): Promise<ReleaseDecisions> {
+    if (statusValue !== "published") return NO_DECISIONS;
+    return this.releaseVisibility.decisions({
       scopeKind: "collection",
       scopeSlug: targetCollection,
-      now: new Date(),
+      now,
     });
   }
 
@@ -1474,15 +1479,26 @@ export class CollectionRelationshipService extends BaseService {
     // directly already honours this; an expansion that did not would make the
     // same document published when asked for by name and missing when arrived
     // at by reference.
-    const revealed = new Set(
-      await this.targetRevealIds(targetCollection, statusValue)
+    // A due release also WITHDRAWS. Applying only the reveal half left a
+    // scheduled takedown visible through every relationship that pointed at it,
+    // while a direct read of the same document honoured it.
+    const decisions = await this.targetDecisions(
+      targetCollection,
+      statusValue,
+      new Date()
     );
+    const revealed = new Set(decisions.reveal);
+    const hidden = new Set(decisions.hide);
     const rows = statusValue
-      ? fetched.filter(
-          row =>
-            row.status === statusValue ||
-            (typeof row.id === "string" && revealed.has(row.id))
-        )
+      ? fetched.filter(row => {
+          const id = typeof row.id === "string" ? row.id : null;
+          // Withdrawn wins over the stored status: the row still says
+          // published, which is exactly what the release is undoing.
+          if (id !== null && hidden.has(id)) return false;
+          return (
+            row.status === statusValue || (id !== null && revealed.has(id))
+          );
+        })
       : fetched;
     this.recordWithheld(targetCollection, fetched, rows, access);
 
@@ -1797,9 +1813,10 @@ export class CollectionRelationshipService extends BaseService {
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
-        revealIds: await this.targetRevealIds(
+        decisions: await this.targetDecisions(
           targetCollection,
-          statusFilter?.value
+          statusFilter?.value,
+          new Date()
         ),
       });
       const admitted = (await this.db

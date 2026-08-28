@@ -21,6 +21,8 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import type { VersionsDbApi } from "../versions/db-api";
 
 import { releaseMemberKey } from "./release-member-key";
+import { NO_DECISIONS } from "./release-scope";
+import type { ReleaseDecisions } from "./release-scope";
 import type { DueMember } from "./resolve-release-effect";
 import { resolveReleaseEffect } from "./resolve-release-effect";
 
@@ -274,55 +276,81 @@ export class ReleasesRepository {
    * Running `resolveReleaseEffect` here means the filter and the decoration
    * reach their answer through the SAME pure rule, so they cannot disagree.
    */
-  async findDuePublishTargets(input: {
+  async findDueDecisions(input: {
     scopeKind: VersionScopeKind;
     scopeSlug: string;
     now: Date;
-  }): Promise<string[]> {
+  }): Promise<ReleaseDecisions> {
+    // DOCUMENT-WIDE members only. Per-locale lifecycle does not live on the row
+    // this answer filters: a localized document is public "through its main row
+    // OR through any one of its translations", and the mutation service keeps a
+    // German unpublish from taking the document down for everyone by writing
+    // the companion's `_status` and leaving the main row alone. A locale member
+    // applied here would contradict that write path in both directions — hiding
+    // the whole document for a one-language takedown, and admitting a main row
+    // whose companion filter still excludes the newly published translation.
+    //
+    // So this seam answers only the question the main row can answer. Per-locale
+    // release visibility belongs on companion selection and is not built yet;
+    // it cannot regress anything today, because releases have no write surface
+    // and no locale member can exist.
     const members = await this.db.select<ReleaseMemberRow>(MEMBERS, {
       where: {
         and: [
           { column: "scopeKind", op: "=", value: input.scopeKind },
           { column: "scopeSlug", op: "=", value: input.scopeSlug },
+          { column: "locale", op: "IS NULL" },
         ],
       },
     });
-    if (members.length === 0) return [];
+    if (members.length === 0) return NO_DECISIONS;
 
-    // The release each member belongs to decides whether it counts, and the
-    // member row does not carry that. A release still being assembled has no
-    // instant, so `loadScheduledReleases` returning nothing for it is what
-    // keeps an unscheduled member from reading as due.
     const releases = await this.loadScheduledReleases(
       members.map(m => m.releaseId)
     );
-    if (releases.size === 0) return [];
+    if (releases.size === 0) return NO_DECISIONS;
 
-    const grouped = new Map<string, { entryId: string; due: DueMember[] }>();
+    const grouped = new Map<string, DueMember[]>();
     for (const member of members) {
       const release = releases.get(member.releaseId);
       if (release === undefined || release.scheduledAt === null) continue;
-      const key = documentRefKey(member);
-      const bucket = grouped.get(key) ?? { entryId: member.entryId, due: [] };
-      bucket.due.push({
+      // Grouped by ENTRY, which is the whole document. Grouping by a key that
+      // also carried the locale produced two groups for one document, each
+      // resolving its own winner — so an older document-wide publish and a
+      // newer takedown could put the SAME id in both sets, and the two read
+      // paths then disagreed about it.
+      const bucket = grouped.get(member.entryId) ?? [];
+      bucket.push({
         memberId: member.id,
         releaseId: member.releaseId,
         action: member.action,
         scheduledAt: release.scheduledAt,
         createdAt: member.createdAt,
       });
-      grouped.set(key, bucket);
+      grouped.set(member.entryId, bucket);
     }
 
-    const targets = new Set<string>();
-    for (const { entryId, due } of grouped.values()) {
+    const reveal: string[] = [];
+    const hide: string[] = [];
+    for (const [entryId, due] of grouped) {
       const decision = resolveReleaseEffect({ members: due, now: input.now });
-      if (decision.effect === "publish") targets.add(entryId);
+      // BOTH directions. Reading only the publish half made a scheduled
+      // takedown a no-op: the decision said `unpublish`, the id was simply left
+      // out of the reveal set, and the ordinary `status = published` filter went
+      // on returning the row it was supposed to withdraw.
+      if (decision.effect === "publish") reveal.push(entryId);
+      else if (decision.effect === "unpublish") hide.push(entryId);
     }
-    // A document localized into several languages contributes one member per
-    // language, and the row it would reveal is the same row. De-duplicated so
-    // the caller's `IN` clause names each id once.
-    return [...targets];
+
+    // Disjoint, and now actually so: ONE group per document means one winning
+    // member, so an id reaches exactly one of these. An earlier version claimed
+    // this while grouping per document-AND-locale, which made it false — a
+    // document-wide publish and a later locale takedown put the same id in
+    // both. Two things now prevent that, and only one of them is load-bearing:
+    // the locale filter above means every member of a document groups together
+    // regardless of the key, so grouping by entry is what states the intent
+    // rather than what enforces it.
+    return { reveal, hide };
   }
 
   /**
