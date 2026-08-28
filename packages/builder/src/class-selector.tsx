@@ -101,7 +101,7 @@ function liveFailure(
  * does exactly that — so a reference comparison would discard a failure on the
  * next render, which is every render.
  *
- * Half of the scoping, beside the block'"'"'s own identity. This half catches what
+ * Half of the scoping, beside the block's own identity. This half catches what
  * identity cannot: the same block whose classes have since changed, where the
  * refusal describes a state it has left.
  */
@@ -297,7 +297,7 @@ export function ClassSelector({
    * Cleared, not merely hidden. Hiding leaves the refusal stored, so a node
    * returning to a class list it held before — an external edit and an undo
    * would do it — revives an alert about an operation that did not just fail.
-   * This is React'"'"'s documented adjust-state-during-render: the condition stops
+   * This is React's documented adjust-state-during-render: the condition stops
    * being true once the state is null, so it converges on the next pass.
    */
   if (failure !== null && liveFailure(failure, nodeId, nodeClassIds) === null) {
@@ -339,7 +339,7 @@ export function ClassSelector({
           /*
            * The element moved on. The class was created and is in the library,
            * but applying it now would put it on a node the author did not ask
-           * about — the request'"'"'s own node is no longer selected, and there is
+           * about — the request's own node is no longer selected, and there is
            * nothing here that could write to it safely.
            */
           if (currentNodeId.current !== startedOn) return;
