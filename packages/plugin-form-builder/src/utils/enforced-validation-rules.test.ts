@@ -213,3 +213,63 @@ describe("the message rule", () => {
     }
   });
 });
+
+describe("the table is what the generator reads", () => {
+  /**
+   * Every assertion above derives BOTH sides from `ENFORCED_VALIDATION_RULES`:
+   * it asks the table what to expect and then checks the generator against it.
+   * That cannot see the generator ignoring the table — remove a rule and the
+   * suite simply stops checking it, and passes either way.
+   *
+   * These expectations are written out instead. They are the anchor the
+   * derived assertions hang from: if the two ever disagree, one of them is
+   * wrong and the pair says so, where a single self-referential check would
+   * stay quiet.
+   *
+   * Kept deliberately small. This is not a second copy of the table — it is a
+   * handful of cases whose answers were established by running the generator,
+   * chosen because each is a rule some OTHER type deliberately omits.
+   */
+  const ANCHORED: ReadonlyArray<{
+    type: FormFieldType;
+    rule: string;
+    enforced: boolean;
+  }> = [
+    // `pattern` bites on text, and is deliberately absent from textarea.
+    { type: "text", rule: "pattern", enforced: true },
+    { type: "textarea", rule: "pattern", enforced: false },
+    // Length bounds bite on textarea, and email reads neither.
+    { type: "textarea", rule: "minLength", enforced: true },
+    { type: "email", rule: "minLength", enforced: false },
+    // Numeric bounds bite on number; a date reads its bounds from the field
+    // itself, not from `validation`.
+    { type: "number", rule: "min", enforced: true },
+    { type: "date", rule: "min", enforced: false },
+  ];
+
+  for (const { type, rule, enforced } of ANCHORED) {
+    it(`${type}: ${rule} is ${enforced ? "enforced" : "ignored"}`, () => {
+      const bound = REJECTING_BOUND[rule];
+      expect(bound, `no probe defined for ${rule}`).toBeDefined();
+      // The control on the probe itself: unbounded, this value passes.
+      expect(accepts(field(type), ACCEPTED[type])).toBe(true);
+      expect(accepts(field(type, bound), ACCEPTED[type])).toBe(!enforced);
+    });
+  }
+
+  /**
+   * And the anchor agrees with the table, so the two cannot drift apart
+   * silently: a rule listed for a type must be one the anchor calls enforced,
+   * and vice versa, for every case the anchor covers.
+   */
+  it("agrees with the table it anchors", () => {
+    for (const { type, rule, enforced } of ANCHORED) {
+      expect(
+        ENFORCED_VALIDATION_RULES[type].includes(
+          rule as (typeof ENFORCED_VALIDATION_RULES)[typeof type][number]
+        ),
+        `${type}/${rule}: the table and the anchor disagree`
+      ).toBe(enforced);
+    }
+  });
+});
