@@ -52,7 +52,7 @@ import {
  * commonest structural edit in the editor is undiscoverable and awkward on a
  * laptop, and the two letters carry no relationship to the direction they move.
  */
-const MOVE_KEYS: ReadonlyArray<{
+export const MOVE_KEYS: ReadonlyArray<{
   keys: string;
   direction: MoveDirection;
   description: string;

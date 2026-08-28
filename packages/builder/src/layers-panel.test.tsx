@@ -26,6 +26,8 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
+import { keyHint } from "./key-hint";
+import { MOVE_KEYS } from "./keyboard-actions";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "./editor-state";
 
@@ -133,6 +135,55 @@ function rows(): string[] {
 }
 
 describe("LayersPanel", () => {
+  it("says how to reorder, in the keys this platform carries", () => {
+    /*
+     * The bindings already work while this panel holds focus — the tree takes
+     * the keystroke and the editor acts on the selection — so what was missing
+     * was never the capability, only any way to find it.
+     */
+    renderPanel();
+
+    const hint = window.document.getElementById("nx-layers-move-hint");
+    expect(hint).not.toBeNull();
+    // The DESCRIPTION every binding already carries, not a second wording.
+    expect(hint?.textContent).toContain("Move the selected block up");
+    expect(hint?.textContent).toContain("Move the selected block out of its");
+  });
+
+  it("derives the hint from the bindings rather than restating them", () => {
+    /*
+     * The property that matters, and the one a fixed string cannot have: every
+     * binding the editor registers is named here, and nothing else is. A
+     * retyped legend passes an assertion about its own text on the day it is
+     * written and teaches a dead keystroke the day someone rebinds one.
+     */
+    renderPanel();
+
+    const hint = window.document.getElementById("nx-layers-move-hint");
+    for (const { keys, description } of MOVE_KEYS) {
+      const shown = keyHint(keys, false);
+      expect(shown).not.toBeNull();
+      expect(hint?.textContent).toContain(description);
+    }
+    // As many keystrokes drawn as there are bindings, so a binding added to the
+    // table cannot quietly go unmentioned here.
+    expect(hint?.querySelectorAll(".nx-layers-panel__hint-key").length).toBe(
+      MOVE_KEYS.length
+    );
+  });
+
+  it("makes the hint the tree's own description", () => {
+    /*
+     * Text near the tree is read by whoever can see it. As the tree's
+     * description it is announced on entering the tree, which is the moment an
+     * author asks the question it answers.
+     */
+    renderPanel();
+
+    const tree = screen.getByRole("tree");
+    expect(tree.getAttribute("aria-describedby")).toBe("nx-layers-move-hint");
+  });
+
   it("shows the top level, and hides what is inside a collapsed block", () => {
     // The precondition for everything below. An assertion that a nested row is
     // ABSENT is satisfied by a panel that renders nothing at all, so the rows
