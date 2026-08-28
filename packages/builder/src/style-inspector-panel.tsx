@@ -120,7 +120,7 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
-import { styleSubjectFor } from "./style-subject";
+import { renderedTagOf, styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
   type StyleAddress,
@@ -176,6 +176,23 @@ export interface StyleInspectorPanelProps {
    * omitting it does not mean "allow" — it means the question was never asked.
    */
   policy?: StylePolicy;
+  /**
+   * The canvas root, so the panel can read what element a node RENDERS as.
+   *
+   * Only the typographic baseline needs it: those rules land on `h1` itself, so
+   * nothing in the document says whether one reaches this node — `core/heading`
+   * takes its tag from a prop, and `core/rich-text` renders a `div` with its
+   * headings inside. Omitted, a heading's baseline is reported as reaching
+   * nothing, which is the quiet answer a host that cannot supply a canvas
+   * should get rather than a guess.
+   *
+   * A READ-ONLY view of the ref rather than `React.RefObject`, which is
+   * invariant: `Canvas` publishes its root as `RefObject<HTMLDivElement | null>`
+   * and that is not assignable to `RefObject<HTMLElement | null>`. Widening the
+   * element type here instead would tie this panel to a `div` the canvas is
+   * free to stop being. This panel only ever reads `current`.
+   */
+  canvasRoot?: { readonly current: HTMLElement | null };
   /** The interaction state being edited. `base` when the host says nothing. */
   state?: StyleState;
   /** The breakpoint being edited. The unconditional one when the host says nothing. */
@@ -452,6 +469,7 @@ function SelectedNodeClasses({
 
 export function StyleInspectorPanel({
   editor,
+  canvasRoot,
   policy,
   tokens,
   state,
@@ -478,6 +496,11 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
+  const renderedTag = useRenderedTag(
+    canvasRoot,
+    editor.selectedId,
+    editor.document
+  );
   /*
    * What the browser is applying, or `undefined` when nobody can say.
    *
@@ -543,7 +566,7 @@ export function StyleInspectorPanel({
    * is: both are only valid against the document they were read from, and an
    * edit anywhere changes the document and the values shown together.
    */
-  const subject = selectedSubject(editor, cascade);
+  const subject = selectedSubject(editor, cascade, renderedTag);
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -1237,13 +1260,47 @@ function StyleControlField({
  */
 function selectedSubject(
   editor: EditorState,
-  cascade: PageStyleCascade | undefined
+  cascade: PageStyleCascade | undefined,
+  tag: string | undefined
 ): StyleSubject | undefined {
   if (editor.selectedId === null) return undefined;
-  return styleSubjectFor(
+  const subject = styleSubjectFor(
     cascade?.nodes ?? editor.document.nodes,
     editor.selectedId
   );
+  // Spread only when there is one, so a host with no canvas leaves the field
+  // ABSENT rather than present-and-undefined. `styleOrigin` reads it as "the
+  // caller cannot say" either way, and an absent key says that more plainly to
+  // anyone reading a logged subject.
+  if (subject === undefined || tag === undefined) return subject;
+  return { ...subject, tag };
+}
+
+/**
+ * The element the selected node is drawn as, re-read after every commit.
+ *
+ * An effect rather than a read in the panel's body: the canvas and this panel
+ * re-render together, so during the body the DOM still holds the PREVIOUS tag —
+ * an author switching a heading from `h2` to `h1` would see the panel answer
+ * for `h2` until something else re-rendered it.
+ *
+ * `document` is a dependency because the tag is a function of the node's props:
+ * changing a heading's level changes what it renders without changing which
+ * node is selected.
+ */
+function useRenderedTag(
+  canvasRoot: { readonly current: HTMLElement | null } | undefined,
+  selectedId: string | null,
+  document: EditorState["document"]
+): string | undefined {
+  const [tag, setTag] = React.useState<string | undefined>(undefined);
+  React.useEffect(() => {
+    const next = renderedTagOf(canvasRoot?.current, selectedId);
+    // Compared before setting, or an effect that runs on every commit and sets
+    // unconditionally re-renders on every commit.
+    setTag(current => (current === next ? current : next));
+  }, [canvasRoot, selectedId, document]);
+  return tag;
 }
 
 /**

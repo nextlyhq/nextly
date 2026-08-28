@@ -1574,6 +1574,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         inspector={
           <InspectorPanel
             editor={editor}
+            // The SAME ref the canvas publishes its root through, so the style
+            // tab reads the element a node is actually drawn as rather than
+            // inferring one from the document. Two refs would let the panel
+            // read a canvas that is not the one on screen.
+            canvasRoot={canvasRoot}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
