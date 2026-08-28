@@ -97,6 +97,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     DropIndicator: nothing,
     SpacingOverlay: nothing,
     BlockKeyboardActions: passthrough,
+    /*
+     * Passed THROUGH, not stubbed to nothing: the canvas renders inside it, so
+     * a stub would take the recorder below out of the tree along with it. The
+     * real one reads the verbs context, which the passthrough above does not
+     * provide.
+     */
+    BlockContextMenu: passthrough,
     EditorCommandPalette: nothing,
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,

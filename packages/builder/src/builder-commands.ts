@@ -101,6 +101,31 @@ export const EDITOR_GROUP = "Editor";
  * searched rather than aimed at, and a row that matches the search and then
  * refuses to run is worse there than one that was never offered.
  */
+/**
+ * What each toolbar action id actually RUNS.
+ *
+ * Published rather than kept inside the palette because the palette is no
+ * longer the only surface over these verbs: the right-click menu offers the
+ * same list, and a second copy of this map is how one surface comes to move a
+ * block while another duplicates it. The AVAILABILITY of an action is
+ * `toolbarActions`'s answer and the LABEL is the surface's own; this is the
+ * third and last thing a surface needs, and the only one they can all share.
+ *
+ * Total over {@link ToolbarActionId}, so a verb added to the bar cannot reach a
+ * surface with nothing bound to it — the compiler names the omission here.
+ */
+export function blockActionRunners(
+  verbs: CommandVerbs
+): Record<ToolbarActionId, () => void> {
+  return {
+    "select-parent": verbs.selectParent,
+    "move-up": () => verbs.move("up"),
+    "move-down": () => verbs.move("down"),
+    duplicate: verbs.duplicate,
+    delete: verbs.delete,
+  };
+}
+
 export function builderCommands({
   document,
   selectedId,
@@ -111,13 +136,7 @@ export function builderCommands({
   canRedo,
   onExit,
 }: BuilderCommandsInput): BuilderCommand[] {
-  const run: Record<ToolbarActionId, () => void> = {
-    "select-parent": verbs.selectParent,
-    "move-up": () => verbs.move("up"),
-    "move-down": () => verbs.move("down"),
-    duplicate: verbs.duplicate,
-    delete: verbs.delete,
-  };
+  const run = blockActionRunners(verbs);
 
   const blockCommands = toolbarActions(document, selectedId)
     .filter(action => action.enabled)
