@@ -113,6 +113,50 @@ function mount(node: Partial<BlockNode> = {}) {
   return editor;
 }
 
+describe("what InspectorPanel forwards to the style tab", () => {
+  it("carries the class props through, so the selector reaches the editor", () => {
+    /*
+     * The chain is the feature. `StyleInspectorPanel` treats a missing
+     * `onCreateClass` as the host opting out, so a prop dropped ANYWHERE
+     * between the host and it is invisible: the selector renders fine in
+     * isolation, its own tests pass, and every real selection in the shipped
+     * editor shows nothing at all.
+     *
+     * Asserted through the rendered SELECTOR rather than by inspecting props,
+     * because what matters is that it arrives — a forwarding test that checked
+     * the call would pass on a panel that received the prop and ignored it.
+     */
+    register();
+    const editor = editorFor(documentOf({}));
+    render(
+      <InspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn()}
+        classLibrary={[
+          { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
+        ]}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(
+      screen.getByRole("combobox", { name: /add a class/i })
+    ).toBeDefined();
+  });
+
+  it("shows no class surface when the host passed nothing", () => {
+    // The control: the assertion above must be about forwarding, not about the
+    // selector rendering unconditionally.
+    register();
+    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  });
+});
+
 describe("InspectorPanel identity fields", () => {
   it("shows the block's stored name and lock", () => {
     mount({ name: "Hero title", locked: true });
