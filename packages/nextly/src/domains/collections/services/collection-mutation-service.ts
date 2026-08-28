@@ -3233,7 +3233,11 @@ export class CollectionMutationService extends BaseService {
               // rather than restated, because a create that forgot it would leave every new
               // document's translations reading as UNKNOWN until each locale was rewritten, and a
               // staleness signal that never fires for new content is invisible.
-              ...companionContentStamp(localizedWrite.companionData),
+              ...companionContentStamp(
+                localizedWrite.companionData,
+                localizedWrite.companionTableName,
+                this.dialect
+              ),
             },
             {}
           );

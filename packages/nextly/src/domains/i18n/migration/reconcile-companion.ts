@@ -73,8 +73,8 @@ export interface ReconcileCompanionArgs {
    *
    * Omission is the honest default rather than a shortcut: a FIELD GROUP has no version scope, so
    * there is no per-locale history to read and NULL — UNKNOWN — is the true answer for it. B2
-   * ships collections-only by the founder's ruling (2026-08-28), and extending it to Singles is
-   * `task:b2-staleness-for-singles`, which is this argument gaining one more caller.
+   * covers collections only: nothing surfaces the signal for a Single, so seeding one would
+   * populate a column no screen reads. Extending it is this argument gaining one more caller.
    */
   versionScope?: VersionScopeKind;
   /**
@@ -158,11 +158,11 @@ export function buildCompanionReconcileSql(
  * traversals inside the statement whose failure mode is silently plausible timestamps is a worse
  * trade than the error they remove.
  *
- * Accepted by the founder (2026-08-28) against the alternative of leaving pre-migration
- * chronology unknown. The error is bounded to rows that predate the migration, runs in one
- * direction, and clears the moment that language is next saved; the alternative is an established
- * site seeing an empty worklist on the day it upgrades, which is the feature not working for
- * exactly the content that has had time to go stale.
+ * Accepted rather than avoided, and the alternative is worth naming: seeding nothing leaves
+ * pre-migration chronology unknown, so an established site sees an empty worklist on the day it
+ * upgrades and fills in only as each language is next saved — the feature not working for exactly
+ * the content that has had time to go stale. The error kept in its place is bounded to rows that
+ * predate the migration, runs in one direction, and clears the moment that language is saved.
  *
  * ## What it deliberately does not do
  *

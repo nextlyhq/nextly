@@ -121,6 +121,27 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     } as never;
   }
 
+  /**
+   * A db whose FIRST select answers normally and whose SECOND rejects.
+   *
+   * The stamp read is the second query `populateTranslationStatus` issues, so failing every select
+   * would break the companion read first and the test would pass for the wrong reason.
+   */
+  function dbFailingOnStampRead(
+    rows: Record<string, unknown>[],
+    failure: Error
+  ) {
+    let calls = 0;
+    return {
+      select: () => ({
+        from: () => ({
+          where: () =>
+            ++calls === 1 ? Promise.resolve(rows) : Promise.reject(failure),
+        }),
+      }),
+    } as never;
+  }
+
   const SOURCE = "en";
   const TARGET = "fr";
 
@@ -136,21 +157,6 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
       _status: "published",
       _updated_at: updatedAt,
       title,
-    };
-  }
-
-  /**
-   * A raw-SQL surface returning the same rows.
-   *
-   * `_updated_at` is read through its own explicitly-projected query rather than off the
-   * companion's Drizzle table, because the column is deliberately NOT declared there: a companion
-   * that predates it would otherwise break the ORDINARY localized read, whose bare `select()`
-   * would name a column those tables do not have.
-   */
-  function stampReaderFor(rows: Record<string, unknown>[]) {
-    return {
-      dialect: "sqlite",
-      executeQuery: <T>(): Promise<T[]> => Promise.resolve(rows as T[]),
     };
   }
 
@@ -174,8 +180,8 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
         ? {}
         : {
             staleness: {
-              reader: stampReaderFor(rows),
               companionTableName: "dc_posts_locales",
+              dialect: "sqlite" as const,
             },
           }),
     });
@@ -270,7 +276,10 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     const row: Record<string, unknown> = { id: "doc1" };
     await expect(
       populateTranslationStatus({
-        db: dbReturning(rows),
+        db: dbFailingOnStampRead(
+          rows,
+          new Error("SqliteError: no such column: _updated_at")
+        ),
         companionTable: { _parent: "p", _locale: "l" },
         localizedFields: [{ name: "title", column: "title" }],
         rows: [row],
@@ -279,14 +288,8 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
         hasStatus: true,
         readiness: "ready",
         staleness: {
-          reader: {
-            dialect: "sqlite",
-            executeQuery: () =>
-              Promise.reject(
-                new Error("SqliteError: no such column: _updated_at")
-              ),
-          },
           companionTableName: "dc_posts_locales",
+          dialect: "sqlite" as const,
         },
       })
     ).resolves.toBeUndefined();
@@ -300,7 +303,10 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     // dropped connection must not be reported as "this site has no staleness information".
     await expect(
       populateTranslationStatus({
-        db: dbReturning([companionRow(TARGET, "Bonjour", new Date(1000))]),
+        db: dbFailingOnStampRead(
+          [companionRow(TARGET, "Bonjour", new Date(1000))],
+          new Error("permission denied for relation")
+        ),
         companionTable: { _parent: "p", _locale: "l" },
         localizedFields: [{ name: "title", column: "title" }],
         rows: [{ id: "doc1" } as Record<string, unknown>],
@@ -309,12 +315,8 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
         hasStatus: true,
         readiness: "ready",
         staleness: {
-          reader: {
-            dialect: "sqlite",
-            executeQuery: () =>
-              Promise.reject(new Error("permission denied for relation")),
-          },
           companionTableName: "dc_posts_locales",
+          dialect: "sqlite" as const,
         },
       })
     ).rejects.toThrow("permission denied");

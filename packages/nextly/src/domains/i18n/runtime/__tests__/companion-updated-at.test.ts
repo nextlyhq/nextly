@@ -261,17 +261,24 @@ describe("companion `_updated_at`", () => {
 
     it("stamps a write carrying translated content", () => {
       const now = new Date("2026-08-28T09:00:00.000Z");
-      expect(companionContentStamp({ title: "Bonjour" }, now)).toEqual({
-        [COMPANION_UPDATED_AT_COLUMN]: now,
+      // The ENCODED value, which on SQLite is epoch seconds -- what the INTEGER
+      // column stores. Asserting the raw `Date` would pass on a value that
+      // reaches the driver unencoded, which is the defect this guards.
+      expect(
+        companionContentStamp({ title: "Bonjour" }, COMPANION, "sqlite", now)
+      ).toEqual({
+        [COMPANION_UPDATED_AT_COLUMN]: Math.floor(now.getTime() / 1000),
       });
     });
 
     it("stamps nothing for a lifecycle-only write", () => {
-      expect(companionContentStamp({ _status: "published" })).toEqual({});
+      expect(
+        companionContentStamp({ _status: "published" }, COMPANION, "sqlite")
+      ).toEqual({});
     });
 
     it("stamps nothing for an empty write", () => {
-      expect(companionContentStamp({})).toEqual({});
+      expect(companionContentStamp({}, COMPANION, "sqlite")).toEqual({});
     });
 
     it("stamps when content and status travel together", () => {
@@ -279,8 +286,15 @@ describe("companion `_updated_at`", () => {
       // breaks save-and-publish, which IS a content change.
       const now = new Date("2026-08-28T09:00:00.000Z");
       expect(
-        companionContentStamp({ title: "Salut", _status: "published" }, now)
-      ).toEqual({ [COMPANION_UPDATED_AT_COLUMN]: now });
+        companionContentStamp(
+          { title: "Salut", _status: "published" },
+          COMPANION,
+          "sqlite",
+          now
+        )
+      ).toEqual({
+        [COMPANION_UPDATED_AT_COLUMN]: Math.floor(now.getTime() / 1000),
+      });
     });
   });
 
@@ -293,7 +307,12 @@ describe("companion `_updated_at`", () => {
     // there is no conflict to resolve. This reproduces that shape: the shared rule spread into a
     // plain insert. A test that called the upsert here would pass while the real create path left
     // every new document unstamped, which is exactly what it did before this fix.
-    const stamp = companionContentStamp({ title: "Bonjour" }, now);
+    const stamp = companionContentStamp(
+      { title: "Bonjour" },
+      COMPANION,
+      "sqlite",
+      now
+    );
     const stampColumns = Object.keys(stamp);
     const cols = ["_parent", "_locale", "title", ...stampColumns];
     await adapter.executeQuery(
@@ -306,7 +325,7 @@ describe("companion `_updated_at`", () => {
         // The stamp is a `Date`, which is what every dialect's driver takes and what the SQLite
         // adapter converts to epoch seconds. Narrowed here rather than spread as `unknown`, so
         // this reads as the same bind the real create path performs.
-        ...stampColumns.map(column => stamp[column] as Date),
+        ...stampColumns.map(column => stamp[column] as number),
       ]
     );
 

@@ -33,6 +33,7 @@ import type {
 } from "../migration/transition-state";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
+import { encodeStamp } from "./companion-stamp-column";
 
 /**
  * A held transition, plus the condition a statement can carry to prove it is still held.
@@ -217,6 +218,8 @@ export type CompanionStampMode = "stamp" | "omit" | "clear";
  */
 export function companionContentStamp(
   companionData: Record<string, unknown>,
+  companionTableName: string,
+  dialect: SupportedDialect,
   now?: Date
 ): Record<string, unknown> {
   const writesContent = Object.keys(companionData).some(
@@ -224,7 +227,18 @@ export function companionContentStamp(
   );
   if (!writesContent) return {};
   return {
-    [COMPANION_UPDATED_AT_COLUMN]: new Date(now?.getTime() ?? Date.now()),
+    // 🔴 Encoded the way Drizzle would encode it, not handed to the driver raw.
+    //
+    // A `Date` bound straight to a driver writes the LOCAL wall clock into a column that records
+    // no time zone, while every timestamp Drizzle writes is UTC. On a UTC server the two agree and
+    // nothing looks wrong, which is why the difference survives CI — and this comparison reads
+    // BOTH bases, because the back-fill seeds from Drizzle-written version rows. A mixed pair can
+    // order backwards, which inverts the staleness answer rather than degrading it.
+    [COMPANION_UPDATED_AT_COLUMN]: encodeStamp(
+      new Date(now?.getTime() ?? Date.now()),
+      companionTableName,
+      dialect
+    ),
   };
 }
 
@@ -295,7 +309,12 @@ export async function upsertCompanionRow(
         ? { ...withStatus, [COMPANION_UPDATED_AT_COLUMN]: null }
         : {
             ...withStatus,
-            ...companionContentStamp(companionData, options.now),
+            ...companionContentStamp(
+              companionData,
+              companionTableName,
+              adapter.dialect,
+              options.now
+            ),
           };
   const cols = Object.keys(withStamp);
 
@@ -402,11 +421,14 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
  * `fieldGroup` maps to `undefined` structurally: `nextly_versions.scope_kind` has no member for
  * it, so there is no history to read and NULL is the true answer rather than a gap.
  *
- * `single` maps to `undefined` by SCOPE, not by structure — Singles do have version history. B2
- * ships collections-only (founder, 2026-08-28) because Singles has no worklist to surface the
- * signal on, and extending it is `task:b2-staleness-for-singles`. Note that this bounds the
- * BACK-FILL alone: `upsertCompanionRow` stamps every companion write whatever the entity, so
- * Singles accumulate truthful timestamps from now on and only their history stays unknown.
+ * `single` maps to `undefined` by SCOPE, not by structure — Singles do have version history, and
+ * seeding from it would work. It is withheld because nothing surfaces the signal for a Single:
+ * there is no Singles worklist, so a back-fill there would populate a column no screen reads,
+ * while committing every future reader to whatever it happened to seed.
+ *
+ * This bounds the BACK-FILL alone. `upsertCompanionRow` stamps every companion write whatever the
+ * entity, so Singles accumulate truthful timestamps from now on; only their history stays
+ * unknown, which is the same state any locale with no durable versions is in.
  */
 export function versionScopeForEntityKind(
   kind: I18nTransitionKind
