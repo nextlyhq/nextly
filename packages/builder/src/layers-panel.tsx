@@ -54,14 +54,19 @@
  */
 
 import { allBlocks } from "@nextlyhq/blocks-engine";
-import { Input, TreeView, type TreeNode } from "@nextlyhq/ui";
+import {
+  Input,
+  TreeView,
+  detectApplePlatform,
+  type TreeNode,
+} from "@nextlyhq/ui";
 import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
 import { keyHint } from "./key-hint";
-import { MOVE_KEYS } from "./keyboard-actions";
+import { MOVE_KEYS, useBlockKeysEnabled } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 
@@ -228,19 +233,48 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
   );
 
   /*
+   * Which keyboard is in front of the author, resolved AFTER mounting.
+   *
+   * `detectApplePlatform` reads `navigator`, which a server render does not
+   * have — it answers false there, so a server would emit `Alt` and the first
+   * browser render `⌥`, and React would find markup it did not produce and
+   * throw the subtree away. Held as `null` until it is known, so the legend is
+   * absent rather than briefly wrong: this module's whole rule is that a hint
+   * naming the wrong key is worse than no hint at all.
+   */
+  const [apple, setApple] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setApple(detectApplePlatform());
+  }, []);
+
+  /* Whether pressing these keys does anything, which is what makes it honest to
+   * say so. A host can mount this panel with no bindings above it, or with them
+   * turned off while something modal is over the canvas. */
+  const keysLive = useBlockKeysEnabled();
+
+  /*
    * Built from the binding table, so a rebound keystroke moves the hint with
    * it. A binding this cannot spell is dropped rather than guessed at — see
    * `keyHint` for why a wrong hint is worse than no hint.
    */
   const hints = React.useMemo(
     () =>
-      MOVE_KEYS.flatMap(({ keys, direction, description }) => {
-        const shown = keyHint(keys);
-        return shown === null
-          ? []
-          : [{ keys, shown, label: DIRECTION_LABEL[direction], description }];
-      }),
-    []
+      apple === null || !keysLive
+        ? []
+        : MOVE_KEYS.flatMap(({ keys, direction, description }) => {
+            const shown = keyHint(keys, apple);
+            return shown === null
+              ? []
+              : [
+                  {
+                    keys,
+                    shown,
+                    label: DIRECTION_LABEL[direction],
+                    description,
+                  },
+                ];
+          }),
+    [apple, keysLive]
   );
 
   return (
