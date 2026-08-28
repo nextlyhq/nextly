@@ -55,7 +55,6 @@ function pagesOptions(
     ...(opts.pagePreviewPath === undefined
       ? {}
       : { previewPath: opts.pagePreviewPath }),
-    ...(opts.limits === undefined ? {} : { limits: opts.limits }),
     ...(pagePreviewBreakpoints(opts, configStyle) ?? {}),
   };
 }

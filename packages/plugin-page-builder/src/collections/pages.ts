@@ -88,6 +88,15 @@ export interface PagesCollectionOptions {
  * unrelated, so a caller wanting only a later one had to pass `undefined` for
  * the ones before it, and the call site stops being readable at exactly the
  * point it starts carrying a preview declaration.
+ *
+ * Which classes a page references is answered by the `nx_pb_class_usage` index
+ * rather than by anything on the page row. The index is keyed by class and
+ * maintained on every write, so it answers that question as a lookup; a column
+ * on the page can only be read once the page is already in hand, which is the
+ * opposite of the direction every caller asks in.
+ *
+ * So this collection stores no derived usage, and takes no document bounds:
+ * bounds exist to cap a derivation, and the derivation lives with the index.
  */
 export function pagesCollection(options: PagesCollectionOptions = {}) {
   const { previewPath, breakpoints } = options;
