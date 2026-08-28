@@ -474,4 +474,47 @@ describe("applyDueReleases", () => {
     expect(publish).not.toHaveBeenCalled();
     expect(unpublish).toHaveBeenCalledTimes(1);
   });
+  it("REFUSES a locale-scoped member instead of half-performing it", async () => {
+    // The read seam answers document-wide members only: `findDueDecisions`
+    // filters `locale IS NULL`, because per-locale lifecycle lives on the
+    // companion's `_status` and the main row it filters cannot express it.
+    //
+    // Performing the write anyway would apply an effect the read path refuses
+    // to project, AND the success check could not observe it: a read at a
+    // locale returns the MAIN row's status, so a per-locale unpublish that
+    // COMMITTED reads back unchanged, is reported WRITE_FAILED, and replays its
+    // hooks and outbox events on every drain forever.
+    const publish = vi.fn(async () => {});
+    const unpublish = vi.fn(async () => {});
+
+    const result = await applyDueReleases(
+      deps({
+        members: [member({ locale: "de", action: "publish" })],
+        mutations: { publish, unpublish },
+      })
+    );
+
+    expect(result.outcomes).toMatchObject([
+      { failure: "LOCALE_SCOPE_UNSUPPORTED" },
+    ]);
+    // Refused, not attempted: a write nothing can verify must not happen.
+    expect(publish).not.toHaveBeenCalled();
+    expect(unpublish).not.toHaveBeenCalled();
+  });
+
+  it("still performs a DOCUMENT-WIDE member on the same pass", async () => {
+    // The control. A guard that refused everything would satisfy the case
+    // above while disabling materialisation entirely.
+    const publish = vi.fn(async () => {});
+
+    const result = await applyDueReleases(
+      deps({
+        members: [member({ locale: null, action: "publish" })],
+        mutations: { publish },
+      })
+    );
+
+    expect(result).toMatchObject({ applied: 1, failed: 0 });
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
 });
