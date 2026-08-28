@@ -85,6 +85,11 @@ docker/postgres/data/
 
 # SQLite database files
 apps/playground/data/
+# The nextly package's own SQLite tests default to `file:./data/nextly.db` when
+# no DATABASE_URL is set, so running them from `packages/nextly` leaves a
+# database file there. Untracked and unignored, it is one `git add -A` away
+# from being committed into a pull request.
+packages/nextly/data/
 
 # Nextly runtime artifacts (migration logs, journal) written next to any app/package
 .nextly/
