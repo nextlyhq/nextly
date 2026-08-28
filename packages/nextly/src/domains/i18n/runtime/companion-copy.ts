@@ -27,6 +27,9 @@ import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 import type { CompanionIntrospectAdapter } from "./companion-io";
 import { buildCompanionRuntimeTable } from "./companion-registration";
 
+/** Physical name of the runtime key/value table the transition claim lives in. */
+const META_TABLE = "nextly_meta";
+
 /** Minimal field shape these copies need. */
 export interface CopyableField {
   name: string;
@@ -281,20 +284,46 @@ export async function copyDefaultLocaleOntoMain(
  * A companion that predates the column is not an error here: it simply has no stamp to clear, and
  * every locale on it already reads as UNKNOWN. Anything else rethrows, so a permission fault is
  * not quietly absorbed into "there was nothing to do".
+ *
+ * The guard is part of the statement rather than a check before it. This clears the stamp on
+ * EVERY row of the locale, and the caller passes the SOURCE locale — one half of every comparison
+ * in the collection — so a superseded worker running it unguarded erases the whole collection's
+ * chronology rather than one row's.
  */
 async function clearLocaleStamp(
   adapter: CompanionIntrospectAdapter,
-  companionTableName: string,
-  locale: string
+  args: {
+    companionTableName: string;
+    locale: string;
+    guard?: { key: string; value: string };
+  }
 ): Promise<void> {
+  const isPg = adapter.dialect === "postgresql";
   const q = (id: string) =>
     adapter.dialect === "mysql" ? `\`${id}\`` : `"${id}"`;
-  const hole = adapter.dialect === "postgresql" ? "$1" : "?";
+  const params: unknown[] = [args.locale];
+  const hole = () => (isPg ? `$${params.length}` : "?");
+  const localeHole = hole();
+
+  // The claim condition, in the SAME statement. A separate pre-check would leave exactly the
+  // window the guard exists to close: the claim can be superseded between reading it and issuing
+  // the update.
+  let guardClause = "";
+  if (args.guard) {
+    params.push(args.guard.key);
+    const keyHole = hole();
+    params.push(args.guard.value);
+    const valueHole = hole();
+    guardClause =
+      ` AND EXISTS (SELECT 1 FROM ${q(META_TABLE)} ` +
+      `WHERE ${q("key")} = ${keyHole} AND ${q("value")} = ${valueHole})`;
+  }
+
   try {
     await adapter.executeQuery(
-      `UPDATE ${q(companionTableName)} SET ${q(COMPANION_UPDATED_AT_COLUMN)} = NULL ` +
-        `WHERE ${q("_locale")} = ${hole}`,
-      [locale]
+      `UPDATE ${q(args.companionTableName)} SET ${q(COMPANION_UPDATED_AT_COLUMN)} = NULL ` +
+        `WHERE ${q("_locale")} = ${localeHole}${guardClause}`,
+      params
     );
   } catch (error) {
     if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return;
@@ -344,12 +373,18 @@ export async function refreshDefaultLocaleFromMain(
   // content with an unknown stamp — safe. The other order leaves new content wearing an old
   // stamp, which is the defect itself.
   //
-  // Deliberately UNGUARDED, unlike the copy below. Clearing a stamp is monotonic toward unknown
-  // and can never assert something false, so doing it for a transition that has since moved on
-  // costs one locale its staleness signal until it is next written — where running the guard
-  // would mean replicating its `exists (...)` clause in raw SQL for a statement that cannot do
-  // harm.
-  await clearLocaleStamp(adapter, args.companionTableName, args.locale);
+  // 🔴 CARRIES THE SAME CLAIM GUARD as the copy, and inside the same statement rather than as a
+  // pre-check, which would reopen the race the guard exists to close. This statement is NOT the
+  // harmless one it looks like: it clears the stamp on EVERY row of the locale, and the locale it
+  // is called for is the SOURCE — one half of every comparison in the collection. A superseded
+  // worker running it unguarded therefore erases the whole collection's chronology and hides
+  // every stale translation in it until each source row is rewritten, which is a far larger
+  // effect than the one row it appears to touch.
+  await clearLocaleStamp(adapter, {
+    companionTableName: args.companionTableName,
+    locale: args.locale,
+    guard: args.guard,
+  });
 
   const meta = metaTableFor(adapter.dialect);
   const thisLocale = eq(resolved.companion._locale as never, args.locale);

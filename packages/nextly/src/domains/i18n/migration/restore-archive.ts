@@ -22,7 +22,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, lte } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
-import { upsertCompanionRow } from "../runtime/companion-io";
+import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
+import {
+  companionHasColumn,
+  upsertCompanionRow,
+} from "../runtime/companion-io";
 
 /** Minimal adapter surface this helper needs — matches DrizzleAdapter. */
 export interface RestoreArchiveAdapter {
@@ -123,6 +127,21 @@ export async function restoreI18nArchive(
     g.data[r.field] = r.value;
   }
 
+  // 🔴 Probed ONCE before the loop, because `"clear"` NAMES the column and a companion that
+  // predates it would fail the whole restore before a single archived value landed. That is a
+  // regression the chronology fix introduced: the previous mode omitted the column, so it
+  // tolerated a legacy companion by accident. Registry-owned companions have no transition that
+  // adds the column, so this state is reachable rather than theoretical.
+  //
+  // A probe rather than a catch-and-retry: a failed statement marks a PostgreSQL transaction
+  // aborted, and asking once outside the loop costs one plan-only query instead of one failure
+  // per locale.
+  const canClearStamp = await companionHasColumn(
+    adapter,
+    companionTableName,
+    COMPANION_UPDATED_AT_COLUMN
+  );
+
   for (const g of grouped.values()) {
     await upsertCompanionRow(
       adapter,
@@ -143,7 +162,7 @@ export async function restoreI18nArchive(
       // Omitting the stamp would leave that recent value standing while this statement replaces
       // the content beneath it with older archived text, so the restored translation would read
       // as current. Writing NULL says what is true: unknown.
-      { updatedAt: "clear" }
+      { updatedAt: canClearStamp ? "clear" : "omit" }
     );
   }
 

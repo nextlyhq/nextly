@@ -726,13 +726,32 @@ export async function companionHasStatusColumn(
   adapter: CompanionWriteAdapter,
   companionTableName: string
 ): Promise<boolean> {
+  return companionHasColumn(adapter, companionTableName, "_status");
+}
+
+/**
+ * Whether an EXISTING companion physically carries `column`.
+ *
+ * A plan-only `SELECT … LIMIT 0`, so the server parses the statement and returns no rows: the
+ * cheapest question that still gets its answer from the database rather than from what a
+ * configuration says should be there.
+ *
+ * 🔴 MUST NOT be called inside an open transaction. A query against a missing column marks the
+ * whole PostgreSQL transaction aborted, after which the real statement dies with
+ * `current transaction is aborted` and the error names an innocent one. That is the same hazard
+ * `companion-readiness` documents, and it is why callers probe BEFORE they open one.
+ */
+export async function companionHasColumn(
+  adapter: CompanionWriteAdapter,
+  companionTableName: string,
+  column: string
+): Promise<boolean> {
   const isMysql = adapter.dialect === "mysql";
-  const table = isMysql
-    ? `\`${companionTableName}\``
-    : `"${companionTableName}"`;
-  const col = isMysql ? "`_status`" : `"_status"`;
+  const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
   try {
-    await adapter.executeQuery(`SELECT ${col} FROM ${table} LIMIT 0`);
+    await adapter.executeQuery(
+      `SELECT ${q(column)} FROM ${q(companionTableName)} LIMIT 0`
+    );
     return true;
   } catch {
     return false;
