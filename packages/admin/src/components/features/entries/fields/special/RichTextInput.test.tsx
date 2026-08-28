@@ -4,7 +4,16 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LexicalComposer } from "@lexical/react/LexicalComposer";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import type { LexicalCommand, SerializedEditorState } from "lexical";
+import { ContentEditable } from "@lexical/react/LexicalContentEditable";
+import { TablePlugin } from "@lexical/react/LexicalTablePlugin";
+import { TableNode } from "@lexical/table";
+import {
+  $getRoot,
+  $nodesOfType,
+  type LexicalCommand,
+  type LexicalEditor,
+  type SerializedEditorState,
+} from "lexical";
 import type { RichTextFieldConfig } from "nextly/config";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
@@ -29,7 +38,8 @@ import {
   OPEN_BUTTON_GROUP_DIALOG_COMMAND,
 } from "./RichTextButtonGroupPlugin";
 
-// Lexical selection & toolbar DOM stub
+// Lexical's selection and toolbar code touch DOM APIs jsdom does not
+// implement — stub them so the editor can mount and re-render.
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
   window.matchMedia =
@@ -46,6 +56,7 @@ const FIELD = {
   name: "body",
 } as unknown as RichTextFieldConfig;
 
+/** A minimal serialized Lexical document holding one paragraph of plain text. */
 function doc(text: string): SerializedEditorState {
   return {
     root: {
@@ -78,26 +89,33 @@ function doc(text: string): SerializedEditorState {
   } as unknown as SerializedEditorState;
 }
 
+// Never retries in tests, so a plugin's failed background query cannot hang a run.
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false } },
 });
 
+// Hand the mounted editor out to the test harness, so tests can dispatch each
+// plugin's registered dialog command (the same command the toolbar trigger
+// fires) and read the editor's node state to observe what a dialog inserted.
 type Dispatcher = (command: LexicalCommand<unknown>, payload: unknown) => void;
 
 function CommandBridgePlugin({
   onReady,
 }: {
-  onReady: (dispatch: Dispatcher) => void;
+  onReady: (editor: LexicalEditor) => void;
 }) {
   const [editor] = useLexicalComposerContext();
   useEffect(() => {
-    onReady((cmd, payload) => {
-      editor.dispatchCommand(cmd, payload);
-    });
+    onReady(editor);
   }, [editor, onReady]);
   return null;
 }
 
+/**
+ * Form harness mirroring the entry/single editors: the editor is bound through RHF
+ * `control`, and a locale switch arrives as `form.reset(...)` with another language's
+ * value — the exact external-change path the editor must follow.
+ */
 function Harness({
   initial,
   readOnly = false,
@@ -108,6 +126,8 @@ function Harness({
   const form = useForm<{ body: unknown }>({
     defaultValues: { body: initial },
   });
+  // The editor's media plugins query the API and the toolbar renders inside
+  // tooltips, so the harness supplies the same app-level providers the admin does.
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -122,9 +142,10 @@ function Harness({
         </button>
         <button onClick={() => form.reset({ body: null })}>clear</button>
         <button
-          onClick={() =>
-            form.reset({ body: { root: { type: "bogus-node-type" } } })
-          }
+          onClick={() => {
+            // A corrupted stored value: parseable JSON, but not a Lexical document.
+            form.reset({ body: { root: { type: "bogus-node-type" } } });
+          }}
         >
           corrupt
         </button>
@@ -144,6 +165,8 @@ describe("RichTextInput — external value sync", () => {
     render(<Harness initial={doc("English body")} />);
     await screen.findByText("English body");
 
+    // A locale switch resets the form with the other language's fetched value; the
+    // editor must display it instead of keeping the first-mounted language.
     await user.click(screen.getByText("switch-es"));
 
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
@@ -155,6 +178,8 @@ describe("RichTextInput — external value sync", () => {
     render(<Harness initial={doc("English body")} />);
     await screen.findByText("English body");
 
+    // An untranslated language has no stored value — the editor must show empty,
+    // not the previous language's content.
     await user.click(screen.getByText("clear"));
 
     expect(screen.queryByText("English body")).not.toBeInTheDocument();
@@ -165,9 +190,16 @@ describe("RichTextInput — external value sync", () => {
     render(<Harness initial={doc("English body")} />);
     await screen.findByText("English body");
 
+    // A corrupted or version-mismatched stored value must not crash the editor
+    // tree, and must not leave the previous document on screen (a save from that
+    // screen would write the previous language's content into this one).
     await user.click(screen.getByText("corrupt"));
 
+    // The whole document is empty — not just missing the previous content, but
+    // holding nothing else either (no partial or garbled render of the bad value).
+    // The contentEditable carries the field name as its accessible label.
     expect(screen.getByLabelText("body").textContent).toBe("");
+    // The editor is still alive: a follow-up valid value loads normally.
     await user.click(screen.getByText("switch-es"));
     expect(await screen.findByText("Cuerpo espanol")).toBeInTheDocument();
   });
@@ -177,6 +209,9 @@ describe("RichTextInput — read-only", () => {
   it("offers the formatting toolbar while the field is editable", async () => {
     render(<Harness initial={doc("Body copy")} />);
 
+    // The control for the negative below: without this, an absent toolbar in
+    // the read-only case would be satisfied by a harness that renders no
+    // toolbar under any circumstances.
     expect(
       await screen.findByRole("toolbar", { name: /text formatting/i })
     ).toBeInTheDocument();
@@ -185,6 +220,8 @@ describe("RichTextInput — read-only", () => {
   it("renders no formatting toolbar when the field is read-only", async () => {
     render(<Harness initial={doc("Body copy")} readOnly />);
 
+    // The content still has to be there — an absent toolbar proves nothing if
+    // the editor failed to mount at all.
     expect(await screen.findByText("Body copy")).toBeInTheDocument();
     expect(
       screen.queryByRole("toolbar", { name: /text formatting/i })
@@ -199,6 +236,7 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
   // tests to toolbar layout or its icon buttons.
   function renderPluginHarness() {
     let dispatch: Dispatcher = () => {};
+    let editorRef: LexicalEditor | null = null;
     const view = render(
       <TooltipProvider>
         <LexicalComposer
@@ -210,21 +248,39 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
             },
           }}
         >
+          {/* Handles INSERT_TABLE_COMMAND the way the real editor does, so
+              the dialog's submit actually inserts a table into the composer.
+              The editable gives the insert a selection to anchor to. */}
+          <TablePlugin />
+          <ContentEditable />
           <RichTextTablePlugin />
           <RichTextVideoPlugin />
           <RichTextButtonLinkPlugin />
           <RichTextButtonGroupPlugin />
           <CommandBridgePlugin
-            onReady={d => {
-              dispatch = d;
+            onReady={editor => {
+              editorRef = editor;
+              // jsdom fires no real selection events, so seed one in editor
+              // state — a table insert needs a selection to anchor to.
+              editor.update(() => {
+                $getRoot().selectEnd();
+              });
+              dispatch = (cmd, payload) => editor.dispatchCommand(cmd, payload);
             }}
           />
         </LexicalComposer>
       </TooltipProvider>
     );
 
+    // Reading node state through the editor (rather than the DOM) keeps the
+    // assertion about what the dialog INSERTED, independent of any renderer.
+    const tableCount = (): number =>
+      editorRef?.getEditorState().read(() => $nodesOfType(TableNode).length) ??
+      0;
+
     return {
       ...view,
+      tableCount,
       openTable: () => dispatch(OPEN_TABLE_DIALOG_COMMAND, undefined),
       openVideo: () => dispatch(OPEN_VIDEO_DIALOG_COMMAND, undefined),
       openButtonLink: () =>
@@ -236,7 +292,11 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
 
   describe("Table dialog", () => {
     it("opens, resets on cancel, reports validation error, and submits with Enter", async () => {
-      const { openTable } = renderPluginHarness();
+      const { openTable, tableCount } = renderPluginHarness();
+
+      // Give the insert a selection to anchor to, as a user clicking into the
+      // field would; without it a table insert has nowhere to land.
+      fireEvent.focus(screen.getByRole("textbox"));
 
       openTable();
       expect(
@@ -268,6 +328,9 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
       expect(
         screen.queryByRole("heading", { name: "Insert Table" })
       ).not.toBeInTheDocument();
+      // The dialog closing is not enough: Enter must have INSERTED the table
+      // into the editor, which a close-only submit would silently skip.
+      await vi.waitFor(() => expect(tableCount()).toBe(1));
     });
   });
 
