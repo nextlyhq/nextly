@@ -856,18 +856,53 @@ function toStampDate(raw: unknown): Date | null {
 }
 
 /**
- * Does this driver error say the companion has no `_updated_at` column?
+ * Does this error say the table has no such column?
  *
- * Matched on the COLUMN NAME appearing in a message that also reads as a missing-column error,
- * because the three dialects word it differently and none of them exposes a portable code for it
- * that this layer can see: SQLite says `no such column`, PostgreSQL `column ... does not exist`,
- * MySQL `Unknown column`. Requiring the column name as well as the shape keeps this from
- * swallowing an unrelated missing column and reporting the site as having no staleness data.
+ * 🔴 WALKS THE CAUSE CHAIN, because the driver wording is not on the error a caller catches.
+ * Measured against a real SQLite adapter, a Drizzle select on a missing column throws:
+ *
+ *   DrizzleQueryError  "Failed query: select \"_parent\", \"_locale\", \"_updated_at\" from ..."
+ *     cause: SqliteError  "no such column: \"_updated_at\" - should this be a string literal..."
+ *
+ * so a predicate reading only the top-level message finds no driver wording and rethrows — and
+ * the legacy companion this exists to tolerate fails its read after all.
+ *
+ * 🔴 Both conditions are tested PER LEVEL rather than across the chain, and that is not fussiness:
+ * the top-level message quotes the SQL, so it CONTAINS the column name. Testing "some level
+ * mentions the column" and "some level reads as a missing-column error" separately would match the
+ * name from the statement text and the wording from an unrelated cause, and report any nested
+ * failure on a query that happens to select this column as a missing column.
+ *
+ * Matched on wording because none of the three dialects exposes a portable code for this that
+ * reaches here: SQLite says `no such column`, PostgreSQL `column ... does not exist`, MySQL
+ * `Unknown column`. Requiring the column NAME alongside the shape keeps it from swallowing a
+ * different column's absence and reporting the site as having no staleness data.
  */
 export function isMissingColumnError(error: unknown, column: string): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  if (!message.includes(column)) return false;
-  return /no such column|does not exist|unknown column/i.test(message);
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  // Bounded by identity rather than by a depth constant: a cause chain that loops would otherwise
+  // spin here, and a legitimate chain is short.
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    // A cause is `unknown`, and only two shapes carry a readable message. Anything else is
+    // skipped rather than stringified: `String(someObject)` yields "[object Object]", which
+    // matches nothing and would quietly make this level unexaminable.
+    const message =
+      current instanceof Error
+        ? current.message
+        : typeof current === "string"
+          ? current
+          : "";
+    if (
+      message.includes(column) &&
+      /no such column|does not exist|unknown column/i.test(message)
+    ) {
+      return true;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
 }
 
 /**
