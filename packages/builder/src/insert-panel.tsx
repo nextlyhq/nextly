@@ -171,7 +171,14 @@ export function InsertPanel({
 
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
-    const node = nodeForEntry(entry, blockSource, source);
+    // `nesting` rather than `source`. They differ exactly when the caller
+    // supplied no rules: `source` has already defaulted to the REGISTRY, which
+    // knows nothing about a supplied definition and so reports every one of its
+    // types as unrestricted. Passing it defeats the fallback in
+    // `expandSlotDefaults`, which derives the rules from these same
+    // definitions — the only source that can see a supplied block's `parent`
+    // and its slots' `allow`.
+    const node = nodeForEntry(entry, blockSource, nesting);
     // `apply` is the only path a document changes by, so undo covers this
     // insert for free. It answers null when the op is refused, and a refusal
     // must not be reported as an insert — the panel offers only placements the
