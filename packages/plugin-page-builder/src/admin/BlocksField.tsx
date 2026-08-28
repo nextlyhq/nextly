@@ -60,6 +60,7 @@ import {
   offeredTiers,
   selectableTiers,
   widthForBreakpoint,
+  BlockContextMenu,
   EditorCommandPalette,
   BuilderShell,
   Canvas,
@@ -1668,50 +1669,57 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 : "This site\u2019s styles could not be loaded, so the canvas would not match the published page. Reload to try again."}
             </p>
           ) : (
-            <Canvas
-              document={editor.document}
-              siteStyles={siteSheet(canvasSiteStyle)}
-              selectedId={editor.selectedId}
-              selectedIds={editor.selection.ids}
-              onSelect={editor.select}
-              // The style context and the host policy, derived above so both are
-              // one object with one identity rather than rebuilt per render.
-              render={canvasRender}
-              // The box the tiers are compiled against, the width it is asked
-              // to take, and the reporter that closes the loop: the request is
-              // a ceiling, and everything downstream is derived from what the
-              // box actually got rather than from what it was offered.
-              preview={canvasPreview}
-              dragHandlers={drag.handlers}
-              // The pointer route into typing a block's text. Its keyboard
-              // counterpart is the Enter binding above, registered in the same
-              // place so a surface cannot gain one without the other.
-              onDoubleClick={inline.onDoubleClick}
-              // Both pieces of chrome go through the canvas rather than beside it,
-              // because both are positioned in the canvas's own content
-              // coordinates and the canvas root is what establishes them.
-              overlay={
-                <>
-                  <DropIndicator target={drag.target} />
-                  {/*
+            /*
+              Wrapped rather than passed in, because the menu opens over the
+              WHOLE canvas and reads which block from the selection the canvas
+              has already moved. The wrapper generates no box, so the canvas
+              lays out exactly as it did.
+            */
+            <BlockContextMenu editor={editor}>
+              <Canvas
+                document={editor.document}
+                siteStyles={siteSheet(canvasSiteStyle)}
+                selectedId={editor.selectedId}
+                selectedIds={editor.selection.ids}
+                onSelect={editor.select}
+                // The style context and the host policy, derived above so both are
+                // one object with one identity rather than rebuilt per render.
+                render={canvasRender}
+                // The box the tiers are compiled against, the width it is asked
+                // to take, and the reporter that closes the loop: the request is
+                // a ceiling, and everything downstream is derived from what the
+                // box actually got rather than from what it was offered.
+                preview={canvasPreview}
+                dragHandlers={drag.handlers}
+                // The pointer route into typing a block's text. Its keyboard
+                // counterpart is the Enter binding above, registered in the same
+                // place so a surface cannot gain one without the other.
+                onDoubleClick={inline.onDoubleClick}
+                // Both pieces of chrome go through the canvas rather than beside it,
+                // because both are positioned in the canvas's own content
+                // coordinates and the canvas root is what establishes them.
+                overlay={
+                  <>
+                    <DropIndicator target={drag.target} />
+                    {/*
                   Suppressed for the duration of a drag. The bar would otherwise
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                  <BlockToolbar
-                    editor={editor}
-                    hidden={drag.draggingId !== null}
-                  />
-                  {/*
+                    <BlockToolbar
+                      editor={editor}
+                      hidden={drag.draggingId !== null}
+                    />
+                    {/*
                   Suppressed for the same reason and by the same signal. The
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                  <SpacingOverlay
-                    editor={editor}
-                    hidden={drag.draggingId !== null}
-                  />
-                  {/*
+                    <SpacingOverlay
+                      editor={editor}
+                      hidden={drag.draggingId !== null}
+                    />
+                    {/*
                   Suppressed during a drag for the same reason the toolbar and
                   the bands are: the document is mid-change, so a control
                   offering to fill a container names a shape that is about to
@@ -1723,26 +1731,27 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   left floating over nothing after that would make the
                   preference lie about what a visitor sees.
                 */}
-                  <EmptyContainerAppenders
-                    document={editor.document}
-                    slots={slots}
-                    blocks={blocks}
-                    hidden={emptyContainerAppenderHidden(
-                      drag.draggingId,
-                      showEmptyElements
-                    )}
-                    onAppend={nodeId => {
-                      // Select first, then open. The inserter derives its
-                      // target from the selection, so selecting the container
-                      // is what makes the next insert land inside it — there
-                      // is no second targeting path to keep in step.
-                      editor.select(nodeId);
-                      openInsertPanel();
-                    }}
-                  />
-                </>
-              }
-            />
+                    <EmptyContainerAppenders
+                      document={editor.document}
+                      slots={slots}
+                      blocks={blocks}
+                      hidden={emptyContainerAppenderHidden(
+                        drag.draggingId,
+                        showEmptyElements
+                      )}
+                      onAppend={nodeId => {
+                        // Select first, then open. The inserter derives its
+                        // target from the selection, so selecting the container
+                        // is what makes the next insert land inside it — there
+                        // is no second targeting path to keep in step.
+                        editor.select(nodeId);
+                        openInsertPanel();
+                      }}
+                    />
+                  </>
+                }
+              />
+            </BlockContextMenu>
           )}
         </BlockKeyboardActions>
       </BuilderShell>

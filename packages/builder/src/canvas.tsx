@@ -507,10 +507,14 @@ function markedIds(
  */
 function useCanvasPointer(
   onSelect: ((id: string | null, mode: SelectionMode) => void) | undefined,
-  onDoubleClick: ((event: React.MouseEvent<HTMLDivElement>) => void) | undefined
+  onDoubleClick:
+    | ((event: React.MouseEvent<HTMLDivElement>) => void)
+    | undefined,
+  marked: readonly string[]
 ): {
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
 } {
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -529,7 +533,43 @@ function useCanvasPointer(
     },
     [onDoubleClick]
   );
-  return { onClick: click, onDoubleClick: doubleClick };
+  /*
+   * The secondary button selects, and says whether anything above this has a
+   * block to act on.
+   *
+   * Selecting FIRST is the whole point. A menu opened over one block while the
+   * selection sits on another acts on the other one, and the author is looking
+   * at the block they aimed at — so the destructive verbs on it would be aimed
+   * somewhere they cannot see.
+   *
+   * A block already in the selection is left alone rather than replacing it.
+   * Right-clicking one of several chosen blocks to act on all of them is what
+   * every comparable editor does, and re-selecting would silently drop the rest
+   * of the author's selection at the moment they went looking for a verb.
+   *
+   * Over the canvas BACKGROUND the event is stopped instead. There is no node,
+   * so a menu of block verbs would have no subject; stopping it here rather
+   * than opening an empty one keeps that decision next to the hit test that
+   * establishes it.
+   */
+  const contextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (isChrome(event.target)) return;
+      const id = nodeIdFromEvent(event.target);
+      if (id === null) {
+        event.stopPropagation();
+        return;
+      }
+      if (onSelect === undefined || marked.includes(id)) return;
+      onSelect(id, "replace");
+    },
+    [marked, onSelect]
+  );
+  return {
+    onClick: click,
+    onDoubleClick: doubleClick,
+    onContextMenu: contextMenu,
+  };
 }
 
 /**
@@ -896,7 +936,7 @@ export function Canvas({
     () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick);
+  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
@@ -945,6 +985,7 @@ export function Canvas({
       data-nx-selected-id={selectedId ?? undefined}
       onClick={pointer.onClick}
       onDoubleClick={pointer.onDoubleClick}
+      onContextMenu={pointer.onContextMenu}
       // Spread rather than merged with a handler of this component's own: the
       // canvas has no pointer behaviour of its own apart from the drag, so
       // there is nothing to combine, and merging would create a second place
