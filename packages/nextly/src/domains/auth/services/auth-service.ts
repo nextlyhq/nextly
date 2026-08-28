@@ -1,7 +1,6 @@
 import { randomBytes, createHash } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { eq, and, gt, lt, isNull } from "drizzle-orm";
 
 import {
@@ -23,9 +22,14 @@ import { env } from "../../../lib/env";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { auditReason } from "../../audit/audit-reasons";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
+
+// Re-exported: this module owned `affectedRowCount` before it was shared, and
+// both its unit test and the invite flow import it from here.
+export { affectedRowCount };
 
 interface RegisterUserData {
   email: string;
@@ -74,32 +78,6 @@ interface TransactionLike {
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
-}
-
-/**
- * The number of rows a Drizzle write affected, read from the right field for
- * the running dialect.
- *
- * Each driver reports it differently — better-sqlite3 as `changes`,
- * node-postgres as `rowCount`, mysql2 as a `ResultSetHeader.affectedRows` (in
- * an array on newer versions) — so an atomic claim that needs to know whether
- * it won a race cannot read a single field. Exported for its own unit test:
- * this is the one piece of the invite flow that is genuinely dialect-specific.
- */
-export function affectedRowCount(
-  result: unknown,
-  dialect: SupportedDialect
-): number {
-  if (dialect === "sqlite") {
-    return (result as { changes?: number }).changes ?? 0;
-  }
-  if (dialect === "postgresql") {
-    return (result as { rowCount?: number }).rowCount ?? 0;
-  }
-  const header = Array.isArray(result)
-    ? (result[0] as { affectedRows?: number } | undefined)
-    : (result as { affectedRows?: number });
-  return header?.affectedRows ?? 0;
 }
 
 /**
