@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
 import { VersionTimelineRail } from "../VersionTimelineRail";
@@ -75,10 +75,14 @@ describe("VersionTimelineRail — a row names its language", () => {
 
     renderRail([version({ locale: "fr" })]);
 
-    // The premise: the row rendered at all, so an absent label below would be
+    // The premise: the row rendered at all, so an absent badge below would be
     // a missing locale rather than a rail that drew nothing.
     expect(screen.getByText("Version 5")).toBeInTheDocument();
-    expect(screen.getByText("French")).toBeInTheDocument();
+    // The CODE shows and the human label is its tooltip — the presentation the
+    // history sheet's rows already use, through the same component.
+    const badge = screen.getByText("fr");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("title", "French");
   });
 
   it("falls back to the locale CODE when it has no label", () => {
@@ -90,7 +94,9 @@ describe("VersionTimelineRail — a row names its language", () => {
 
     renderRail([version({ locale: "de" })]);
 
-    expect(screen.getByText("de")).toBeInTheDocument();
+    const badge = screen.getByText("de");
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute("title", "de");
   });
 
   it("says nothing about language on a document that is not localized", () => {
@@ -105,7 +111,7 @@ describe("VersionTimelineRail — a row names its language", () => {
     renderRail([version({ locale: "fr" })]);
 
     expect(screen.getByText("Version 5")).toBeInTheDocument();
-    expect(screen.queryByText("French")).not.toBeInTheDocument();
+    expect(screen.queryByText("fr")).not.toBeInTheDocument();
   });
 
   it("says nothing when a localized document's version has no locale", () => {
@@ -118,7 +124,7 @@ describe("VersionTimelineRail — a row names its language", () => {
     renderRail([version({ locale: null })]);
 
     expect(screen.getByText("Version 5")).toBeInTheDocument();
-    expect(screen.queryByText("French")).not.toBeInTheDocument();
+    expect(screen.queryByText("fr")).not.toBeInTheDocument();
   });
 });
 
@@ -145,10 +151,11 @@ describe("VersionTimelineRail — a row that cannot be compared says so", () => 
     const oldest = rows.find(r => r.textContent?.includes("Version 1"));
     expect(oldest).toBeDefined();
     expect(oldest).toBeDisabled();
-    expect(oldest).toHaveAttribute(
-      "title",
-      "Nothing before this version to compare it against"
-    );
+    // Visible text, not a tooltip: a disabled button is not focusable, so a
+    // keyboard user reaches no tooltip, and a touch user has no hover.
+    expect(
+      screen.getByText("Nothing before this version to compare it against")
+    ).toBeInTheDocument();
   });
 
   /**
@@ -162,10 +169,9 @@ describe("VersionTimelineRail — a row that cannot be compared says so", () => 
 
     const row = screen.getByRole("button", { name: /Version 4/ });
     expect(row).toBeDisabled();
-    expect(row).toHaveAttribute(
-      "title",
-      "Load more history to compare this version"
-    );
+    expect(
+      screen.getByText("Load more history to compare this version")
+    ).toBeInTheDocument();
   });
 
   /**
@@ -180,6 +186,11 @@ describe("VersionTimelineRail — a row that cannot be compared says so", () => 
 
     const row = screen.getByRole("button", { name: /Version 2/ });
     expect(row).toBeEnabled();
-    expect(row).not.toHaveAttribute("title");
+    // Scoped to THIS row: the oldest row in the same rail legitimately carries
+    // a reason, so an unscoped query would find it and report this row as
+    // unavailable when it is not.
+    expect(
+      within(row).queryByText(/Load more history|Nothing before this version/)
+    ).not.toBeInTheDocument();
   });
 });

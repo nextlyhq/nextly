@@ -11,11 +11,11 @@
  */
 
 import { Badge, Button, Skeleton } from "@admin/components/ui";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import { formatDateTime } from "@admin/lib/dates/format";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
 import { predecessorOf, type Predecessor } from "./version-pairing";
+import { VersionLocaleBadge } from "./VersionLocaleBadge";
 import { VersionSummaryLine } from "./VersionSummaryLine";
 
 /** How many rows fetch their summary. Beyond this a reader has to scroll. */
@@ -56,24 +56,6 @@ function RailSkeleton() {
   );
 }
 
-/**
- * The language a version holds, on a document that has more than one.
- *
- * A localized document captures a version per locale and this list interleaves
- * them, so a row identified only by its number leaves an editor unable to tell
- * whether version 5 is the English or the French one. Read from the same hook
- * `VersionRow` uses, with the locale's human label falling back to its code, so
- * the two lists name a language the same way.
- *
- * Nothing is said on a single-language install, where a badge on every row
- * would carry no information.
- */
-function LocaleBadge({ locale }: { locale: string | null }) {
-  const { enabled, getLocale } = useLocalization();
-  if (!enabled || locale === null) return null;
-  return <Badge variant="outline">{getLocale(locale)?.label ?? locale}</Badge>;
-}
-
 /** A row's first line: which version it is, its status, and any name given it. */
 function RowHeading({ version }: { version: VersionMeta }) {
   return (
@@ -83,7 +65,7 @@ function RowHeading({ version }: { version: VersionMeta }) {
           ? "Autosave"
           : `Version ${version.versionNo}`}
       </span>
-      <LocaleBadge locale={version.locale} />
+      <VersionLocaleBadge locale={version.locale} />
       {version.status ? (
         <Badge variant={version.status === "published" ? "success" : "outline"}>
           {version.status}
@@ -146,7 +128,6 @@ function TimelineRow({
         type="button"
         aria-current={active ? "true" : undefined}
         disabled={versionNo === null || unpairable !== null}
-        title={unpairable ?? undefined}
         onClick={() =>
           versionNo !== null && unpairable === null && onSelect(versionNo)
         }
@@ -156,6 +137,14 @@ function TimelineRow({
       >
         <RowHeading version={version} />
         <span className="mt-0.5 flex flex-col gap-0.5">
+          {/* Rendered as text rather than a `title` tooltip. The button is
+              disabled, so it is not focusable and no tooltip is reachable by
+              keyboard; a touch user has no hover to reveal one either. Left
+              there, the row would say it is unavailable without saying that
+              loading more history makes it available. */}
+          {unpairable === null ? null : (
+            <span className="text-xs text-muted-foreground">{unpairable}</span>
+          )}
           <span className="text-xs text-muted-foreground">
             {version.author?.name ?? "Unknown author"} &middot;{" "}
             {formatDateTime(version.createdAt)}

@@ -150,6 +150,13 @@ export function VersionComparePage({
     [list.data]
   );
   const pair = resolvePair(versions, from, to, list.hasNextPage ?? false);
+  // Derived once and given to BOTH surfaces. An infinite query flips to
+  // `isError` when a LATER page fails while keeping the pages it already holds,
+  // so the aggregate state says "this failed" about a page nobody asked for.
+  // Passed raw, it erases the rail's rows on one surface and unmounts a valid
+  // comparison on the other — two different lies about the same event. Only a
+  // failure that left nothing on screen is a failure of the history itself.
+  const historyUnavailable = list.isError && versions.length === 0;
 
   // Choosing a row compares it against the version before it IN ITS OWN LOCALE,
   // and writes that choice to the URL so the comparison on screen is the one the
@@ -164,22 +171,24 @@ export function VersionComparePage({
         list.hasNextPage ?? false
       );
       if (previous.kind !== "version") return;
-      const target = withQuery(window.location.pathname, {
-        from: previous.versionNo,
-        to: versionNo,
-      });
+      // Compared as the VALUES that decide the comparison, not as URL text.
       // `navigateTo` skips a push only when its argument equals
-      // `window.location.pathname`, which a target carrying a query never does
-      // — so choosing the row already on screen stacked another identical
-      // entry, and Back walked through indistinguishable copies of one
-      // comparison before leaving the page. Compared here against the full
-      // current URL, which is what actually distinguishes two comparisons.
-      if (target === `${window.location.pathname}${window.location.search}`) {
-        return;
-      }
-      navigateTo(target);
+      // `window.location.pathname`, which a target carrying a query never does,
+      // so choosing the row already on screen stacked another identical entry
+      // and Back walked through indistinguishable copies of one comparison.
+      // Comparing serialized text instead would answer differently for
+      // `?to=9&from=8`, or for a link carrying an unrelated parameter, and
+      // reinstate exactly that — these two numbers are what `resolvePair`
+      // reads, so they are what "the same comparison" means.
+      if (previous.versionNo === from && versionNo === to) return;
+      navigateTo(
+        withQuery(window.location.pathname, {
+          from: previous.versionNo,
+          to: versionNo,
+        })
+      );
     },
-    [versions, list.hasNextPage]
+    [versions, list.hasNextPage, from, to]
   );
 
   return (
@@ -220,12 +229,7 @@ export function VersionComparePage({
             selected={pair.kind === "pair" ? pair.to : null}
             onSelect={selectPair}
             isLoading={list.isLoading}
-            // Only a failure that left NOTHING on screen replaces the rail. A
-            // failed next page also flips the query to error while its loaded
-            // pages remain, and passing that through discarded every row a
-            // reader already had, along with the Load more control that would
-            // have retried it. The history sheet draws the same distinction.
-            isError={list.isError && versions.length === 0}
+            isError={historyUnavailable}
             hasNextPage={list.hasNextPage}
             isFetchingNextPage={list.isFetchingNextPage}
             onLoadMore={() => void list.fetchNextPage()}
@@ -242,7 +246,7 @@ export function VersionComparePage({
           <ComparisonPane
             scope={scope}
             pair={pair}
-            isError={list.isError}
+            isError={historyUnavailable}
             isLoading={list.isLoading}
             onRetry={() => void list.refetch()}
           />
