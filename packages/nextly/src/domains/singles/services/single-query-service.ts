@@ -42,6 +42,7 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import {
   expansionStatusScope,
   resolveStatusFilter,
+  type StatusFilterValue,
 } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
@@ -100,6 +101,10 @@ import {
   isCompanionReady,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import {
+  NO_RELEASE_VISIBILITY,
+  type ReleaseVisibility,
+} from "../../releases/release-visibility";
 import {
   getColumnDescriptor,
   isTextStorageKind,
@@ -705,6 +710,33 @@ export class SingleQueryService extends BaseService {
   /** Persists version snapshots; used when a versioned Single is auto-created. */
   private readonly versionCapture = new VersionCaptureService();
 
+  /**
+   * Whether a due release publishes this Single, despite its stored status.
+   *
+   * A collection read filters rows in SQL, so a release widens the filter.
+   * A Single is one row per slug and is never filtered — it is loaded and then
+   * REFUSED with a 404 when its status is not what the caller may see. So here
+   * the release has to reach the refusal rather than the query.
+   *
+   * Only asked of a PUBLISHED read: an unbounded or draft-only view has nothing
+   * for a release to reveal, and asking anyway would spend the lookup on a
+   * question whose answer cannot change the outcome.
+   */
+  private async releaseRevealsSingle(
+    slug: string,
+    documentId: unknown,
+    statusFilter: { value: StatusFilterValue } | null
+  ): Promise<boolean> {
+    if (statusFilter?.value !== "published") return false;
+    if (typeof documentId !== "string") return false;
+    const revealed = await this.releaseVisibility.revealIds({
+      scopeKind: "single",
+      scopeSlug: slug,
+      now: new Date(),
+    });
+    return revealed.includes(documentId);
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -715,7 +747,14 @@ export class SingleQueryService extends BaseService {
     // i18n: when set and the single is localized, reads resolve translatable fields
     // from the companion `single_<slug>_locales` table for the requested locale.
     private readonly localization?: SanitizedLocalizationConfig,
-    accessControlService?: AccessControlService
+    accessControlService?: AccessControlService,
+    /**
+     * What a due release makes visible.
+     *
+     * A null object by default, so a construction site without releases wired
+     * needs no special case and cannot narrow a read by forgetting one.
+     */
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
     // Evaluates the Single's stored access rules. Defaulted rather than
@@ -1658,7 +1697,12 @@ export class SingleQueryService extends BaseService {
         if (
           storedRow &&
           statusFilter &&
-          (storedRow as { status?: string }).status !== statusFilter.value
+          (storedRow as { status?: string }).status !== statusFilter.value &&
+          !(await this.releaseRevealsSingle(
+            slug,
+            (storedRow as { id?: unknown }).id,
+            statusFilter
+          ))
         ) {
           return {
             success: false,
@@ -1796,7 +1840,12 @@ export class SingleQueryService extends BaseService {
       // as a not-yet-created Single.
       if (
         statusFilter &&
-        (doc as { status?: string }).status !== statusFilter.value
+        (doc as { status?: string }).status !== statusFilter.value &&
+        !(await this.releaseRevealsSingle(
+          slug,
+          (doc as { id?: unknown }).id,
+          statusFilter
+        ))
       ) {
         return {
           success: false,

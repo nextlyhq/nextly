@@ -27,9 +27,11 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import { statusCondition } from "../../../lib/status-condition";
 import {
   expansionStatusScope,
   resolveStatusFilter,
+  type StatusFilterValue,
   type StatusOption,
 } from "../../../lib/status-filter";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -116,6 +118,10 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
+import {
+  NO_RELEASE_VISIBILITY,
+  type ReleaseVisibility,
+} from "../../releases/release-visibility";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   draftDocumentFacts,
@@ -277,9 +283,35 @@ export class CollectionQueryService extends BaseService {
      * reads resolve translatable fields from the companion `_locales` table for the
      * requested locale with fallback. Absent → non-localized behavior (unchanged).
      */
-    private readonly localization?: SanitizedLocalizationConfig
+    private readonly localization?: SanitizedLocalizationConfig,
+    /**
+     * What a due release makes visible on this read.
+     *
+     * A null object by default, so a runtime with no releases wired needs no
+     * special case here and cannot silently narrow a read by forgetting one.
+     */
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The documents a due release would publish in this collection, if any.
+   *
+   * Costs a memo read while nothing is scheduled — see `createReleaseVisibility`
+   * — so the common case is not paying for a query it cannot use. Only asked
+   * for a PUBLISHED read: an unbounded or draft-only read has nothing to reveal.
+   */
+  private async releaseRevealIds(
+    collectionName: string,
+    statusFilter: { value: StatusFilterValue } | null
+  ): Promise<readonly string[]> {
+    if (statusFilter?.value !== "published") return [];
+    return this.releaseVisibility.revealIds({
+      scopeKind: "collection",
+      scopeSlug: collectionName,
+      now: new Date(),
+    });
   }
 
   // ============================================================
@@ -1142,9 +1174,16 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
       });
-      if (statusFilter && schema.status) {
-        whereConditions.push(eq(schema.status, statusFilter.value));
-      }
+      const releaseCondition = statusCondition({
+        filter: statusFilter,
+        statusColumn: schema.status,
+        idColumn: schema.id,
+        revealIds: await this.releaseRevealIds(
+          params.collectionName,
+          statusFilter
+        ),
+      });
+      if (releaseCondition) whereConditions.push(releaseCondition);
       // Build the localized-query context AFTER the status filter is resolved so
       // localized where/search EXISTS checks constrain by the per-locale status too
       // (a published read must not match a draft translation).
@@ -2236,9 +2275,16 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
       });
-      if (statusFilter && schema.status) {
-        whereConditions.push(eq(schema.status, statusFilter.value));
-      }
+      const releaseCondition = statusCondition({
+        filter: statusFilter,
+        statusColumn: schema.status,
+        idColumn: schema.id,
+        revealIds: await this.releaseRevealIds(
+          params.collectionName,
+          statusFilter
+        ),
+      });
+      if (releaseCondition) whereConditions.push(releaseCondition);
       // Build the localized-query context AFTER the status filter is resolved so
       // localized where/search EXISTS checks constrain by the per-locale status too
       // (a published read must not match a draft translation).
@@ -2749,12 +2795,25 @@ export class CollectionQueryService extends BaseService {
       // still refuses to return the published row to a draft-only view.
       const suppressDraftStatusFilter =
         draftOverlayPossible && statusFilter?.value === "draft";
-      const statusCondition =
-        statusFilter && schema.status && !suppressDraftStatusFilter
-          ? eq(schema.status, statusFilter.value)
-          : null;
-      const whereParts = [idCondition, ownerCondition, statusCondition].filter(
-        (c): c is NonNullable<typeof c> => c !== null
+      // Named `lifecycleCondition` rather than shadowing the imported
+      // `statusCondition` helper it now delegates to.
+      const lifecycleCondition = suppressDraftStatusFilter
+        ? undefined
+        : statusCondition({
+            filter: statusFilter,
+            statusColumn: schema.status,
+            idColumn: schema.id,
+            revealIds: await this.releaseRevealIds(
+              params.collectionName,
+              statusFilter
+            ),
+          });
+      const whereParts = [
+        idCondition,
+        ownerCondition,
+        lifecycleCondition,
+      ].filter(
+        (c): c is NonNullable<typeof c> => c !== null && c !== undefined
       );
       const whereCondition =
         whereParts.length === 1 ? whereParts[0] : and(...whereParts);

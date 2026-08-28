@@ -1,5 +1,5 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
@@ -13,6 +13,7 @@ import {
   keysToCamelCase,
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { statusCondition } from "../../../lib/status-condition";
 import { resolveStatusFilter } from "../../../lib/status-filter";
 import {
   AccessControlService,
@@ -65,6 +66,10 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  NO_RELEASE_VISIBILITY,
+  type ReleaseVisibility,
+} from "../../releases/release-visibility";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -1286,9 +1291,38 @@ export class CollectionRelationshipService extends BaseService {
     adapter: DrizzleAdapter,
     logger: Logger,
     private readonly fileManager: CollectionFileManager,
-    private readonly collectionService: DynamicCollectionService
+    private readonly collectionService: DynamicCollectionService,
+    /**
+     * What a due release makes visible in the TARGET collection.
+     *
+     * Not a trust question. `widensLifecycle` and `expansionStatusScope` decide
+     * whether this CALLER may see unpublished content, and a bounded caller
+     * deliberately inherits nothing. A due release is the other kind of fact:
+     * the target document IS published, for everyone, so it reaches a bounded
+     * caller too and that is correct rather than a leak.
+     */
+    private readonly releaseVisibility: ReleaseVisibility = NO_RELEASE_VISIBILITY
   ) {
     super(adapter, logger);
+  }
+
+  /**
+   * The documents a due release would publish in the target collection.
+   *
+   * Only asked when the read is bounded to published: an unbounded expansion
+   * already returns the row, so there is nothing to reveal and nothing to pay
+   * for.
+   */
+  private async targetRevealIds(
+    targetCollection: string,
+    statusValue: string | undefined
+  ): Promise<readonly string[]> {
+    if (statusValue !== "published") return [];
+    return this.releaseVisibility.revealIds({
+      scopeKind: "collection",
+      scopeSlug: targetCollection,
+      now: new Date(),
+    });
   }
 
   private resolveAccessService(): CollectionAccessService {
@@ -1435,8 +1469,20 @@ export class CollectionRelationshipService extends BaseService {
     // an unexplained absence as evidence lost and refuses the whole parent.
     // A row that was never there stays unrecorded, because a dangling
     // reference is a data problem and must not be dressed up as a refusal.
+    // A due release publishes the target, so a row it names is admitted even
+    // though its stored status still says otherwise. Reading the author
+    // directly already honours this; an expansion that did not would make the
+    // same document published when asked for by name and missing when arrived
+    // at by reference.
+    const revealed = new Set(
+      await this.targetRevealIds(targetCollection, statusValue)
+    );
     const rows = statusValue
-      ? fetched.filter(row => row.status === statusValue)
+      ? fetched.filter(
+          row =>
+            row.status === statusValue ||
+            (typeof row.id === "string" && revealed.has(row.id))
+        )
       : fetched;
     this.recordWithheld(targetCollection, fetched, rows, access);
 
@@ -1747,17 +1793,22 @@ export class CollectionRelationshipService extends BaseService {
       // Guarded on the column and not on the flag alone: naming a column the
       // table does not have fails the whole query, and the catch below would
       // then withhold every row of the collection.
-      const statusCondition =
-        statusFilter && schema.status
-          ? eq(schema.status, statusFilter.value)
-          : undefined;
+      const lifecycleCondition = statusCondition({
+        filter: statusFilter,
+        statusColumn: schema.status,
+        idColumn: schema.id,
+        revealIds: await this.targetRevealIds(
+          targetCollection,
+          statusFilter?.value
+        ),
+      });
       const admitted = (await this.db
         .select()
         .from(schema)
         .where(
           and(
             inArray(schema.id, ids),
-            ...(statusCondition ? [statusCondition] : []),
+            ...(lifecycleCondition ? [lifecycleCondition] : []),
             condition
           )
         )) as Record<string, unknown>[];

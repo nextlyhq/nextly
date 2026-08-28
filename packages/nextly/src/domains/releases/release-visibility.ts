@@ -1,0 +1,100 @@
+/**
+ * The one seam a read path uses to ask what a due release makes visible.
+ *
+ * A read needs two things from the releases domain and must not have to know
+ * that: the cheap check that says whether asking is worth it at all, and the
+ * lookup that answers. Handing a query service both would put the ORDER of
+ * those two in six places — and the order is the whole optimisation. Getting it
+ * wrong costs a query per read on a path that is otherwise a single statement.
+ *
+ * ## The cheap check is the point
+ *
+ * While no scheduled release has taken effect, no document can be affected, and
+ * the entire question is a comparison between two instants. Only when something
+ * IS due does a read pay for the lookup. So the common case — which is every
+ * read on every site that has never scheduled a release — costs one memo read.
+ *
+ * ## Why a null object rather than an optional dependency
+ *
+ * A caller without releases wired gets {@link NO_RELEASE_VISIBILITY}, which
+ * answers "nothing" without asking anything. An optional dependency would make
+ * every call site write `?? []`, and one that forgot would silently narrow a
+ * read rather than fail — the failure mode this whole path exists to avoid.
+ *
+ * @module domains/releases/release-visibility
+ */
+
+import type { VersionScopeKind } from "../../schemas/versions/types";
+
+import { PendingTransitionCache } from "./pending-transition-cache";
+import type { DueCheck } from "./release-read";
+import { ReleasesRepository } from "./releases-repository";
+import type { ReleasesDbApi } from "./releases-repository";
+
+export interface RevealQuery {
+  scopeKind: VersionScopeKind;
+  scopeSlug: string;
+  now: Date;
+}
+
+export interface ReleaseVisibility {
+  /**
+   * The ids of documents in this scope that a due release would PUBLISH.
+   *
+   * Empty is the overwhelmingly common answer, and is reached without a query.
+   */
+  revealIds(query: RevealQuery): Promise<readonly string[]>;
+}
+
+/** The lookup half, satisfied by `ReleasesRepository`. */
+export interface RevealSource {
+  findDuePublishTargets(input: RevealQuery): Promise<string[]>;
+}
+
+/**
+ * Answers "nothing", without asking.
+ *
+ * For a runtime with no releases wired. Deliberately a real object rather than
+ * `undefined`: a missing dependency should not be something each call site
+ * remembers to handle.
+ */
+export const NO_RELEASE_VISIBILITY: ReleaseVisibility = {
+  // Not `async () => []`: there is nothing to await, and declaring it async
+  // only to satisfy the interface trips the rule that asks why.
+  revealIds: () => Promise.resolve([]),
+};
+
+export function createReleaseVisibility(deps: {
+  cache: DueCheck;
+  repository: RevealSource;
+}): ReleaseVisibility {
+  return {
+    async revealIds(query: RevealQuery): Promise<readonly string[]> {
+      // The cheap check first, always. Reversing these two turns the common
+      // case — nothing scheduled anywhere — from a memo read into a query
+      // against the members table on every read of every collection.
+      if (!(await deps.cache.mayHaveDue(query.now))) return [];
+      return deps.repository.findDuePublishTargets(query);
+    },
+  };
+}
+
+/**
+ * The ordinary construction: a repository over this adapter, and a cheap check
+ * that memoizes the earliest scheduled instant.
+ *
+ * Extracted because three services need one — the collection reads, the Single
+ * reads and the relationship expansion — and the assembly is not the obvious
+ * part. Three hand-written copies would each have to remember that the cache is
+ * per SERVICE and not per read: a cache built inside a read reloads the
+ * earliest instant on every request and turns the optimisation into a cost.
+ */
+export function releaseVisibilityFor(db: ReleasesDbApi): ReleaseVisibility {
+  const repository = new ReleasesRepository(db);
+  return createReleaseVisibility({
+    cache: new PendingTransitionCache(() =>
+      repository.findEarliestScheduledTransition()
+    ),
+    repository,
+  });
+}
