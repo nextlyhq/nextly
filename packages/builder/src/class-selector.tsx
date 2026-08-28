@@ -141,18 +141,6 @@ export type ClassCreation =
 
 export interface ClassSelectorProps {
   /**
-   * The site's class library, or `undefined` when there is none to show.
-   *
-   * A real third state rather than an empty library: a site that has stored
-   * nothing legitimately has no classes, and drawing the two the same way would
-   * invite an author to create a class into a library about to be replaced by
-   * the one still loading.
-   *
-   * `undefined` covers two causes — a read in flight and a read that failed —
-   * and {@link ClassSelectorProps.libraryAbsence} says which. They need
-   * different words: one will finish and the other will not.
-   */
-  /**
    * Which block this is editing.
    *
    * Required, and read for two things: scoping a failure to the element it is
@@ -168,6 +156,18 @@ export interface ClassSelectorProps {
    * protects a caller who remembers; a prop cannot be forgotten.
    */
   nodeId: string;
+  /**
+   * The site's class library, or `undefined` when there is none to show.
+   *
+   * A real third state rather than an empty library: a site that has stored
+   * nothing legitimately has no classes, and drawing the two the same way would
+   * invite an author to create a class into a library about to be replaced by
+   * the one still loading.
+   *
+   * `undefined` covers two causes — a read in flight and a read that failed —
+   * and {@link ClassSelectorProps.libraryAbsence} says which. They need
+   * different words: one will finish and the other will not.
+   */
   library: readonly NamedClass[] | undefined;
   /**
    * Why there is no library, when there is none.
