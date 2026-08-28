@@ -190,6 +190,17 @@ export function ClassSelector({
   // first save is still on the network.
   const [saving, setSaving] = React.useState(false);
   const listId = React.useId();
+  /*
+   * What the node holds RIGHT NOW, for the callback that runs after a save.
+   *
+   * A site-style save is asynchronous, and an author can remove a chip while it
+   * is in flight. The success handler closes over the render that started the
+   * request, so applying from that render's ids would write back the classes as
+   * they stood before the removal — undoing it, from a callback about something
+   * else entirely.
+   */
+  const currentIds = React.useRef(nodeClassIds);
+  currentIds.current = nodeClassIds;
 
   if (library === undefined) {
     return (
@@ -248,12 +259,13 @@ export function ClassSelector({
         }
         // Applied through the ordinary path, so a node already at its limit
         // refuses here exactly as it would for an existing class rather than
-        // being special-cased into a second rule.
-        applyExisting(created.classId);
+        // being special-cased into a second rule — and against the node as it
+        // is NOW, not as it was when the request left.
+        applyExisting(created.classId, currentIds.current);
       });
       return;
     }
-    applyExisting(option.choice.id);
+    applyExisting(option.choice.id, nodeClassIds);
   };
 
   /**
@@ -263,20 +275,20 @@ export function ClassSelector({
    * the id the host just minted, so the per-node bound and the store's refusal
    * are enforced in one place rather than once per caller.
    */
-  function applyExisting(classId: string): void {
+  function applyExisting(classId: string, against: readonly string[]): void {
     // Through the shared helper rather than an append written here. The bound
     // on how many classes a node may carry belongs to one place, and a second
     // append would keep working after that place learned to refuse.
-    const outcome = withClassApplied(nodeClassIds, classId);
+    const outcome = withClassApplied(against, classId);
     if (!outcome.ok) {
-      setFailure({ about: nodeClassIds, issue: { kind: "node-full" } });
+      setFailure({ about: against, issue: { kind: "node-full" } });
       return;
     }
     if (onNodeClassesChange(outcome.classIds) === "refused") {
       // The draft survives, deliberately. An author whose write was refused
       // has lost nothing they typed, and the next thing they do is likely to
       // be trying it again.
-      setFailure({ about: nodeClassIds, issue: { kind: "not-written" } });
+      setFailure({ about: against, issue: { kind: "not-written" } });
       return;
     }
     setFailure(null);

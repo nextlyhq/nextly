@@ -116,6 +116,7 @@ import {
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
+  classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
   siteBreakpoints,
@@ -564,7 +565,9 @@ function TokensStudio({
 function useClassSurface(
   siteStyle: { classes?: readonly NamedClass[] } | undefined,
   pending: boolean,
-  error: unknown
+  error: unknown,
+  /** The site's own config, whose classes storage layers over. */
+  config: { classes?: readonly NamedClass[] } | undefined
 ) {
   /*
    * `undefined` while the read is in flight, and the resolved list once it is
@@ -584,24 +587,50 @@ function useClassSurface(
      * the site is not in — the distinction the tokens studio already draws.
      */
     absence: failed ? ("failed" as const) : ("pending" as const),
-    create: useCreateClass(siteStyle?.classes),
+    /*
+     * Withheld while the library is unknown. A failed read leaves
+     * `useSiteStyle` answering with the config defaults alone, so creating
+     * against it would compose a library missing everything stored — and the
+     * save would then delete those classes rather than add one.
+     */
+    create: useCreateClass(library, config?.classes),
   };
 }
 
-function useCreateClass(library: readonly NamedClass[] | undefined) {
+function useCreateClass(
+  library: readonly NamedClass[] | undefined,
+  configured: readonly NamedClass[] | undefined
+) {
   // Its own write handle rather than one passed in. The caller is already the
   // largest component in this file, and a dependency a hook can obtain for
   // itself is a statement that does not need to live there.
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
     async (slug: string) => {
-      const existing = library ?? [];
+      if (library === undefined) {
+        return {
+          ok: false as const,
+          reason:
+            "This site's classes could not be read, so none can be added.",
+        };
+      }
+      const existing = library;
       const classId = newId();
       const next: NamedClass[] = [
         ...existing,
         { id: classId, slug, orderIndex: nextOrderIndex(existing), styles: {} },
       ];
-      const result = await saveSection("classes", next);
+      /*
+       * Only what DIFFERS from the site's own config classes. `library` is the
+       * MERGED set the canvas compiles, so saving it whole would copy every
+       * config class into the database on the first creation and mask the
+       * site's code from then on — the argument `tokenOverrideOf` already
+       * makes for tokens.
+       */
+      const result = await saveSection(
+        "classes",
+        classOverrideOf(configured, next)
+      );
       if (result.saved) return { ok: true as const, classId };
       const reasons = Object.values(result.issues);
       // An empty `issues` is still a refusal — the transport could not describe
@@ -615,7 +644,7 @@ function useCreateClass(library: readonly NamedClass[] | undefined) {
             : "This class could not be saved.",
       };
     },
-    [library, saveSection]
+    [library, configured, saveSection]
   );
 }
 
@@ -934,7 +963,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const classes = useClassSurface(
     canvasSiteStyle,
     siteStylePending,
-    siteStyleError
+    siteStyleError,
+    configSiteStyle
   );
 
   /*
