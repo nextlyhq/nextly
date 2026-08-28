@@ -402,6 +402,39 @@ describe("companion `_updated_at`", () => {
     expect(await readStamp(adapter, "p1", "es")).toBeNull();
   });
 
+  it("clears the stamp when a surviving companion's source locale is refreshed from main", async () => {
+    await createCompanion();
+    const translated = new Date("2026-08-28T12:00:00.000Z");
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "en",
+      { title: "Hello" },
+      undefined,
+      { now: translated }
+    );
+    expect(await readStamp(adapter, "p1", "en")).toBe(
+      Math.floor(translated.getTime() / 1000)
+    );
+
+    const { refreshDefaultLocaleFromMain } = await import("../companion-copy");
+    await refreshDefaultLocaleFromMain(adapter, {
+      tableName: MAIN,
+      companionTableName: COMPANION,
+      fields: [{ name: "title", type: "text", localized: true }],
+      dialect: "sqlite",
+      locale: "en",
+      columns: ["title"],
+    });
+
+    // 🔴 Re-enabling localization over a companion that survived a disable copies the SOURCE
+    // locale's columns back from the now-authoritative main table. Leaving the stamp alone would
+    // attach the old chronology to new content, so a target that really is stale would compare
+    // newer than its source and never be reported. NULL says what is true: unknown.
+    expect(await readStamp(adapter, "p1", "en")).toBeNull();
+  });
+
   describe("the back-fill", () => {
     /** The companion as it stands on a database that predates B2: no `_updated_at`. */
     async function createLegacyCompanion(): Promise<void> {
