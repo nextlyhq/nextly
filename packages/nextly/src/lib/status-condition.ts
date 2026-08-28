@@ -15,7 +15,11 @@
  * stored as a draft is excluded by the DATABASE, and no amount of post-filtering
  * adds back a row the query never returned.
  *
- * So the reveal has to happen here, where the condition is built.
+ * So the reveal has to happen here, where the condition is built. The
+ * suppression is applied here too — not because it has to be, but because a
+ * filter and a post-filter that each know half the decision disagree the moment
+ * one of them is changed alone, and the disagreement surfaces as a listing
+ * whose count does not match its own contents.
  *
  * ## Why this is one function and not six
  *
@@ -28,7 +32,17 @@
  * @module lib/status-condition
  */
 
-import { eq, inArray, or, type SQL, type SQLWrapper } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  notInArray,
+  or,
+  type SQL,
+  type SQLWrapper,
+} from "drizzle-orm";
+
+import type { ReleaseDecisions } from "../domains/releases/release-scope";
 
 import type { StatusFilterValue } from "./status-filter";
 
@@ -37,16 +51,16 @@ export interface StatusConditionInput {
   filter: { value: StatusFilterValue } | null;
   /** The lifecycle column on the table being read. */
   statusColumn: SQLWrapper | undefined;
-  /** The identity column, for the reveal set. */
+  /** The identity column, for the reveal and hide sets. */
   idColumn: SQLWrapper | undefined;
   /**
-   * Documents a due release would PUBLISH.
+   * What a due release does to this scope, in both directions.
    *
-   * Empty in the overwhelmingly common case — nothing scheduled, or nothing due
-   * — and the caller is expected to have skipped the lookup entirely rather
-   * than passing an empty array it paid for.
+   * Two empty sets in the overwhelmingly common case — nothing scheduled, or
+   * nothing due — and the caller is expected to have skipped the lookup
+   * entirely rather than paying for a query that returns them.
    */
-  revealIds: readonly string[];
+  decisions: ReleaseDecisions;
 }
 
 /**
@@ -57,16 +71,28 @@ export interface StatusConditionInput {
  * there is nothing for a release to reveal.
  */
 export function statusCondition(input: StatusConditionInput): SQL | undefined {
-  const { filter, statusColumn, idColumn, revealIds } = input;
+  const { filter, statusColumn, idColumn, decisions } = input;
   if (filter === null || statusColumn === undefined) return undefined;
 
   const base = eq(statusColumn, filter.value);
 
-  // Only a PUBLISHED read is widened. A draft-only read is asking for pending
-  // work, and a document a release is about to publish is not that; adding it
-  // would answer a question nobody asked. An unbounded read never reaches here.
+  // Only a PUBLISHED read is adjusted. A draft-only read is asking for pending
+  // work: a document a release is about to publish is not that, and one it is
+  // about to withdraw is not pending work either. An unbounded read never
+  // reaches here.
   if (filter.value !== "published") return base;
-  if (revealIds.length === 0 || idColumn === undefined) return base;
+  if (idColumn === undefined) return base;
 
-  return or(base, inArray(idColumn, [...revealIds]));
+  const { reveal, hide } = decisions;
+  if (reveal.length === 0 && hide.length === 0) return base;
+
+  // Withdraw first, then admit. The two sets are disjoint — one winning member
+  // decides each document — so the order cannot change the answer; it is fixed
+  // only so the generated SQL is stable to read.
+  const published =
+    hide.length === 0 ? base : and(base, notInArray(idColumn, [...hide]));
+
+  return reveal.length === 0
+    ? published
+    : or(published, inArray(idColumn, [...reveal]));
 }
