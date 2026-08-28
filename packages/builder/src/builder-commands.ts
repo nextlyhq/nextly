@@ -93,15 +93,6 @@ export const HISTORY_GROUP = "History";
 export const EDITOR_GROUP = "Editor";
 
 /**
- * The palette's commands for the current state.
- *
- * Unavailable commands are OMITTED rather than listed and disabled, which is
- * the opposite of what the toolbar does — and deliberately. A toolbar keeps one
- * shape so the control an author is aiming at does not move; a palette is
- * searched rather than aimed at, and a row that matches the search and then
- * refuses to run is worse there than one that was never offered.
- */
-/**
  * What each toolbar action id actually RUNS.
  *
  * Published rather than kept inside the palette because the palette is no
@@ -126,6 +117,15 @@ export function blockActionRunners(
   };
 }
 
+/**
+ * The palette's commands for the current state.
+ *
+ * Unavailable commands are OMITTED rather than listed and disabled, which is
+ * the opposite of what the toolbar does — and deliberately. A toolbar keeps one
+ * shape so the control an author is aiming at does not move; a palette is
+ * searched rather than aimed at, and a row that matches the search and then
+ * refuses to run is worse there than one that was never offered.
+ */
 export function builderCommands({
   document,
   selectedId,
