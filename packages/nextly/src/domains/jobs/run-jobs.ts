@@ -233,36 +233,30 @@ async function runOne(
   };
 
   const definition = deps.registry.get(job.slug);
-
-  // Deferred BEFORE an attempt is charged.
-  //
-  // During a rolling deployment an instance that has not been replaced yet does
-  // not know a slug the new instances already enqueue. Charging that to the
-  // job's retry budget lets the old workers exhaust it before a new one gets a
-  // turn — the job then fails permanently for a reason that had already fixed
-  // itself.
-  //
-  // The row is still never silently skipped: the reason is recorded, so a type
-  // genuinely deleted while rows were queued shows up in the admin instead of
-  // cycling invisibly. It simply keeps its budget for a runner that can run it.
   if (definition === undefined) {
-    const deferred = nextAttempt({
-      attemptCount: 1,
-      maxAttempts: DEFAULT_MAX_ATTEMPTS,
-      now: now(),
-      random: deps.random,
-    });
-    return {
-      id: job.id,
-      runnerId,
-      outcome: "retry",
-      nextAttemptAt: deferred.outcome === "retry" ? deferred.at : null,
-      lastError: `No job type is registered for "${job.slug}".`,
-      now: now(),
-    };
+    return deferUnregistered(job, runnerId, now, deps.random);
   }
 
   const attempt = job.attemptCount + 1;
+  /**
+   * Record this attempt as failed, and let the backoff policy decide whether
+   * another one follows.
+   *
+   * Every failure below reaches the same decision with the same arguments, and
+   * stating it once is what keeps the three of them from drifting into three
+   * slightly different answers to "what happens when this job errors".
+   */
+  const failed = (error: unknown): FinalizeInput =>
+    decide(
+      job,
+      attempt,
+      definition.retry.maxAttempts,
+      error instanceof Error ? error.message : String(error),
+      runnerId,
+      now,
+      deps.random
+    );
+
   const stillOurs = await deps.store.markAttempt(
     job.id,
     runnerId,
@@ -284,15 +278,7 @@ async function runOne(
   try {
     identity = await resolveRunAs(deps.runAs, job.runAsUserId);
   } catch (error) {
-    return decide(
-      job,
-      attempt,
-      definition.retry.maxAttempts,
-      error instanceof Error ? error.message : String(error),
-      runnerId,
-      now,
-      deps.random
-    );
+    return failed(error);
   }
   // Terminal, not retried: a deleted or deactivated user does not come back on
   // the next pass, and retrying would cycle an unrunnable row forever.
@@ -320,15 +306,7 @@ async function runOne(
     // and skipping every later candidate in the batch. One unlucky write would
     // stop the whole drain. Charged as an ordinary attempt instead, so the job
     // retries on its own backoff.
-    return decide(
-      job,
-      attempt,
-      definition.retry.maxAttempts,
-      error instanceof Error ? error.message : String(error),
-      runnerId,
-      now,
-      deps.random
-    );
+    return failed(error);
   }
   if (!stillOursAfterIdentity) return LEASE_LOST;
 
@@ -346,15 +324,7 @@ async function runOne(
       })
     );
   } catch (error) {
-    return decide(
-      job,
-      attempt,
-      definition.retry.maxAttempts,
-      error instanceof Error ? error.message : String(error),
-      runnerId,
-      now,
-      deps.random
-    );
+    return failed(error);
   }
 
   return {
@@ -363,6 +333,41 @@ async function runOne(
     outcome: "done",
     nextAttemptAt: null,
     lastError: null,
+    now: now(),
+  };
+}
+
+/**
+ * A job whose type this instance does not know, deferred without charging an
+ * attempt.
+ *
+ * During a rolling deployment an instance that has not been replaced yet does
+ * not know a slug the new instances already enqueue. Charging that to the job's
+ * retry budget lets the old workers exhaust it before a new one gets a turn —
+ * the job then fails permanently for a reason that had already fixed itself.
+ *
+ * The row is still never silently skipped: the reason is recorded, so a type
+ * genuinely deleted while rows were queued shows up in the admin instead of
+ * cycling invisibly. It simply keeps its budget for a runner that can run it.
+ */
+function deferUnregistered(
+  job: JobRow,
+  runnerId: string,
+  now: () => Date,
+  random: (() => number) | undefined
+): FinalizeInput {
+  const deferred = nextAttempt({
+    attemptCount: 1,
+    maxAttempts: DEFAULT_MAX_ATTEMPTS,
+    now: now(),
+    random,
+  });
+  return {
+    id: job.id,
+    runnerId,
+    outcome: "retry",
+    nextAttemptAt: deferred.outcome === "retry" ? deferred.at : null,
+    lastError: `No job type is registered for "${job.slug}".`,
     now: now(),
   };
 }

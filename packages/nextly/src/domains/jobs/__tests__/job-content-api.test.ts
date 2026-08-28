@@ -118,7 +118,13 @@ describe("the options this client OWNS", () => {
     // it sets. `actor` is the sharpest: `apiKeyScopeAllows` reads its
     // `permissions` array as AUTHORITATIVE rather than consulting the bound
     // user's grants, so a caller supplying one grants itself what it names.
-    const find = vi.fn(async () => ({ items: [] }));
+    // The parameter is DECLARED, not inferred. Without it `vi.fn` types
+    // `mock.calls` as an empty tuple, so reading `calls[0][0]` is a type
+    // error — invisible to `vitest` and to a bare `tsc --noEmit`, and
+    // reported only by the second pass `check-types` runs over the tests.
+    const find = vi.fn(async (_args: Record<string, unknown>) => ({
+      items: [],
+    }));
     const client = createJobContentApi({ id: "u1", roles: ["editor"] }, {
       find,
     } as never);
@@ -161,7 +167,9 @@ describe("the options this client OWNS", () => {
     // whose `permissions` array is read as authoritative, behind a wrapper
     // advertising a bound identity. Present-and-undefined is what wins the
     // spread.
-    const find = vi.fn(async () => ({ items: [] }));
+    const find = vi.fn(async (_args: Record<string, unknown>) => ({
+      items: [],
+    }));
     const client = createJobContentApi({ id: "u1", roles: ["editor"] }, {
       find,
     } as never);
@@ -182,7 +190,9 @@ describe("the options this client OWNS", () => {
     // A job queued by nobody acts as nobody. With `user` merely deleted, an
     // instance default would be merged back in and the least-privileged job
     // would run as whoever that default names.
-    const find = vi.fn(async () => ({ items: [] }));
+    const find = vi.fn(async (_args: Record<string, unknown>) => ({
+      items: [],
+    }));
     const client = createJobContentApi(null, { find } as never);
 
     await (client.find as (args: unknown) => Promise<unknown>)({
@@ -199,7 +209,9 @@ describe("the options this client OWNS", () => {
     // The control. Stripping everything would satisfy the case above while
     // making the client useless: a job could not choose a locale, a depth, or
     // pass context to its hooks.
-    const find = vi.fn(async () => ({ items: [] }));
+    const find = vi.fn(async (_args: Record<string, unknown>) => ({
+      items: [],
+    }));
     const client = createJobContentApi(null, { find } as never);
 
     await (client.find as (args: unknown) => Promise<unknown>)({
