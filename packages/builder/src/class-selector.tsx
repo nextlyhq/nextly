@@ -96,9 +96,14 @@ function liveFailure(
 /**
  * Whether two class lists are the same list, by CONTENT.
  *
- * A caller with no stored classes hands over a fresh `[]` on every render —
- * `?? []` in the style inspector does exactly that — so comparing by reference
- * would discard a failure on the next render, which is every render.
+ * By value rather than by reference because a caller with no stored classes
+ * hands over a fresh `[]` on every render — `?? []` in the style inspector
+ * does exactly that — so a reference comparison would discard a failure on the
+ * next render, which is every render.
+ *
+ * Half of the scoping, beside the block's own identity. This half catches what
+ * identity cannot: the same block whose classes have since changed, where the
+ * refusal describes a state it has left.
  */
 function sameClassIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, index) => id === b[index]);
@@ -136,6 +141,22 @@ export type ClassCreation =
 
 export interface ClassSelectorProps {
   /**
+   * Which block this is editing.
+   *
+   * Required, and read for two things: scoping a failure to the element it is
+   * about, and telling a creation still in flight whether the block it was
+   * started for is the one still selected.
+   *
+   * It does not replace the class-list comparison — {@link liveFailure} uses
+   * both, and neither settles it alone. This one catches what content cannot:
+   * two blocks with no classes present the same empty list, so a refusal
+   * raised against one would go on being shown against the other.
+   *
+   * A prop rather than a documented requirement to mount this keyed. Keying
+   * protects a caller who remembers; a prop cannot be forgotten.
+   */
+  nodeId: string;
+  /**
    * The site's class library, or `undefined` when there is none to show.
    *
    * A real third state rather than an empty library: a site that has stored
@@ -147,17 +168,6 @@ export interface ClassSelectorProps {
    * and {@link ClassSelectorProps.libraryAbsence} says which. They need
    * different words: one will finish and the other will not.
    */
-  /**
-   * Which block this is editing.
-   *
-   * Required, and used only to scope a failure to the element it is about.
-   * Comparing the class ids instead was a proxy for identity and it fails on
-   * the commonest case: two blocks with no classes both present an empty list,
-   * so a refusal raised against one goes on being shown against the other.
-   * Keyed mounting protects a caller that remembers to key; a prop cannot be
-   * forgotten.
-   */
-  nodeId: string;
   library: readonly NamedClass[] | undefined;
   /**
    * Why there is no library, when there is none.
@@ -242,6 +252,18 @@ export function ClassSelector({
   const currentIds = React.useRef(nodeClassIds);
   currentIds.current = nodeClassIds;
   /*
+   * Which node is selected NOW, so a pending creation can tell whether it is
+   * still about the element it was started for.
+   *
+   * The success handler captures `nodeId` and the write callback from the
+   * render that began the request, while reading the class list live. Mixing
+   * the two lets a resolution write one node's classes through another node's
+   * callback — the built-in parent keys by node and never sees it, a direct
+   * consumer that does not key would.
+   */
+  const currentNodeId = React.useRef(nodeId);
+  currentNodeId.current = nodeId;
+  /*
    * What is typed RIGHT NOW, for the same reason. The field stays editable
    * while a creation is in flight, so an author can begin the next class name
    * before the first one lands — and clearing on success would take away what
@@ -249,6 +271,23 @@ export function ClassSelector({
    */
   const currentQuery = React.useRef(query);
   currentQuery.current = query;
+
+  /*
+   * Cleared, not merely hidden. Hiding leaves the refusal stored, so a node
+   * returning to a class list it held before — an external edit and an undo
+   * would do it — revives an alert about an operation that did not just fail.
+   * This is React's documented adjust-state-during-render: the condition stops
+   * being true once the state is null, so it converges on the next pass.
+   *
+   * Above the library-absence return because a refusal outlives the
+   * library: a render that draws no list still observes the node leaving
+   * the state the refusal was raised against, and skipping that lets a
+   * list which changes and comes back while the library is away arrive
+   * back matching.
+   */
+  if (failure !== null && liveFailure(failure, nodeId, nodeClassIds) === null) {
+    setFailure(null);
+  }
 
   if (library === undefined) {
     return (
@@ -300,9 +339,17 @@ export function ClassSelector({
        * knew whether it had landed.
        */
       const submitted = query;
+      const startedOn = nodeId;
       setSaving(true);
       void onCreateClass(option.slug)
         .then(created => {
+          /*
+           * The element moved on. The class was created and is in the library,
+           * but applying it now would put it on a node the author did not ask
+           * about — the request's own node is no longer selected, and there is
+           * nothing here that could write to it safely.
+           */
+          if (currentNodeId.current !== startedOn) return;
           if (!created.ok) {
             setFailure({
               about: nodeId,

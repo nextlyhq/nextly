@@ -188,14 +188,26 @@ export function VersionComparePage({
       // reinstate exactly that — these two numbers are what `resolvePair`
       // reads, so they are what "the same comparison" means.
       if (previous.versionNo === from && versionNo === to) return;
+      // Built through the same `versionsHref` the history sheet uses, so one
+      // place decides what a comparison's address looks like. Hand-building it
+      // here is how the locale came to be dropped: the address was assembled
+      // from the two numbers this callback happens to hold, and a language is
+      // not one of them.
+      //
+      // The locale is taken from the SELECTED version rather than carried from
+      // the current address, so choosing a row in another language moves the
+      // page to that language instead of keeping the previous one. The rail
+      // interleaves locales, so the row a reader clicks is routinely not in the
+      // language now on screen.
       navigateTo(
-        withQuery(window.location.pathname, {
-          from: previous.versionNo,
-          to: versionNo,
-        })
+        versionsHref(
+          scope,
+          { from: previous.versionNo, to: versionNo },
+          versions.find(v => v.versionNo === versionNo)?.locale
+        )
       );
     },
-    [versions, list.hasNextPage, from, to]
+    [versions, list.hasNextPage, from, to, scope]
   );
 
   return (
