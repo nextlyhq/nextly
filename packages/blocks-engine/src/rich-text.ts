@@ -41,6 +41,17 @@
  */
 
 /**
+ * The `type` a prop schema declares to say its value is rich text.
+ *
+ * Here rather than spelled at each end because two ends read it and they must
+ * mean the same string: the block library writes it into a schema, and an
+ * editor reads it to decide whether a value is a tree or a line of text. A
+ * mismatch is silent in the worst possible way — the editor treats a tree as
+ * text, reads no text out of it, and commits an empty string over the passage.
+ */
+export const RICH_TEXT_PROP_TYPE = "richText";
+
+/**
  * One node of stored rich text.
  *
  * `type` is the only field every node has. `children`, `text` and `format` are
@@ -154,6 +165,13 @@ const BLOCK_BOUNDARY: unique symbol = Symbol("rich-text block boundary");
  * space is introduced only when leaving a block-level container or crossing a
  * line break — which is where the author put a boundary.
  *
+ * "Block-level" is decided by the node's TYPE, not by whether it has children.
+ * A node can carry its own `text` and still be drawn as a block — `button-link`
+ * stores its label that way — and reading the label without the boundary runs
+ * it into whatever follows: a passage of `Before`, a button reading `Buy now`,
+ * then `After` flattens to `Before Buy nowAfter`, which is what a crawler would
+ * then be handed as the page description.
+ *
  * ## Iterative
  *
  * The walk uses an explicit stack rather than recursion. Nesting depth here is
@@ -180,13 +198,32 @@ export function richTextToPlainText(value: RichTextValue): string {
     }
     if (!isRichTextNode(item)) continue;
 
+    /*
+     * Asked ONCE, before the node is read, because it is the same question
+     * either way: does this node end a line?
+     *
+     * BOTH sides, and the leading one is not decoration. Lexical's decorator
+     * nodes are inline unless a node overrides `isInline()`, and none of this
+     * editor's do — so inserting a button with the caret in a paragraph makes
+     * it a CHILD of that paragraph, between two text runs. A trailing boundary
+     * alone leaves `Before`, a button reading `Buy now`, then `After` as
+     * `BeforeBuy now After`: separated from what follows and welded to what
+     * came before.
+     *
+     * Redundant spaces cost nothing — the join collapses runs of whitespace —
+     * so this does not need to know whether a boundary already sits there.
+     */
+    const inline = isInline(item);
+    if (!inline) {
+      parts.push(" ");
+      stack.push(BLOCK_BOUNDARY);
+    }
+
     const leaf = leafText(item);
     if (leaf !== null) {
       parts.push(leaf);
       continue;
     }
-
-    if (!INLINE_CONTAINERS.has(item.type)) stack.push(BLOCK_BOUNDARY);
     if (Array.isArray(item.children)) pushChildren(stack, item.children);
   }
 
@@ -217,6 +254,35 @@ function pushChildren(
  * A line break contributes a space: it is where the author ended a line, and
  * plain text has no other way to say so.
  */
+/**
+ * Leaves that carry their own text and are still drawn as BLOCKS.
+ *
+ * Named explicitly, and short on purpose. Carrying `text` is the norm for
+ * inline content and the exception for block content, so a type nobody has
+ * listed here keeps the behaviour it already had — which is what an unknown
+ * type from a future editor should get.
+ */
+const BLOCK_LEVEL_LEAVES: ReadonlySet<string> = new Set(["button-link"]);
+
+/**
+ * Whether a node sits INSIDE a line rather than ending one.
+ *
+ * A line break is inline because it already emits its own space. Beyond that
+ * the question splits on whether the node carries its own text:
+ *
+ * - It does: inline unless listed above. Deciding this by `type === "text"`
+ *   instead is too coarse and measurably wrong — `code-highlight` carries text
+ *   for every syntax token in a code block, so `foo(bar)` would flatten to
+ *   `foo ( bar )`. A run split by formatting has the same problem: `pre` plus
+ *   bold `fix` must not read as `pre fix`.
+ * - It does not: it is a container, and only a link stays inside the line.
+ */
+function isInline(node: RichTextNode): boolean {
+  if (node.type === "linebreak") return true;
+  if (typeof node.text === "string") return !BLOCK_LEVEL_LEAVES.has(node.type);
+  return INLINE_CONTAINERS.has(node.type);
+}
+
 function leafText(node: RichTextNode): string | null {
   if (typeof node.text === "string") return node.text;
   if (node.type === "linebreak") return " ";

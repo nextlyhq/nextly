@@ -14,6 +14,7 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import { releaseVisibilityFor } from "../domains/releases/release-visibility";
 import { MetaRetentionGate } from "../domains/retention/gate";
 import {
   buildRetentionRunner,
@@ -210,7 +211,8 @@ export class CollectionsHandler {
       adapter,
       logger,
       this.fileManager,
-      this.collectionService
+      this.collectionService,
+      releaseVisibilityFor(adapter)
     );
 
     this.metadataService = new CollectionMetadataService(

@@ -100,6 +100,7 @@ const EXPECTED_BLOCKS = [
   "core/image",
   "core/list",
   "core/quote",
+  "core/rich-text",
   "core/section",
   "core/spacer",
   "core/text",

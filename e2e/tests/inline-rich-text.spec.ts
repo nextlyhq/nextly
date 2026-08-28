@@ -1,0 +1,236 @@
+/**
+ * Editing a passage on the canvas, in a real browser.
+ *
+ * Two behaviours of inline rich text cannot be observed anywhere else. jsdom
+ * does not reflect the editor's selection back into the DOM — `rangeCount`
+ * stays 0 after a focus — so a unit test can assert that a caret offset was
+ * HANDED to the editor and never where the caret went. And a list's Enter
+ * gesture runs through command handlers that need a real key event to reach.
+ *
+ * Both were repaired on evidence read out of Lexical's source rather than
+ * measured, which is exactly the kind of claim that deserves a browser.
+ *
+ * The route is the real admin builder rather than a playground harness: the
+ * harnesses mount `<Canvas>` directly and never supply the editor loader, so
+ * nothing there would load Lexical at all and both tests would pass against a
+ * feature that does nothing.
+ *
+ * @module tests/inline-rich-text
+ */
+import { expect, test, type Page } from "@playwright/test";
+
+import { STORAGE_STATE } from "../global-setup";
+import { gotoAdmin } from "./support/admin";
+
+const HOMEPAGE = "/admin/api/singles/homepage";
+
+/** The element the renderer marks as carrying the passage. */
+const PASSAGE = '[data-nx-prop="content"]';
+
+const SENTENCE = "Hello world";
+
+function textNode(text: string) {
+  return {
+    type: "text",
+    text,
+    format: 0,
+    style: "",
+    mode: "normal",
+    detail: 0,
+    version: 1,
+  };
+}
+
+function paragraph(text: string) {
+  return {
+    type: "paragraph",
+    format: "",
+    indent: 0,
+    version: 1,
+    direction: null,
+    children: [textNode(text)],
+  };
+}
+
+/** A document holding one `core/rich-text` block. */
+function documentWith(children: unknown[]) {
+  return {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "passage",
+        type: "core/rich-text",
+        version: 1,
+        props: {
+          content: {
+            root: {
+              type: "root",
+              format: "",
+              indent: 0,
+              version: 1,
+              direction: null,
+              children,
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
+/** Seed the single the builder opens, then open it. */
+async function openBuilderWith(page: Page, children: unknown[]): Promise<void> {
+  const api = await page.request;
+  const stored = await api.patch(HOMEPAGE, {
+    data: { layout: documentWith(children) },
+  });
+  expect(stored.ok(), `seeding the homepage layout: ${stored.status()}`).toBe(
+    true
+  );
+
+  await gotoAdmin(page, "/singles/homepage");
+  await page.getByRole("button", { name: "Edit blocks" }).click();
+  // The passage must be ON SCREEN before anything is aimed at it: a gesture
+  // sent at an element that has not rendered lands on the page behind it.
+  await expect(page.locator(PASSAGE).first()).toBeVisible({ timeout: 30_000 });
+}
+
+/**
+ * A point a given fraction of the way across the rendered GLYPHS.
+ *
+ * Aimed at the text node's own box rather than the block's. The passage's
+ * element is full canvas width and a short sentence occupies the left of it, so
+ * the element's centre is PAST the end of the words — a double-click there
+ * resolves to the end of the text and every assertion about caret position
+ * passes or fails for the wrong reason. Measured: aiming at the wrapper gave a
+ * caret offset of 11 on an eleven-character sentence.
+ *
+ * The same trap `text-selection.spec.ts` records from the other direction: a
+ * gesture aimed at a block corner is only sometimes over text.
+ */
+async function glyphPoint(
+  page: Page,
+  across: number
+): Promise<{ x: number; y: number }> {
+  const point = await page
+    .locator(PASSAGE)
+    .first()
+    .evaluate((element, fraction) => {
+      const text = element.ownerDocument.evaluate(
+        ".//text()[normalize-space()]",
+        element,
+        null,
+        9 /* FIRST_ORDERED_NODE_TYPE */,
+        null
+      ).singleNodeValue;
+      if (text === null) return null;
+      const range = element.ownerDocument.createRange();
+      range.selectNodeContents(text);
+      const box = range.getBoundingClientRect();
+      return { x: box.x + box.width * fraction, y: box.y + box.height / 2 };
+    }, across);
+  if (point === null) throw new Error("[e2e] the passage rendered no text");
+  return point;
+}
+
+/**
+ * Enter the passage by double-clicking its text, and wait until it is editable.
+ *
+ * The wait is the whole point of doing this in a browser: the editor arrives on
+ * a lazily loaded chunk, and `contenteditable` appearing is the first moment
+ * anything can be typed. Typing before it would go to the document and assert
+ * nothing about this feature.
+ */
+async function enterPassage(page: Page, across: number): Promise<void> {
+  const point = await glyphPoint(page, across);
+  await page.mouse.dblclick(point.x, point.y);
+  await expect(page.locator(`${PASSAGE}[contenteditable="true"]`)).toBeVisible({
+    timeout: 30_000,
+  });
+}
+
+test.describe.configure({ mode: "serial" });
+
+test.use({ storageState: STORAGE_STATE });
+
+test.describe("a passage edited on the canvas", () => {
+  test("types where the author clicked, not at the end", async ({ page }) => {
+    /*
+     * `focus()` puts the caret at the END of a passage when the loaded state
+     * carries no selection, and a freshly parsed state never carries one. So
+     * before the fix every edit began at the end regardless of the pointer, and
+     * a double-click in the middle followed by typing appended.
+     *
+     * The caret comes from the POINTER's position, not from the document's
+     * selection: a press on a block is a grab rather than a highlight, so the
+     * canvas suppresses the browser's own selection and there is none to read.
+     * Measured here before this was understood — `rangeCount` was 0 at the
+     * moment of the double-click, so the offset was always absent and every
+     * edit began at the end.
+     */
+    await openBuilderWith(page, [paragraph(SENTENCE)]);
+    // Just past the middle of "Hello world", which is inside "world".
+    await enterPassage(page, 0.55);
+
+    await page.keyboard.type("X");
+
+    const passage = page.locator(PASSAGE).first();
+    // Asserted on both sides. "does not end with X" alone passes against an
+    // editor that typed nothing at all, and "contains X" alone passes against
+    // one that appended.
+    await expect(passage).toContainText("X");
+    await expect(passage).not.toContainText("worldX");
+  });
+
+  test("leaves a list when Enter is pressed on an empty item", async ({
+    page,
+  }) => {
+    /*
+     * The generic rich-text handler makes Enter on an empty list item insert
+     * ANOTHER empty item, so an author cannot leave a list by the gesture every
+     * editor uses. Exiting lives in the list behaviour, which the field editor
+     * mounts as a plugin and this editor registers imperatively.
+     *
+     * Two Enters from the end of the only item: the first opens a new empty
+     * item, the second should end the list. Counting items is what separates
+     * the two outcomes — with the behaviour registered the empty item is
+     * consumed, without it there are three.
+     */
+    await openBuilderWith(page, [
+      {
+        type: "list",
+        listType: "bullet",
+        tag: "ul",
+        start: 1,
+        format: "",
+        indent: 0,
+        version: 1,
+        direction: null,
+        children: [
+          {
+            type: "listitem",
+            value: 1,
+            format: "",
+            indent: 0,
+            version: 1,
+            direction: null,
+            children: [textNode("Item")],
+          },
+        ],
+      },
+    ]);
+    await enterPassage(page, 0.5);
+
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+
+    const items = page.locator(`${PASSAGE} li`);
+    // The control on the fixture itself: if the list never rendered as a list,
+    // this count would be 0 and the assertion below would pass for the wrong
+    // reason.
+    await expect(items).not.toHaveCount(0);
+    await expect(items).toHaveCount(1);
+  });
+});

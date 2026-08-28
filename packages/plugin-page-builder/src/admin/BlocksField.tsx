@@ -74,15 +74,27 @@ import {
   useBuilderChecklist,
   useCanvasDrag,
   useEditorState,
-  useInlineText,
+  useInlineEditing,
+  documentAfter,
+  type InlineEditOutcome,
 } from "@nextlyhq/builder/shell";
 import {
+  loadInlineRichTextEditor,
   useDocumentCheckpoint,
   usePluginClientConfig,
   useEntryFieldsPanel,
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
+// From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
+// and sonner keeps its queue in module state, so a toast published into another
+// bundled copy would never reach it.
+import {
+  chordMatches,
+  detectApplePlatform,
+  parseKeys,
+  toast,
+} from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -607,6 +619,104 @@ function siteStyleStatus(
   return error === null ? "ready" : "unavailable";
 }
 
+/**
+ * Whether anything in the editor is work the author has not saved.
+ *
+ * An OPEN inline edit counts, on top of the document's own history. Inline
+ * editing does not touch the document until an edit finishes, so `undoDepth` is
+ * still zero while an author is typing into a block — and a navigation or an
+ * access-driven removal at that moment tears the canvas down without a blur,
+ * leaving the guard as the only thing that could have asked first.
+ *
+ * Reported for an edit that is merely OPEN rather than one known to have
+ * changed something, because nothing here can tell those apart until the write
+ * happens. A prompt an author dismisses costs a click; the other direction
+ * costs the paragraph they were writing.
+ */
+function hasUnsavedWork(
+  editor: { undoDepth: number },
+  inline: { editing: unknown; editingRich: unknown }
+): boolean {
+  return (
+    editor.undoDepth > 0 ||
+    inline.editing !== null ||
+    inline.editingRich !== null
+  );
+}
+
+/**
+ * What to tell the author when an inline edit did not save, or `null` when
+ * there is nothing to say.
+ *
+ * Said at all because nothing else would. An inline edit lives in the element
+ * until it ends, so the document never records it, the dirty flag never moves,
+ * and an edit that could not be written leaves no trace for the author to
+ * notice — they would find the old words back on the page and no reason given.
+ *
+ * The two refusals are separated because only one of them is theirs to act on:
+ * a passage that outgrew the page can be shortened, while one that was edited
+ * elsewhere cannot be reconciled from here, and the useful thing to say is that
+ * their version is still on screen for as long as they leave it there.
+ */
+function inlineEditProblem(outcome: InlineEditOutcome): string | null {
+  if (outcome.status === "unavailable")
+    return "Another block is still holding text that has not been saved. Finish that one first.";
+  if (outcome.status === "discarded")
+    return "That block changed while you were editing it, so your text was not saved.";
+  if (outcome.status !== "refused") return null;
+  return outcome.reason === "moved-on"
+    ? "That block was edited somewhere else while you were typing. Your text is still in it \u2014 copy what you need before you leave."
+    : "Your text could not be saved into this page. Shortening it may help.";
+}
+
+/**
+ * Finish whatever inline edit was open, and say what the host may now do.
+ *
+ * An inline edit lives in the element until it ends — that is what keeps the
+ * caret still while an author types — so the document a caller is holding is
+ * the one from before it, and committing that would save a page missing the
+ * words they were in the middle of writing.
+ *
+ * Says nothing to the author: the surface reports every finished edit through
+ * one callback, including the ones started here, so reporting again from this
+ * return value would announce the same edit twice.
+ *
+ * `mayClose` is separate from the document because the two answers differ: a
+ * refused passage changed nothing, so there is a perfectly good document to
+ * save, and the only thing that must not happen is unmounting the editor still
+ * holding the words.
+ */
+function finishInlineEdit(
+  inline: { commit: () => InlineEditOutcome },
+  held: BlockDocument
+): { document: BlockDocument; mayClose: boolean } {
+  const outcome = inline.commit();
+  return {
+    document: documentAfter(outcome, held),
+    mayClose: outcome.status !== "refused",
+  };
+}
+
+/**
+ * The form's save shortcut, parsed from the SAME spec the form registers.
+ *
+ * Asked of the shortcut library rather than written out here. A hand-rolled
+ * `key === "s" && (metaKey || ctrlKey)` treats modifiers as a minimum, so it
+ * also fires on Ctrl+Shift+S and Ctrl+Alt+S — which the manager rejects,
+ * meaning the form does NOT save. Ctrl+Shift+S is the browser's Save As on
+ * several platforms, so the author would have got a dialog, an inline edit
+ * closed underneath it, and a field changed by a keystroke that saved nothing.
+ */
+const SAVE_CHORD = parseKeys("mod+s")[0];
+
+/** Whether a key event is the form's save shortcut on this platform. */
+function isSaveChord(event: KeyboardEvent): boolean {
+  return (
+    SAVE_CHORD !== undefined &&
+    chordMatches(SAVE_CHORD, event.key, event, detectApplePlatform())
+  );
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -655,9 +765,30 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
 
   /*
    * Typing a block's text on the canvas. The hook owns the caret; which values
-   * may be typed into is the block's own declaration, read by the builder.
+   * may be typed into is the block's own declaration, read by the builder, and
+   * WHICH editor a value gets is that declaration too.
+   *
+   * The rich-text loader is passed rather than imported by the builder, because
+   * it reaches Lexical and the builder must not: one copy of Lexical is what
+   * keeps its node classes recognisable, and this package is already on the
+   * admin side of that line.
    */
-  const inline = useInlineText(editor);
+  /*
+   * ONE place the author is told about an inline edit that did not save.
+   *
+   * Passed to the hook rather than read from what `commit` returns here,
+   * because most edits do not end by this component calling `commit`. Leaving
+   * the passage ends one; so does opening another, and so does this canvas
+   * unmounting. The outcome that most needs saying — a passage whose block was
+   * deleted or locked while the author typed into it — is reached almost
+   * entirely by the first of those, so reporting from the return value alone
+   * said nothing on the common path.
+   */
+  const announce = useCallback((outcome: InlineEditOutcome) => {
+    const problem = inlineEditProblem(outcome);
+    if (problem !== null) toast.error(problem);
+  }, []);
+  const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
    * The entry's other fields, or null when there is no surrounding form. Null
@@ -1045,7 +1176,40 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
    */
-  useReportUnsavedWork(`blocks:${name}`, editor.undoDepth > 0);
+  useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
+
+  /*
+   * Finish an open passage before the form is asked to save it.
+   *
+   * An inline edit lives in the element until it ends, so the field still holds
+   * the value from before it. Reporting the edit as unsaved work is what lets
+   * the form submit — and reporting cannot write to the form, by that context's
+   * own contract — so a save taken while a passage is open would send the
+   * previous value and report success.
+   *
+   * Capture phase, so this runs before the form's own handler sees the chord.
+   *
+   * This closes the SHORTCUT. A save started any other way — a button, a
+   * command palette — still leaves an open passage behind, because nothing lets
+   * a surface holding uncommitted work be asked to flush before submission.
+   * That is a contract the form does not have, not something this can reach.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isSaveChord(event)) return;
+      /*
+       * Saved even when the passage was refused, and NOT closed either way.
+       * The document is right and complete for everything except the passage
+       * still open, so withholding the save would lose the rest of their work
+       * to protect a paragraph that is not going anywhere: it stays in the
+       * editor, on screen, and the message is what tells them it is still
+       * there.
+       */
+      onCommit(finishInlineEdit(inline, editor.document).document);
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [editor.document, inline, onCommit]);
 
   /*
    * Writing back on the way out rather than on every keystroke.
@@ -1056,9 +1220,27 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * editor's undo two answers to one question.
    */
   const done = useCallback(() => {
-    onCommit(editor.document);
+    /*
+     * The open inline edit is finished FIRST, and the document it produced is
+     * the one handed over.
+     *
+     * An inline edit lives in the element until it ends — that is what keeps
+     * the caret still while an author types — so `editor.document` here is the
+     * one from before it. Committing that would hand the form a document
+     * missing the words the author was in the middle of writing, and the exit
+     * gesture is the most common way to leave a passage open.
+     */
+    const finished = finishInlineEdit(inline, editor.document);
+    /*
+     * A REFUSED commit kept the passage open because the author's words are in
+     * it and nowhere else. Closing unmounts the canvas and takes the editor
+     * with it, so leaving is declined until they deal with it — they have been
+     * told what happened, and their text is still where they left it.
+     */
+    if (!finished.mayClose) return;
+    onCommit(finished.document);
     onClose();
-  }, [editor.document, onCommit, onClose]);
+  }, [editor.document, inline, onCommit, onClose]);
 
   /*
    * Opens the insert panel from the canvas itself, for the empty-container

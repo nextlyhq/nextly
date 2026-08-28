@@ -21,6 +21,7 @@
 import type { PermissionSeedService } from "../../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { DynamicCollectionService } from "../../domains/dynamic-collections";
+import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import { MetaRetentionGate } from "../../domains/retention/gate";
 import {
   buildRetentionRunner,
@@ -145,7 +146,8 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
       adapter,
       logger,
       fileManager,
-      dynamicCollectionService
+      dynamicCollectionService,
+      releaseVisibilityFor(adapter)
     );
     if (!container.has("relationshipService")) {
       container.registerSingleton<CollectionRelationshipService>(

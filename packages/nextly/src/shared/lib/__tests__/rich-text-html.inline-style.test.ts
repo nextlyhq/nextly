@@ -79,7 +79,9 @@ describe("an inline style beside a format wrapper", () => {
       format: TEXT_FORMAT.UNDERLINE,
       style: "text-decoration: underline wavy red",
     });
-    expect(decorated).toContain("text-decoration:underline wavy red");
+    // Longhands: the engine resolves the shorthand into the three it assigns,
+    // so neither surface emits it under its own name any more.
+    expect(decorated).toContain("text-decoration-line:underline");
     expect(decorated).not.toContain("<u");
   });
 

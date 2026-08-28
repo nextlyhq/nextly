@@ -64,6 +64,8 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import type { AddressableField } from "../../../shared/addressable-fields";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -127,7 +129,6 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
-  addressableFields,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -2069,7 +2070,7 @@ export class CollectionMutationService extends BaseService {
     // single component declared inside such a group stores its value at the
     // enclosing level, so without flattening the lookup would miss it and treat
     // it as a scalar, replacing rather than merging a nested component patch.
-    const byName = new Map<string, FieldConfig>();
+    const byName = new Map<string, AddressableField>();
     for (const f of addressableFields(fields)) {
       const name = (f as { name?: unknown }).name;
       if (typeof name === "string") byName.set(name, f);

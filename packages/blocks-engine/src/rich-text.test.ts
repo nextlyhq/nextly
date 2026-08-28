@@ -261,3 +261,112 @@ describe("codeTokenClass", () => {
     }
   });
 });
+
+describe("richTextToPlainText around a block-like leaf", () => {
+  it("separates a node that carries its own text but is drawn as a block", () => {
+    /*
+     * NESTED, which is the shape the editor actually produces: Lexical's
+     * decorator nodes are inline unless one overrides `isInline()`, and none of
+     * this editor's do, so inserting a button with the caret in a paragraph
+     * makes it a CHILD of that paragraph between two text runs.
+     *
+     * A fixture that put the button between two ROOT paragraphs would pass
+     * against a walk that separates it from what follows and welds it to what
+     * came before, because the preceding paragraph's own boundary supplies the
+     * missing space. This one cannot: both sides are inside one paragraph.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Before" },
+              { type: "button-link", text: "Buy now" },
+              { type: "text", text: "After" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Before Buy now After");
+  });
+
+  it("separates one between root paragraphs too", () => {
+    // The shape a stored document can also hold, kept because the two travel
+    // different paths through the walk.
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
+          { type: "button-link", text: "Buy now" },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
+        ])
+      )
+    ).toBe("Before Buy now After");
+  });
+
+  it("does not put a space between syntax tokens in a code block", () => {
+    /*
+     * `code-highlight` carries its own text, one node per token, and a code
+     * block's tokens are usually not separated by anything. Treating "carries
+     * text" as "ends a line" therefore rewrites the code: `foo(bar)` becomes
+     * `foo ( bar )`. Measured before this was written — that is what it did.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "code",
+            children: [
+              { type: "code-highlight", text: "foo" },
+              { type: "code-highlight", text: "(" },
+              { type: "code-highlight", text: "bar" },
+              { type: "code-highlight", text: ")" },
+            ],
+          },
+        ])
+      )
+    ).toBe("foo(bar)");
+  });
+
+  it("still joins text leaves split only by formatting", () => {
+    /*
+     * The control, and the property the case above must not buy at its
+     * expense. Lexical splits a run at every change of format, so `prefix`
+     * with a bold second half is two adjacent leaves — a boundary between them
+     * would read as `pre fix`.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "pre" },
+              { type: "text", text: "fix", format: 1 },
+            ],
+          },
+        ])
+      )
+    ).toBe("prefix");
+  });
+
+  it("still keeps an inline link inside its line", () => {
+    // The other half of the control: a link is a container AND inline, so it
+    // must not earn a boundary either.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "see " },
+              { type: "link", children: [{ type: "text", text: "here" }] },
+              { type: "text", text: " now" },
+            ],
+          },
+        ])
+      )
+    ).toBe("see here now");
+  });
+});
