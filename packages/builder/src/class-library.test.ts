@@ -79,7 +79,7 @@ describe("what the manager lists", () => {
     // unknown would leave every newly created class out of the evidence filter
     // — the one place it most needs to appear.
     const rows = classRows(LIBRARY, { "id-hero": 3 }, []);
-    expect(rows.map(r => r.knownDocuments)).toEqual([3, 0, 0]);
+    expect(rows.map(r => r.indexedDocuments)).toEqual([3, 0, 0]);
   });
 
   it("marks what the open document applies, separately from the count", () => {
@@ -102,14 +102,14 @@ describe("a count keyed by a name Object.prototype already answers", () => {
 
   it("reads an inherited member as nothing known rather than as a count", () => {
     const rows = classRows(INHERITED, {}, []);
-    expect(rows.map(r => r.knownDocuments)).toEqual([0, 0]);
+    expect(rows.map(r => r.indexedDocuments)).toEqual([0, 0]);
   });
 
   it("still lists such a class under the no-known-usage filter", () => {
     // The failure this guards is silent: a function is not `=== 0`, so the
     // class would vanish from the one filter that exists to surface it.
     const rows = classRows(INHERITED, {}, []);
-    expect(filterClassRows(rows, "no-known-usage").map(r => r.slug)).toEqual([
+    expect(filterClassRows(rows, "not-in-index").map(r => r.slug)).toEqual([
       "ctor",
       "to-string",
     ]);
@@ -119,7 +119,7 @@ describe("a count keyed by a name Object.prototype already answers", () => {
     // The control for the case above: shadowing the prototype must not be
     // treated as absence, or the guard would have fixed one bug with another.
     const rows = classRows(INHERITED, { constructor: 5 }, []);
-    expect(rows.find(r => r.slug === "ctor")?.knownDocuments).toBe(5);
+    expect(rows.find(r => r.slug === "ctor")?.indexedDocuments).toBe(5);
   });
 
   it("reads only OWN counts, not one reached through the prototype", () => {
@@ -137,9 +137,9 @@ describe("a count keyed by a name Object.prototype already answers", () => {
     inherited["id-card"] = 2;
 
     const rows = classRows(LIBRARY, inherited, []);
-    expect(rows.find(r => r.slug === "hero")?.knownDocuments).toBe(0);
+    expect(rows.find(r => r.slug === "hero")?.indexedDocuments).toBe(0);
     // The control: an own count on the same record is still read.
-    expect(rows.find(r => r.slug === "card")?.knownDocuments).toBe(2);
+    expect(rows.find(r => r.slug === "card")?.indexedDocuments).toBe(2);
   });
 
   it("refuses a fractional count, which cannot describe documents", () => {
@@ -150,7 +150,7 @@ describe("a count keyed by a name Object.prototype already answers", () => {
       { "id-hero": 0.5 } as unknown as Record<string, number>,
       []
     );
-    expect(rows.find(r => r.slug === "hero")?.knownDocuments).toBe(0);
+    expect(rows.find(r => r.slug === "hero")?.indexedDocuments).toBe(0);
   });
 
   it("refuses a stored value that is not a usable count", () => {
@@ -165,8 +165,8 @@ describe("a count keyed by a name Object.prototype already answers", () => {
       >,
       []
     );
-    expect(rows.find(r => r.slug === "hero")?.knownDocuments).toBe(0);
-    expect(rows.find(r => r.slug === "badge")?.knownDocuments).toBe(0);
+    expect(rows.find(r => r.slug === "hero")?.indexedDocuments).toBe(0);
+    expect(rows.find(r => r.slug === "badge")?.indexedDocuments).toBe(0);
   });
 });
 
@@ -182,7 +182,7 @@ describe("the three filters, which are three different questions", () => {
   });
 
   it("shows only classes the index knows of no document for", () => {
-    expect(filterClassRows(rows, "no-known-usage").map(r => r.slug)).toEqual([
+    expect(filterClassRows(rows, "not-in-index").map(r => r.slug)).toEqual([
       "badge",
       "card",
     ]);
@@ -198,7 +198,7 @@ describe("the three filters, which are three different questions", () => {
     // `card` is on this page and referenced by no document the index knows;
     // `hero` is referenced twice and on no open page. If either filter were
     // derived from the other, one of these would be wrong.
-    const noKnown = filterClassRows(rows, "no-known-usage").map(r => r.slug);
+    const noKnown = filterClassRows(rows, "not-in-index").map(r => r.slug);
     const here = filterClassRows(rows, "on-this-page").map(r => r.slug);
     expect(noKnown).toContain("card");
     expect(here).toContain("card");
@@ -529,9 +529,9 @@ describe("a node holding more classes than the page applies", () => {
 
 describe("what deleting a class costs", () => {
   it("names the count when the index knows of documents", () => {
-    expect(deletionWarning({ knownDocuments: 4 })).toEqual({
-      knownDocuments: 4,
-      hasKnownUsage: true,
+    expect(deletionWarning({ indexedDocuments: 4 })).toEqual({
+      indexedDocuments: 4,
+      hasIndexedUsage: true,
       requiresConfirmation: true,
     });
   });
@@ -541,15 +541,15 @@ describe("what deleting a class costs", () => {
     // remove the other's row, leaving a class that renders on the live site
     // with no row to say so. Zero is the one value it produces wrongly in the
     // direction that destroys data, so it is the last one to wave through.
-    expect(deletionWarning({ knownDocuments: 0 })).toEqual({
-      knownDocuments: 0,
-      hasKnownUsage: false,
+    expect(deletionWarning({ indexedDocuments: 0 })).toEqual({
+      indexedDocuments: 0,
+      hasIndexedUsage: false,
       requiresConfirmation: true,
     });
   });
 
   it("confirms on ONE reference, the boundary a threshold would sit at", () => {
-    expect(deletionWarning({ knownDocuments: 1 }).requiresConfirmation).toBe(
+    expect(deletionWarning({ indexedDocuments: 1 }).requiresConfirmation).toBe(
       true
     );
   });

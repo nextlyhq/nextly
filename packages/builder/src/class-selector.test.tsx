@@ -182,6 +182,19 @@ describe("a node that already holds as many classes as the page applies", () => 
     ).toBe("hero");
   });
 
+  it("refuses CREATION too, not just application", () => {
+    /*
+     * The create branch never reaches `withClassApplied` — the id does not
+     * exist yet — so fixing the apply path left this one appending a 65th
+     * reference through the host. Same bound, asked before the class exists.
+     */
+    const { onCreateClass } = draw({ nodeClassIds: full });
+    type("call-to-action");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onCreateClass).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/as many classes/i);
+  });
+
   it("still applies normally one below the limit", () => {
     // The control: the refusal above is about the boundary, not about the
     // component having stopped applying anything at all.
@@ -190,6 +203,14 @@ describe("a node that already holds as many classes as the page applies", () => 
     type("hero");
     fireEvent.keyDown(field(), { key: "Enter" });
     expect(onNodeClassesChange).toHaveBeenCalledWith([...nearly, "id-hero"]);
+  });
+
+  it("still CREATES normally one below the limit", () => {
+    const nearly = full.slice(0, MAX_CLASSES_PER_NODE - 1);
+    const { onCreateClass } = draw({ nodeClassIds: nearly });
+    type("call-to-action");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
   });
 });
 

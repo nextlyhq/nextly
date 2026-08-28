@@ -83,13 +83,29 @@ describe("what the list shows", () => {
     expect(names).toEqual(["hero", "badge", "card"]);
   });
 
-  it("reports usage as knowledge, never as a bare count", () => {
-    // The index can under-count, so a row with no evidence must not be labelled
-    // as unused — the two are indistinguishable from here.
+  it("names the INDEX, never usage, and never a bare count", () => {
+    /*
+     * The index errs in both directions — it loses rows to interleaved saves
+     * and retains them when a removal fails — so neither "used" nor "unused" is
+     * something a row can assert. It can only report what the index holds.
+     */
     draw();
-    expect(screen.getByText(/3 known/)).toBeTruthy();
-    expect(screen.queryByText(/^Unused$/)).toBeNull();
-    expect(screen.getAllByText(/None known/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/3 in index/)).toBeTruthy();
+    expect(screen.getAllByText(/Not in index/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/known/i)).toBeNull();
+    expect(screen.queryByText(/unused/i)).toBeNull();
+  });
+
+  it("uses the SAME words in the row and in the confirmation", () => {
+    // Two uncertainty policies for one number is how the shorter one — the row,
+    // which is read far more often — comes to overstate what the index knows.
+    draw();
+    fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
+    const row = screen.getByText(/3 in index/).textContent ?? "";
+    const confirm = screen.getByText(/has it on 3 document/i).textContent ?? "";
+    expect(row).toMatch(/index/);
+    expect(confirm).toMatch(/index/);
+    expect(confirm).not.toMatch(/\bknown\b/i);
   });
 
   it("marks what the open document applies, separately from the count", () => {
@@ -101,7 +117,7 @@ describe("what the list shows", () => {
 describe("the filters, which ask three different questions", () => {
   it("narrows to classes the index knows no document for", () => {
     draw();
-    fireEvent.click(screen.getByRole("button", { name: "No known usage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
     const names = screen
       .getAllByRole("textbox")
       .map(input => (input as HTMLInputElement).value);
@@ -126,7 +142,7 @@ describe("the filters, which ask three different questions", () => {
 
   it("says so when a filter matches nothing", () => {
     draw({ usage: { "id-hero": 1, "id-badge": 1, "id-card": 1 } });
-    fireEvent.click(screen.getByRole("button", { name: "No known usage" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
     expect(screen.getByText(/no classes match/i)).toBeTruthy();
   });
 });
@@ -204,6 +220,65 @@ describe("renaming in place", () => {
       (screen.getByLabelText("Name of hero") as HTMLInputElement).value
     ).toBe("hero");
     expect(onRename).not.toHaveBeenCalled();
+  });
+});
+
+describe("a class the site's config supplies", () => {
+  // `resolveSiteStyle` merges configured classes back over storage BY ID, so
+  // absence from the stored tier reads as "no override" rather than "deleted".
+  // A delete would strip every document's reference and the class would return
+  // on the next read — the references gone, the class back, nothing using it.
+  it("offers no Delete, and says why instead", () => {
+    draw({ suppliedClassIds: ["id-hero"] });
+    expect(screen.queryByRole("button", { name: "Delete hero" })).toBeNull();
+    expect(screen.getByText("Default")).toBeTruthy();
+  });
+
+  it("still offers Delete for the stored classes beside it", () => {
+    // The control: withholding is about that one class, not about the panel
+    // having stopped offering deletion.
+    draw({ suppliedClassIds: ["id-hero"] });
+    expect(screen.getByRole("button", { name: "Delete card" })).toBeTruthy();
+  });
+
+  it("still lets a supplied class be RENAMED, which storage can express", () => {
+    // A rename writes an override rather than removing one, so it survives the
+    // merge. Withholding it too would be a restriction nothing requires.
+    const { onRename } = draw({ suppliedClassIds: ["id-hero"] });
+    fireEvent.change(nameField("hero"), { target: { value: "banner" } });
+    fireEvent.keyDown(nameField("hero"), { key: "Enter" });
+    expect(onRename).toHaveBeenCalledWith("id-hero", "banner");
+  });
+});
+
+describe("Enter inside the surrounding entry form", () => {
+  it("prevents the default action, so the form is not submitted", () => {
+    /*
+     * This panel mounts inside the entry form. An unprevented Enter submits it,
+     * saving or publishing the entry when the author only meant to finish
+     * typing a class name — a far larger action than the one they took.
+     */
+    draw();
+    fireEvent.change(nameField("hero"), { target: { value: "banner" } });
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    nameField("hero").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("leaves other keys alone, so typing still reaches the field", () => {
+    // The control: preventing everything would break the input itself.
+    draw();
+    const event = new KeyboardEvent("keydown", {
+      key: "a",
+      bubbles: true,
+      cancelable: true,
+    });
+    nameField("hero").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 });
 

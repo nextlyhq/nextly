@@ -71,6 +71,7 @@ import * as React from "react";
 
 import { batchStyleClearOps, batchStyleWriteOps } from "./batch-style";
 import { breakpointQueries, matchedBreakpoints } from "./breakpoints";
+import { commitOnEnter } from "./commit-on-enter";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import {
@@ -3219,11 +3220,7 @@ function TextField({
       onChange={event => setDraft(event.target.value)}
       onBlur={commit}
       onKeyDown={event => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          commit();
-          return;
-        }
+        if (commitOnEnter(event, commit)) return;
         if (onStep === undefined) return;
         const delta = arrowStep(event);
         if (delta === null) return;

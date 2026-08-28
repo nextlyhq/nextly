@@ -385,13 +385,18 @@ export {
   deletionWarning,
   newClassName,
   renamedClassName,
+  nodeHasRoom,
   siteClasses,
+  usageSummary,
   withClassApplied,
   withClassRemoved,
 } from "./class-library";
 export type {
+  ApplyRefusal,
+  ClassApplyOutcome,
   ClassChoice,
   ClassFilter,
+  ClassNameOutcome,
   ClassRow,
   ClassUsageCounts,
   DeletionWarning,

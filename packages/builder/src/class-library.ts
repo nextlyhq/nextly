@@ -66,15 +66,29 @@ import {
  */
 export type ClassUsageCounts = Readonly<Record<string, number>>;
 
+/**
+ * How a usage figure is described, wherever it appears.
+ *
+ * One vocabulary, derived once. A row saying "3 known" beside a confirmation
+ * saying the same number may be wrong in either direction is two uncertainty
+ * policies for one value, and the shorter one is the one an author reads most.
+ * Everything here names the INDEX and claims nothing about usage.
+ */
+export function usageSummary(row: Pick<ClassRow, "indexedDocuments">): string {
+  return row.indexedDocuments === 0
+    ? "Not in index"
+    : `${row.indexedDocuments} in index`;
+}
+
 /** Which classes the manager lists. */
-export type ClassFilter = "all" | "no-known-usage" | "on-this-page";
+export type ClassFilter = "all" | "not-in-index" | "on-this-page";
 
 /**
  * A class as the surfaces name it, carrying nothing about where it is used.
  *
  * Separate from {@link ClassRow} so that a list which has not been given usage
  * data cannot present a fabricated zero. A selector offering classes knows
- * nothing about the index, and a type that made it say `knownDocuments: 0`
+ * nothing about the index, and a type that made it say `indexedDocuments: 0`
  * would have it contradict the manager for the same class.
  */
 export interface ClassChoice {
@@ -89,13 +103,15 @@ export interface ClassChoice {
 /** A class together with what is known about the documents using it. */
 export interface ClassRow extends ClassChoice {
   /**
-   * Documents known to reference this class — a lower bound, never a count.
+   * Documents the usage index records for this class.
    *
-   * Absent from the index means nothing is known, which is reported as zero
-   * because there is no third answer to give a filter. It does not mean the
-   * class is unused, and nothing may treat it as permission.
+   * Named for the INDEX rather than for usage, because that is all it can
+   * report. The index loses rows to interleaved saves and retains them when a
+   * removal fails, so it errs in both directions — this is neither a count nor
+   * a bound on one. Absent means zero, because a filter has no third answer to
+   * give, and nothing may read that zero as permission.
    */
-  knownDocuments: number;
+  indexedDocuments: number;
   /** Whether the document currently open applies this class to any node. */
   onThisPage: boolean;
 }
@@ -131,7 +147,7 @@ export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
  * exists to surface it. A value that is not a usable count is treated as
  * nothing known, which is safe here only because nothing decides on zero.
  */
-function knownUsage(usage: ClassUsageCounts, classId: string): number {
+function indexedUsage(usage: ClassUsageCounts, classId: string): number {
   if (!Object.hasOwn(usage, classId)) return 0;
   const count = usage[classId];
   // A document count is a whole number of documents. A fraction is as much a
@@ -157,7 +173,7 @@ export function classRows(
   const onPage = new Set(documentClassIds);
   return siteClasses(library).map(choice => ({
     ...choice,
-    knownDocuments: knownUsage(usage, choice.id),
+    indexedDocuments: indexedUsage(usage, choice.id),
     onThisPage: onPage.has(choice.id),
   }));
 }
@@ -175,8 +191,8 @@ export function filterClassRows(
   rows: readonly ClassRow[],
   filter: ClassFilter
 ): ClassRow[] {
-  if (filter === "no-known-usage") {
-    return rows.filter(row => row.knownDocuments === 0);
+  if (filter === "not-in-index") {
+    return rows.filter(row => row.indexedDocuments === 0);
   }
   if (filter === "on-this-page") return rows.filter(row => row.onThisPage);
   return [...rows];
@@ -361,6 +377,19 @@ export function renamedClassName(
 /** Why a class cannot go on a node. */
 export type ApplyRefusal = "node-full";
 
+/**
+ * Whether a node can take one more class at all.
+ *
+ * Asked BEFORE a class exists, which is the case {@link withClassApplied}
+ * cannot answer: creating a class and putting it on the selected node is one
+ * intent, and the id it would use does not exist yet. Without this the create
+ * path would reach a host that must either append a reference validation
+ * rejects, or rediscover this same limit on its own.
+ */
+export function nodeHasRoom(nodeClassIds: readonly string[]): boolean {
+  return nodeClassIds.length < MAX_CLASSES_PER_NODE;
+}
+
 /** A node's new class ids, or why the class cannot go on it. */
 export type ClassApplyOutcome =
   | { readonly ok: true; readonly classIds: string[] }
@@ -406,15 +435,15 @@ export function withClassRemoved(
 
 /** What an author is told before a class is deleted. */
 export interface DeletionWarning {
-  /** Documents known to reference it. A floor on the damage, not its size. */
-  knownDocuments: number;
+  /** Documents the index records. Not a count, and not a bound on one. */
+  indexedDocuments: number;
   /**
    * Whether there is a number worth naming in the prompt.
    *
-   * This chooses the WORDING, never whether to ask. False means the index knows
-   * of no document, which is not the same as there being none.
+   * This chooses the WORDING, never whether to ask. False means the index holds
+   * no row, which is not the same as there being no document.
    */
-  hasKnownUsage: boolean;
+  hasIndexedUsage: boolean;
   /**
    * Always. Typed as the literal so no caller can make it conditional without
    * the change being visible in this file.
@@ -440,11 +469,11 @@ export interface DeletionWarning {
  * that should be waved through.
  */
 export function deletionWarning(
-  row: Pick<ClassRow, "knownDocuments">
+  row: Pick<ClassRow, "indexedDocuments">
 ): DeletionWarning {
   return {
-    knownDocuments: row.knownDocuments,
-    hasKnownUsage: row.knownDocuments > 0,
+    indexedDocuments: row.indexedDocuments,
+    hasIndexedUsage: row.indexedDocuments > 0,
     requiresConfirmation: true,
   };
 }

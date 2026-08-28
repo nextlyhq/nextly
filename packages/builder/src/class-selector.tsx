@@ -41,6 +41,7 @@ import * as React from "react";
 
 import {
   appliedClasses,
+  nodeHasRoom,
   selectorOptions,
   withClassApplied,
   withClassRemoved,
@@ -99,6 +100,16 @@ export function ClassSelector({
   const commit = (option: ClassOption | undefined): void => {
     if (option === undefined) return;
     if (option.kind === "create") {
+      /*
+       * The same node bound the apply path observes, asked before the class
+       * exists. `withClassApplied` cannot answer here — the id it would append
+       * is not minted until the host has stored the class — so the precondition
+       * is checked directly rather than left for the host to rediscover.
+       */
+      if (!nodeHasRoom(nodeClassIds)) {
+        setRefused(true);
+        return;
+      }
       onCreateClass(option.slug);
     } else {
       // Through the shared helper rather than an append written here. The

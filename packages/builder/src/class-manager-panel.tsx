@@ -44,18 +44,21 @@ import {
   deletionWarning,
   filterClassRows,
   renamedClassName,
+  usageSummary,
   type ClassFilter,
   type ClassRow,
   type ClassUsageCounts,
 } from "./class-library";
+import { commitOnEnter } from "./commit-on-enter";
 
 /** The filters, with the wording each one is allowed to use. */
 const FILTERS: ReadonlyArray<{ value: ClassFilter; label: string }> = [
   { value: "all", label: "All" },
-  // NOT "Unused". The index cannot distinguish a class no document uses from
-  // one whose rows a concurrent save removed, and a label saying "unused"
-  // would assert the difference it cannot see.
-  { value: "no-known-usage", label: "No known usage" },
+  // NOT "Unused", and not "No known usage" either. The index cannot tell a
+  // class no document uses from one whose rows a save removed, and it also
+  // retains rows a failed removal left behind — so the only thing this filter
+  // can honestly name is the index itself.
+  { value: "not-in-index", label: "Not in index" },
   { value: "on-this-page", label: "On this page" },
 ];
 
@@ -72,6 +75,21 @@ export interface ClassManagerPanelProps {
   usage: ClassUsageCounts;
   /** The class ids the open document applies, for the on-this-page filter. */
   documentClassIds: readonly string[];
+  /**
+   * The classes something ELSE supplies, which the stored library layers over.
+   *
+   * Needed because these two are not equally editable, exactly as the tokens
+   * studio found for tokens. `resolveSiteStyle` merges the site'"'"'s configured
+   * classes back over the stored tier BY ID, so absence from storage means "no
+   * override" rather than "deleted" — a supplied class reappears on the next
+   * read while the delete callback has already stripped it from every document
+   * that referenced it. The author is left with the class back, nothing using
+   * it, and the references gone.
+   *
+   * Offering a Delete that quietly undoes itself is worse than not offering
+   * one, so it is withheld and the row says why.
+   */
+  suppliedClassIds?: readonly string[];
   /** Rename a class. The slug has already passed the engine's grammar. */
   onRename: (classId: string, slug: string) => void;
   /** Delete a class, removing it from every document that references it. */
@@ -83,6 +101,7 @@ export function ClassManagerPanel({
   library,
   usage,
   documentClassIds,
+  suppliedClassIds,
   onRename,
   onDelete,
 }: ClassManagerPanelProps): React.ReactElement {
@@ -110,6 +129,7 @@ export function ClassManagerPanel({
       <ClassList
         rows={rows}
         library={library}
+        supplied={new Set(suppliedClassIds ?? [])}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -145,11 +165,13 @@ function FilterChips({
 function ClassList({
   rows,
   library,
+  supplied,
   onRename,
   onDelete,
 }: {
   rows: readonly ClassRow[];
   library: readonly NamedClass[];
+  supplied: ReadonlySet<string>;
   onRename: (classId: string, slug: string) => void;
   onDelete: (classId: string) => void;
 }): React.ReactElement {
@@ -163,6 +185,7 @@ function ClassList({
           <ClassRowView
             row={row}
             library={library}
+            isSupplied={supplied.has(row.id)}
             onRename={onRename}
             onDelete={onDelete}
           />
@@ -175,11 +198,13 @@ function ClassList({
 function ClassRowView({
   row,
   library,
+  isSupplied,
   onRename,
   onDelete,
 }: {
   row: ClassRow;
   library: readonly NamedClass[];
+  isSupplied: boolean;
   onRename: (classId: string, slug: string) => void;
   onDelete: (classId: string) => void;
 }): React.ReactElement {
@@ -190,15 +215,22 @@ function ClassRowView({
       <div className="nx-classman__fields">
         <NameField row={row} library={library} onRename={onRename} />
         <UsageNote row={row} />
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          aria-label={`Delete ${row.slug}`}
-          onClick={() => setConfirming(true)}
-        >
-          Delete
-        </Button>
+        {isSupplied ? (
+          // Named rather than shown disabled. A greyed button invites an
+          // author to hunt for the permission that would enable it, and there
+          // is none — the class comes from the site's own configuration.
+          <span className="nx-classman__origin">Default</span>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            aria-label={`Delete ${row.slug}`}
+            onClick={() => setConfirming(true)}
+          >
+            Delete
+          </Button>
+        )}
       </div>
       {confirming ? (
         <DeleteConfirm
@@ -258,7 +290,7 @@ function NameField({
         onChange={event => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={event => {
-          if (event.key === "Enter") commit();
+          if (commitOnEnter(event, commit)) return;
           if (event.key === "Escape") setDraft(null);
         }}
       />
@@ -281,15 +313,16 @@ const REFUSALS = {
 } as const;
 
 /**
- * What is known about a class's usage, phrased as knowledge rather than count.
+ * A class's usage figure, in the one vocabulary every surface uses.
  *
- * "None known" and not "Unused": the index can lose a live class's rows to a
- * concurrent save, so the absence of a row is the absence of evidence.
+ * Delegated to {@link usageSummary} rather than phrased here. A row saying one
+ * thing beside a confirmation saying another is two uncertainty policies for
+ * one number, and the row is the one an author reads far more often.
  */
 function UsageNote({ row }: { row: ClassRow }): React.ReactElement {
   return (
     <span className="nx-classman__usage">
-      {row.knownDocuments === 0 ? "None known" : `${row.knownDocuments} known`}
+      {usageSummary(row)}
       {row.onThisPage ? " · on this page" : ""}
     </span>
   );
@@ -319,8 +352,8 @@ function DeleteConfirm({
   return (
     <div className="nx-classman__confirm" role="group">
       <p className="nx-classman__issue">
-        {warning.hasKnownUsage
-          ? `Delete “${row.slug}”? The index has it on ${warning.knownDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
+        {warning.hasIndexedUsage
+          ? `Delete “${row.slug}”? The index has it on ${warning.indexedDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
           : `Delete “${row.slug}”? The index knows of no document using it, but it cannot rule one out.`}
       </p>
       <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
