@@ -18,6 +18,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { isSystemResource } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
 interface PermissionsTableLike {
   resource: unknown;
@@ -357,6 +358,11 @@ export class PermissionService extends BaseService {
    *   one of the hidden internal permissions (resource = 'permissions', or
    *   create/delete on 'settings'). The hidden case maps to NOT_FOUND
    *   intentionally — exposing it as FORBIDDEN would leak the policy.
+   * @throws NextlyError(INTERNAL_ERROR) when the id is nullish or empty. That
+   *   is not a miss, it is a caller bug: Drizzle drops an `undefined` filter
+   *   key entirely, so the lookup would run WITHOUT a where clause and return
+   *   an arbitrary permission — including the hidden ones the NOT_FOUND
+   *   mapping above exists to conceal. Refused rather than answered.
    */
   async getPermissionById(permissionId: string): Promise<{
     id: string;
@@ -370,7 +376,7 @@ export class PermissionService extends BaseService {
     const permission = await (
       this.db as RBACDatabaseInstance
     ).query.permissions.findFirst({
-      where: { id: permissionId },
+      where: { id: requireFilterValue(permissionId, "permissionId") },
       columns: {
         id: true,
         name: true,
@@ -631,7 +637,7 @@ export class PermissionService extends BaseService {
       const permission = await (
         this.db as RBACDatabaseInstance
       ).query.permissions.findFirst({
-        where: { id: permissionId },
+        where: { id: requireFilterValue(permissionId, "permissionId") },
         columns: {
           id: true,
           name: true,
@@ -712,7 +718,7 @@ export class PermissionService extends BaseService {
     const permission = await (
       this.db as RBACDatabaseInstance
     ).query.permissions.findFirst({
-      where: { id: permissionId },
+      where: { id: requireFilterValue(permissionId, "permissionId") },
       columns: {
         id: true,
         resource: true,

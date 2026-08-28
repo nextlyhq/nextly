@@ -23,27 +23,9 @@ import { env } from "../../../lib/env";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import type { Logger } from "../../../services/shared";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { auditReason } from "../../audit/audit-reasons";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
-
-// v1's RQB object filters silently DROP keys whose value is `undefined`
-// (drizzle-orm/relations.js skips them) — so `{ id: undefined }` compiles to
-// NO WHERE clause and `findFirst` returns an arbitrary row. The removed
-// callback form (`eq(col, undefined)`) bound a parameter and matched zero
-// rows — it failed safe. On the auth path that behavioral flip is
-// security-critical, so every single-key lookup routes its value through
-// this guard: a nullish/empty value is a programming error upstream and
-// must throw, never widen the query.
-function requireFilterValue<T>(value: T, field: string): NonNullable<T> {
-  if (value === undefined || value === null || value === "") {
-    throw NextlyError.internal({
-      logContext: {
-        reason: `auth query filter "${field}" resolved to an empty value — refusing to run an unfiltered lookup`,
-      },
-    });
-  }
-  return value;
-}
 
 interface RegisterUserData {
   email: string;
