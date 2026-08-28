@@ -43,6 +43,7 @@ import {
   appliedClasses,
   nodeHasRoom,
   selectorOptions,
+  unappliedNodeClassCount,
   withClassApplied,
   withClassRemoved,
   type ClassChoice,
@@ -92,7 +93,16 @@ export function ClassSelector({
   }
 
   const applied = appliedClasses(library, nodeClassIds);
-  const options = selectorOptions(library, nodeClassIds, query);
+  const { options, hidden } = selectorOptions(library, nodeClassIds, query);
+  const unapplied = unappliedNodeClassCount(nodeClassIds);
+  /*
+   * DERIVED from the current node rather than read from state alone. A stored
+   * refusal outlives the node it described: removing a chip, an undo, or the
+   * host selecting a different element all give the node room again while the
+   * flag still says it is full. Deriving it cannot drift, where an effect that
+   * cleared the flag would have to be kept in step with every one of those.
+   */
+  const showRefusal = refused && !nodeHasRoom(nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps a
   // highlight instead of silently sending Enter back to the first row.
   const highlighted = Math.min(active, Math.max(options.length - 1, 0));
@@ -164,9 +174,19 @@ export function ClassSelector({
         onChoose={commit}
         onHighlight={setActive}
       />
-      {refused ? (
+      {hidden > 0 ? (
+        <p className="nx-inspector__note">
+          {`${hidden} more — keep typing to narrow the list.`}
+        </p>
+      ) : null}
+      {showRefusal ? (
         <p className="nx-classes__issue" role="alert">
           This element already has as many classes as the page can apply.
+        </p>
+      ) : null}
+      {unapplied > 0 ? (
+        <p className="nx-classes__issue" role="status">
+          {`This element lists ${unapplied} more class(es) than the page applies. They style nothing, and removing one here can bring another into use.`}
         </p>
       ) : null}
     </div>
@@ -277,17 +297,21 @@ function OptionList({
           key={optionKey(option)}
           id={optionDomId(id, index)}
           role="option"
+          /*
+           * NOT in the tab sequence. The APG is explicit that with
+           * `aria-activedescendant` only the composite container is tabbable —
+           * DOM focus stays in the input and the arrows move the active
+           * descendant. A nested native button put every row in the tab order,
+           * so one Tab out of the field walked the whole list, and once focus
+           * left the input the arrow handler stopped running at all.
+           */
+          tabIndex={-1}
           aria-selected={index === highlighted}
           className={optionClass(index === highlighted)}
           onMouseEnter={() => onHighlight(index)}
+          onClick={() => onChoose(option)}
         >
-          <button
-            type="button"
-            className="nx-classes__option-button"
-            onClick={() => onChoose(option)}
-          >
-            {optionLabel(option)}
-          </button>
+          {optionLabel(option)}
         </li>
       ))}
     </ul>

@@ -190,10 +190,14 @@ describe("renaming in place", () => {
     expect(onRename).not.toHaveBeenCalled();
   });
 
-  it("lets a class keep its own name, which is not a collision", () => {
-    // Typed away and back, because a field set to the value it already holds
-    // fires no change and would leave the draft unset — the test would then
-    // pass on a code path that never consulted the collision rule at all.
+  it("treats a name typed away and back as no rename at all", () => {
+    /*
+     * Two things at once, and both matter. Its own slug is not a COLLISION, so
+     * no refusal is reported — but it is also not a CHANGE, so no rename is
+     * dispatched: a host that persists every reported intent would write a
+     * revision rendering identically to the one before it. The draft still
+     * clears, because the author did finish editing.
+     */
     const { onRename } = draw();
     fireEvent.change(nameField("hero"), { target: { value: "heroic" } });
     fireEvent.change(screen.getByLabelText("Name of hero"), {
@@ -201,7 +205,19 @@ describe("renaming in place", () => {
     });
     expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.keyDown(screen.getByLabelText("Name of hero"), { key: "Enter" });
-    expect(onRename).toHaveBeenCalledWith("id-hero", "hero");
+    expect(onRename).not.toHaveBeenCalled();
+    expect(
+      (screen.getByLabelText("Name of hero") as HTMLInputElement).value
+    ).toBe("hero");
+  });
+
+  it("treats whitespace around the current slug as no rename either", () => {
+    // Normalisation happens before the comparison, so " hero " is the value
+    // the class already has — the same no-op wearing different text.
+    const { onRename } = draw();
+    fireEvent.change(nameField("hero"), { target: { value: "  hero  " } });
+    fireEvent.keyDown(screen.getByLabelText("Name of hero"), { key: "Enter" });
+    expect(onRename).not.toHaveBeenCalled();
   });
 
   it("commits nothing when the field was never edited", () => {

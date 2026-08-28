@@ -270,8 +270,15 @@ function NameField({
 
   const commit = (): void => {
     if (outcome === null) return;
-    if (outcome.ok) onRename(row.id, outcome.slug);
-    else return;
+    if (!outcome.ok) return;
+    /*
+     * A rename to the name the class already has is not a rename. Text typed
+     * away and back, or the same slug with surrounding space, both normalise to
+     * the stored value — and a host that persists every reported intent would
+     * write a revision whose rendered output is identical to the one before it.
+     * The draft still clears, because the author did finish editing.
+     */
+    if (outcome.slug !== row.slug) onRename(row.id, outcome.slug);
     setDraft(null);
   };
 
