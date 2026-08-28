@@ -124,7 +124,19 @@ describe("withAction — error path", () => {
 });
 
 describe("withAction — requestId", () => {
-  it("honors x-request-id from headers() when set", async () => {
+  // SKIPPED against finding:with-action-header-path-has-no-test-seam.
+  // `with-action.ts` resolves Next through `createRequire(import.meta.url)`,
+  // so `next/headers` is never a specifier vi.mock can intercept. Measured in
+  // one probe with this same mock in scope: the ESM import receives the mock,
+  // the createRequire call receives the real module and throws "headers was
+  // called outside a request scope". The catch then returns a generated id, so
+  // this assertion cannot be reached however the header is set.
+  //
+  // Kept as-is rather than rewritten to assert the fallback: the fallback is
+  // already covered by the test below, and rewriting this one would delete the
+  // only record that the upstream-id precedence chain -- x-request-id,
+  // x-vercel-id, cf-ray -- is unverified.
+  it.skip("honors x-request-id from headers() when set", async () => {
     mockedHeaders = new Headers({ "x-request-id": "req_upstream0000001" });
     const action = withAction(async () => {
       throw NextlyError.notFound();
