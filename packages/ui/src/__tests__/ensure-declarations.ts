@@ -122,6 +122,10 @@ export function buildDeclarations(): string {
 /** What the declaration build reads, for deciding whether it is out of date. */
 const BUILD_INPUTS = [
   "src",
+  // `scripts` because one of them decides WHAT is built: `published-entries`
+  // derives the entry list from the exports map, so a change there changes the
+  // output without touching anything under `src`.
+  "scripts",
   "tsup.config.ts",
   "tsup.server-safe.config.ts",
   "tsconfig.json",

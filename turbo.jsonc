@@ -388,7 +388,13 @@
         "tsup.config.ts",
         "tsup.server-safe.config.ts",
         "tsconfig.json",
-        "package.json"
+        "package.json",
+        // The scripts BUILD it, and one of them decides what gets built:
+        // `published-entries` derives the entry list from the exports map. A
+        // change there that no listed file accompanies would otherwise leave
+        // the hash unmoved, replay the cached output, and let the surface suite
+        // pass against declarations produced by the previous derivation.
+        "scripts/**/*.{ts,mts,cts,js,mjs,cjs}"
       ],
       "outputs": ["node_modules/.cache/surface-declarations/**"]
     },
@@ -488,7 +494,11 @@
     // Same as 'test' but with coverage reporting enabled.
     // Outputs HTML and terminal coverage reports.
     "test:coverage": {
-      "dependsOn": ["^build"],
+      // `build:surface-declarations` for the same reason `test` has it: the ui
+      // package's surface suite runs here too, and it READS declarations rather
+      // than building them. Without this edge, coverage from a clean tree
+      // reaches that suite with nothing to read.
+      "dependsOn": ["^build", "build:surface-declarations"],
       "outputs": ["coverage/**"],
       "cache": true
     },
