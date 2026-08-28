@@ -138,8 +138,10 @@ describe("the cascade fetched for the panel", () => {
     // The baseline is IN what they agreed on, rather than absent from both. A
     // comparison of two sheets that each lack the tier would pass while the
     // panel explained a cascade the page does not have.
-    expect(compiled.css).toContain(":where(");
-    expect(compiled.css).toContain(" h1)");
+    // The baseline is IN what they agreed on, and ANCHORED rather than merely
+    // present. A rule wrapped whole weighs 0-0-0 and loses to a bare element
+    // reset, so "contains `h1`" would pass on a sheet that changes nothing.
+    expect(compiled.css).toContain(".nx-pb-page :where(h1)");
     // And the trace belongs to that same compile rather than to a different one.
     expect(
       pageStyleTrace(page, { breakpoints: BREAKPOINTS }, undefined)?.entries

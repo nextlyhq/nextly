@@ -60,6 +60,7 @@ import {
 import {
   blockTypeClassName,
   nodeClassNames,
+  PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { serializeRules } from "./serialize";
@@ -144,7 +145,7 @@ export interface StyleCompileContext {
    * this bridges the gap until the fonts manager fills it, and is shaped so
    * that manager can supply the same record later.
    */
-  elementBases?: Readonly<Record<string, NodeStyles>>;
+  elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -341,7 +342,26 @@ export interface CompiledPageCss {
  * specificity are separated by source order, so the order they are emitted in
  * is part of the contract rather than an artifact of iteration.
  */
-const TYPOGRAPHIC_ELEMENTS = ["h1", "h2", "h3", "h4", "h5", "h6", "p"] as const;
+export const TYPOGRAPHIC_ELEMENTS = [
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+] as const;
+
+/**
+ * An element a typographic default may be written for.
+ *
+ * The type is the allow-list rather than a widening of it, so a tag the
+ * compiler does not emit — a typo, or `blockquote` before anyone decides it
+ * belongs — is refused where it is written instead of silently contributing
+ * nothing. A caller reading `Record<string, …>` has no way to learn which keys
+ * are honoured except by trying one.
+ */
+export type TypographicElement = (typeof TYPOGRAPHIC_ELEMENTS)[number];
 
 const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
   base: "",
@@ -1068,8 +1088,8 @@ interface EnvelopeContext {
   /** Which hosts this site will fetch from; unasked when absent. */
   mayFetchUrl?: MayFetchUrl;
   /**
-   * Whether this envelope's rules carry NO specificity, by wrapping each
-   * finished selector in `:where()`.
+   * The selector part kept OUTSIDE `:where()` when this envelope's rules are
+   * written as defaults, with everything else wrapped.
    *
    * Set for a block type's DEFAULTS and for nothing else. The page-root prefix
    * is doubled so an AUTHOR's values beat ordinary host CSS, and defaults
@@ -1084,10 +1104,25 @@ interface EnvelopeContext {
    * order: a type's default loses to a named class and to a node's own value
    * because it weighs nothing, not because it happens to be written first.
    *
+   * **It is an anchor rather than a flag because zero is the wrong weight.**
+   * Wrapping the WHOLE selector gives `0-0-0`, and an ordinary unlayered reset
+   * — `h1, h2, … { font-size: inherit; margin: 0 }`, which is the shape
+   * Tailwind's preflight ships — is `0-0-1` and beats it. A default written
+   * that way loses to the very reset it exists to answer. Measured in a
+   * browser: with the reset present, the fully wrapped rule left an `h1` at
+   * 16px and the anchored one at its declared 36px.
+   *
+   * One class outside and the rest inside gives `0-1-0`, which is what
+   * Tailwind Typography emits and what the two ends of the contract need: it
+   * beats a bare element reset, and it still loses to a host's own
+   * `.content h1` at `0-1-1`. The anchor is the SINGLE page-root class rather
+   * than the doubled one, because doubling is how an author's values are made
+   * to outrank host CSS and a default must not borrow that.
+   *
    * `:where()` changes what a match WEIGHS and never what it selects, so the
    * same elements are styled either way.
    */
-  weightless?: boolean;
+  weightlessAnchor?: string;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -1111,7 +1146,7 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl, weightless = false } = about;
+  const { origin, trace, mayFetchUrl, weightlessAnchor } = about;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1196,15 +1231,15 @@ function envelopeRules(
       for (const rule of groupByDescendant(compiled.declarations)) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-          // Wrapped AFTER the state and the descendant are appended, never
-          // around the base alone: `:where(root .type) a` leaves the `a`
-          // outside and weighing 0-0-1, so a block default that styles
-          // something inside itself would still outrank a host rule of the
-          // same shape. The whole selector goes in or the guarantee is
-          // partial.
-          selector: weightless
-            ? `:where(${selector}${STATE_SELECTORS[state]}${rule.descendant})`
-            : `${selector}${STATE_SELECTORS[state]}${rule.descendant}`,
+          // Everything after the anchor is wrapped, state and descendant
+          // included: `${anchor} :where(x) a` leaves the `a` outside carrying
+          // weight of its own, so a default that styles something inside
+          // itself would outrank a host rule of the same shape. The anchor is
+          // the only part that weighs.
+          selector:
+            weightlessAnchor === undefined
+              ? `${selector}${STATE_SELECTORS[state]}${rule.descendant}`
+              : `${weightlessAnchor} :where(${selector}${STATE_SELECTORS[state]}${rule.descendant})`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1573,6 +1608,11 @@ export function compilePageCss(
   // selectors do not carry.
   const effectiveScope = scope === "" ? undefined : ctx.scope;
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
+  // The SINGLE page-root class, for the tiers that must not borrow the
+  // doubling. `PAGE_ROOT_SELECTOR` repeats the class so an author's values
+  // outrank host CSS; a default anchored to one class weighs `0-1-0`, which
+  // clears a bare element reset and still yields to a host's own class rule.
+  const defaultsAnchor = `.${PAGE_ROOT_CLASS}${scope}`;
 
   const nodes = documentNodes(
     doc,
@@ -1642,7 +1682,7 @@ export function compilePageCss(
     rules.push(
       ...envelopeRules(
         elements[tag],
-        `${pageRoot} ${tag}`,
+        tag,
         pointer("/elementBases", tag),
         contexts,
         tokenPrefix,
@@ -1653,7 +1693,7 @@ export function compilePageCss(
           origin: { kind: "page" },
           trace,
           mayFetchUrl,
-          weightless: true,
+          weightlessAnchor: defaultsAnchor,
         }
       )
     );
@@ -1694,7 +1734,7 @@ export function compilePageCss(
         // escaping is what keeps it safe if the check is ever loosened, and it
         // changes nothing for a type that passed, whose characters are all
         // legal in a class already.
-        `${pageRoot} .${escapeIdentifier(blockTypeClassName(type))}`,
+        `.${escapeIdentifier(blockTypeClassName(type))}`,
         pointer("/blockBases", type),
         contexts,
         tokenPrefix,
@@ -1705,7 +1745,7 @@ export function compilePageCss(
           origin: { kind: "blockType", type },
           trace,
           mayFetchUrl,
-          weightless: true,
+          weightlessAnchor: defaultsAnchor,
         }
       )
     );
