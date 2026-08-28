@@ -424,9 +424,12 @@ describe("the class selector, mounted above the style sections", () => {
     );
   });
 
-  it("reports a creation to the host rather than writing it", () => {
-    // The class has no id until the host has stored it, so a node write here
-    // would have to invent one.
+  it("reports a creation to the host, then writes the id it answers with", async () => {
+    /*
+     * Asserting only that no write happened YET is satisfied by the promise not
+     * having settled, and would hold for a panel that never applies the class.
+     * The write has to be observed after the microtask runs.
+     */
     const { editor, onCreateClass } = mountWithClasses({ library: LIBRARY });
     fireEvent.change(screen.getByRole("combobox", { name: /add a class/i }), {
       target: { value: "call-to-action" },
@@ -437,6 +440,14 @@ describe("the class selector, mounted above the style sections", () => {
 
     expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
     expect(editor.applyAll).not.toHaveBeenCalled();
+
+    await React.act(async () => {});
+
+    expect(editor.applyAll.mock.calls[0]?.[0]?.[0]).toEqual({
+      kind: "update",
+      id: "a",
+      patch: { classes: ["id-new"] },
+    });
   });
 });
 
