@@ -31,13 +31,20 @@
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
 import type * as React from "react";
+import { Fragment } from "react";
 
-import { FIT_ZOOM, ZOOM_STEPS, type CanvasZoom } from "./canvas-zoom";
+import {
+  FIT_ZOOM,
+  ZOOM_STEPS,
+  writeZoom,
+  type CanvasZoom,
+} from "./canvas-zoom";
 
 export interface CanvasZoomControlProps {
   /** What the canvas was asked to draw at. */
@@ -69,6 +76,34 @@ function asPercent(scale: number): string {
   return `${Math.round(scale * 100)}%`;
 }
 
+/**
+ * A zoom as the string the menu addresses it by.
+ *
+ * Routed through `writeZoom` rather than spelled here, so the value a checked
+ * item is compared against and the value the preference is stored as are one
+ * decision. Written twice they agree until one of them learns a new kind, and
+ * the failure is a menu with nothing checked rather than an error.
+ */
+function choiceValue(zoom: CanvasZoom): string {
+  return String(writeZoom(zoom));
+}
+
+/**
+ * Every zoom the menu offers, in the order it offers them.
+ *
+ * Built once from the steps rather than parsed back out of the chosen string.
+ * A parse is a second implementation of what this list already knows, and it
+ * has a failure mode the lookup does not: an unrecognised string has to become
+ * SOME zoom, so it silently becomes the wrong one.
+ */
+const CHOICES: readonly { value: string; label: string; zoom: CanvasZoom }[] = [
+  { value: choiceValue(FIT_ZOOM), label: "Fit", zoom: FIT_ZOOM },
+  ...ZOOM_STEPS.map(step => {
+    const zoom: CanvasZoom = { kind: "fixed", scale: step };
+    return { value: choiceValue(zoom), label: asPercent(step), zoom };
+  }),
+];
+
 export function CanvasZoomControl({
   zoom,
   appliedScale,
@@ -94,24 +129,36 @@ export function CanvasZoomControl({
         <span aria-hidden="true">{shown}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        <DropdownMenuItem
-          onSelect={() => {
-            onChange(FIT_ZOOM);
+        {/* A RADIO group, so the open menu says which mode is active.
+
+            The trigger cannot: Fit resolves to exactly 100% at the widest
+            tier, which is the state an editor opens in, so "100%" is the same
+            two characters for a canvas that will resize when a panel opens and
+            one that will not. The mark is the only place a sighted author can
+            read the difference, and a checked radio is also what tells a
+            screen reader which item is current.
+
+            Nothing is marked when the zoom is a fixed scale the steps do not
+            contain — a host can pass one, and a stored value can outlive the
+            step list. That is honest: the menu genuinely does not hold it, and
+            marking the nearest step would claim the author chose something
+            they did not. */}
+        <DropdownMenuRadioGroup
+          value={choiceValue(zoom)}
+          onValueChange={next => {
+            const choice = CHOICES.find(candidate => candidate.value === next);
+            if (choice !== undefined) onChange(choice.zoom);
           }}
         >
-          Fit
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {ZOOM_STEPS.map(step => (
-          <DropdownMenuItem
-            key={step}
-            onSelect={() => {
-              onChange({ kind: "fixed", scale: step });
-            }}
-          >
-            {asPercent(step)}
-          </DropdownMenuItem>
-        ))}
+          {CHOICES.map((choice, index) => (
+            <Fragment key={choice.value}>
+              {index === 1 ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuRadioItem value={choice.value}>
+                {choice.label}
+              </DropdownMenuRadioItem>
+            </Fragment>
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

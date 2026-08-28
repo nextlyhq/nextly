@@ -92,7 +92,7 @@ describe("the canvas zoom control", () => {
     const { onChange } = mount({ appliedScale: 1 });
 
     fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse" });
-    const item = screen.getByRole("menuitem", { name: "150%" });
+    const item = screen.getByRole("menuitemradio", { name: "150%" });
     fireEvent.pointerUp(item, { pointerType: "mouse" });
 
     expect(onChange).toHaveBeenCalledWith({ kind: "fixed", scale: 1.5 });
@@ -107,10 +107,67 @@ describe("the canvas zoom control", () => {
     const { onChange } = mount({ zoom: { kind: "fixed", scale: 2 } });
 
     fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse" });
-    fireEvent.pointerUp(screen.getByRole("menuitem", { name: "Fit" }), {
+    fireEvent.pointerUp(screen.getByRole("menuitemradio", { name: "Fit" }), {
       pointerType: "mouse",
     });
 
     expect(onChange).toHaveBeenCalledWith(FIT_ZOOM);
+  });
+});
+
+describe("which zoom the open menu says is current", () => {
+  /** Open the menu and return the item with this label. */
+  function itemNamed(name: string): HTMLElement {
+    return screen.getByRole("menuitemradio", { name });
+  }
+
+  function open(): void {
+    fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse" });
+  }
+
+  it("marks FIT rather than the step it happens to resolve to", () => {
+    /*
+     * The case the trigger cannot cover. Fit produces exactly 100% at the
+     * widest tier, which is the state the editor opens in, so the visible
+     * label is the same four characters for a canvas that will resize when a
+     * panel opens and one that will not. Both items are asserted: marking Fit
+     * while also marking 100% would satisfy an assertion on Fit alone, and it
+     * is precisely the ambiguity being removed.
+     */
+    mount({ zoom: FIT_ZOOM, appliedScale: 1 });
+    open();
+
+    expect(itemNamed("Fit").getAttribute("aria-checked")).toBe("true");
+    expect(itemNamed("100%").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("marks the STEP when one was chosen, at the same painted scale", () => {
+    // The other half of the pair, deliberately at the scale that makes the two
+    // states indistinguishable on the trigger.
+    mount({ zoom: { kind: "fixed", scale: 1 }, appliedScale: 1 });
+    open();
+
+    expect(itemNamed("100%").getAttribute("aria-checked")).toBe("true");
+    expect(itemNamed("Fit").getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("marks NOTHING for a fixed scale the menu does not offer", () => {
+    /*
+     * A host can build a zoom directly and a stored value can outlive the step
+     * list, so a scale between the steps is reachable. Marking the nearest one
+     * would tell the author they chose something they did not; an unmarked
+     * menu says truthfully that none of these is what is on screen.
+     */
+    mount({ zoom: { kind: "fixed", scale: 1.23 }, appliedScale: 1.23 });
+    open();
+
+    const marked = screen
+      .getAllByRole("menuitemradio")
+      .filter(item => item.getAttribute("aria-checked") === "true");
+    // Asserted through the count of MARKED items rather than by naming each
+    // one: a case that checks only the steps it thought of passes against an
+    // implementation that marks a step it did not.
+    expect(marked).toHaveLength(0);
+    expect(screen.getAllByRole("menuitemradio").length).toBeGreaterThan(1);
   });
 });
