@@ -76,19 +76,16 @@ export interface LayersPanelProps {
   /**
    * Whether the block-move keystrokes are bound for THIS editor.
    *
-   * Asked of the host rather than worked out here, and that is the third answer
-   * to this question — the first two were wrong in instructive ways. A React
-   * context said no in the product, because `BlocksField` draws this panel
-   * through the shell's panel region while the bindings wrap the shell's
-   * children, and those are sibling subtrees. Asking the shortcut manager fixed
-   * that and broke two other things: it made a `ShortcutProvider` mandatory for
-   * a panel that never needed one, and it cannot tell one editor's bindings
-   * from another's, so a second editor's enabled keys advertised themselves in
-   * a panel whose own were off.
+   * Owned by the host, which is the only place that can answer it. This panel
+   * is drawn in the shell's panel region while the keystrokes are registered by
+   * a component wrapping the shell's children, and those are sibling subtrees —
+   * so nothing readable from where this sits describes the bindings beside it.
+   * A host with two editors on one page has two answers, and only it knows
+   * which belongs to which.
    *
-   * The host is the only place that knows, because the host is what mounts both
-   * halves. Defaults to `false`: a panel told nothing says nothing, which is
-   * the safe direction for a claim that pressing something does something.
+   * Defaults to `false`, so a panel told nothing says nothing: the legend is a
+   * claim that pressing something does something, and silence is the safe
+   * direction for a claim that cannot be checked from here.
    */
   moveHints?: boolean;
 }

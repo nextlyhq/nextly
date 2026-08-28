@@ -128,12 +128,11 @@ function Host({
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
   /*
-   * Rendered with NO provider around it in the default case, deliberately.
+   * No shortcut provider around it, deliberately.
    *
-   * This component is exported, and a host may mount it on its own. An earlier
-   * revision read the shortcut manager from here, which made a `ShortcutProvider`
-   * mandatory for a panel that had never needed one — a crash for direct
-   * consumers, and a harness that always supplied one could not have seen it.
+   * This component is exported and a host may mount it on its own, so it must
+   * render without one. A harness that always supplied a provider could not
+   * tell that apart from a panel that requires one.
    */
   return <LayersPanel editor={editor} moveHints={keys === "bound"} />;
 }
@@ -192,11 +191,25 @@ describe("LayersPanel", () => {
     renderPanel();
 
     const hint = hintFor(screen.getByRole("tree"));
-    for (const { keys, description } of MOVE_KEYS) {
+    const rendered = Array.from(
+      hint?.querySelectorAll(".nx-layers-panel__hint-row") ?? []
+    );
+    expect(rendered).toHaveLength(MOVE_KEYS.length);
+    MOVE_KEYS.forEach(({ keys, description }, index) => {
       const shown = keyHint(keys, false);
       expect(shown).not.toBeNull();
-      expect(hint?.textContent).toContain(description);
-    }
+      const row = rendered[index];
+      /*
+       * The KEY as drawn, beside its own description. Asserting only that the
+       * descriptions appear leaves the keystrokes unchecked, so a legend that
+       * iterated these bindings and printed fixed labels beside them would
+       * pass — which is the exact implementation this claims not to be.
+       */
+      expect(
+        row?.querySelector(".nx-layers-panel__hint-key")?.textContent
+      ).toBe(shown);
+      expect(row?.textContent).toContain(description);
+    });
     // As many keystrokes drawn as there are bindings, so a binding added to the
     // table cannot quietly go unmentioned here.
     expect(hint?.querySelectorAll(".nx-layers-panel__hint-key").length).toBe(
@@ -238,11 +251,16 @@ describe("LayersPanel", () => {
      * perfectly, which is why a single-panel fixture cannot see this.
      */
     register();
+    /*
+     * BOTH bound. With one panel unbound its description is absent, so the
+     * comparison is against a `null` that differs from anything — green with a
+     * shared constant id, which is the regression this is for.
+     */
     render(
-      <ShortcutProvider>
-        <Host document={nestedDocument()} keys="absent" />
+      <>
         <Host document={nestedDocument()} keys="bound" />
-      </ShortcutProvider>
+        <Host document={nestedDocument()} keys="bound" />
+      </>
     );
 
     const [first, second] = screen.getAllByRole("tree");
@@ -251,13 +269,15 @@ describe("LayersPanel", () => {
     }
     const firstId = first.getAttribute("aria-describedby");
     const secondId = second.getAttribute("aria-describedby");
+    expect(firstId).not.toBeNull();
+    expect(secondId).not.toBeNull();
     expect(firstId).not.toBe(secondId);
-    // And each id resolves to a legend that is inside ITS OWN panel, which is
-    // the property a mere difference of strings does not establish.
+    // And each id resolves to a legend inside ITS OWN panel — two different
+    // strings alone do not establish that either points at the right element.
     for (const tree of [first, second]) {
       const hint = hintFor(tree);
-      if (hint === null) continue;
-      expect(hint.closest(".nx-layers-panel")).toBe(
+      expect(hint).not.toBeNull();
+      expect(hint?.closest(".nx-layers-panel")).toBe(
         tree.closest(".nx-layers-panel")
       );
     }
