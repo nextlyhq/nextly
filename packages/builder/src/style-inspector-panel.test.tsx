@@ -270,6 +270,31 @@ describe("controls", () => {
     expect(screen.getByRole("option", { name: "multiply" })).toBeDefined();
   });
 
+  it("writes on Enter, and stops the entry form from submitting", () => {
+    /*
+     * Both halves matter and neither implies the other. Committing without
+     * `preventDefault` submits the surrounding entry form, saving or
+     * publishing the entry when the author meant to finish one field; and
+     * preventing without committing loses the edit silently. Nothing covered
+     * this before, which is how the handler came to be refactored unguarded.
+     */
+    const editor = mount({ spacing: true });
+    const field = fieldsOf("padding").getByLabelText("Block start");
+
+    fireEvent.change(field, { target: { value: "12px" } });
+    expect(editor.applyAll).not.toHaveBeenCalled();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    field.dispatchEvent(event);
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it("writes through the store on blur, not on every keystroke", () => {
     const editor = mount({ spacing: true });
     const field = fieldsOf("padding").getByLabelText("Block start");

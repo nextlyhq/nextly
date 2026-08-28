@@ -366,3 +366,39 @@ export { TokensPanel } from "./tokens-panel";
 export type { TokensPanelProps } from "./tokens-panel";
 export { SelectionBreadcrumb } from "./breadcrumb";
 export type { SelectionBreadcrumbProps } from "./breadcrumb";
+/*
+ * The two class surfaces, and the rules both answer from.
+ *
+ * Split because the actions are: applying a class happens while styling one
+ * element and belongs beside the style controls, while auditing and deleting is
+ * occasional and needs a list. A host that mounts either owns the site style
+ * document and decides when an edit is persisted; these export the surfaces,
+ * not the save.
+ */
+export { ClassSelector } from "./class-selector";
+export type { ClassSelectorProps } from "./class-selector";
+export { ClassManagerPanel } from "./class-manager-panel";
+export type { ClassManagerPanelProps } from "./class-manager-panel";
+export {
+  classRows,
+  filterClassRows,
+  deletionWarning,
+  newClassName,
+  renamedClassName,
+  nodeHasRoom,
+  siteClasses,
+  usageSummary,
+  withClassApplied,
+  withClassRemoved,
+} from "./class-library";
+export type {
+  ApplyRefusal,
+  ClassApplyOutcome,
+  ClassChoice,
+  ClassFilter,
+  ClassNameOutcome,
+  ClassRow,
+  ClassUsageCounts,
+  DeletionWarning,
+  NameRefusal,
+} from "./class-library";
