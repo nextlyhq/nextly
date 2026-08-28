@@ -298,16 +298,17 @@ export function richTextNode(
     return refuse(meta, presenceStatus(beforeAbsent, afterAbsent, "changed"));
   }
 
-  // Both sides hold nothing, so there is nothing to show and nothing changed.
-  // Returned before the block comparison rather than after, because comparing
-  // `[]` against Lexical's empty paragraph yields one ADDED block — a blank
-  // row rendered into the diff for an edit that changed nothing a reader can
-  // see, which is the other half of reading an empty document as content.
-  if (beforeAbsent && afterAbsent) {
-    return { ...meta, kind: "richText", status: "unchanged", blocks: [] };
-  }
+  // An absent side contributes NO blocks, whichever spelling it arrived in.
+  // Both views then derive from one absence decision: the field status and the
+  // block statuses cannot contradict each other. Left as its parsed blocks, an
+  // empty paragraph pairs against the other side's content and reports the
+  // block `changed` — with incidental attribute differences — while the field
+  // reports `added`, and the view renders the block. It is also what keeps a
+  // blank row out of the diff when both sides are absent.
+  const beforeCompared = beforeAbsent ? [] : beforeBlocks;
+  const afterCompared = afterAbsent ? [] : afterBlocks;
 
-  const blocks = compareBlocks(beforeBlocks, afterBlocks);
+  const blocks = compareBlocks(beforeCompared, afterCompared);
   // Too large to align. Unlike the case above this says nothing about presence
   // either, since both sides were readable documents.
   if (blocks === null) return refuse(meta, "changed");

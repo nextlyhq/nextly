@@ -519,11 +519,18 @@ describe("richTextNode — an empty document is an absence, not content", () => 
     it(`reports filling ${label} as added, not changed`, () => {
       const node = richTextNode(meta, empty(), doc(["First"]));
       expect(node.status).toBe("added");
+      // The BLOCKS have to agree with the field. An absent side that still
+      // contributes its empty paragraph pairs it against the new text, so the
+      // block reports `changed` with incidental attribute differences while
+      // the field reports `added` — and the view renders the block status, so
+      // the reader is shown a Changed row on a field that was just filled.
+      expect(node.blocks.map(b => b.status)).toEqual(["added"]);
     });
 
     it(`reports emptying a field to ${label} as removed, not changed`, () => {
       const node = richTextNode(meta, doc(["First"]), empty());
       expect(node.status).toBe("removed");
+      expect(node.blocks.map(b => b.status)).toEqual(["removed"]);
     });
   }
 
