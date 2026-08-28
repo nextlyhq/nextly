@@ -139,14 +139,24 @@ type ResolvedDefinition = NonNullable<ReturnType<SlotDefaultSource["get"]>>;
 /**
  * How deep a chain of declared defaults may go.
  *
- * DERIVED from the document's own `MAX_DEPTH` rather than chosen here. A second
- * number would be a second depth policy, and the lower of the two silently
- * wins: a declaration nesting nine containers is legal by the document model
- * and was truncated by a bound this module invented, with nothing reported.
+ * **This bounds THIS function's own recursion; it does not promise the result
+ * fits.** The same distinction the node budget below draws, and for the same
+ * reason stated at the top of this module: these primitives make no claim about
+ * whether what they build can be saved, and one place decides that at the point
+ * of writing. A subtree seeded into an already-deep slot can exceed the
+ * document's depth once placed, and the op layer refuses it — which is what
+ * happens to any oversized insert and is not this function's question. It
+ * cannot be this function's question: the insertion point belongs to the
+ * caller, and a value expanded here may be placed anywhere or nowhere.
+ *
+ * `MAX_DEPTH` supplies the ceiling because it is the natural one and inventing
+ * a second number would give the same question two answers — the failure this
+ * replaced, where a legal nine-deep declaration was truncated by a bound this
+ * module had chosen for itself.
  *
  * Less ONE, because the node these children hang from is created by the caller
- * and counts toward the document's depth just as they do — spending the whole
- * allowance below it yields a tree one level deeper than any document may hold.
+ * and occupies a level of its own. That removes the case that could never fit
+ * WHEREVER it landed; it does not make the remainder fit everywhere.
  *
  * The cycle set is what stops a block seeding itself at any remove, so this
  * bounds only a chain of DISTINCT types.
