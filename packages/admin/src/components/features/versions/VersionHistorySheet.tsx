@@ -608,10 +608,16 @@ export function VersionHistorySheet({
                 size="sm"
                 onClick={() =>
                   navigateTo(
-                    versionsHref(scope, {
-                      from: previousVersionNo,
-                      to: selected,
-                    })
+                    versionsHref(
+                      scope,
+                      { from: previousVersionNo, to: selected },
+                      // The SELECTED version's language, not the sheet's
+                      // filter: the filter says which rows are listed, while
+                      // this says which text the pair being opened actually
+                      // holds — and that is what the destination must name the
+                      // document in.
+                      versions.find(v => v.versionNo === selected)?.locale
+                    )
                   )
                 }
               >

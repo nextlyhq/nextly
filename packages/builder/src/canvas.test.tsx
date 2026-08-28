@@ -424,6 +424,110 @@ describe("the gesture a click's modifiers meant", () => {
     );
   }
 
+  it("selects the block under a secondary click before any menu opens", () => {
+    /*
+     * A menu opened over one block while the selection sits on another acts on
+     * the other one, and the author is looking at the block they aimed at — so
+     * a destructive verb would be aimed somewhere off screen. The selection has
+     * to move on the contextmenu event itself, which is the only thing that
+     * happens before a menu above this can open.
+     */
+    const onSelect = vi.fn();
+    const { container } = clickable(onSelect);
+    const block = container.querySelector(`[${NODE_ID_ATTRIBUTE}]`);
+    if (block === null) throw new Error("expected a rendered block");
+
+    fireEvent.contextMenu(block);
+    expect(onSelect).toHaveBeenCalledWith("a", "replace");
+  });
+
+  it("keeps a selection that already holds the block", () => {
+    /*
+     * Right-clicking one of several chosen blocks to act on all of them is what
+     * every comparable editor does. Re-selecting would drop the rest of the
+     * author's selection at the exact moment they went looking for a verb.
+     */
+    const onSelect = vi.fn();
+    const { container } = render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedIds={["a", "other"]}
+        onSelect={onSelect as never}
+      />
+    );
+    const block = container.querySelector(`[${NODE_ID_ATTRIBUTE}]`);
+    if (block === null) throw new Error("expected a rendered block");
+
+    fireEvent.contextMenu(block);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("withholds the event from above when no block is under it", () => {
+    /*
+     * A menu of block verbs over the canvas background would have no subject.
+     * Stopping the event here rather than opening an empty menu keeps that
+     * decision beside the hit test that establishes it — and an ancestor
+     * listening for the gesture is exactly how the menu is mounted.
+     */
+    const onSelect = vi.fn();
+    const above = vi.fn();
+    const { container } = render(
+      <div onContextMenu={above}>
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          onSelect={onSelect as never}
+        />
+      </div>
+    );
+    // The page wrapper: inside the canvas, carrying no node id of its own.
+    const background = container.querySelector(".nx-pb-page");
+    if (background === null) throw new Error("expected the page wrapper");
+
+    fireEvent.contextMenu(background);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(above).not.toHaveBeenCalled();
+  });
+
+  it("lets the event reach above when a block IS under it", () => {
+    // The control on the other side: a rule that stopped every contextmenu
+    // event would pass the test above while no menu could ever open.
+    const above = vi.fn();
+    const { container } = render(
+      <div onContextMenu={above}>
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          onSelect={vi.fn() as never}
+        />
+      </div>
+    );
+    const block = container.querySelector(`[${NODE_ID_ATTRIBUTE}]`);
+    if (block === null) throw new Error("expected a rendered block");
+
+    fireEvent.contextMenu(block);
+    expect(above).toHaveBeenCalledTimes(1);
+  });
+
   it("reports the mode alongside the id", () => {
     // The mode travels with the id because only the event knows it: a caller
     // reading modifiers off a later render's event would read a different

@@ -188,14 +188,26 @@ export function VersionComparePage({
       // reinstate exactly that — these two numbers are what `resolvePair`
       // reads, so they are what "the same comparison" means.
       if (previous.versionNo === from && versionNo === to) return;
+      // Built through the same `versionsHref` the history sheet uses, so one
+      // place decides what a comparison's address looks like. Hand-building it
+      // here is how the locale came to be dropped: the address was assembled
+      // from the two numbers this callback happens to hold, and a language is
+      // not one of them.
+      //
+      // The locale is taken from the SELECTED version rather than carried from
+      // the current address, so choosing a row in another language moves the
+      // page to that language instead of keeping the previous one. The rail
+      // interleaves locales, so the row a reader clicks is routinely not in the
+      // language now on screen.
       navigateTo(
-        withQuery(window.location.pathname, {
-          from: previous.versionNo,
-          to: versionNo,
-        })
+        versionsHref(
+          scope,
+          { from: previous.versionNo, to: versionNo },
+          versions.find(v => v.versionNo === versionNo)?.locale
+        )
       );
     },
-    [versions, list.hasNextPage, from, to]
+    [versions, list.hasNextPage, from, to, scope]
   );
 
   return (
@@ -267,10 +279,18 @@ export function VersionComparePage({
   );
 }
 
-/** The address of a document's history, with an optional pair already chosen. */
+/**
+ * The address of a document's history, with an optional pair already chosen.
+ *
+ * The locale travels with the pair. A localized document holds different text
+ * per language, so the versions being compared and the name the page gives the
+ * document are both questions the language answers — and a link that omits it
+ * opens the French comparison under the English title.
+ */
 export function versionsHref(
   scope: VersionScope,
-  pair?: { from: number; to: number }
+  pair?: { from: number; to: number },
+  locale?: string | null
 ): string {
   const path =
     scope.kind === "single"
@@ -279,5 +299,12 @@ export function versionsHref(
           slug: scope.slug,
           id: scope.entryId ?? "",
         });
-  return pair ? withQuery(path, { from: pair.from, to: pair.to }) : path;
+  const query = {
+    ...(pair ? { from: pair.from, to: pair.to } : {}),
+    // Omitted rather than sent empty when there is none: a non-localized
+    // document should carry no locale, and `?locale=` reads as one that failed
+    // to resolve rather than one that was never asked for.
+    ...(locale ? { locale } : {}),
+  };
+  return Object.keys(query).length > 0 ? withQuery(path, query) : path;
 }

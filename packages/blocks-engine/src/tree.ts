@@ -82,10 +82,11 @@ import type { SlotSpec } from "./block";
 import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
-import { MAX_NODES } from "./limits";
+import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
+import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
@@ -138,13 +139,29 @@ type ResolvedDefinition = NonNullable<ReturnType<SlotDefaultSource["get"]>>;
 /**
  * How deep a chain of declared defaults may go.
  *
- * A bound rather than a promise: the cycle set below already stops a block from
- * seeding itself at any remove, so this catches only a chain of DISTINCT types
- * long enough to be a mistake — eight containers deep is past any layout an
- * author would draw, and a declaration that wants more is describing a document
- * rather than a starting point.
+ * **This bounds THIS function's own recursion; it does not promise the result
+ * fits.** The same distinction the node budget below draws, and for the same
+ * reason stated at the top of this module: these primitives make no claim about
+ * whether what they build can be saved, and one place decides that at the point
+ * of writing. A subtree seeded into an already-deep slot can exceed the
+ * document's depth once placed, and the op layer refuses it — which is what
+ * happens to any oversized insert and is not this function's question. It
+ * cannot be this function's question: the insertion point belongs to the
+ * caller, and a value expanded here may be placed anywhere or nowhere.
+ *
+ * `MAX_DEPTH` supplies the ceiling because it is the natural one and inventing
+ * a second number would give the same question two answers — the failure this
+ * replaced, where a legal nine-deep declaration was truncated by a bound this
+ * module had chosen for itself.
+ *
+ * Less ONE, because the node these children hang from is created by the caller
+ * and occupies a level of its own. That removes the case that could never fit
+ * WHEREVER it landed; it does not make the remainder fit everywhere.
+ *
+ * The cycle set is what stops a block seeding itself at any remove, so this
+ * bounds only a chain of DISTINCT types.
  */
-const MAX_SLOT_DEFAULT_DEPTH = 8;
+const MAX_SLOT_DEFAULT_DEPTH = MAX_DEPTH - 1;
 
 /**
  * How many nodes one expansion may create, and why a depth bound is not enough.
@@ -279,6 +296,13 @@ function expandFrom(
   let filledAnySlot = false;
 
   for (const [slotName, spec] of Object.entries(declaredSlots)) {
+    // Registration refuses a slot named for an `Object.prototype` member, and
+    // registration is not the only way a definition reaches here: a supplied
+    // definition the registry does not hold never passed that check. Filling
+    // such a slot materialises a key `assertNodeShape` then rejects, so the op
+    // is refused and the author's click does nothing, silently. The SAME
+    // predicate answers here, so the two paths cannot disagree about a name.
+    if (!isUsableSlotName(slotName)) continue;
     const children = childrenForSlot(spec?.defaultBlock, {
       type,
       slotName,

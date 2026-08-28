@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { BlockNode } from "./document";
-import { countNodes, treeDepth } from "./limits";
+import { MAX_DEPTH, countNodes, treeDepth } from "./limits";
 import { measureBytes } from "./measure-bytes";
 import {
   duplicateNode,
@@ -1649,6 +1649,55 @@ describe("expanding a slot's declared default", () => {
     expect(created).toBeGreaterThan(100);
   });
 
+  it("refuses to fill a slot whose name cannot be stored", () => {
+    // Registration rejects such a name, and a SUPPLIED definition never passes
+    // registration — `blockSourceFor` admits one the registry does not hold.
+    // Filling it materialises a key the op layer then rejects, so the insert is
+    // refused and the author's click does nothing with nothing reported.
+    const slots: Record<string, unknown> = {};
+    // `defineProperty` because a literal `{ constructor: ... }` is fine but
+    // `__proto__` written as a literal key sets the prototype instead, and the
+    // two must be built the same way to be compared.
+    Object.defineProperty(slots, "constructor", {
+      value: { defaultBlock: [{ type: "core/leaf" }] },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    expect(Object.keys(slots)).toEqual(["constructor"]);
+
+    const supplied = {
+      get: (type: string) =>
+        type === "core/host"
+          ? { version: 1, slots }
+          : type === "core/leaf"
+            ? { version: 1 }
+            : undefined,
+    };
+
+    expect(expandSlotDefaults("core/host", supplied as never)).toBeUndefined();
+  });
+
+  it("fills an ordinary slot name on the same path", () => {
+    // The control. A guard that refused every slot would satisfy the assertion
+    // above while making declared defaults inert for every supplied block.
+    const supplied = {
+      get: (type: string) =>
+        type === "core/host"
+          ? {
+              version: 1,
+              slots: { children: { defaultBlock: [{ type: "core/leaf" }] } },
+            }
+          : type === "core/leaf"
+            ? { version: 1 }
+            : undefined,
+    };
+
+    expect(
+      expandSlotDefaults("core/host", supplied as never)?.children
+    ).toHaveLength(1);
+  });
+
   it("stops expanding a chain of distinct types at the depth bound", () => {
     // Each type seeds the next, so no type repeats and the cycle set never
     // fires — the depth bound is the only thing that ends this.
@@ -1674,6 +1723,9 @@ describe("expanding a slot's declared default", () => {
     // Bounded, and bounded where the constant says. An unbounded expansion
     // never reaches this line, and asserting merely "finite" would pass on a
     // bound of any size.
-    expect(depth).toBe(8);
+    // Derived from the document's own MAX_DEPTH, less the root the caller
+    // creates — not a number chosen here. Asserting the literal would let a
+    // second depth policy be reintroduced without failing anything.
+    expect(depth).toBe(MAX_DEPTH - 1);
   });
 });
