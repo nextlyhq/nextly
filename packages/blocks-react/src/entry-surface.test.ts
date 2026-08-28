@@ -338,6 +338,7 @@ describe("the root entry", () => {
       // The container marker. Public so an editor asks whether a block declares
       // slots instead of keeping a hardcoded list of container type names.
       "SLOTS_ATTRIBUTE",
+      "TYPOGRAPHY_DEFAULTS",
       "UNPREVIEWABLE_CONTAINER",
       "createBlockResolver",
       "createStandaloneContext",
@@ -360,6 +361,7 @@ describe("the root entry", () => {
       "resolvePageStylesWithTrace",
       "sharedStyleInputs",
       "styleTextForInjection",
+      "withTypographyDefaults",
     ]);
   });
 

@@ -82,6 +82,7 @@ export type SharedStyleInputs = Pick<
   | "namedClasses"
   | "tokenPrefix"
   | "blockBases"
+  | "elementBases"
   | "previewContainer"
 >;
 

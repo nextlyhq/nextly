@@ -85,6 +85,10 @@ export type {
  * that guesses.
  */
 export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
+export {
+  TYPOGRAPHY_DEFAULTS,
+  withTypographyDefaults,
+} from "./blocks/typography-defaults";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the

@@ -28,6 +28,7 @@ import type {
   StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 import {
   pruneRenderedPlaceholders,
   sharedStyleInputs,
@@ -116,18 +117,20 @@ export function pageStyleTrace(
    * compile provided it named the breakpoints — the one field a compile cannot
    * proceed without.
    */
+  // The same baseline the render path applies, from the same function. The
+  // panel explains a cascade, so it has to compile the cascade the page has.
   const merged: StyleCompileContext | undefined =
     input.styleContext !== undefined
-      ? {
+      ? withTypographyDefaults({
           ...input.styleContext,
           ...withoutStatedNulls(shared),
           // Spread LAST, so the normalised set replaces the null the spread
           // above would otherwise carry into a slot declared as a set.
           breakpoints: stated ?? input.styleContext.breakpoints,
-        }
+        })
       : stated === undefined
         ? undefined
-        : {
+        : withTypographyDefaults({
             ...withoutStatedNulls(shared),
             breakpoints: stated,
             /*
@@ -141,7 +144,7 @@ export function pageStyleTrace(
             ...(input.site?.mayFetchUrl === undefined
               ? {}
               : { mayFetchUrl: input.site.mayFetchUrl }),
-          };
+          });
   if (merged === undefined) return undefined;
   const { context } = effectiveCompile({
     styleContext: merged,
