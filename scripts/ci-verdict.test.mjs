@@ -1076,8 +1076,8 @@ describe("the review-thread query asks for what the code reads", () => {
    * thread objects, so they supply `__typename` whether or not the request ever
    * asked GitHub for it — removing the field from the query leaves all of them
    * green while, in production, no thread canonicalises to a bot, nothing is
-   * ever exempt, and every advisory thread blocks. That is the defect this
-   * change fixes, reachable again by editing one line nothing else watches.
+   * ever exempt, and every advisory thread blocks — reachable by editing one
+   * line nothing else watches.
    *
    * Asserted against the exported string the request actually sends, not a copy
    * of it, so the test cannot drift from the query the way a duplicated literal
@@ -1121,8 +1121,8 @@ describe("advisory threads, in the shape GraphQL actually sends", () => {
    * filter is configured with. The helper above this one takes a login and
    * hands it straight back inside a thread, so the two sides that DIVERGE in
    * production are one value in the test, and it passes under any suffix
-   * convention at all. That is why the divergence survived: the oracle was a
-   * second derivation of the same source.
+   * convention at all — an oracle that is a second derivation of the source it
+   * is checking cannot see the two disagree.
    */
   const botThread = (slug, isResolved) => ({
     isResolved,
