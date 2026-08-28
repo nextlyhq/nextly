@@ -32,6 +32,7 @@ import {
   filterClassRows,
   newClassName,
   renamedClassName,
+  selectorOptions,
   siteClasses,
   withClassApplied,
   withClassRemoved,
@@ -266,6 +267,52 @@ describe("what the selector offers next", () => {
       "id",
       "slug",
     ]);
+  });
+});
+
+describe("what one keystroke resolves to", () => {
+  it("offers the matches first and the new name last", () => {
+    // Enter has to resolve to exactly one action. Create sitting last is what
+    // makes a partially typed name apply the match rather than create a
+    // near-duplicate beside it.
+    const options = selectorOptions(LIBRARY, [], "ca");
+    expect(options.map(o => o.kind)).toEqual(["apply", "create"]);
+    expect(options[0]).toEqual({
+      kind: "apply",
+      choice: expect.objectContaining({ slug: "card" }),
+    });
+    expect(options[1]).toEqual({ kind: "create", slug: "ca" });
+  });
+
+  it("does not offer to create a name the library already holds", () => {
+    // A second class under one slug is dropped by the compiler, so offering it
+    // would be offering an entry that styles nothing.
+    const options = selectorOptions(LIBRARY, [], "hero");
+    expect(options.map(o => o.kind)).toEqual(["apply"]);
+  });
+
+  it("offers nothing for a class the node already carries", () => {
+    // Neither action is available: applying is a no-op and creating collides.
+    expect(selectorOptions(LIBRARY, ["id-hero"], "hero")).toEqual([]);
+  });
+
+  it("offers no creation for a name the engine's grammar rejects", () => {
+    const options = selectorOptions(LIBRARY, [], "Not A Slug");
+    expect(options.every(o => o.kind === "apply")).toBe(true);
+  });
+
+  it("offers every applicable class and no creation for an empty query", () => {
+    // The opened-but-untyped state. An empty name cannot be created, so the
+    // list is exactly what the node could still be given.
+    const options = selectorOptions(LIBRARY, ["id-hero"], "");
+    expect(options.map(o => o.kind)).toEqual(["apply", "apply"]);
+  });
+
+  it("carries the CREATE slug normalized, not as typed", () => {
+    expect(selectorOptions(LIBRARY, [], "  new-thing ")).toContainEqual({
+      kind: "create",
+      slug: "new-thing",
+    });
   });
 });
 

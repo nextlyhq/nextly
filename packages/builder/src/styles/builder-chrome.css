@@ -1834,3 +1834,81 @@
   outline-offset: -2px;
   color: var(--nx-foreground);
 }
+
+/*
+ * The class selector, at the top of the style inspector.
+ *
+ * Chips wrap rather than scroll: the rail is narrow and a horizontal scroller
+ * hides the classes furthest from the start, which are the ones that override
+ * the others.
+ */
+.nx-classes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nx-classes__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-classes__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.125rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding-inline-start: 0.5rem;
+  background: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5rem;
+}
+
+.nx-classes__chip-name {
+  font-family: var(--font-mono, monospace);
+}
+
+.nx-classes__chip-remove {
+  height: 1.25rem;
+  min-width: 1.25rem;
+  padding: 0;
+  line-height: 1;
+}
+
+.nx-classes__options {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  overflow: hidden;
+}
+
+.nx-classes__option-button {
+  display: block;
+  width: 100%;
+  padding: 0.25rem 0.5rem;
+  text-align: start;
+  font-size: var(--text-xs);
+  font-family: var(--font-mono, monospace);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/*
+ * The highlight is drawn on the row, not on :hover, because the keyboard and
+ * the pointer must agree on which row Enter would take. A hover-only rule
+ * would show one row as chosen while another is the one that commits.
+ */
+.nx-classes__option--active,
+.nx-classes__option:hover {
+  background: var(--accent);
+}
