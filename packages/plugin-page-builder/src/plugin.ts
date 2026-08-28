@@ -113,10 +113,10 @@ export interface PageBuilderOptions {
    *
    * Set the SAME value here and on `PageRenderer.limits` (or on the style
    * context it reads). The renderer decides which nodes a page draws; this
-   * decides which nodes the class-usage record counts, and both ask the engine
+   * decides which nodes the class-usage index counts, and both ask the engine
    * the same question through `selectNodes`. Handing them different bounds
    * makes them answer about different documents — a class applied to a node the
-   * page renders would be missing from the record, and a usage-based delete
+   * page renders would be missing from the index, and a usage-based delete
    * reads that absence as "not used".
    *
    * Left unset, both use the engine defaults and agree by construction.
@@ -337,10 +337,10 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // renderer no longer applies.
         locales: () =>
           ctx.config.localization?.locales.map(locale => locale.code) ?? [],
-        // The SAME bounds the pages collection and the renderer use. Deriving
-        // the index under different ones records a different document than the
-        // page serves: raised bounds leave classes on the extra nodes
-        // unindexed, so a class the page renders reads as unused.
+        // The SAME bounds the renderer draws under. Deriving the index under
+        // different ones records a different document than the page serves:
+        // raised bounds leave classes on the extra nodes unindexed, so a class
+        // the page renders reads as unused.
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
     },
