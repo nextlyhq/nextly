@@ -47,18 +47,28 @@ describe("ExpressionValidator - Security Tests", () => {
       }).not.toThrow();
     });
 
-    it("should allow array methods", () => {
+    // RLS expressions permit no function call of ANY kind. `CallExpression` is
+    // absent from `ALLOWED_NODE_TYPES`, so the check at the top of the
+    // CallExpression visitor refuses before reaching anything else — a
+    // deliberate, conservative default for a validator that parses
+    // caller-supplied source.
+    //
+    // These cases previously asserted the opposite, describing a two-tier
+    // design (globals refused, methods permitted) that the allow-list has never
+    // implemented; `git log -S CallExpression` on the validator returns only the
+    // initial commit, so they had never passed.
+    it("refuses an array method, like every other call", () => {
       expect(() => {
         ExpressionValidator.validate(
           "['admin', 'editor'].includes(record.role)"
         );
-      }).not.toThrow();
+      }).toThrow(/AST node type 'CallExpression'/);
     });
 
-    it("should allow string methods", () => {
+    it("refuses a string method", () => {
       expect(() => {
         ExpressionValidator.validate("record.email.endsWith('@example.com')");
-      }).not.toThrow();
+      }).toThrow(/AST node type 'CallExpression'/);
     });
 
     it("should allow negation", () => {
@@ -243,23 +253,25 @@ describe("ExpressionValidator - Security Tests", () => {
   });
 
   describe("Global Function Calls", () => {
-    it("should block calls to global functions", () => {
+    it("refuses a global function call", () => {
+      // Refused by the node-type check, NOT by the global-identifier branch
+      // below it, which is unreachable for that reason. Asserting the specific
+      // wording here would be asserting a message nothing produces.
       expect(() => {
         ExpressionValidator.validate("alert('hello')");
-      }).toThrow(/Function calls to global functions are not allowed/);
+      }).toThrow(/AST node type 'CallExpression'/);
     });
 
-    it("should allow method calls on objects", () => {
-      // This should be allowed - it's a method call, not a global function call
+    it("refuses a method call on an object", () => {
       expect(() => {
         ExpressionValidator.validate("record.toString()");
-      }).not.toThrow();
+      }).toThrow(/AST node type 'CallExpression'/);
     });
 
-    it("should allow method calls on arrays", () => {
+    it("refuses a method call on an array", () => {
       expect(() => {
         ExpressionValidator.validate("[1, 2, 3].includes(record.id)");
-      }).not.toThrow();
+      }).toThrow(/AST node type 'CallExpression'/);
     });
   });
 
@@ -346,13 +358,17 @@ describe("ExpressionValidator - Security Tests", () => {
       }).not.toThrow();
     });
 
-    it("should allow array and string operations", () => {
+    it("refuses a composite expression as soon as it contains a call", () => {
+      // Combining two refused calls with `&&` does not make either allowed —
+      // the walk refuses at the first CallExpression it reaches. Worth stating,
+      // because the interesting question about a composite is whether the outer
+      // operator changes the verdict, and it does not.
       expect(() => {
         ExpressionValidator.validate(
           "['admin', 'editor'].includes(record.role) && " +
             "record.email.endsWith('@company.com')"
         );
-      }).not.toThrow();
+      }).toThrow(/AST node type 'CallExpression'/);
     });
 
     it("should allow object property access chains", () => {
