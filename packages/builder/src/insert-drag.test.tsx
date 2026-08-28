@@ -612,19 +612,14 @@ describe("dragging a block from the palette onto the canvas", () => {
     }
   });
 
-  it("detaches a previous palette gesture before starting another", () => {
-    // A palette drag is followed on the document, so its three listeners are
-    // the gesture's only handle on the pointer. Starting a second gesture
-    // overwrites the closure that removes them, and if the first set was not
-    // detached first it survives with nothing able to reach it — calling into
-    // a gesture it no longer owns for the life of the page.
-    //
-    // The ordinary sequence always releases first, so this needs a press with
-    // no release between. Counted rather than observed behaviourally: a leaked
-    // listener does nothing visible once its gesture is gone, which is exactly
-    // why it would go unnoticed.
-    const { container } = renderTwo();
-    const row = container.ownerDocument.body.querySelector("button")!;
+  it("ignores a second palette press while one drag already owns the pointer", () => {
+    // Two fingers, two rows, before the first releases. Taking the drag over
+    // would leave the FIRST gesture with no ending of its own: its release
+    // goes unheard, its click is never suppressed, and the row it started from
+    // inserts through the ordinary click path — a block the author never
+    // dropped, while a second drag is still in flight.
+    const { container, row } = renderTwo();
+    const second = container.ownerDocument.body.querySelectorAll("button")[0]!;
 
     const POINTER = /^pointer(move|up|cancel)$/;
     const added: string[] = [];
@@ -648,21 +643,73 @@ describe("dragging a block from the palette onto the canvas", () => {
       realRemove.call(document, type, fn, opts);
     } as typeof document.removeEventListener;
 
+    /*
+     * The RELEASE is inside the counted window too, deliberately.
+     *
+     * Restoring the real listeners before it would leave the removals
+     * uncounted, and `removed` would read zero for a gesture that detached
+     * perfectly — an assertion no implementation could satisfy.
+     */
     try {
       pressRow(row, 300, 500);
-      pressRow(row, 300, 500);
-      release(200, 90);
+      moveTo(200, 154);
+      // The second finger. A different pointer id, on a palette row.
+      fireEvent.pointerDown(second, {
+        button: 0,
+        pointerId: 9,
+        clientX: 300,
+        clientY: 520,
+      });
+
+      // ONE gesture's worth of listeners. Six would mean the second press
+      // started its own, which is the takeover this guards.
+      expect(added.length).toBe(3);
+      // And the first drag is untouched: still in flight, and still ending
+      // where ITS pointer settled. A takeover would leave this release
+      // unheard, and nothing would be inserted at all.
+      expect(dragState.draggingBlockName).toBe("test/heading");
+
+      release(200, 154);
     } finally {
       document.addEventListener = realAdd;
       document.removeEventListener = realRemove;
     }
 
-    // Two gestures, three listeners each. The control on the instrument: if
-    // this is not 6 the test is counting something other than what it thinks,
-    // and the balance below would be meaningless.
-    expect(added).toHaveLength(6);
-    // Every one of them removed. Without detaching first this is 3.
-    expect(removed).toHaveLength(6);
+    expect(ids()).toEqual(["a", "b", INSERTED]);
+    // Every listener the one gesture took is given back.
+    expect(removed.length).toBe(3);
+  });
+
+  it("ignores a press on the CANVAS while a palette drag owns the gesture", () => {
+    // The same rule at the other entry point. A finger landing on a block
+    // mid-drag would otherwise replace the palette gesture with a move-drag of
+    // that block — so the drag the author is performing vanishes, and a block
+    // they only touched starts moving instead.
+    const { container, row } = renderTwo();
+    pressRow(row, 300, 500);
+    moveTo(200, 154);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    const block = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="a"]`
+    );
+    expect(block, "no rendered node to press").not.toBeNull();
+    fireEvent.pointerDown(block!, {
+      button: 0,
+      pointerId: 9,
+      clientX: 200,
+      clientY: 40,
+    });
+
+    // Still the palette's gesture, and still reporting no node id — a takeover
+    // would put block "a" in flight and set `draggingId`.
+    expect(dragState.draggingBlockName).toBe("test/heading");
+    expect(dragState.draggingId).toBeNull();
+
+    // And it still ends as its own drag, where its own pointer settled.
+    release(200, 154);
+    expect(ids()).toEqual(["a", "b", INSERTED]);
+    expect(editorRef?.undoDepth).toBe(1);
   });
 
   it("starts no drag at all when the host supplied no canvas", () => {
