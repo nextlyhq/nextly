@@ -32,7 +32,14 @@
  * the toolbar, so it takes the toolbar's shorter "Duplicate" for the same
  * reason the toolbar does.
  *
- * ## A disabled verb stays, and says why
+ * ## A disabled verb stays, and says why IN THE MENU
+ *
+ * The reason is VISIBLE text inside the item, not a `title`. The toolbar can
+ * use a tooltip because its buttons stay hoverable; a disabled menu item does
+ * not, since the shared item style sets `data-[disabled]:pointer-events-none`
+ * — and Radix skips disabled items in keyboard navigation, so there is no
+ * route to a tooltip by either input. A `title` there is an explanation that
+ * exists in the markup and reaches nobody.
  *
  * `toolbarActions` sets `reason` only for a cause an author can act on — a lock
  * — and leaves self-evident ones unsaid. So an unavailable verb is drawn
@@ -143,18 +150,25 @@ export function BlockContextMenu({
               {DESTRUCTIVE.has(action.id) ? <ContextMenuSeparator /> : null}
               <ContextMenuItem
                 disabled={!action.enabled}
-                // The reason a lock gives, spelled exactly as the toolbar
-                // spells it. Carrying it to a screen reader as well is not
-                // solved here: `aria-description` has uneven support, and a
-                // description on a DISABLED item is inconsistently announced,
-                // so this matches the toolbar rather than inventing a second
-                // behaviour that has not been measured.
-                title={action.reason ?? action.label}
+                // Stacked once there is a reason, so the explanation sits under
+                // the verb rather than running on from it.
+                className={
+                  action.reason === undefined
+                    ? undefined
+                    : "flex-col items-start gap-0.5"
+                }
                 onSelect={() => {
                   run[action.id]();
                 }}
               >
-                {action.label}
+                <span>{action.label}</span>
+                {action.reason === undefined ? null : (
+                  // Part of the item's own content, so it is both on screen and
+                  // in the name the item is announced by. Nothing here stays
+                  // hoverable or focusable once disabled, so an explanation
+                  // carried outside the content would reach nobody.
+                  <span className="text-xs opacity-80">{action.reason}</span>
+                )}
               </ContextMenuItem>
             </React.Fragment>
           ))}

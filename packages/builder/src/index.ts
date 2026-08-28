@@ -337,20 +337,6 @@ export {
 } from "./builder-commands";
 
 /**
- * @experimental The right-click menu over the canvas.
- *
- * Assembled here rather than by the host for the reason `EditorCommandPalette`
- * is: mounting it means reaching into the verbs context, deriving the list from
- * `toolbarActions` on the right renders, and knowing it must sit inside
- * `BlockKeyboardActions`. A host given the pieces would get all three right
- * differently.
- */
-export {
-  BlockContextMenu,
-  type BlockContextMenuProps,
-} from "./block-context-menu";
-
-/**
  * @experimental Who owns Escape while the editor is on screen.
  *
  * From this entry because the rule is a plain function over the DOM and a
