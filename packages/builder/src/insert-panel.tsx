@@ -43,6 +43,7 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { InsertDragEntry } from "./canvas-drag";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
@@ -107,7 +108,7 @@ export interface InsertPanelProps {
    */
   beginInsertDrag?: (
     event: React.PointerEvent<HTMLElement>,
-    entry: { blockName: string; makeNode: () => BlockNode | null }
+    entry: InsertDragEntry
   ) => void;
 }
 
@@ -262,6 +263,9 @@ export function InsertPanel({
                     beginInsertDrag?.(event, {
                       blockName: entry.blockName,
                       makeNode: () => nodeForEntry(entry, blockSource, nesting),
+                      // The same notification the click path sends, so a host
+                      // cannot see one kind of insert and miss the other.
+                      onInserted: onInsert,
                     });
                   }}
                 >

@@ -234,6 +234,20 @@
   min-height: 2.5rem;
   align-items: start;
   padding-block: 0.375rem;
+  /*
+   * Reserve the sideways gesture, so a row can be DRAGGED onto the canvas.
+   *
+   * Left at the default, a touch browser owns direct manipulation from the
+   * moment it classifies the movement as panning, and it announces that by
+   * sending `pointercancel` — which this engine correctly treats as the
+   * gesture being withdrawn. The drag would abandon itself partway across, and
+   * only on touch.
+   *
+   * `pan-y` rather than `none`: the palette is a scrolling list, and taking
+   * vertical panning as well would trade a broken drag for a list a finger
+   * cannot scroll.
+   */
+  touch-action: pan-y;
 }
 
 /*

@@ -16,6 +16,9 @@
  *
  * @module insert-panel.test
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -160,6 +163,37 @@ describe("InsertPanel", () => {
     fireEvent.click(screen.getByText("Text"));
 
     expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("reserves the sideways gesture on a row, so touch can drag it", () => {
+    /*
+     * Asserted against the stylesheet because there is nothing else that could
+     * see it. `touch-action` is honoured by a real compositor deciding whether
+     * a movement belongs to the page or to the element; jsdom has no such
+     * decision to make, and every pointer test in this package would pass with
+     * the declaration deleted.
+     *
+     * The failure it guards is invisible in every other way: on a touch
+     * browser the default lets the browser claim the gesture as a pan, and it
+     * announces that with `pointercancel` — which this engine correctly treats
+     * as the drag being withdrawn. So the drag abandons itself part-way, only
+     * on touch, and nothing in CI is capable of noticing.
+     */
+    const css = readFileSync(
+      join(process.cwd(), "src/styles/builder-chrome.css"),
+      "utf8"
+    );
+    const rule = css.slice(css.indexOf(".nx-insert-panel [cmdk-item] {"));
+    const firstBlock = rule.slice(0, rule.indexOf("}"));
+
+    // Population: a renamed selector would leave every assertion below reading
+    // an empty string, and "no forbidden value found" would pass on nothing.
+    expect(firstBlock.length).toBeGreaterThan(0);
+    expect(firstBlock).toContain("touch-action: pan-y;");
+    // `pan-y` and not `none`, which is the tempting stronger answer: the
+    // palette is a scrolling list, and taking vertical panning too would trade
+    // a broken drag for a list a finger cannot scroll.
+    expect(firstBlock).not.toContain("touch-action: none");
   });
 
   it("judges a supplied block's declared children by the supplied rules", () => {

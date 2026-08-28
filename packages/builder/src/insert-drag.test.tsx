@@ -53,6 +53,7 @@ afterEach(async () => {
   clearBlocks();
   captured = [];
   built = 0;
+  inserted = [];
   clicks = 0;
   buildsType = "test/heading";
 });
@@ -61,6 +62,8 @@ afterEach(async () => {
 let captured: number[] = [];
 /** How many times the palette was asked to build its node. */
 let built = 0;
+/** Node ids the host was notified about, in order. */
+let inserted: string[] = [];
 /** How many times the row's own click-to-insert handler ran. */
 let clicks = 0;
 /** What the palette's thunk answers with, so a test can make it disagree. */
@@ -161,6 +164,9 @@ function Host({ document: doc }: { document: BlockDocument }) {
               built += 1;
               return node(INSERTED, buildsType);
             },
+            onInserted: n => {
+              inserted.push(n.id);
+            },
           })
         }
       >
@@ -214,6 +220,13 @@ function renderTwo() {
   layout(result.container, { a: 100, b: 100 });
   const row = result.getByTestId("palette-row");
   return { ...result, row };
+}
+
+/** The canvas root, which carries the drag's OWN React handlers. */
+function canvasRootOf(container: HTMLElement): HTMLElement {
+  const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+  if (root === null) throw new Error("no canvas root rendered");
+  return root;
 }
 
 function pressRow(row: HTMLElement, x: number, y: number): void {
@@ -413,6 +426,82 @@ describe("dragging a block from the palette onto the canvas", () => {
     release(200, 154);
     expect(ids()).toEqual(["a", "b", INSERTED]);
     expect(editorRef?.undoDepth).toBe(1);
+  });
+
+  it("ignores another pointer arriving through the CANVAS, not the document", () => {
+    // The other transport, and the one a second finger actually uses when it
+    // is over the canvas: those events reach the drag through `Canvas`'s React
+    // handlers, never the document listeners. A guard living only in the
+    // document closures leaves this route open, and a test that dispatches the
+    // rogue pointer at `document` cannot tell the two apart.
+    const { container, row } = renderTwo();
+    pressRow(row, 300, 500);
+    moveTo(200, 154);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    const canvas = canvasRootOf(container);
+    // Two moves, because the switch rule anchors travel when a rival target
+    // first appears — one event always has zero travel and could never move
+    // the committed target, whatever the guard did.
+    fireEvent.pointerMove(canvas, { pointerId: 9, clientX: 200, clientY: 20 });
+    fireEvent.pointerMove(canvas, { pointerId: 9, clientX: 200, clientY: 40 });
+    fireEvent.pointerUp(canvas, { pointerId: 9, clientX: 200, clientY: 40 });
+
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+
+    // The owning pointer still ends it, at the target IT settled on — the
+    // control showing the second finger did not silently re-aim.
+    release(200, 154);
+    expect(ids()).toEqual(["a", "b", INSERTED]);
+  });
+
+  it("keeps the click suppressed until the pointer is released, however late", async () => {
+    // Escape is pressed with the finger still down, so the release — and the
+    // click the browser builds from that press and release — arrives in a LATER
+    // task. A suppressor armed for one task is gone by then, and the row's own
+    // handler inserts a block from a drag the author visibly cancelled.
+    const { row } = renderTwo();
+    pressRow(row, 300, 500);
+    moveTo(200, 90);
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    // The task boundary is the whole point. Firing keydown, pointerup and click
+    // in one task passes whether or not the suppression survives.
+    await new Promise(resolve => {
+      setTimeout(resolve, 0);
+    });
+
+    release(300, 500);
+    fireEvent.click(row);
+
+    expect(clicks).toBe(0);
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+  });
+
+  it("tells the host what landed, the same way the click path does", () => {
+    const { row } = renderTwo();
+    pressRow(row, 300, 500);
+    moveTo(200, 90);
+    release(200, 90);
+
+    expect(ids()).toEqual(["a", INSERTED, "b"]);
+    expect(inserted).toEqual([INSERTED]);
+  });
+
+  it("tells the host nothing when the drop was refused", () => {
+    // The must-differ half: a notification that fired regardless would report
+    // an insert that never happened, which is worse than not reporting.
+    const { row } = renderTwo();
+    buildsType = "test/some-other-block";
+    pressRow(row, 300, 500);
+    moveTo(200, 90);
+    release(200, 90);
+
+    expect(built).toBe(1);
+    expect(ids()).toEqual(["a", "b"]);
+    expect(inserted).toEqual([]);
   });
 
   it("declines a node whose type is not the one the drop was resolved for", () => {
