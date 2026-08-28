@@ -89,6 +89,27 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
 
 /** Whether an event started inside editor chrome rather than inside the page. */
+/**
+ * Whether the gesture landed in text the author is editing.
+ *
+ * Asked apart from {@link isChrome} because the answer is the same and the
+ * reason is not: chrome is not the page, while this IS the page and is being
+ * typed into. The browser's own menu carries spelling, selection and clipboard
+ * for a caret, and none of that has a replacement here — taking it away mid
+ * sentence to offer "Move up" is a straight loss.
+ *
+ * `contenteditable="false"` is excluded explicitly: it marks a region the
+ * editor has deliberately made uneditable INSIDE an editable one, which is a
+ * block again rather than text.
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editable = target.closest("[contenteditable]");
+  return (
+    editable !== null && editable.getAttribute("contenteditable") !== "false"
+  );
+}
+
 function isChrome(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -554,13 +575,27 @@ function useCanvasPointer(
    */
   const contextMenu = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
-      if (isChrome(event.target)) return;
-      const id = nodeIdFromEvent(event.target);
-      if (id === null) {
+      /*
+       * Three ways to have no block to act on, stopped the same way and for
+       * separate reasons — see each predicate. Stopping rather than merely
+       * returning is what matters: a menu mounted ABOVE the canvas sees
+       * whatever this lets past, and the chrome and the appenders are drawn
+       * INSIDE the canvas root, so a bare return offers the selected block's
+       * verbs for a gesture aimed at a button that is not a block.
+       *
+       * `preventDefault` is deliberately not called, so the browser's own menu
+       * still appears wherever this one does not.
+       */
+      if (
+        isEditableTarget(event.target) ||
+        isChrome(event.target) ||
+        nodeIdFromEvent(event.target) === null
+      ) {
         event.stopPropagation();
         return;
       }
-      if (onSelect === undefined || marked.includes(id)) return;
+      const id = nodeIdFromEvent(event.target);
+      if (id === null || onSelect === undefined || marked.includes(id)) return;
       onSelect(id, "replace");
     },
     [marked, onSelect]

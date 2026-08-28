@@ -168,6 +168,48 @@ describe("the canvas's right-click menu", () => {
     expect(editor.applyAll).toHaveBeenCalled();
   });
 
+  it("leaves editor chrome to the browser's own menu", () => {
+    /*
+     * The toolbar and the appenders are drawn inside the canvas root, so they
+     * sit inside this menu's trigger — and an appender for an empty container
+     * is drawn inside the container's own element. Merely declining to select
+     * there is not enough: the gesture would still reach the trigger and offer
+     * the block's verbs for a press aimed at a button that is not a block.
+     */
+    register();
+    const { container } = mount(editorSpy(pair(), "a"));
+    // INSIDE the block, which is the case that discriminates. Chrome drawn on
+    // the canvas background resolves to no node anyway, so a fixture there
+    // passes whether or not this rule exists — the appender drawn inside an
+    // empty container is the shape that would otherwise reach the trigger with
+    // a block id already resolved.
+    const chrome = window.document.createElement("button");
+    chrome.setAttribute("data-nx-chrome", "");
+    blockElement(container).appendChild(chrome);
+
+    fireEvent.contextMenu(chrome);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("leaves text being edited to the browser's own menu", () => {
+    /*
+     * Spelling, selection and clipboard for a caret have no replacement here,
+     * so replacing the native menu with "Move up" mid-sentence is a straight
+     * loss. The inline editor stops pointer and click but not this one.
+     */
+    register();
+    const { container } = mount(editorSpy(pair(), "a"));
+    const block = blockElement(container);
+    const editable = window.document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    block.appendChild(editable);
+
+    fireEvent.contextMenu(editable);
+
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
   it("keeps an unavailable verb, carrying the reason it is unavailable", () => {
     /*
      * A lock is the one reason `toolbarActions` reports, because it is the one
@@ -179,8 +221,15 @@ describe("the canvas's right-click menu", () => {
     const { container } = mount(editorSpy(locked, "a"));
     fireEvent.contextMenu(blockElement(container));
 
-    const remove = screen.getByRole("menuitem", { name: "Delete" });
+    const remove = screen
+      .getAllByRole("menuitem")
+      .find(item => item.textContent?.startsWith("Delete"));
+    if (remove === undefined) throw new Error("expected a Delete item");
     expect(remove.getAttribute("data-disabled")).not.toBeNull();
-    expect(remove.getAttribute("title")).not.toBe("Delete");
+    // VISIBLE, not a `title`. A disabled item has `pointer-events-none` and is
+    // skipped by keyboard navigation, so a tooltip on it is unreachable by
+    // either input — the reason has to be in the item's own content.
+    expect(remove.textContent).toContain("This block is locked.");
+    expect(remove.getAttribute("title")).toBeNull();
   });
 });
