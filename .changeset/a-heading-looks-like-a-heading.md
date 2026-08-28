@@ -42,5 +42,14 @@ element reset, and still below a host's own class rule, so a default remains
 something a site can override. Previously block defaults carried the doubled
 page-root prefix that exists to make an AUTHOR's values outrank host CSS.
 
+The heading scale is sized in `em`, which is what lets an author's typography
+reach a heading at all. These defaults are rules ON the element, while a page
+setting or a block's own value arrives by inheritance, and a direct rule beats
+an inherited one whatever either weighs — so a page set to `20px` left every
+heading at its default size. In `em` the default is a multiple of what was
+inherited instead of a replacement for it: the same page now gives an `h1`
+`45px`, while a document that sets nothing is unchanged and a site's own
+`.content h1` still wins.
+
 `TYPOGRAPHY_DEFAULTS` and `withTypographyDefaults` are exported so a host can
 replace the baseline.
