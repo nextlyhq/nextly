@@ -108,6 +108,44 @@ describe("AuthService", () => {
       expect(dbUser).toBeUndefined();
     });
 
+    it("rejects a duplicate WITHOUT paying for the password hash", async () => {
+      // The security property, asserted on the call and not on the clock.
+      //
+      // Hashing is a deliberately expensive key derivation, and `bcryptjs` is
+      // pure JS with no native binding, so it runs ON the event loop and
+      // blocks. Deriving it before checking the address is free let an
+      // unauthenticated caller spend ~1s of single-threaded server CPU per
+      // request, needing only an email they know is registered and any
+      // password that passes the strength check.
+      //
+      // A duration assertion would pin this too, badly: it would be flaky on a
+      // loaded runner and would still pass if the hash moved somewhere else.
+      // Asserting the hash is never CALLED is exact.
+      const existingEmail = "existing@test.com";
+      await testDb.db.insert(testDb.schema.users).values(
+        userFactory({
+          email: existingEmail,
+          passwordHash: await hashPassword(
+            "ValidPassword123!",
+            FIXTURE_SALT_ROUNDS
+          ),
+        })
+      );
+
+      const password = await import("../../../auth/password");
+      const hashSpy = vi.spyOn(password, "hashPassword");
+
+      await expect(
+        service.registerUser({
+          email: existingEmail,
+          password: "DifferentPassword123!",
+        })
+      ).rejects.toMatchObject({ code: "DUPLICATE", statusCode: 409 });
+
+      expect(hashSpy).not.toHaveBeenCalled();
+      hashSpy.mockRestore();
+    });
+
     it("should reject registration with duplicate email", async () => {
       // Arrange: Create existing user
       const existingEmail = "existing@test.com";
