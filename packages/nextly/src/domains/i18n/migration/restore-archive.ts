@@ -133,12 +133,17 @@ export async function restoreI18nArchive(
       undefined,
       // 🔴 Replay must not date these translations to the moment they were restored (i18n B2).
       // The archive stores per-FIELD rows -- `field` and `value` -- so it never held the original
-      // `_updated_at` and there is nothing to put back. Stamping instead would fabricate a
-      // chronology: source content edited after re-enabling but before the replay would look
-      // OLDER than the archived translation, and a genuinely stale target would be reported
-      // current. Unknown is the true answer, and unknown is a state the comparison already
-      // handles safely.
-      { stampUpdatedAt: false }
+      // `_updated_at` and there is nothing to put back. Stamping would fabricate a chronology:
+      // source content edited after re-enabling but before the replay would look OLDER than the
+      // archived translation, and a genuinely stale target would be reported current.
+      //
+      // "clear" rather than "omit", and the difference is the whole correctness of this line. A
+      // locale may ALREADY have a row -- someone translates it after localization is re-enabled
+      // but before `i18n:restore` runs -- and the conflict clause updates only the columns named.
+      // Omitting the stamp would leave that recent value standing while this statement replaces
+      // the content beneath it with older archived text, so the restored translation would read
+      // as current. Writing NULL says what is true: unknown.
+      { updatedAt: "clear" }
     );
   }
 

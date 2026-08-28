@@ -674,25 +674,45 @@ export class UserMutationService extends BaseService {
 
       const { users } = this.tables;
 
-      // Check existing BEFORE deriving the password hash. The order is the
-      // security property, not a micro-optimisation: hashing is a deliberately
-      // expensive key derivation (bcrypt at cost 12) and `bcryptjs` is a
-      // pure-JS implementation with no native binding, so it runs ON the event
-      // loop rather than in a threadpool — it blocks.
+      // 🔴 Derive the hash BEFORE the duplicate lookup, and keep it that way.
       //
-      // Hashing first meant an unauthenticated caller could spend roughly a
-      // second of single-threaded server CPU per request, needing only an email
-      // address they know is taken and any password that passes the strength
-      // check. No credentials, nothing learned — an availability cost, paid
-      // before the lookup that was always going to reject the request.
-      // Measured: ~2.9s locally per duplicate registration, ~9.8s on a loaded
-      // CI runner.
+      // The obvious reordering -- look the address up first, and skip a
+      // deliberately expensive key derivation for a request that is going to be
+      // rejected -- was applied here and then reverted, so the reasoning is
+      // recorded rather than left to be rediscovered by whoever tries it next.
       //
-      // Account-enumeration sensitive, unchanged: the public message stays
-      // generic ("Resource already exists.") via NextlyError.duplicate; the
-      // email + entity flow only through logContext. Checking first also
-      // REMOVES a timing signal rather than adding one — a taken address is
-      // currently the slow path, which is itself a weak oracle.
+      // It creates an ACCOUNT-ENUMERATION ORACLE. `/api/auth/register` answers
+      // a taken address and a free one with byte-identical responses on purpose
+      // (spec §13.2 silent-success), so duration is the only channel left --
+      // and `stallResponse` is a FLOOR, not a fixed duration: it pads a fast
+      // response up to `loginStallTimeMs` (500ms) and does nothing to a slow
+      // one. Check-first therefore returns a taken address at ~500ms and a free
+      // one at however long bcrypt takes, measured here at ~2.9s locally and
+      // ~9.8s on a loaded runner. The two identical responses become trivially
+      // distinguishable by a stopwatch.
+      //
+      // And it buys almost nothing against the availability concern it was
+      // written for. An attacker burning CPU has no reason to send a REGISTERED
+      // address: unregistered ones still reach the hash on every request, so
+      // check-first only avoids the work in the case nobody attacking would
+      // choose. What actually bounds that cost is the per-IP limiter, which
+      // already covers this route -- `register` is in the shared auth bucket in
+      // `auth/handlers/router.ts` and is checked before dispatch.
+      //
+      // So both paths pay the hash, both leave at the same time, and the
+      // enumeration property the endpoint is designed around holds.
+      let passwordHash: string | null = null;
+      if (userData.password && userData.password.length > 0) {
+        const looksPlain =
+          userData.password.length < 32 || !userData.password.includes(":");
+        passwordHash = looksPlain
+          ? await hashPassword(userData.password)
+          : userData.password;
+      }
+
+      // Account-enumeration sensitive: the public message stays generic
+      // ("Resource already exists.") via NextlyError.duplicate; the email and
+      // entity travel only through logContext.
       const existingUser = await this.db.query.users.findFirst({
         where: { email: requireFilterValue(userData.email, "email") },
         columns: { id: true, email: true },
@@ -701,16 +721,6 @@ export class UserMutationService extends BaseService {
         throw NextlyError.duplicate({
           logContext: { entity: "user", email: userData.email },
         });
-      }
-
-      // Derive password hash once (supports pre-hashed inputs while prioritizing plain passwords)
-      let passwordHash: string | null = null;
-      if (userData.password && userData.password.length > 0) {
-        const looksPlain =
-          userData.password.length < 32 || !userData.password.includes(":");
-        passwordHash = looksPlain
-          ? await hashPassword(userData.password)
-          : userData.password;
       }
 
       // If roles are provided, validate they all exist before creating the user.
