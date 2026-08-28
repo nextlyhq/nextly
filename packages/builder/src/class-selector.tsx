@@ -96,9 +96,14 @@ function liveFailure(
 /**
  * Whether two class lists are the same list, by CONTENT.
  *
- * A caller with no stored classes hands over a fresh `[]` on every render —
- * `?? []` in the style inspector does exactly that — so comparing by reference
- * would discard a failure on the next render, which is every render.
+ * By value rather than by reference because a caller with no stored classes
+ * hands over a fresh `[]` on every render — `?? []` in the style inspector
+ * does exactly that — so a reference comparison would discard a failure on the
+ * next render, which is every render.
+ *
+ * Half of the scoping, beside the block'"'"'s own identity. This half catches what
+ * identity cannot: the same block whose classes have since changed, where the
+ * refusal describes a state it has left.
  */
 function sameClassIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id, index) => id === b[index]);
@@ -150,12 +155,17 @@ export interface ClassSelectorProps {
   /**
    * Which block this is editing.
    *
-   * Required, and used only to scope a failure to the element it is about.
-   * Comparing the class ids instead was a proxy for identity and it fails on
-   * the commonest case: two blocks with no classes both present an empty list,
-   * so a refusal raised against one goes on being shown against the other.
-   * Keyed mounting protects a caller that remembers to key; a prop cannot be
-   * forgotten.
+   * Required, and read for two things: scoping a failure to the element it is
+   * about, and telling a creation still in flight whether the block it was
+   * started for is the one still selected.
+   *
+   * It does not replace the class-list comparison — {@link liveFailure} uses
+   * both, and neither settles it alone. This one catches what content cannot:
+   * two blocks with no classes present the same empty list, so a refusal
+   * raised against one would go on being shown against the other.
+   *
+   * A prop rather than a documented requirement to mount this keyed. Keying
+   * protects a caller who remembers; a prop cannot be forgotten.
    */
   nodeId: string;
   library: readonly NamedClass[] | undefined;
