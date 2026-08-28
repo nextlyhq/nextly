@@ -17,6 +17,7 @@ import type {
   VersionScopeKind,
   VersionStatus,
 } from "../../schemas/versions/types";
+import { VERSIONS_TABLE } from "../../schemas/versions/types";
 
 import type {
   VersionsDbApi,
@@ -26,7 +27,7 @@ import type {
 import type { PrunableVersion } from "./retention";
 import { workingDraftKey } from "./working-draft-key";
 
-const TABLE = "nextly_versions";
+const TABLE = VERSIONS_TABLE;
 
 // Ids deleted per statement. Each id binds one parameter and SQLite's default
 // SQLITE_MAX_VARIABLE_NUMBER is 999 (the lowest across supported dialects), so

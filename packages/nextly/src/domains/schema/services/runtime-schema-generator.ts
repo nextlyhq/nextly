@@ -46,6 +46,7 @@ import {
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import type { LocalizedColumnSpec } from "../../i18n/migration/types";
 
 import {
@@ -222,6 +223,23 @@ function buildCompanionColumnRecord(
           ? mysqlVarchar("_status", { length: 20 }).notNull().default("draft")
           : sqliteText("_status").notNull().default("draft");
   }
+
+  // i18n B2: when THIS locale was last written. Unconditional — every companion carries it,
+  // unlike `_status` — and it must be DECLARED here or `db.select()` never returns it, so the
+  // staleness comparison would read `undefined` for every row and quietly report nothing stale.
+  //
+  // Built through the same `buildUserDrizzleColumn` path a localized `timestamp` field takes, so
+  // the runtime column and the physical one agree BY CONSTRUCTION rather than by two hand-written
+  // dialect maps that happen to match today. `ddlType` renders the same kind for the DDL.
+  out[COMPANION_UPDATED_AT_COLUMN] = buildUserDrizzleColumn(
+    {
+      name: COMPANION_UPDATED_AT_COLUMN,
+      dialectType: "",
+      nullable: true,
+      kind: "timestamp",
+    },
+    dialect
+  );
 
   // Localized field columns — always nullable (localized-required is app-layer, M2).
   for (const col of columns) {

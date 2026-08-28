@@ -23,6 +23,16 @@ export type VersionStatus = "draft" | "published" | "unpublished";
 /** The kind of document a version belongs to (Nextly's `{ kind, slug }` scope). */
 export type VersionScopeKind = "collection" | "single" | "page";
 
+/**
+ * Physical name of the version-history table, identical on all three dialects.
+ *
+ * Exported because a second reader now addresses it in raw SQL: i18n B2 seeds a companion's
+ * `_updated_at` from `MAX(created_at)` per locale, and a migration statement cannot go through
+ * the repository. Two spellings of a table name is exactly the kind of divergence that survives
+ * every test until the table is renamed.
+ */
+export const VERSIONS_TABLE = "nextly_versions";
+
 /** The active status set, in canonical order. */
 export const VERSION_STATUSES: readonly VersionStatus[] = [
   "draft",

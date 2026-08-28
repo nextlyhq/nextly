@@ -17,9 +17,11 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
+import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import type { LocalizedFieldRef } from "../companion-join";
 import { claimGuardCondition } from "../migration/transition-state";
 import type {
@@ -61,6 +63,22 @@ export interface CompanionSchema {
   localizedFields: LocalizedFieldRef[];
   /** Whether the companion carries a per-locale `_status` column (entity has Draft/Published). */
   hasStatus: boolean;
+  /**
+   * Whether the companion carries the per-locale `_updated_at` column (i18n B2).
+   *
+   * Unconditionally `true`, because unlike `_status` this column is part of every companion's
+   * declared shape rather than a consequence of the entity's configuration. It is still a FIELD
+   * rather than a literal at each reader, for two reasons: readers then treat it exactly as they
+   * treat `hasStatus`, so neither can be passed while the other is forgotten; and if it ever
+   * becomes conditional, one definition changes instead of every call site.
+   *
+   * This is the DECLARED shape, not an introspection — the same contract `hasStatus` reports. A
+   * database whose companion physically predates the column is brought into step by
+   * `reconcileCompanionColumns`; until it is, a staleness query against that collection fails, and
+   * the worklist already reports a collection whose read failed as one this answer did not cover.
+   * That is the honest outcome: it never claims a clean backlog for a collection it could not ask.
+   */
+  hasUpdatedAt: boolean;
 }
 
 /**
@@ -108,6 +126,7 @@ export function buildCompanionSchema(args: {
     companionTableName: companion.companionTableName,
     localizedFields,
     hasStatus: args.status === true,
+    hasUpdatedAt: true,
   };
 }
 
@@ -160,14 +179,38 @@ export async function upsertCompanionRow(
   parentId: string,
   locale: string,
   companionData: Record<string, unknown>,
-  status?: string
+  status?: string,
+  options: { now?: Date; stampUpdatedAt?: boolean } = {}
 ): Promise<void> {
   const withStatus =
     status !== undefined
       ? { ...companionData, _status: status }
       : companionData;
-  const cols = Object.keys(withStatus);
-  if (cols.length === 0) return;
+  // Counted BEFORE the timestamp is added, so "nothing to write" still means nothing to write.
+  // Stamping first would turn every no-op call into a real write that moves `_updated_at` without
+  // any content changing — and since staleness is `source._updated_at > target._updated_at`, that
+  // is not a harmless extra row touch: it would mark every other locale stale against a source
+  // that nobody edited.
+  if (Object.keys(withStatus).length === 0) return;
+
+  // i18n B2: when THIS locale was last written. Bound as a `Date`, which every dialect handles —
+  // node-postgres and mysql2 serialize it natively, and the SQLite adapter converts it to epoch
+  // seconds in `sanitizeSqliteValue`, on BOTH surfaces this function runs over (the adapter's
+  // `executeQuery` and a transaction's `execute` via `companionWriteVia`). Verified rather than
+  // assumed: the two paths sanitize in different functions, and a `Date` that survived one and
+  // not the other would work in a test and throw in production.
+  //
+  // Opt-out rather than opt-in, because the failure of forgetting is silent. A locale written
+  // through a path that skipped the stamp keeps a NULL `_updated_at`, reads as UNKNOWN, and is
+  // never reported stale — the warning simply never fires for it, and nobody notices a warning
+  // that does not appear. `stampUpdatedAt: false` exists for a companion that physically predates
+  // the column, where naming it in the INSERT would fail the statement outright.
+  const stampedAt = new Date(options.now?.getTime() ?? Date.now());
+  const withStamp =
+    options.stampUpdatedAt === false
+      ? withStatus
+      : { ...withStatus, [COMPANION_UPDATED_AT_COLUMN]: stampedAt };
+  const cols = Object.keys(withStamp);
 
   const isMysql = adapter.dialect === "mysql";
   const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
@@ -179,7 +222,7 @@ export async function upsertCompanionRow(
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withStatus[c]
+        c === "_parent" ? parentId : c === "_locale" ? locale : withStamp[c]
       );
       return ph();
     })
@@ -261,6 +304,29 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
  * Issues DDL, so it belongs to `db:sync` and never to boot — a running deployment must not alter
  * its own schema because a config file changed.
  */
+/**
+ * The version scope an i18n entity kind records its history under, or `undefined` when it records
+ * none — which is what decides whether `_updated_at` can be back-filled for it (i18n B2).
+ *
+ * Stated once rather than at each call site, because the two are the same question and a second
+ * spelling of it would let one unattended path seed a companion the other leaves blank, for the
+ * same entity, with nothing to indicate which ran.
+ *
+ * `fieldGroup` maps to `undefined` structurally: `nextly_versions.scope_kind` has no member for
+ * it, so there is no history to read and NULL is the true answer rather than a gap.
+ *
+ * `single` maps to `undefined` by SCOPE, not by structure — Singles do have version history. B2
+ * ships collections-only (founder, 2026-08-28) because Singles has no worklist to surface the
+ * signal on, and extending it is `task:b2-staleness-for-singles`. Note that this bounds the
+ * BACK-FILL alone: `upsertCompanionRow` stamps every companion write whatever the entity, so
+ * Singles accumulate truthful timestamps from now on and only their history stays unknown.
+ */
+export function versionScopeForEntityKind(
+  kind: I18nTransitionKind
+): VersionScopeKind | undefined {
+  return kind === "collection" ? "collection" : undefined;
+}
+
 export async function reconcileCompanionColumns(
   adapter: CompanionIntrospectAdapter,
   args: {
@@ -276,6 +342,12 @@ export async function reconcileCompanionColumns(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
+    /**
+     * Which version scope this entity's history is recorded under, enabling the `_updated_at`
+     * back-fill (i18n B2). Omit for an entity with no version history — a field group — where
+     * NULL is the true answer rather than a gap.
+     */
+    versionScope?: VersionScopeKind;
   },
   onError?: (error: unknown) => void
 ): Promise<void> {
@@ -316,6 +388,21 @@ export async function reconcileCompanionColumns(
     // every run, so a partial apply simply finishes on the next one.
     const hasStatus = present.has("_status");
 
+    // i18n B2: `_updated_at` IS reconciled here, and the contrast with `_status` above is the
+    // whole justification rather than an inconsistency.
+    //
+    // `_status` cannot be added unattended because ADD-then-back-fill is not retryable from
+    // physical shape alone: if the ADD lands and the back-fill does not, every later run sees the
+    // column present, concludes the companion is in step, and leaves published content reading as
+    // draft. The half-applied state is a LIE that repairs itself into permanence.
+    //
+    // `_updated_at`'s half-applied state is NULL, and NULL already means UNKNOWN to the only
+    // thing that reads it — the staleness comparison, which answers "not stale and not known"
+    // rather than "fine". The back-fill is guarded by `WHERE _updated_at IS NULL`, so a later run
+    // finishes what a partial one started. Nothing degrades into a false statement, so the
+    // reasoning that keeps `_status` out does not reach this column.
+    const hasUpdatedAt = present.has(COMPANION_UPDATED_AT_COLUMN);
+
     // Draft/Published was switched on after this companion was created, so `_status` is now
     // required and absent. Reconciling it is unsafe for the reasons above — but returning
     // quietly is worse than either: the caller persists `status: true`, reports success, and
@@ -337,8 +424,12 @@ export async function reconcileCompanionColumns(
     }
 
     // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
-    // builder runs.
-    if (desired.every(f => present.has(toColumn(f.name)))) return;
+    // builder runs. `hasUpdatedAt` is part of the condition rather than a separate check: a
+    // companion whose translated columns are all present but which predates `_updated_at` still
+    // has work to do, and testing the localized columns alone would return here and leave every
+    // such companion permanently unstamped.
+    if (hasUpdatedAt && desired.every(f => present.has(toColumn(f.name))))
+      return;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -357,6 +448,11 @@ export async function reconcileCompanionColumns(
       builtBy: args.builtBy,
       status: hasStatus,
       companionHasStatus: hasStatus,
+      // Introspected, so `false` is a measurement rather than a default. The builder distinguishes
+      // it from `undefined` — "nobody looked" — precisely because an unconditional ADD COLUMN
+      // would fail on every companion that already has the column.
+      companionHasUpdatedAt: hasUpdatedAt,
+      versionScope: args.versionScope,
       companionExists: true,
     });
     for (const stmt of statements) {
@@ -378,7 +474,11 @@ export async function reconcileCompanionColumns(
           .find(t => t.name === companionTableName)
           ?.columns.map(c => c.name) ?? []
       );
-      if (desired.every(f => now.has(toColumn(f.name)))) return;
+      if (
+        now.has(COMPANION_UPDATED_AT_COLUMN) &&
+        desired.every(f => now.has(toColumn(f.name)))
+      )
+        return;
     } catch {
       // Fall through to reporting the original error: if we cannot even re-read the table,
       // the reconcile genuinely did not succeed.

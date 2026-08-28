@@ -896,6 +896,7 @@ export async function ensureLocalizedCompanions(
   const {
     ensureCompanionTable,
     reconcileCompanionColumns,
+    versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
   } = await import("../../domains/i18n/runtime/companion-io");
@@ -1093,6 +1094,9 @@ export async function ensureLocalizedCompanions(
           fields: entity.fields ?? [],
           dialect,
           status: entity.status === true,
+          // Decides whether `_updated_at` can be seeded from version history for this
+          // entity kind; a kind with no history correctly seeds nothing.
+          versionScope: versionScopeForEntityKind(kind),
         },
         error => {
           logger.error(
