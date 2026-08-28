@@ -14,6 +14,8 @@
  * @module shell-state
  */
 
+import { FIT_ZOOM, readZoom, writeZoom, type CanvasZoom } from "./canvas-zoom";
+
 /**
  * The panels the left rail switches between.
  *
@@ -125,6 +127,14 @@ export interface ShellPreferences {
   leftPanel: LeftPanel | null;
   leftPinned: boolean;
   /**
+   * How large the canvas draws the page, as the author last left it.
+   *
+   * Chrome rather than document state, like everything else here: it describes
+   * how one person is looking at the editor, not what the page IS, so it must
+   * not travel with the document to another author.
+   */
+  zoom: CanvasZoom;
+  /**
    * Layouts, one per PANEL TOPOLOGY.
    *
    * Keyed rather than singular because a layout only means anything alongside
@@ -210,6 +220,7 @@ export function topologyKey(panelIds: readonly string[]): string {
 export const DEFAULT_PREFERENCES: ShellPreferences = {
   leftPanel: null,
   leftPinned: true,
+  zoom: FIT_ZOOM,
   layouts: {},
   showEmptyElements: true,
 };
@@ -324,6 +335,11 @@ export function readPreferences(store: PreferenceStore): ShellPreferences {
       typeof record.leftPinned === "boolean"
         ? record.leftPinned
         : DEFAULT_PREFERENCES.leftPinned,
+    // Fit when the stored value is not a zoom, which includes every preference
+    // written before there was one. `readZoom` refuses a scale outside the
+    // bounds rather than painting the canvas somewhere the control cannot be
+    // reached to undo it.
+    zoom: readZoom(record.zoom) ?? DEFAULT_PREFERENCES.zoom,
     layouts: readLayouts(record.layouts),
     showEmptyElements:
       typeof record.showEmptyElements === "boolean"
@@ -338,7 +354,12 @@ export function writePreferences(
   preferences: ShellPreferences
 ): void {
   try {
-    store.write(JSON.stringify(preferences));
+    // Narrowed on the way out for the reason it is checked on the way in: what
+    // is stored is a value this can read back, not whatever shape the running
+    // editor happens to hold.
+    store.write(
+      JSON.stringify({ ...preferences, zoom: writeZoom(preferences.zoom) })
+    );
   } catch {
     // A quota error or unavailable storage. Losing a panel width is not worth
     // interrupting an edit over, and there is nothing the author could do.

@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import type { CanvasZoom } from "./canvas-zoom";
 import { devWarnOnce } from "./dev-warn";
 import {
   BUILDER_CHROME_CLASS,
@@ -155,6 +156,15 @@ export interface BuilderShellProps {
    * changes here and not at every call site that duplicated it.
    */
   onShowEmptyElementsChange?: (showEmptyElements: boolean) => void;
+  /**
+   * Reports the canvas zoom, and takes the change back.
+   *
+   * The shell owns it because the shell owns preferences, and a host owns what
+   * to DO with it — the canvas is the host's to render, so only it can apply a
+   * scale. Reported the same way `showEmptyElements` is, including on the first
+   * value, so a host never has to assume the default.
+   */
+  onZoomChange?: (zoom: CanvasZoom) => void;
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -447,7 +457,11 @@ function shallowEqualPreferences(
   if (
     a.leftPanel !== b.leftPanel ||
     a.leftPinned !== b.leftPinned ||
-    a.showEmptyElements !== b.showEmptyElements
+    a.showEmptyElements !== b.showEmptyElements ||
+    a.zoom.kind !== b.zoom.kind ||
+    (a.zoom.kind === "fixed" &&
+      b.zoom.kind === "fixed" &&
+      a.zoom.scale !== b.zoom.scale)
   ) {
     return false;
   }
@@ -1103,6 +1117,7 @@ export function BuilderShell({
   store,
   openInsertPanelToken,
   onShowEmptyElementsChange,
+  onZoomChange,
   ...props
 }: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
@@ -1207,6 +1222,14 @@ export function BuilderShell({
   React.useEffect(() => {
     onShowEmptyElementsChangeRef.current?.(preferences.showEmptyElements);
   }, [preferences.showEmptyElements]);
+  // The zoom, held and reported the same way and for the same reasons.
+  const onZoomChangeRef = React.useRef(onZoomChange);
+  React.useEffect(() => {
+    onZoomChangeRef.current = onZoomChange;
+  });
+  React.useEffect(() => {
+    onZoomChangeRef.current?.(preferences.zoom);
+  }, [preferences.zoom]);
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref

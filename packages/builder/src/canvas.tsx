@@ -46,6 +46,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { CanvasDragHandlers } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
+import { FIT_ZOOM, type CanvasZoom } from "./canvas-zoom";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -401,8 +402,16 @@ function useRegionWidth(
  */
 export function canvasScale(
   requested: number | undefined,
-  region: number | undefined
+  region: number | undefined,
+  zoom: CanvasZoom = FIT_ZOOM
 ): number {
+  /*
+   * A chosen scale is not derived from anything, which is the whole of what
+   * choosing means. It is answered before the guards below because those exist
+   * to make a FIT computable — an unmeasured region cannot be fitted to, and a
+   * fixed scale never needed it.
+   */
+  if (zoom.kind === "fixed") return zoom.scale;
   if (requested === undefined || region === undefined) return 1;
   if (!(requested > 0) || !(region > 0)) return 1;
   return Math.min(1, region / requested);
@@ -451,12 +460,22 @@ export function canvasScale(
  */
 function previewBoxStyle(
   preview: CanvasPreview | undefined,
-  scale: number
+  scale: number,
+  chosen: boolean
 ): React.CSSProperties {
   if (preview === undefined) return {};
   const container = previewContainerStyle(preview.container);
   if (preview.width === undefined) return container;
-  if (scale >= 1) {
+  /*
+   * A FIT that needs no shrinking is left unzoomed and centred, which is the
+   * shape a canvas showing a page at its own size has always had.
+   *
+   * A CHOSEN scale is applied whatever its value, including 1 and above. The
+   * two are not the same request: fitting to 1 means "it already fits", while
+   * choosing 1 means "draw it at actual size and let the region clip" — and at
+   * anything above 1 there is no reading of `maxWidth` that magnifies.
+   */
+  if (!chosen && scale >= 1) {
     return {
       ...container,
       maxWidth: `${preview.width}px`,
@@ -480,7 +499,8 @@ function previewBoxStyle(
  */
 function useCanvasSurface(
   root: React.RefObject<HTMLElement | null>,
-  preview: CanvasPreview | undefined
+  preview: CanvasPreview | undefined,
+  zoom: CanvasZoom
 ): React.CSSProperties {
   // What the box GOT, reported outward to whoever asked.
   useReportedInlineWidth(root, preview?.onMeasured);
@@ -489,7 +509,12 @@ function useCanvasSurface(
   // nothing to scale, and an observer that exists to answer a question nobody
   // asked still fires on every pane drag.
   const region = useRegionWidth(root, preview?.width !== undefined);
-  return previewBoxStyle(preview, canvasScale(preview?.width, region));
+  const scale = canvasScale(preview?.width, region, zoom);
+  const onScale = preview?.onScale;
+  useEffect(() => {
+    onScale?.(scale);
+  }, [onScale, scale]);
+  return previewBoxStyle(preview, scale, zoom.kind === "fixed");
 }
 
 /**
@@ -725,6 +750,20 @@ export interface CanvasPreview {
    * tier as live on the strength of a box nobody has looked at.
    */
   onMeasured?: (width: number | undefined) => void;
+  /**
+   * The scale the box is actually painted at, reported as it changes.
+   *
+   * Separate from {@link CanvasPreview.onMeasured} because they answer
+   * different questions: that one is the width the box GOT, this one is how far
+   * it had to shrink to get it. A caller can derive neither from the other
+   * without the region, which only this canvas measures.
+   *
+   * Reported rather than exposed as state for the reason the width is: a
+   * control that computed its own would be a second answer to what is on
+   * screen, and the two would disagree for exactly the frame after a panel
+   * opens — which is the moment worth naming.
+   */
+  onScale?: (scale: number) => void;
 }
 
 /**
@@ -978,6 +1017,14 @@ export interface CanvasProps {
    */
   dragHandlers?: CanvasDragHandlers;
   /**
+   * How large to draw the previewed page.
+   *
+   * Defaults to fitting, which is what this canvas did before the scale could
+   * be chosen — so a host offering no zoom control keeps exactly the behaviour
+   * it had.
+   */
+  zoom?: CanvasZoom;
+  /**
    * Raised when a double-click lands on the page.
    *
    * Separate from `onSelect` because the two gestures mean different things and
@@ -1015,6 +1062,7 @@ export function Canvas({
   render,
   className,
   dragHandlers,
+  zoom = FIT_ZOOM,
   onDoubleClick,
   overlay,
   preview,
@@ -1048,7 +1096,7 @@ export function Canvas({
     preview
   );
 
-  const boxStyle = useCanvasSurface(root, active);
+  const boxStyle = useCanvasSurface(root, active, zoom);
 
   const page = useMemo(
     () => (

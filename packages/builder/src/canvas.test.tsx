@@ -46,6 +46,7 @@ import {
   canvasScale,
   nodeIdFromEvent,
 } from "./canvas";
+import type { CanvasZoom } from "./canvas-zoom";
 
 // Explicit because this package does not enable vitest globals, and without
 // them testing-library never registers its own cleanup: every render stays
@@ -823,7 +824,7 @@ describe("what the canvas reports about the box it got", () => {
   }
 
   /** A canvas asked for `width`, so it has a region to scale against. */
-  function atWidth(width: number) {
+  function atWidth(width: number, zoom?: CanvasZoom) {
     return render(
       <Canvas
         document={
@@ -835,6 +836,7 @@ describe("what the canvas reports about the box it got", () => {
         }
         siteStyles={PREVIEWABLE}
         preview={{ container: "nx-preview-viewport", width }}
+        {...(zoom === undefined ? {} : { zoom })}
       />
     );
   }
@@ -884,6 +886,40 @@ describe("what the canvas reports about the box it got", () => {
        */
       expect(zoomOf(root)).toBe(`${912 / 1280}`);
       expect(root.style.transform).toBe("");
+    });
+
+    it("draws a CHOSEN scale where fitting would not have", () => {
+      /*
+       * The case the old shape could not express. A fit that needs no shrinking
+       * is left unzoomed and centred, so every scale at or above 1 took the
+       * `maxWidth` path — and no reading of `maxWidth` magnifies. Choosing 150%
+       * has to reach `zoom`, or the control moves a number on screen and
+       * nothing else.
+       */
+      const { container } = atWidth(600, { kind: "fixed", scale: 1.5 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(zoomOf(root)).toBe("1.5");
+      // And NOT the fitting shape, which has no way to magnify.
+      expect(root.style.maxWidth).toBe("");
+    });
+
+    it("holds a chosen scale when the region changes under it", () => {
+      /*
+       * Choosing a scale means it stops moving when the panels do. Re-deriving
+       * it anyway is the defect this replaces: the canvas fell from 89% to
+       * 59.5% because a panel opened, with nothing said and no way back.
+       *
+       * The region is moved to a width that WOULD have produced a different
+       * fit, so a canvas still fitting reports something else here.
+       */
+      const { container } = atWidth(1280, { kind: "fixed", scale: 1 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(zoomOf(root)).toBe("1");
+      expect(root.style.width).toBe("1280px");
     });
 
     it("leaves a tier that FITS unscaled and centred", () => {
