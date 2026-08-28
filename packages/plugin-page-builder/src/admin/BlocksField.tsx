@@ -872,7 +872,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const slots = useMemo(registrySlotSource, []);
   const nesting = useMemo(registryNestingSource, []);
-  const drag = useCanvasDrag({ editor, slots, nesting });
+  // The canvas root, published by `Canvas` below and read by the drag when a
+  // gesture begins somewhere that is not the canvas — a palette row, whose
+  // pointerdown has no `currentTarget` the drag could measure against.
+  const canvasRoot = useRef<HTMLDivElement | null>(null);
+  const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
 
   /*
    * The empty-container appender's only read of a block's definition: its
@@ -1588,7 +1592,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         renderPanel={panel => {
           if (panel === "insert") {
             return (
-              <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
+              <InsertPanel
+                editor={editor}
+                categoryOrder={CORE_CATEGORIES}
+                beginInsertDrag={drag.beginInsertDrag}
+              />
             );
           }
           if (panel === "layers") {
@@ -1687,6 +1695,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             <BlockContextMenu editor={editor}>
               <Canvas
                 document={editor.document}
+                rootRef={canvasRoot}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}
