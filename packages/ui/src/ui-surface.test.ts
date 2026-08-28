@@ -12,7 +12,13 @@
  * with `"use client"` and pulls in the whole component tree, which does not
  * belong in a Node test process.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+} from "node:fs";
 import {
   publishedEntries,
   sourcesBySubpath,
@@ -23,6 +29,7 @@ import {
   declarationsDir,
   EXTENDS_PACKAGE,
   EXTENDS_PACKAGE_DIR,
+  upToDate,
 } from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -580,24 +587,74 @@ describe("ui release tags do not shadow the documentation", () => {
 });
 
 describe("what the freshness check watches", () => {
+  /**
+   * Runs a case with one file's modification time moved to now, and puts the
+   * original time back afterwards.
+   *
+   * The file's CONTENT is never touched, so this cannot leave the tree dirty —
+   * and the freshness question is about times rather than bytes, so a time is
+   * the honest thing to move.
+   */
+  function withTouched(target: string, run: () => void): void {
+    const before = statSync(target);
+    try {
+      const now = new Date();
+      utimesSync(target, now, now);
+      run();
+    } finally {
+      utimesSync(target, before.atime, before.mtime);
+    }
+  }
+
+  /** The declarations, built and therefore current, before a case moves a time. */
+  function currentDeclarations(): void {
+    declarationsDir();
+    expect(upToDate()).toBe(true);
+  }
+
   it("watches the config package this one actually extends", () => {
     /*
      * The declaration build reads its compiler options through an `extends`
-     * chain that leaves this package, so the freshness check watches the
-     * directory at the other end of it. That directory is named rather than
-     * resolved — following the chain is the dependency tracking this helper
-     * deliberately refuses to do — which leaves one assumption to keep honest:
-     * that the chain still starts where it is assumed to.
+     * chain that leaves this package, so a change at the other end of it
+     * changes the output while nothing inside this package moves.
      *
-     * Without this, a package that stopped extending `@nextlyhq/tsconfig` would
-     * leave the check watching a directory nothing reads, and a stale build
-     * would pass in every run turbo does not schedule.
+     * Driven rather than described. An earlier version of this case asserted
+     * only that the tsconfig NAMES the package and that the directory exists,
+     * and stayed green when the entry was deleted from the input list — the
+     * list was right and nothing consulted it.
      */
     const config = readFileSync(path.join(PKG_ROOT, "tsconfig.json"), "utf8");
-
     expect(config).toContain(`"extends": "${EXTENDS_PACKAGE}/`);
-    expect(existsSync(path.join(PKG_ROOT, "..", EXTENDS_PACKAGE_DIR))).toBe(
-      true
+
+    currentDeclarations();
+    withTouched(
+      path.join(PKG_ROOT, "..", EXTENDS_PACKAGE_DIR, "base-bundler.json"),
+      () => {
+        expect(upToDate()).toBe(false);
+      }
     );
+  });
+
+  it("watches the workspace lockfile, because the toolchain is an input", () => {
+    /*
+     * A dependency-only upgrade changes the installed TypeScript or tsup
+     * without touching a byte in this package. The declarations it produced
+     * are then the previous compiler's work, and every other path watched here
+     * still looks current.
+     */
+    currentDeclarations();
+    withTouched(path.join(PKG_ROOT, "..", "..", "pnpm-lock.yaml"), () => {
+      expect(upToDate()).toBe(false);
+    });
+  });
+
+  it("does not call everything stale", () => {
+    /*
+     * The control. A freshness check that always answered `false` would pass
+     * both cases above and rebuild on every run, which is the cost this whole
+     * arrangement exists to avoid.
+     */
+    currentDeclarations();
+    expect(upToDate()).toBe(true);
   });
 });

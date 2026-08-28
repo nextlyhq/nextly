@@ -157,6 +157,11 @@ const BUILD_INPUTS = [
   // says so rather than the check quietly watching the wrong directory.
   join("..", EXTENDS_PACKAGE_DIR),
   "package.json",
+  // The workspace lockfile, because the TOOLCHAIN is an input too. A
+  // dependency-only upgrade changes the installed TypeScript or tsup without
+  // touching a byte in this package, and the declarations it produced are then
+  // the previous compiler's work while every path above still looks current.
+  join("..", "..", "pnpm-lock.yaml"),
 ];
 
 /** The newest modification time anywhere under a path, or 0 if it is absent. */
@@ -171,8 +176,15 @@ function newestUnder(path: string): number {
   return newest;
 }
 
-/** Whether the built declarations exist and are no older than the sources. */
-function upToDate(): boolean {
+/**
+ * Whether the built declarations exist and are no older than the sources.
+ *
+ * Exported so a test can drive the freshness question itself. Asserting that
+ * {@link BUILD_INPUTS} merely CONTAINS a path proves nothing about whether the
+ * calculation reads it — a list can be right while nothing consults it, and a
+ * test written against the list stays green when the entry is deleted.
+ */
+export function upToDate(): boolean {
   const present = DECLARATION_ENTRIES.every(entry =>
     existsSync(join(OUT_DIR, entry))
   );
