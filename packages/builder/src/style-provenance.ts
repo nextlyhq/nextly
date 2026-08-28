@@ -202,13 +202,12 @@ function landsOnTheBlock(entry: StyleTraceEntry): boolean {
  * page root — so it needs no descendant to reach one, and `styleOrigin` has
  * already refused it for any subject whose element does not match.
  *
- * That refusal is total today, because nothing supplies `StyleSubject.tag`: the
- * element a node renders lives inside that block's render function, and the
- * document alone does not say it. So a heading still reports its size as unset
- * rather than as coming from the baseline. Quiet rather than wrong, which is
- * the same judgement this module makes one function up — and the trace now
- * carries the element, so filling the gap is a matter of the subject learning
- * its tag rather than of the compiler recording more.
+ * The subject learns its tag from the CANVAS — `renderedTagOf` reads the
+ * element carrying the node's id — so a heading reports its size as coming from
+ * the baseline while `core/rich-text` does not: that block's own root is a
+ * `div` with its headings inside, and the baseline genuinely does not style its
+ * box. A host that supplies no canvas states no tag and gets the refusal, which
+ * is the quiet answer rather than a guessed one.
  */
 
 /**

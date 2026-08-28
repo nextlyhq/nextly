@@ -33,6 +33,7 @@ import {
   findNode,
   locateNode,
 } from "@nextlyhq/blocks-engine";
+import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 /** One node's own identity, without the chain above it. */
 type SubjectNode = Omit<StyleSubject, "ancestors">;
@@ -132,4 +133,46 @@ export function styleSubjectFor(
   // Reversed once, here: the walk produces nearest-first and the engine reads
   // outermost-first.
   return { ...identityOf(node), ancestors: ancestors.reverse() };
+}
+
+/**
+ * The element a node's own box is rendered as, read off the canvas.
+ *
+ * The typographic baseline compiles to `:where(h1)` — a rule on the ELEMENT —
+ * so nothing else in a subject can say whether one reaches this node. The
+ * document cannot answer it either: the tag lives inside a block's render, and
+ * `core/heading` picks it from a PROP while `core/rich-text` renders a plain
+ * `div` with its headings INSIDE. A reader that guessed from the block type
+ * would get the second case backwards and report a heading baseline as styling
+ * a rich-text block's own box.
+ *
+ * So the canvas answers. It is the page a visitor sees, so its tag cannot
+ * disagree with the cascade the browser actually ran, and it needs no new field
+ * on the block contract — which every third-party block author would otherwise
+ * inherit. `core/rich-text` comes out right for free: its root really is a
+ * `div`, so a heading baseline correctly does not reach that block's own
+ * font-size control.
+ *
+ * `undefined` when the node is not drawn. Read AFTER a commit rather than
+ * during a render, because the canvas and this panel re-render together and the
+ * DOM still holds the previous tag while the panel's body is running — asking
+ * then reports the level an author just changed away from.
+ */
+export function renderedTagOf(
+  root: HTMLElement | null | undefined,
+  nodeId: string | null
+): string | undefined {
+  if (root == null || nodeId === null) return undefined;
+  // A node id is author data reaching a SELECTOR, and an unescaped one does not
+  // merely miss — `querySelector` THROWS on invalid syntax, so an id an author
+  // is free to choose would take down the panel rather than lose one indicator.
+  //
+  // Escaped as an attribute VALUE rather than through `CSS.escape`, which
+  // escapes an IDENTIFIER: inside quotes a `.`, `:` or `*` is already literal
+  // and only the quote and the backslash end the string early. `CSS.escape` is
+  // also absent from some DOM implementations, so reaching for it would make
+  // this throw in exactly the environments that cannot afford a throw.
+  const value = nodeId.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const element = root.querySelector(`[${NODE_ID_ATTRIBUTE}="${value}"]`);
+  return element?.tagName.toLowerCase();
 }

@@ -70,6 +70,17 @@ import type { StylePolicy } from "./style-values";
 
 export interface InspectorPanelProps {
   /**
+   * The canvas root, forwarded to the style tab.
+   *
+   * Declared here only to CARRY it: this panel has no opinion about the canvas,
+   * and what the style tab does with it lives on
+   * {@link StyleInspectorPanelProps.canvasRoot}. Forwarded rather than left out
+   * for the reason the class library is: a prop the chain drops is invisible —
+   * the surface renders in isolation, its tests pass, and every real selection
+   * in the shipped editor silently loses the answer.
+   */
+  canvasRoot?: { readonly current: HTMLElement | null };
+  /**
    * The site's class library, forwarded to the style tab's class selector.
    *
    * Declared here only to CARRY it: this panel has no opinion about classes,
@@ -185,6 +196,7 @@ const INSPECTOR_TABS = [
 
 export function InspectorPanel({
   editor,
+  canvasRoot,
   classLibrary,
   classLibraryAbsence,
   onCreateClass,
@@ -331,6 +343,7 @@ export function InspectorPanel({
         <TabsContent value="style">
           <StyleInspectorPanel
             editor={editor}
+            canvasRoot={canvasRoot}
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}
