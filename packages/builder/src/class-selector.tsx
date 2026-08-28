@@ -242,6 +242,18 @@ export function ClassSelector({
   const currentIds = React.useRef(nodeClassIds);
   currentIds.current = nodeClassIds;
   /*
+   * Which node is selected NOW, so a pending creation can tell whether it is
+   * still about the element it was started for.
+   *
+   * The success handler captures `nodeId` and the write callback from the
+   * render that began the request, while reading the class list live. Mixing
+   * the two lets a resolution write one node's classes through another node's
+   * callback — the built-in parent keys by node and never sees it, a direct
+   * consumer that does not key would.
+   */
+  const currentNodeId = React.useRef(nodeId);
+  currentNodeId.current = nodeId;
+  /*
    * What is typed RIGHT NOW, for the same reason. The field stays editable
    * while a creation is in flight, so an author can begin the next class name
    * before the first one lands — and clearing on success would take away what
@@ -271,6 +283,16 @@ export function ClassSelector({
    * node may have gained room since, through a removal, an undo, or the host
    * selecting a smaller element.
    */
+  /*
+   * Cleared, not merely hidden. Hiding leaves the refusal stored, so a node
+   * returning to a class list it held before — an external edit and an undo
+   * would do it — revives an alert about an operation that did not just fail.
+   * This is React'"'"'s documented adjust-state-during-render: the condition stops
+   * being true once the state is null, so it converges on the next pass.
+   */
+  if (failure !== null && liveFailure(failure, nodeId, nodeClassIds) === null) {
+    setFailure(null);
+  }
   const shown = liveFailure(failure, nodeId, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps a
   // highlight instead of silently sending Enter back to the first row.
@@ -300,9 +322,17 @@ export function ClassSelector({
        * knew whether it had landed.
        */
       const submitted = query;
+      const startedOn = nodeId;
       setSaving(true);
       void onCreateClass(option.slug)
         .then(created => {
+          /*
+           * The element moved on. The class was created and is in the library,
+           * but applying it now would put it on a node the author did not ask
+           * about — the request'"'"'s own node is no longer selected, and there is
+           * nothing here that could write to it safely.
+           */
+          if (currentNodeId.current !== startedOn) return;
           if (!created.ok) {
             setFailure({
               about: nodeId,
