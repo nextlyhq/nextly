@@ -36,6 +36,8 @@ The editor is loaded on first edit rather than on mount, because its node classe
 
 An edit no longer opens against part of the page that has since been replaced: if the canvas re-renders while the editor is still loading, the passage is left alone rather than handed to an element nobody is looking at.
 
+A page description now includes the labels on a button group, which the page shows and the description omitted.
+
 The save shortcut is matched exactly rather than approximately, so pressing Ctrl+Shift+S — the browser's Save As on several platforms — no longer closes an open passage and changes the field for a keystroke the form does not treat as save.
 
 A page description no longer runs a button's label into the words after it: a passage reading "Before", a button, then "After" described the page as "Before Buy nowAfter", because the walk that flattens rich text to plain treated any node carrying its own text as inline. Block-like nodes now end a line, whether or not they hold their text directly.

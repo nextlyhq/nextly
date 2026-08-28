@@ -283,10 +283,32 @@ function isInline(node: RichTextNode): boolean {
   return INLINE_CONTAINERS.has(node.type);
 }
 
+/**
+ * Labels a node keeps in a LIST of its own rather than in `text`.
+ *
+ * `button-group` stores each button under `buttons[].text`, and the renderer
+ * draws every one of them. A walk that reads only `text` and `children` sees
+ * neither, so a passage of "Choose", a group offering "Basic" and "Pro", then
+ * "today" flattens to "Choose today" — words the page shows, missing from the
+ * description of it.
+ *
+ * Projected here rather than at the consumer, so SEO, search indexing and
+ * anything else reading this walk describe the same page.
+ */
+function listedLabels(node: RichTextNode): string | null {
+  if (node.type !== "button-group" || !Array.isArray(node.buttons)) return null;
+  const labels = node.buttons.flatMap(button =>
+    isRichTextNode(button) && typeof button.text === "string" && button.text
+      ? [button.text]
+      : []
+  );
+  return labels.length > 0 ? labels.join(" ") : null;
+}
+
 function leafText(node: RichTextNode): string | null {
   if (typeof node.text === "string") return node.text;
   if (node.type === "linebreak") return " ";
-  return null;
+  return listedLabels(node);
 }
 
 /**
