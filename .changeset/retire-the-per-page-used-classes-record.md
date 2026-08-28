@@ -49,6 +49,19 @@ Removed, and therefore breaking for anyone importing them:
   one that is absent.
 
 Hosts that called `rebuildClassUsage` should call `rebuildClassUsageIndex`,
-which takes the collection, field, locale and variant it walks. Existing
-`usedClasses` columns are left in place rather than dropped; they hold a
-derivable cache that nothing reads.
+which takes the collection, field, locale and variant it walks.
+
+The `pages.usedClasses` COLUMN needs a deliberate schema step, because the
+field leaving the collection makes it live-only and the diff emits
+`drop_column` for it. What happens next depends on the classifier mode:
+
+- `dev-additive`, which is the HMR boot-apply path: the drop is skipped with
+  a warning and the column stays.
+- Interactive sync: a destructive-drop confirmation naming the table and the
+  row count.
+- `production-strict`, which is migrate Phase 1: the sync REFUSES while any
+  destructive operation is present, so a deploy stops until the drop is taken
+  deliberately.
+
+Taking the drop is safe — the column holds a derived value nothing reads —
+but it is a data-losing operation and this does not perform it for you.
