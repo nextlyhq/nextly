@@ -170,4 +170,62 @@ describe("PermissionCacheService", () => {
       expect(await cacheService.invalidateByUser("")).toBe(0);
     });
   });
+
+  describe("invalidateByRole", () => {
+    // Restored after review: this method had NO test anywhere in the tree, and
+    // it is the one a role revocation depends on. A regression here leaves
+    // role-derived allows cached after the role is taken away — the user keeps
+    // permissions they no longer hold, until the TTL expires. Silent, and on
+    // the wrong side.
+    //
+    // The dialect matters here in a way it does not for invalidateByUser: the
+    // roleIds column is a JSON array, and the service uses THREE different
+    // containment queries for it — JSONB `@>` on Postgres, JSON_CONTAINS on
+    // MySQL, and `json_each` on SQLite. This fixture exercises the SQLite arm,
+    // which is the one that previously threw `unrecognized token: "@"` on every
+    // authed request.
+    it("makes reads miss for every user holding the revoked role", async () => {
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+      await cacheService.setCachedPermission("user-2", "read", "users", true, [
+        "role-1",
+        "role-2",
+      ]);
+
+      await cacheService.invalidateByRole("role-1");
+
+      // Both users held role-1 — user-2 among several roles, which is the case
+      // a containment query gets wrong if it compares the column for equality
+      // instead of asking whether the array contains the id.
+      expect(
+        await cacheService.getCachedPermission("user-1", "read", "users")
+      ).toBeNull();
+      expect(
+        await cacheService.getCachedPermission("user-2", "read", "users")
+      ).toBeNull();
+    });
+
+    it("leaves entries for other roles cached", async () => {
+      // The control. Tombstoning every row would satisfy the case above, and
+      // an invalidation that clears the whole cache on any role change is a
+      // correctness-preserving performance bug that no assertion above sees.
+      await cacheService.setCachedPermission("user-1", "read", "users", true, [
+        "role-1",
+      ]);
+      await cacheService.setCachedPermission("user-2", "read", "users", true, [
+        "role-2",
+      ]);
+
+      await cacheService.invalidateByRole("role-1");
+
+      expect(
+        await cacheService.getCachedPermission("user-2", "read", "users")
+      ).toBe(true);
+    });
+
+    it("invalidates nothing for an unusable roleId", async () => {
+      expect(await cacheService.invalidateByRole("")).toBe(0);
+    });
+  });
 });
