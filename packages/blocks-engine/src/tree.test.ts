@@ -1555,6 +1555,53 @@ describe("expanding a slot's declared default", () => {
     ).toBeUndefined();
   });
 
+  it("creates nothing from a slots map that is not a record", () => {
+    // `Object.entries(null)` throws, and a supplied definition reaches this
+    // without registration — the enclosing map arrives through the same
+    // unvalidated source its entries do.
+    const nulled = {
+      get: (type: string) =>
+        type === "core/host" ? { version: 1, slots: null } : undefined,
+    };
+
+    expect(() =>
+      expandSlotDefaults("core/host", nulled as never)
+    ).not.toThrow();
+    expect(expandSlotDefaults("core/host", nulled as never)).toBeUndefined();
+  });
+
+  it("judges a seeded child by the caller's nesting rules when given them", () => {
+    // The caller's source restricts the leaf to a parent that is NOT the
+    // container seeding it. Deriving nesting from the definitions instead would
+    // find no restriction at all and create the child, so the palette would be
+    // filtered by one rule set and the insert populated by another.
+    const definitions = {
+      get: (type: string) =>
+        type === "acme/container"
+          ? {
+              version: 1,
+              slots: { children: { defaultBlock: [{ type: "acme/leaf" }] } },
+            }
+          : type === "acme/leaf"
+            ? { version: 1 }
+            : undefined,
+    };
+    const callerRules = {
+      parentsOf: (type: string) =>
+        type === "acme/leaf" ? ["acme/other"] : undefined,
+    };
+
+    // Without the caller's source the child IS created — that is the control,
+    // and it is what makes the refusal below mean something.
+    expect(
+      expandSlotDefaults("acme/container", definitions)?.children
+    ).toHaveLength(1);
+
+    expect(
+      expandSlotDefaults("acme/container", definitions, callerRules)
+    ).toBeUndefined();
+  });
+
   it("stops creating nodes once the document's node cap is spent", () => {
     // Ten children at each of eight levels is a legal set of declarations and
     // about a hundred million nodes. The DEPTH bound does not reach this: it
@@ -1589,11 +1636,14 @@ describe("expanding a slot's declared default", () => {
     };
     count(slots?.children);
 
-    // Bounded by the DOCUMENT's cap, because a subtree bigger than that could
-    // not be inserted into any document and so must not be built. Asserting
-    // merely "finite" would pass on a bound of any size, including one large
-    // enough to exhaust memory.
-    expect(created).toBeLessThanOrEqual(5000);
+    // Bounded, and bounded so the WHOLE subtree fits rather than just the
+    // children. The node these hang from is created by the caller and is not
+    // charged here, so spending the full cap on children alone yields 5001
+    // nodes — a bound that is satisfied while the thing it bounds does not
+    // fit. Asserting merely "finite" would pass on a bound of any size,
+    // including one large enough to exhaust memory.
+    const parentTheCallerCreates = 1;
+    expect(created + parentTheCallerCreates).toBeLessThanOrEqual(5000);
     // And it did real work rather than refusing everything, which a budget of
     // zero would also satisfy.
     expect(created).toBeGreaterThan(100);

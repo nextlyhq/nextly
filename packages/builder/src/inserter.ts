@@ -526,13 +526,19 @@ export function insertionPointFor(
  */
 export function nodeForEntry(
   entry: InsertEntry,
-  definitions: SlotDefaultSource
+  definitions: SlotDefaultSource,
+  nesting?: NestingSource
 ): BlockNode {
   return makeNode(
     entry.blockName,
     entry.version,
     structuredClone(entry.props),
-    expandSlotDefaults(entry.blockName, definitions)
+    // The nesting source travels with the definitions rather than being
+    // rederived inside the engine. A caller that supplies its own rules uses
+    // them to decide what may be OFFERED, and a seeded child that skipped them
+    // would be a placement the caller's own rules forbid, arriving by being
+    // declared rather than chosen.
+    expandSlotDefaults(entry.blockName, definitions, nesting)
   );
 }
 

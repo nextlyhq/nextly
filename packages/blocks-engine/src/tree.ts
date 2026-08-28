@@ -138,17 +138,23 @@ const MAX_SLOT_DEFAULT_DEPTH = 8;
  *
  * The depth bound limits how DEEP a declaration reaches; it says nothing about
  * how WIDE. Ten children at each of eight levels is a legal set of declarations
- * and about a hundred million nodes, every one of them minting a UUID, long
- * before anything asks whether the result could be inserted. A flat declaration
- * larger than the document cap has the same shape more cheaply: fully built,
- * then refused.
+ * and about a hundred million nodes, every one of them minting a UUID — enough
+ * to exhaust the heap before anything downstream is asked a question.
  *
- * `MAX_NODES` is the document's own cap rather than a number chosen here, so
- * the budget answers the question that actually decides the insert — a subtree
- * this expansion cannot fit into any document is one it must not spend time
- * building.
+ * **This bounds THIS function's own allocation; it does not enforce a document
+ * limit.** The distinction is the one stated at the top of this module: these
+ * primitives make no claim about whether their result can be saved, and one
+ * place decides that at the point of writing. A host running a lower cap gets
+ * a subtree its op layer refuses, which is what happens to any oversized insert
+ * and is not this function's question.
+ *
+ * `MAX_NODES` supplies the ceiling because it is the natural one and inventing
+ * a second number would give the same question two answers. Less ONE, because
+ * the node these children hang from is created by the caller and is not charged
+ * here — spending the whole cap on children alone yields a subtree of
+ * `MAX_NODES + 1` that could never fit whatever the caller does.
  */
-const MAX_SLOT_DEFAULT_NODES = MAX_NODES;
+const MAX_SLOT_DEFAULT_NODES = MAX_NODES - 1;
 
 /**
  * The nesting rules as they read from a block-definition source.
@@ -215,12 +221,17 @@ function nestingFrom(definitions: SlotDefaultSource): NestingSource {
  */
 export function expandSlotDefaults(
   type: string,
-  definitions: SlotDefaultSource
+  definitions: SlotDefaultSource,
+  nesting?: NestingSource
 ): Record<string, BlockNode[]> | undefined {
   return expandFrom(
     type,
     definitions,
-    nestingFrom(definitions),
+    // The CALLER's rules when it has any, so a seeded child is judged by the
+    // same source that decided what the palette would offer. A caller holding
+    // its own nesting source and getting the registry's here would filter the
+    // palette by one rule set and populate the insert by another.
+    nesting ?? nestingFrom(definitions),
     new Set([type]),
     0,
     { remaining: MAX_SLOT_DEFAULT_NODES }
@@ -244,8 +255,12 @@ function expandFrom(
   budget: { remaining: number }
 ): Record<string, BlockNode[]> | undefined {
   if (depth >= MAX_SLOT_DEFAULT_DEPTH) return undefined;
+  // A plain record, not merely "not undefined". `slots: null` reaches
+  // `Object.entries(null)` as a TypeError, and a supplied definition never
+  // passed registration — the same reason the entries below are checked. The
+  // enclosing map arrives through exactly the source its contents do.
   const declaredSlots = definitions.get(type)?.slots;
-  if (declaredSlots === undefined) return undefined;
+  if (!isPlainRecord(declaredSlots)) return undefined;
 
   const expanded: Record<string, BlockNode[]> = {};
   let filledAnySlot = false;
