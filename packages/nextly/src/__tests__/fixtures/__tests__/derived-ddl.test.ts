@@ -1,0 +1,97 @@
+/**
+ * What the fixture's derived DDL must keep from the production schema.
+ *
+ * `ddlFor` builds each table from its Drizzle definition rather than from a
+ * hand-written copy, which is what stops the two drifting. The risk it carries
+ * instead is NARROWNESS: anything it does not translate is silently absent, and
+ * a constraint that is absent does not fail a test — it makes one pass.
+ *
+ * Every case here was a real omission found in review, and each made the
+ * fixture more permissive than production in a way no existing test could see.
+ *
+ * @module __tests__/fixtures/__tests__/derived-ddl.test
+ */
+import { describe, expect, it } from "vitest";
+
+import { createTestDb } from "../db";
+
+/** The raw better-sqlite3 handle, for PRAGMA and sqlite_master reads. */
+type RawSqlite = {
+  prepare(sql: string): { all(): unknown[] };
+};
+
+describe("fixture DDL derived from the Drizzle schema", () => {
+  it("carries column-level UNIQUE, so a collision test can fail", async () => {
+    const testDb = await createTestDb();
+    const raw = testDb.adapter.getDrizzle<{ $client: RawSqlite }>().$client;
+
+    const ddl = (
+      raw
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE tbl_name='dynamic_collections'"
+        )
+        .all() as { sql: string }[]
+    )[0].sql;
+
+    // `slug` and `table_name` both declare `.unique()` on the column rather
+    // than as a table index. Without this the fixture accepted duplicates that
+    // production rejects, so a test about collision handling passed while
+    // proving nothing.
+    expect(ddl).toContain('"slug" text NOT NULL UNIQUE');
+    expect(ddl).toContain('"table_name" text NOT NULL UNIQUE');
+    await testDb.close();
+  });
+
+  it("carries foreign keys WITH their referential actions", async () => {
+    const testDb = await createTestDb();
+    const raw = testDb.adapter.getDrizzle<{ $client: RawSqlite }>().$client;
+
+    const fks = raw.prepare("PRAGMA foreign_key_list(api_keys)").all() as {
+      table: string;
+      from: string;
+      on_delete: string;
+    }[];
+
+    // The actions are the point, not merely the constraint. Production deletes
+    // an api key when its user goes and nulls its role_id when the role goes;
+    // a fixture without them lets a deletion test pass while leaving exactly
+    // the orphan that test was written to catch. The fixture enables
+    // `foreign_keys` ON, so omitting these changed behaviour rather than
+    // skipping a check.
+    expect(fks).toHaveLength(2);
+    expect(fks).toContainEqual(
+      expect.objectContaining({
+        table: "users",
+        from: "user_id",
+        on_delete: "CASCADE",
+      })
+    );
+    expect(fks).toContainEqual(
+      expect.objectContaining({
+        table: "roles",
+        from: "role_id",
+        on_delete: "SET NULL",
+      })
+    );
+    await testDb.close();
+  });
+
+  it("carries a SQL default, so the archive path can run at all", async () => {
+    const testDb = await createTestDb();
+
+    // `nextly_i18n_archive.archived_at` is NOT NULL with
+    // `DEFAULT (unixepoch())`, and the localization-disable path archives rows
+    // WITHOUT naming that column — it relies on the database to supply the
+    // value. A literal-only default translation dropped it, so this insert hit
+    // the NOT NULL constraint and the whole archive path was unreachable from
+    // a test.
+    await expect(
+      testDb.adapter.executeQuery(
+        "INSERT INTO nextly_i18n_archive (collection, entry_id, locale, field, value) " +
+          "VALUES (?, ?, ?, ?, ?)",
+        ["posts", "entry-1", "fr", "title", "Bonjour"]
+      )
+    ).resolves.toBeDefined();
+    await testDb.close();
+  });
+});

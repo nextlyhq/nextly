@@ -76,6 +76,32 @@ function isSqliteTable(value: unknown): value is SQLiteTable {
   return typeof value === "object" && value !== null && is(value, SQLiteTable);
 }
 
+/**
+ * The text of a parameter-free SQL default, or null when there is none to
+ * inline safely.
+ *
+ * Drizzle stores `sql`(unixepoch())`` as an `SQL` instance whose `queryChunks`
+ * hold the raw fragments. Only a default made ENTIRELY of static text can be
+ * written into DDL — one carrying bound parameters would need those values,
+ * which a CREATE TABLE has nowhere to put. Returning null for that case means
+ * the column simply keeps no default, which is the honest outcome; silently
+ * inlining a placeholder would produce a table that accepts writes and stores
+ * the wrong thing.
+ */
+function literalSqlDefault(value: unknown): string | null {
+  const chunks = (value as { queryChunks?: unknown[] })?.queryChunks;
+  if (!Array.isArray(chunks)) return null;
+  let text = "";
+  for (const chunk of chunks) {
+    const parts = (chunk as { value?: unknown })?.value;
+    if (!Array.isArray(parts) || parts.some(p => typeof p !== "string")) {
+      return null;
+    }
+    text += (parts as string[]).join("");
+  }
+  return text.length > 0 ? text : null;
+}
+
 function ddlFor(table: SQLiteTable): string[] {
   const cfg = getTableConfig(table);
   const columns = cfg.columns.map(column => {
@@ -96,6 +122,16 @@ function ddlFor(table: SQLiteTable): string[] {
       parts.push(`DEFAULT '${value.replace(/'/g, "''")}'`);
     else if (typeof value === "number") parts.push(`DEFAULT ${value}`);
     else if (typeof value === "boolean") parts.push(`DEFAULT ${value ? 1 : 0}`);
+    else {
+      // A SQL default — `default(sql`(unixepoch())`)`. Dropping it is not
+      // cosmetic: `nextly_i18n_archive.archived_at` is NOT NULL and the
+      // production archive path inserts without naming it, relying on the
+      // database to supply the value. Without the default that insert fails
+      // the NOT NULL constraint, so the archive path cannot be exercised at
+      // all — a whole code path untestable because of a fixture omission.
+      const sqlText = literalSqlDefault(value);
+      if (sqlText !== null) parts.push(`DEFAULT ${sqlText}`);
+    }
     return parts.join(" ");
   });
 
@@ -111,7 +147,31 @@ function ddlFor(table: SQLiteTable): string[] {
       : null;
   });
 
-  const body = [...columns, ...tableUniques.filter(Boolean)].join(", ");
+  // Foreign keys, with their referential ACTIONS. The fixture turns
+  // `foreign_keys` ON, so omitting these does not merely skip a constraint —
+  // it silently changes behaviour a test may be asserting: production deletes
+  // an `api_keys` row when its user goes and nulls its `role_id` when the role
+  // goes, and a fixture without them lets a deletion test pass while leaving
+  // the orphan it was written to catch.
+  const foreignKeys = cfg.foreignKeys.map(fk => {
+    const ref = fk.reference();
+    const local = ref.columns.map(c => `"${c.name}"`).join(", ");
+    const target = getTableConfig(ref.foreignTable).name;
+    const remote = ref.foreignColumns.map(c => `"${c.name}"`).join(", ");
+    const onDelete = fk.onDelete
+      ? ` ON DELETE ${fk.onDelete.toUpperCase()}`
+      : "";
+    const onUpdate = fk.onUpdate
+      ? ` ON UPDATE ${fk.onUpdate.toUpperCase()}`
+      : "";
+    return `FOREIGN KEY (${local}) REFERENCES "${target}" (${remote})${onDelete}${onUpdate}`;
+  });
+
+  const body = [
+    ...columns,
+    ...tableUniques.filter(Boolean),
+    ...foreignKeys,
+  ].join(", ");
   const statements = [`CREATE TABLE IF NOT EXISTS "${cfg.name}" (${body});`];
   for (const index of cfg.indexes) {
     const built = index.config;
