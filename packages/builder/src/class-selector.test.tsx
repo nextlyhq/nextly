@@ -765,6 +765,58 @@ describe("a creation resolving after the selection moved to another block", () =
     expect(writeB).not.toHaveBeenCalled();
   });
 
+  it("applies to the block that asked when the parent keys by node", async () => {
+    /*
+     * The keyed mount is what the style inspector renders, and it does not
+     * reach the discard above: a new key unmounts the instance rather than
+     * updating it, so the node the handler captured is still the node its ref
+     * reports. The write that follows is self-consistent — the originating
+     * block's own class list through its own callback — which is why the
+     * mixing this file guards against cannot occur here. Asserted so the two
+     * mounts are covered separately rather than one standing in for both.
+     */
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const create = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    const writeA = vi.fn(() => "applied" as const);
+    const writeB = vi.fn(() => "applied" as const);
+
+    const view = render(
+      <ClassSelector
+        key="node-a"
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={["id-hero"]}
+        onNodeClassesChange={writeA}
+        onCreateClass={create}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    view.rerender(
+      <ClassSelector
+        key="node-b"
+        nodeId="node-b"
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={writeB}
+        onCreateClass={create}
+      />
+    );
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-made" });
+    });
+
+    expect(writeA.mock.calls).toEqual([[["id-hero", "id-made"]]]);
+    expect(writeB).not.toHaveBeenCalled();
+  });
+
   it("still applies when the selection has NOT moved", async () => {
     // The control: discarding on a node change must not discard every creation.
     let resolve: (v: { ok: true; classId: string }) => void = () => {};
