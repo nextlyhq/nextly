@@ -306,9 +306,17 @@ describe("richTextToPlainText around a block-like leaf", () => {
               { type: "text", text: "Choose" },
               {
                 type: "button-group",
+                // The REAL serialized shape: a button group's items are not
+                // nodes and carry no `type`. A fixture that invents one gets
+                // past a node-shaped guard and proves nothing about storage.
                 buttons: [
-                  { type: "button", text: "Basic" },
-                  { type: "button", text: "Pro" },
+                  {
+                    url: "/basic",
+                    text: "Basic",
+                    variant: "filled",
+                    size: "md",
+                  },
+                  { url: "/pro", text: "Pro", variant: "outline", size: "md" },
                 ],
               },
               { type: "text", text: "today" },
@@ -330,6 +338,7 @@ describe("richTextToPlainText around a block-like leaf", () => {
             children: [
               { type: "text", text: "Only" },
               { type: "button-group", buttons: [] },
+              { type: "button-group", buttons: [{ url: "/x", text: "" }] },
               { type: "text", text: "this" },
             ],
           },

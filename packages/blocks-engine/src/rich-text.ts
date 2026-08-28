@@ -297,12 +297,30 @@ function isInline(node: RichTextNode): boolean {
  */
 function listedLabels(node: RichTextNode): string | null {
   if (node.type !== "button-group" || !Array.isArray(node.buttons)) return null;
-  const labels = node.buttons.flatMap(button =>
-    isRichTextNode(button) && typeof button.text === "string" && button.text
-      ? [button.text]
-      : []
-  );
+  const labels = node.buttons.flatMap(button => {
+    const label = labelOf(button);
+    return label === null ? [] : [label];
+  });
   return labels.length > 0 ? labels.join(" ") : null;
+}
+
+/**
+ * The label a serialized list ITEM carries, or `null` if it has none.
+ *
+ * Asked of the shape rather than of a node type, because these items are not
+ * nodes: a button in a group serializes as `{ url, text, variant, size }` with
+ * no `type` at all. A check written against the node guard rejects every real
+ * one, and a fixture that invents a `type` to get past it tests nothing.
+ *
+ * Empty labels are dropped rather than joined, so a button whose text was never
+ * filled in does not open a gap in the middle of a sentence.
+ */
+function labelOf(item: unknown): string | null {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    return null;
+  }
+  const text = (item as { text?: unknown }).text;
+  return typeof text === "string" && text.length > 0 ? text : null;
 }
 
 function leafText(node: RichTextNode): string | null {
