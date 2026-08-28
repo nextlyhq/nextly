@@ -49,6 +49,7 @@ import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import {
@@ -671,6 +672,37 @@ export class UserMutationService extends BaseService {
         });
       }
 
+      const { users } = this.tables;
+
+      // Check existing BEFORE deriving the password hash. The order is the
+      // security property, not a micro-optimisation: hashing is a deliberately
+      // expensive key derivation (bcrypt at cost 12) and `bcryptjs` is a
+      // pure-JS implementation with no native binding, so it runs ON the event
+      // loop rather than in a threadpool — it blocks.
+      //
+      // Hashing first meant an unauthenticated caller could spend roughly a
+      // second of single-threaded server CPU per request, needing only an email
+      // address they know is taken and any password that passes the strength
+      // check. No credentials, nothing learned — an availability cost, paid
+      // before the lookup that was always going to reject the request.
+      // Measured: ~2.9s locally per duplicate registration, ~9.8s on a loaded
+      // CI runner.
+      //
+      // Account-enumeration sensitive, unchanged: the public message stays
+      // generic ("Resource already exists.") via NextlyError.duplicate; the
+      // email + entity flow only through logContext. Checking first also
+      // REMOVES a timing signal rather than adding one — a taken address is
+      // currently the slow path, which is itself a weak oracle.
+      const existingUser = await this.db.query.users.findFirst({
+        where: { email: requireFilterValue(userData.email, "email") },
+        columns: { id: true, email: true },
+      });
+      if (existingUser) {
+        throw NextlyError.duplicate({
+          logContext: { entity: "user", email: userData.email },
+        });
+      }
+
       // Derive password hash once (supports pre-hashed inputs while prioritizing plain passwords)
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
@@ -679,21 +711,6 @@ export class UserMutationService extends BaseService {
         passwordHash = looksPlain
           ? await hashPassword(userData.password)
           : userData.password;
-      }
-
-      const { users } = this.tables;
-
-      // Check existing. Account-enumeration sensitive: the public message
-      // stays generic ("Resource already exists.") via NextlyError.duplicate;
-      // the email + entity flow only through logContext.
-      const existingUser = await this.db.query.users.findFirst({
-        where: { email: userData.email },
-        columns: { id: true, email: true },
-      });
-      if (existingUser) {
-        throw NextlyError.duplicate({
-          logContext: { entity: "user", email: userData.email },
-        });
       }
 
       // If roles are provided, validate they all exist before creating the user.
@@ -899,7 +916,7 @@ export class UserMutationService extends BaseService {
 
       // Fetch created user
       const user = await this.db.query.users.findFirst({
-        where: { email: userData.email },
+        where: { email: requireFilterValue(userData.email, "email") },
         columns: {
           id: true,
           email: true,
@@ -1024,7 +1041,7 @@ export class UserMutationService extends BaseService {
       // 1) Load current user. §13.8 + spec note: user existence is sensitive
       // (account enumeration); the public message stays generic.
       const currentUser = await this.db.query.users.findFirst({
-        where: { id: userId },
+        where: { id: requireFilterValue(userId, "userId") },
         columns: {
           id: true,
           email: true,
@@ -1054,7 +1071,7 @@ export class UserMutationService extends BaseService {
           normalizedNewEmail !== currentEmailNormalized
         ) {
           const existing = await this.db.query.users.findFirst({
-            where: { email: normalizedNewEmail },
+            where: { email: requireFilterValue(normalizedNewEmail, "email") },
             columns: { id: true, email: true },
           });
 
@@ -1276,7 +1293,7 @@ export class UserMutationService extends BaseService {
 
       // Fetch updated user
       const user = await this.db.query.users.findFirst({
-        where: { id: currentUser.id },
+        where: { id: requireFilterValue(currentUser.id, "userId") },
         columns: {
           id: true,
           email: true,
