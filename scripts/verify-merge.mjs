@@ -800,21 +800,19 @@ const verdict = await sibling("ci-verdict.mjs");
 // exit 1.
 const { isCliEntry } = await sibling("cli-entry.mjs");
 // The advisory-thread policy lives in ONE implementation, loaded rather than
-// restated. This file counted EVERY unresolved thread and so blocked on the
-// advisory reviewer's — which the sibling's own comment calls out as
-// reinstating through one door the policy closed at another. Two scripts
-// answering one question two ways is how they came to disagree.
+// restated. A reviewer the policy excludes from blocking must not hold the
+// merge through a thread either, and two gates answering that question
+// separately agree only until one of them is edited.
 //
 // Through `sibling` for the reason its docblock gives: a static import resolves
 // against the module URL, so a symlinked entry finds no neighbour and dies with
 // ERR_MODULE_NOT_FOUND before this file runs, turning a deliberate exit 2 into
-// an exit 1. Written as a static import first; the symlink tests caught it.
+// an exit 1.
 //
-// The FIELD SELECTION comes from there too, rather than being restated here.
-// The count delegates to `canonicalActorLogin`, so a future author field would
-// be added to that module's own query while a copy here stayed as it was —
-// and this gate would receive incomplete data and silently disagree with the
-// other again, which is the divergence being closed.
+// The FIELD SELECTION comes from there too. The count delegates to
+// `canonicalActorLogin`, so a selection restated here would leave this gate
+// asking for less than the other and reaching a different verdict on the same
+// pull request.
 const countUnresolvedThreads = verdict.unresolvedThreads;
 /**
  * The review-thread fields this gate asks GitHub for, taken whole from the
@@ -887,21 +885,30 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const REPO = "nextlyhq/nextly";
 
 /**
- * The second reviewer's account, named ONCE.
+ * Reviewers whose findings are advisory: real, worth reading, and not a merge
+ * blocker.
  *
- * It is consulted for two different things — whether it reviewed this revision,
- * and whether its threads may block — and spelling it separately at each is how
- * a future change to one leaves the other pointing at an account that no longer
- * reviews anything.
+ * RESOLVED by the sibling from the environment it reads, rather than listed
+ * here. That policy is configurable through `CI_VERDICT_ADVISORY`, so a second
+ * list would name the default while the other gate honoured the override, and
+ * the two would clear and reject the same pull request.
+ *
+ * A policy that cannot be resolved yields no exemptions, so every thread
+ * counts. That is the strict direction: a gate unable to read its policy must
+ * not hand out exemptions it cannot justify.
  */
-export const CODERABBIT = "coderabbitai[bot]";
+export const ADVISORY_REVIEWERS =
+  verdict.resolveReviewers(process.env).advisory ?? [];
 
 /**
- * Reviewers whose findings are advisory: real, worth reading, and not a merge
- * blocker. Spelled as REST spells them, which is the canonical form everything
- * here compares against.
+ * The second reviewer's account, for the COVERAGE question — whether it has
+ * reviewed this revision at all.
+ *
+ * Separate from the list above, which answers whether a thread may block. A
+ * reviewer can be required to look without being able to hold the merge, and
+ * collapsing the two would make one answer the other.
  */
-export const ADVISORY_REVIEWERS = [CODERABBIT];
+export const CODERABBIT = "coderabbitai[bot]";
 
 /** Set by `main` once the head repository is known; a fork keeps its own. */
 let REMOTE_FOR_FETCH = "origin";

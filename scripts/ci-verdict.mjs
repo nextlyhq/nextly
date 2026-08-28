@@ -534,29 +534,26 @@ export function canonicalActorLogin(author) {
 }
 
 /**
- * The review-thread page query.
+ * The author fields a review thread is read through.
  *
- * Built from {@link REVIEW_THREAD_NODE_FIELDS}, which `verify-merge.mjs` also
- * uses, so the two gates cannot ask GitHub for different fields. Restating the
- * selection there was the first version of this change: the shared count
- * delegates to `canonicalActorLogin`, so a future author field would be added
- * to this query while the copy stayed as it was, and the other gate would
- * silently receive incomplete data and disagree again — the very divergence
- * this change exists to close.
+ * `verify-merge.mjs` builds its own query from this same fragment, so the two
+ * gates cannot ask GitHub for different fields. The count they share delegates
+ * to {@link canonicalActorLogin}, so a selection restated in either file leaves
+ * that file asking for less and reaching a different verdict on the same pull
+ * request.
  *
- * Exported so a test can assert on the STRING THE CODE SENDS rather than on a
- * copy of it. The fields here and {@link canonicalActorLogin} are one decision
- * in two places: the canonicaliser reads `login` and `__typename`, and a
- * hand-built fixture supplies whatever field a test writes into it, so dropping
- * `__typename` from this selection breaks nothing any unit test can see. The
- * request would then return `undefined` for it, no thread would canonicalise to
- * a bot, no thread would ever be exempt, and every advisory thread would block —
- * which is the defect this query change exists to fix, reintroduced silently by
- * editing the query alone.
+ * The fields here and {@link canonicalActorLogin} are one decision in two
+ * places: the canonicaliser reads `login` and `__typename`, and a hand-built
+ * fixture supplies whatever field a test writes into it, so a selection missing
+ * `__typename` is invisible to every unit test. The request returns `undefined`
+ * for the absent field, no thread canonicalises to a bot, nothing is ever
+ * exempt, and every advisory thread blocks. Exported so a test asserts on the
+ * string the request SENDS rather than on a copy of it.
  */
 export const REVIEW_THREAD_NODE_FIELDS =
   "isResolved comments(first:1){ nodes { author { login __typename } } }";
 
+/** The paged review-thread query, built from the shared selection. */
 export const REVIEW_THREADS_QUERY =
   "query($pr:Int!,$owner:String!,$name:String!,$cursor:String){" +
   " repository(owner:$owner,name:$name){ pullRequest(number:$pr){" +
@@ -859,7 +856,18 @@ export const fingerprint = (rv, th, ic) =>
       r?.state,
       r?.submitted_at,
     ]),
-    th.map(t => [t?.isResolved, t?.comments?.nodes?.[0]?.author?.login]),
+    // The CANONICAL login rather than the raw one, because that is what
+    // `unresolvedThreads` reads. `__typename` decides whether a login
+    // canonicalises to a bot, so two snapshots carrying the same login and a
+    // different account kind stand for different verdicts, and a stamp over the
+    // raw login alone holds still while the verdict moves. The derived value
+    // also holds still where the verdict CANNOT move — a kind changing between
+    // two non-bot values leaves the canonical login alone — which a pair of raw
+    // fields would report as evidence moving.
+    th.map(t => [
+      t?.isResolved,
+      canonicalActorLogin(t?.comments?.nodes?.[0]?.author),
+    ]),
     // The parsed revision and the timestamp are read by the coverage decision,
     // so a comment edited in place from an older revision to the current one
     // moves this stamp. Recording only the id would leave two snapshots equal

@@ -993,6 +993,53 @@ describe("canonicalActorLogin", () => {
   });
 });
 
+describe("the stability stamp moves when the verdict would", () => {
+  const thread = (login, typename) => ({
+    isResolved: false,
+    comments: { nodes: [{ author: { login, __typename: typename } }] },
+  });
+
+  /**
+   * The stamp exists so the observation window can tell whether the evidence
+   * moved underneath it. `unresolvedThreads` reads the CANONICAL login, and
+   * `__typename` decides what a login canonicalises to — so a stamp over the
+   * raw login alone holds still across two snapshots that stand for different
+   * verdicts, and the window reports the first snapshot's answer after the
+   * second would have counted the thread.
+   */
+  it("distinguishes snapshots whose account KIND changes the verdict", () => {
+    const asUser = [thread("coderabbitai", "User")];
+    const asBot = [thread("coderabbitai", "Bot")];
+    // The premise: these two really do decide differently.
+    expect(unresolvedThreads(asUser, [RABBIT])).toBe(1);
+    expect(unresolvedThreads(asBot, [RABBIT])).toBe(0);
+    // So their stamps must differ, or the window cannot see the change.
+    expect(fingerprint([], asUser, [])).not.toBe(fingerprint([], asBot, []));
+  });
+
+  /**
+   * The other half, and the reason the stamp records the DERIVED value rather
+   * than the two raw fields. A kind changing between two non-bot values cannot
+   * move the verdict, and a stamp that moved anyway would report evidence
+   * changing where nothing a decision reads did — retrying a settled answer.
+   */
+  it("holds still where the account kind cannot change the verdict", () => {
+    const asUser = [thread("coderabbitai", "User")];
+    const asOrg = [thread("coderabbitai", "Organization")];
+    expect(unresolvedThreads(asUser, [RABBIT])).toBe(
+      unresolvedThreads(asOrg, [RABBIT])
+    );
+    expect(fingerprint([], asUser, [])).toBe(fingerprint([], asOrg, []));
+  });
+
+  /** The control: an unrelated field still moves the stamp. */
+  it("still moves when resolution changes", () => {
+    const open = [thread("someone", "User")];
+    const closed = [{ ...open[0], isResolved: true }];
+    expect(fingerprint([], open, [])).not.toBe(fingerprint([], closed, []));
+  });
+});
+
 describe("the review-thread query asks for what the code reads", () => {
   /**
    * The one property no fixture can establish. Every test above builds its own
