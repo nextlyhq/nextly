@@ -46,12 +46,12 @@ import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
+  blockSourceFor,
   catalogFrom,
   filterEntries,
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
-  registryBlockSource,
   registrySlotSource,
   type InsertionPoint,
   type InsertEntry,
@@ -133,11 +133,17 @@ export function InsertPanel({
   const slotSource = React.useMemo(registrySlotSource, []);
 
   // The definitions an inserted node's declared starting children are expanded
-  // from. Separate from `definitions` above, which is the palette's catalog and
-  // may be a caller-supplied subset: a block's default names child TYPES, and
-  // those must resolve against everything registered rather than against
-  // whatever the palette was told to offer.
-  const blockSource = React.useMemo(registryBlockSource, []);
+  // from: the palette's own catalog first, then everything registered. The
+  // catalog above may be a caller-supplied subset holding a definition the
+  // registry does not, and the block being inserted is the one whose
+  // declaration is being read — so resolving only against the registry would
+  // offer that block and then insert it without the children it declares.
+  // Referenced child TYPES still resolve against the registry through the
+  // fallback, which is where a supplied list has no reason to hold them.
+  const blockSource = React.useMemo(
+    () => blockSourceFor(definitions),
+    [definitions]
+  );
   const point = insertionPointFor(
     editor.document,
     editor.selectedId,

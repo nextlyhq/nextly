@@ -547,6 +547,34 @@ export function registryBlockSource(): SlotDefaultSource {
 }
 
 /**
+ * The definitions an insert expands declared starting children from, given the
+ * palette's own catalog.
+ *
+ * Supplied definitions are consulted FIRST and the registry second, which is
+ * what keeps the offer and the insert reading one declaration. A caller may
+ * hand the palette a definition the registry does not hold — a host block, a
+ * fixture — and the catalog then offers it; resolving only against the registry
+ * would find no declaration for that block and insert it stripped of the
+ * children it declares, silently, because an absent declaration and a declared
+ * emptiness are the same answer.
+ *
+ * The fallback is the other half and not a leftover: an entry names child TYPES
+ * the supplied list has no reason to contain, so those still resolve against
+ * everything registered. Consulting the supplied list first changes which
+ * declaration wins for a name in both, and that is the intended order — the
+ * palette offered THAT definition, so the insert must build THAT block.
+ */
+export function blockSourceFor(
+  definitions: readonly AnyBlockDefinition[] | undefined
+): SlotDefaultSource {
+  if (definitions === undefined) return registryBlockSource();
+  const supplied = new Map(
+    definitions.map(definition => [definition.name, definition])
+  );
+  return { get: type => supplied.get(type) ?? getBlock(type) };
+}
+
+/**
  * The registry as a slot source.
  *
  * DERIVED from `registryBlockSource` rather than reading the registry again:

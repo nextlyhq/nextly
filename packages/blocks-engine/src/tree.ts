@@ -68,6 +68,8 @@
 import type { SlotSpec } from "./block";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { canNest, canNestInSlot } from "./nesting";
+import type { NestingSource } from "./nesting";
 import { defineEntry, ownEntry } from "./safe-record";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
@@ -96,9 +98,53 @@ export function makeNode(
  * the result is the same either way.
  */
 export interface SlotDefaultSource {
-  get(
-    type: string
-  ): { version: number; slots?: Record<string, SlotSpec> } | undefined;
+  get(type: string):
+    | {
+        version: number;
+        slots?: Record<string, SlotSpec>;
+        /**
+         * The child's own prop defaults, which a seeded child starts with just
+         * as a directly inserted one does. Without it a block reached through a
+         * parent's declaration arrives with `{}` while the same block chosen
+         * from the palette arrives with its defaults — one block with two
+         * starting states, decided by how the author happened to create it.
+         */
+        defaultProps?: object;
+        /** The child's own parent restriction, read to refuse an illegal seed. */
+        parent?: readonly string[];
+      }
+    | undefined;
+}
+
+/**
+ * How deep a chain of declared defaults may go.
+ *
+ * A bound rather than a promise: the cycle set below already stops a block from
+ * seeding itself at any remove, so this catches only a chain of DISTINCT types
+ * long enough to be a mistake — eight containers deep is past any layout an
+ * author would draw, and a declaration that wants more is describing a document
+ * rather than a starting point.
+ */
+const MAX_SLOT_DEFAULT_DEPTH = 8;
+
+/**
+ * The nesting rules as they read from a block-definition source.
+ *
+ * DERIVED from the one source this function already holds rather than taken as
+ * a second parameter, for the reason `registrySlotSource` is derived from
+ * `registryBlockSource`: two readings of one set of definitions agree only
+ * until one of them changes. The RULE stays in `nesting.ts` — this supplies it
+ * the same declarations the expansion is reading, so a seed is judged by
+ * exactly the predicate that judges an author's own drag.
+ */
+function nestingFrom(definitions: SlotDefaultSource): NestingSource {
+  return {
+    parentsOf: type => definitions.get(type)?.parent,
+    slotAllowOf: (parentType, slot) => {
+      const slots = definitions.get(parentType)?.slots;
+      return slots === undefined ? undefined : ownEntry(slots, slot)?.allow;
+    },
+  };
 }
 
 /**
@@ -117,19 +163,62 @@ export interface SlotDefaultSource {
  * leaves a container carrying no `slots` at all — which is what an empty
  * container is, and what the editor's own emptiness check reads.
  *
- * Two things are deliberately skipped rather than refused, because a block
+ * A declared child is expanded RECURSIVELY, so a container that declares its
+ * own starting children arrives with them whether an author inserted it from
+ * the palette or a parent's declaration seeded it. The alternative makes a
+ * block's declaration depend on how it was reached, which is the one thing a
+ * declaration should not do.
+ *
+ * Four things are deliberately skipped rather than refused, because a block
  * definition is code this package does not own and a bad entry in one must not
  * make the block unplaceable:
  * - an entry whose type the source cannot resolve contributes no child, since
  *   a node of an unregistered type renders as a placeholder the author did not
  *   ask for and cannot repair;
- * - a slot left with no children that way is omitted entirely, so a container
- *   never claims a slot it did not fill.
+ * - an entry the nesting rules refuse contributes no child, because seeding it
+ *   would build a document that the editor's own validation then reports as
+ *   invalid — a block that is illegal to drag in must not arrive by being
+ *   declared;
+ * - an entry naming a type already being expanded contributes no child, which
+ *   is what stops a declaration that cycles from recurring forever;
+ * - a slot left with no children by any of those is omitted entirely, so a
+ *   container never claims a slot it did not fill.
+ *
+ * The SHAPE of `defaultBlock` is not re-checked here. `registry.ts` refuses a
+ * malformed one at registration with an actionable message, for the same reason
+ * and in the same place it refuses a malformed `allow`: a reader that guards
+ * every field it touches turns a boot-time error a plugin author can fix into a
+ * silent difference in behaviour they cannot.
  */
 export function expandSlotDefaults(
   type: string,
   definitions: SlotDefaultSource
 ): Record<string, BlockNode[]> | undefined {
+  return expandFrom(
+    type,
+    definitions,
+    nestingFrom(definitions),
+    new Set([type]),
+    0
+  );
+}
+
+/**
+ * One level of {@link expandSlotDefaults}, carrying what recursion needs.
+ *
+ * `ancestors` holds the types already being expanded on this path rather than
+ * every type seen anywhere, so two sibling slots may each seed the same child —
+ * which is a shape an author would draw — while a type that reaches itself may
+ * not.
+ */
+function expandFrom(
+  type: string,
+  definitions: SlotDefaultSource,
+  nesting: NestingSource,
+  ancestors: ReadonlySet<string>,
+  depth: number
+): Record<string, BlockNode[]> | undefined {
+  if (depth >= MAX_SLOT_DEFAULT_DEPTH) return undefined;
   const declaredSlots = definitions.get(type)?.slots;
   if (declaredSlots === undefined) return undefined;
 
@@ -137,26 +226,16 @@ export function expandSlotDefaults(
   let filledAnySlot = false;
 
   for (const [slotName, spec] of Object.entries(declaredSlots)) {
-    const declared = spec?.defaultBlock;
-    if (declared === undefined) continue;
-
-    const children: BlockNode[] = [];
-    for (const entry of declared) {
-      // The CHILD's own schema version, never the parent's: a node stamped with
-      // its parent's version is read by the migration runner as older or newer
-      // than it is, and gets upgrade steps meant for a different block.
-      const childVersion = definitions.get(entry.type)?.version;
-      if (childVersion === undefined) continue;
-      // Props are deep-copied. The declaration outlives every block expanded
-      // from it, so handing out its own object would let an edit to one
-      // inserted block reach the block definition — and through it every block
-      // expanded from it afterwards. A shallow copy is not enough, because a
-      // declared value may be an array or a nested object.
-      children.push(
-        makeNode(entry.type, childVersion, structuredClone(entry.props ?? {}))
-      );
-    }
-
+    const children = childrenForSlot(spec?.defaultBlock, {
+      type,
+      slotName,
+      definitions,
+      nesting,
+      ancestors,
+      depth,
+    });
+    // A slot whose declaration produced nothing is omitted entirely, so a
+    // container never claims a slot it did not fill.
     if (children.length === 0) continue;
     // `defineEntry` rather than assignment: a slot name is chosen by whichever
     // package defined the block, so it is not a string this package controls,
@@ -167,6 +246,95 @@ export function expandSlotDefaults(
   }
 
   return filledAnySlot ? expanded : undefined;
+}
+
+/** What one slot's declaration expands to, with every refused entry dropped. */
+function childrenForSlot(
+  declared: SlotSpec["defaultBlock"],
+  context: {
+    readonly type: string;
+    readonly slotName: string;
+    readonly definitions: SlotDefaultSource;
+    readonly nesting: NestingSource;
+    readonly ancestors: ReadonlySet<string>;
+    readonly depth: number;
+  }
+): BlockNode[] {
+  if (declared === undefined) return [];
+  const children: BlockNode[] = [];
+  for (const entry of declared) {
+    const child = childForEntry(entry, context);
+    if (child !== null) children.push(child);
+  }
+  return children;
+}
+
+/**
+ * One declared entry as a node, or `null` where it must not be created.
+ *
+ * Separate from the slot loop because it answers a different question: the loop
+ * decides which slots get filled, this decides whether one declaration may
+ * become a child at all. Each `null` below is a distinct refusal, and keeping
+ * them together is what lets the loop above read as the shape it builds.
+ */
+function childForEntry(
+  entry: { readonly type: string; readonly props?: Record<string, unknown> },
+  context: {
+    readonly type: string;
+    readonly slotName: string;
+    readonly definitions: SlotDefaultSource;
+    readonly nesting: NestingSource;
+    readonly ancestors: ReadonlySet<string>;
+    readonly depth: number;
+  }
+): BlockNode | null {
+  const { definitions, nesting, ancestors, depth } = context;
+  const definition = definitions.get(entry.type);
+  // A node of an unregistered type renders as a placeholder the author did not
+  // ask for and cannot repair.
+  if (definition === undefined) return null;
+  // Both halves of the nesting rule, because `block.ts` is explicit that
+  // neither implies the other: the child says where it belongs, the slot says
+  // what it holds, and a seed has to satisfy both to be a placement the author
+  // could have made themselves.
+  if (!canNest(entry.type, context.type, nesting).allowed) return null;
+  if (
+    !canNestInSlot(entry.type, context.type, context.slotName, nesting).allowed
+  )
+    return null;
+  // Already being expanded on this path, so creating it again would not
+  // terminate.
+  if (ancestors.has(entry.type)) return null;
+
+  // The child's own defaults UNDERNEATH the entry's values, so a seeded child
+  // starts where a directly inserted one starts and the declaration overrides
+  // only what it actually names.
+  //
+  // Deep-copied, because the declaration and the definition both outlive every
+  // block expanded from them: handing out either object would let an edit to
+  // one inserted block reach back into the definition, and through it every
+  // block expanded from it afterwards. A shallow copy is not enough, because a
+  // declared value may be an array or a nested object.
+  const props = structuredClone({
+    ...(definition.defaultProps ?? {}),
+    ...(entry.props ?? {}),
+  });
+
+  return makeNode(
+    entry.type,
+    // The CHILD's own schema version, never the parent's: a node stamped with
+    // its parent's version is read by the migration runner as older or newer
+    // than it is, and gets upgrade steps meant for a different block.
+    definition.version,
+    props,
+    expandFrom(
+      entry.type,
+      definitions,
+      nesting,
+      new Set([...ancestors, entry.type]),
+      depth + 1
+    )
+  );
 }
 
 /** Where an insert or move lands: a parent's slot, or the top level when `parentId` is absent. */
