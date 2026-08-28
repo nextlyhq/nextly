@@ -117,6 +117,12 @@ export type MaterialisationFailure =
   /** The content mutation itself was refused or errored. */
   | "WRITE_FAILED"
   /**
+   * The member names a single locale. Per-locale release visibility is not
+   * built: see the refusal in `applyOne` for why performing it would be worse
+   * than declining it.
+   */
+  | "LOCALE_SCOPE_UNSUPPORTED"
+  /**
    * The release was cancelled OR RESCHEDULED between this pass reading it and
    * acting on it, so the plan describes a schedule that no longer exists.
    */
@@ -224,6 +230,25 @@ async function applyOne(
     releaseId: action.releaseId,
     effect: action.effect,
   };
+
+  // The read seam answers DOCUMENT-WIDE members only. `findDueDecisions`
+  // filters `locale IS NULL` because per-locale lifecycle lives on the
+  // companion's `_status`, which the main row it filters cannot express — so
+  // per-locale release visibility is not built yet.
+  //
+  // Writing one locale here would therefore apply an effect the read path
+  // refuses to project, and the success check below cannot see it either:
+  // `findByID(locale)` returns the MAIN row's status, so a per-locale unpublish
+  // that COMMITTED reads back as unchanged, reports WRITE_FAILED, and replays
+  // its hooks and outbox events on every drain forever.
+  //
+  // Declined rather than half-performed. Nothing can reach this today — there
+  // is no write surface, so no locale member can exist — and when one is built
+  // the schedule-time gate is where a locale member should be refused, with
+  // this as the backstop that keeps the two seams from ever disagreeing.
+  if (action.ref.locale !== null && action.ref.locale !== undefined) {
+    return { ...base, failure: "LOCALE_SCOPE_UNSUPPORTED" };
+  }
 
   const identity = await resolveActionAuthor(deps, action.createdBy);
   if ("failure" in identity) {
