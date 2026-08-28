@@ -11,6 +11,7 @@ import {
 
 import {
   WORKLIST_STATES,
+  type WorklistState,
   resolveActiveTarget,
   worklistStateFrom,
 } from "../worklist";
@@ -55,21 +56,24 @@ describe("WORKLIST_STATES", () => {
     for (const state of LANGUAGE_STATES) expect(values).toContain(state);
   });
 
-  it("adds exactly ONE tab that is not a language state, and it is `stale`", () => {
-    // 🔴 The asymmetry is the point, and it is asserted rather than tolerated.
-    // A worklist tab is a QUESTION; a language state is a CLASSIFICATION, and
-    // `languageState()` returns exactly one of them per locale. Staleness is
-    // orthogonal to all four — a stale translation is still translated, and
-    // still published if it was — so making it a fifth LANGUAGE state would
-    // have the entry-list dots and the language panel stop reporting a live
-    // translation as live.
+  it("offers NO tab the server cannot answer", () => {
+    // 🔴 "Needs review" is built and withheld. The server answers that state with
+    // "nothing is known to be stale", because nothing can yet establish whether
+    // a companion physically carries the timestamp the answer depends on — so
+    // an always-empty tab would read as "this site has no stale translations",
+    // which is a claim, and the wrong one.
     //
-    // Pinned as a set difference rather than a count: a count stays green if
-    // one language state silently disappears while another extra tab arrives.
+    // Asserted as a set difference rather than a count: a count stays green if
+    // a language state silently disappears while an extra tab arrives.
+    //
+    // This test is the one to INVERT when the capability check lands. The
+    // vocabulary decision it guards does not change — `stale` is a filter, not
+    // a fifth `LanguageState`, because staleness is orthogonal to all four and
+    // a stale translation is still published if it was published.
     const extras = WORKLIST_STATES.map(s => s.value).filter(
       v => !(LANGUAGE_STATES as readonly string[]).includes(v)
     );
-    expect(extras).toEqual(["stale"]);
+    expect(extras).toEqual([]);
   });
 
   it("uses the language panel's own wording for every tab that IS a state", () => {
@@ -86,12 +90,16 @@ describe("WORKLIST_STATES", () => {
     }
   });
 
-  it("labels the stale tab by what to DO, not by what was measured", () => {
-    const stale = WORKLIST_STATES.find(s => s.value === "stale");
-    // "Needs review" rather than "Stale" or "Outdated": a translation whose
-    // source moved may still be perfectly correct, so the instruction is to
-    // look at it, not to assume it is wrong.
-    expect(stale?.label).toBe("Needs review");
+  it("keeps `stale` expressible even while no tab offers it", () => {
+    // The TYPE stays wider than the tab list on purpose: the worklist state a
+    // URL can name is `LanguageState | "stale"`, so a saved link naming it
+    // still type-checks and resolves, and the server still answers it honestly
+    // with nothing rather than rejecting it as unknown.
+    const resolved: WorklistState = "stale";
+    expect(resolved).toBe("stale");
+    // And it falls back to the question this page exists for, since no tab
+    // matches it today.
+    expect(worklistStateFrom("stale")).toBe("missing");
   });
 
   it("leads with the question this page exists to answer", () => {
