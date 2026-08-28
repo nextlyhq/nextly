@@ -116,4 +116,66 @@ describe("the pre-push hook specifically", () => {
   it("declares a POSIX shell, so dash and Git Bash both accept it", async () => {
     expect(await hook("pre-push")).toMatch(/^#!\/usr\/bin\/env sh\r?\n/);
   });
+
+  it("typechecks the whole repo, which nothing here did before", async () => {
+    // `lint` and `build` above already run repo-wide, so types were the one
+    // whole-repo question this hook was not asking — and an API or type break
+    // is how a shared package breaks the packages that depend on it.
+    expect(shellCode(await hook("pre-push"))).toMatch(
+      /^\s*pnpm turbo check-types\b/m
+    );
+  });
+
+  it("typechecks AFTER the build, which is what makes it answerable", async () => {
+    /*
+     * `check-types` depends on `^check-types` and never builds, so it reads
+     * whatever `dist` survived. Run before the build it fails on an unbuilt
+     * tree for a reason that has nothing to do with the diff — a red that
+     * teaches the next person to stop reading this hook's output.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    const buildAt = source.search(/^\s*pnpm run build\b/m);
+    const typesAt = source.search(/^\s*pnpm turbo check-types\b/m);
+
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(typesAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeLessThan(typesAt);
+  });
+
+  it("records what is uncommitted BEFORE the first gate runs", async () => {
+    /*
+     * Every gate here runs against the working tree while Git pushes HEAD, so
+     * a green describes a different tree whenever anything is uncommitted.
+     * Reading the status after the gates would let lint-staged, a formatter or
+     * a build artefact decide the answer.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    const recordAt = source.search(/^DIRTY=/m);
+    const firstTool = source.search(FIRST_TOOL);
+
+    expect(recordAt).toBeGreaterThan(-1);
+    expect(recordAt).toBeLessThan(firstTool);
+  });
+
+  it("reports it LAST, so it is still on screen when the push proceeds", async () => {
+    const source = shellCode(await hook("pre-push"));
+
+    const recordAt = source.search(/^DIRTY=/m);
+    const reportAt = source.search(/^if \[ -n "\$DIRTY" \]/m);
+
+    expect(reportAt).toBeGreaterThan(-1);
+    expect(reportAt).toBeGreaterThan(recordAt);
+    // Nothing runs after it, which is the whole point of where it sits.
+    expect(source.slice(reportAt)).not.toMatch(FIRST_TOOL);
+  });
+
+  it("does not refuse the push over a status it could not read", async () => {
+    // A hook that cannot answer a question it only WARNS about must not turn
+    // that into a refusal — this runs under `set -e`.
+    expect(shellCode(await hook("pre-push"))).toMatch(
+      /^DIRTY=.*\|\| true\)"?$/m
+    );
+  });
 });
