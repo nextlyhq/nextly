@@ -830,6 +830,15 @@ export function useCanvasDrag({
         endGesture(native.pointerId, null);
       };
       const cancel = (): void => reset();
+      // Before registering, never after: overwriting the detach closure below
+      // while an earlier palette gesture is still live would strand its three
+      // listeners with nothing able to remove them, and they would go on
+      // calling into a gesture they no longer own for the life of the page.
+      //
+      // The ordinary sequence cannot reach that — a release arrives first and
+      // resets — so this holds the invariant locally instead of resting it on
+      // an ordering that a lost release or a second pointer breaks.
+      stopTrackingDocument();
       document.addEventListener("pointermove", move, true);
       document.addEventListener("pointerup", up, true);
       document.addEventListener("pointercancel", cancel, true);
@@ -839,7 +848,7 @@ export function useCanvasDrag({
         document.removeEventListener("pointercancel", cancel, true);
       };
     },
-    [canvasRoot, endGesture, reset, trackMove]
+    [canvasRoot, endGesture, reset, stopTrackingDocument, trackMove]
   );
 
   // Every ordinary ending funnels through `reset`, which detaches those
