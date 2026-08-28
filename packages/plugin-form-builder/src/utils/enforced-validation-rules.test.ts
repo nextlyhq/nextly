@@ -296,8 +296,8 @@ describe("the generator follows the table, rather than agreeing with it", () => 
    * everything.
    */
 
-  /** `generateZodSchema`, built against a table that says this instead. */
-  async function generatorReading(
+  /** The generator, rebuilt against a table that says this instead. */
+  async function loadGenerator(
     table: Record<FormFieldType, readonly FieldValidationRule[]>
   ) {
     vi.resetModules();
@@ -306,8 +306,33 @@ describe("the generator follows the table, rather than agreeing with it", () => 
       ENFORCED_VALIDATION_RULES: table,
     }));
     const { generateZodSchema: generate } = await import("./generate-schema");
+    return generate;
+  }
+
+  /** `generateZodSchema`, built against a table that says this instead. */
+  async function generatorReading(
+    table: Record<FormFieldType, readonly FieldValidationRule[]>
+  ) {
+    const generate = await loadGenerator(table);
     return (f: FormField, value: unknown) =>
       generate([f]).safeParse({ [f.name]: value }).success;
+  }
+
+  /**
+   * The wording a rejection carries, for the rule whose whole job is wording.
+   *
+   * `message` cannot be probed by acceptance the way every other rule is: it
+   * does not decide whether a value passes, so a table that stopped enforcing
+   * it changes nothing an `accepts` probe can see.
+   */
+  async function issuesFrom(
+    table: Record<FormFieldType, readonly FieldValidationRule[]>,
+    f: FormField,
+    value: unknown
+  ): Promise<string[]> {
+    const generate = await loadGenerator(table);
+    const result = generate([f]).safeParse({ [f.name]: value });
+    return result.success ? [] : result.error.issues.map(i => i.message);
   }
 
   afterEach(() => {
@@ -351,6 +376,58 @@ describe("the generator follows the table, rather than agreeing with it", () => 
     expect(
       substituted(field("textarea", { pattern: "^ZZZ$" }), ACCEPTED.textarea)
     ).toBe(false);
+  });
+
+  it("stops honouring the author's wording when the row drops `message`", async () => {
+    const CUSTOM = "Say it this way instead";
+    const bounded = field("text", { minLength: 50, errorMessage: CUSTOM });
+
+    // The control, and it is what makes the assertion below mean anything: with
+    // the real table the author's wording IS what comes back, so the probe can
+    // tell the two answers apart.
+    expect(
+      await issuesFrom(ENFORCED_VALIDATION_RULES, bounded, ACCEPTED.text)
+    ).toContain(CUSTOM);
+
+    const without = await issuesFrom(
+      {
+        ...ENFORCED_VALIDATION_RULES,
+        text: ["minLength", "maxLength", "pattern"],
+      },
+      bounded,
+      ACCEPTED.text
+    );
+
+    // The row no longer lists `message`, so the editor would not offer the box
+    // — and the wording stored behind it is no longer applied.
+    expect(without).not.toContain(CUSTOM);
+    // The BOUND still bites, though. Only the wording was governed by the row,
+    // and a probe that merely saw a rejection could not tell the difference.
+    expect(without.length).toBeGreaterThan(0);
+  });
+
+  it("keeps a type's intrinsic shape when the row does not enforce `pattern`", async () => {
+    // A phone carrying a pattern its row no longer enables. The danger is not
+    // that the custom pattern is ignored — it should be — but that storing it
+    // stands the type's OWN check down on the way to being ignored, leaving the
+    // field accepting anything at all.
+    const stored = field("phone", { pattern: "^ZZZ$" });
+
+    // The control: under the real table the row DOES enforce `pattern`, so the
+    // override applies and a real number is refused by it.
+    const real = await generatorReading(ENFORCED_VALIDATION_RULES);
+    expect(real(stored, ACCEPTED.phone)).toBe(false);
+
+    const substituted = await generatorReading({
+      ...ENFORCED_VALIDATION_RULES,
+      phone: ["message"],
+    });
+
+    // The override is not applied, so a real number passes again.
+    expect(substituted(stored, ACCEPTED.phone)).toBe(true);
+    // And the type's intrinsic shape is still in force, which is the half that
+    // was lost: letters are not a phone number under any row.
+    expect(substituted(stored, "not a phone at all")).toBe(false);
   });
 
   it("follows the table where numeric bounds are read, too", async () => {
