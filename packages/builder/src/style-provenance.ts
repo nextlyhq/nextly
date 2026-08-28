@@ -195,6 +195,21 @@ function landsOnTheBlock(entry: StyleTraceEntry): boolean {
   return normalizeDescendant(entry.descendant) !== "";
 }
 
+/*
+ * The typographic baseline is deliberately NOT part of the case above. It does
+ * land on the block — `:where(h1)` styles the heading itself rather than the
+ * page root — so it needs no descendant to reach one, and `styleOrigin` has
+ * already refused it for any subject whose element does not match.
+ *
+ * That refusal is total today, because nothing supplies `StyleSubject.tag`: the
+ * element a node renders lives inside that block's render function, and the
+ * document alone does not say it. So a heading still reports its size as unset
+ * rather than as coming from the baseline. Quiet rather than wrong, which is
+ * the same judgement this module makes one function up — and the trace now
+ * carries the element, so filling the gap is a matter of the subject learning
+ * its tag rather than of the compiler recording more.
+ */
+
 /**
  * Whether a recorded declaration reaches the element this control addresses.
  *

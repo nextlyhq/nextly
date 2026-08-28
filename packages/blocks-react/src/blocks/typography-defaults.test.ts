@@ -60,12 +60,16 @@ describe("the typographic baseline", () => {
   });
 
   it("leaves a context that states its own bases alone", () => {
-    const stated = { breakpoints: [], elementBases: {} } as const;
+    const breakpoints = { viewport: [], container: [] };
+    const stated = { breakpoints, elementBases: {} };
+    // Identity, not equality: a context that already has an opinion must be
+    // handed back holding the SAME record, or a host replacing the baseline is
+    // quietly given this one to compile against.
     expect(withTypographyDefaults(stated).elementBases).toBe(
       stated.elementBases
     );
     // ...and supplies them when the caller has no opinion.
-    expect(withTypographyDefaults({ breakpoints: [] }).elementBases).toBe(
+    expect(withTypographyDefaults({ breakpoints }).elementBases).toBe(
       TYPOGRAPHY_DEFAULTS
     );
   });
