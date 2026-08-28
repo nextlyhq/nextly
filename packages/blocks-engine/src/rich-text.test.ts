@@ -282,7 +282,7 @@ describe("richTextToPlainText around a block-like leaf", () => {
             type: "paragraph",
             children: [
               { type: "text", text: "Before" },
-              { type: "button-link", text: "Buy now" },
+              { type: "button-link", url: "/buy", text: "Buy now" },
               { type: "text", text: "After" },
             ],
           },
@@ -390,6 +390,41 @@ describe("richTextToPlainText around a block-like leaf", () => {
     ).toBe("Pick 0 2024 one");
   });
 
+  it("reports a STANDALONE button's numeric label too", () => {
+    /*
+     * The same defect one layer up. A lone `button-link` is drawn by the same
+     * row the group items are drawn by, so its label obeys the same rule — but
+     * the walk read `node.text` directly for it and saw only strings.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
+          { type: "button-link", url: "/zero", text: 0 },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
+        ] as unknown as RichTextValue["root"]["children"])
+      )
+    ).toBe("Before 0 After");
+  });
+
+  it("omits a STANDALONE button the renderer would not draw", () => {
+    /*
+     * The other half of routing it through `labelOf`, and the one a numeric
+     * fixture alone would not catch: the row filters an item whose URL this
+     * format cannot express, so reporting its label describes the page by a
+     * word that never appears on it.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          { type: "paragraph", children: [{ type: "text", text: "Before" }] },
+          { type: "button-link", url: "javascript:alert(1)", text: "Danger" },
+          { type: "paragraph", children: [{ type: "text", text: "After" }] },
+        ])
+      )
+    ).toBe("Before After");
+  });
+
   it("still omits a stored value no reader would draw as text", () => {
     /*
      * The control on the other side. Accepting every non-string would report
@@ -449,7 +484,7 @@ describe("richTextToPlainText around a block-like leaf", () => {
       richTextToPlainText(
         value([
           { type: "paragraph", children: [{ type: "text", text: "Before" }] },
-          { type: "button-link", text: "Buy now" },
+          { type: "button-link", url: "/buy", text: "Buy now" },
           { type: "paragraph", children: [{ type: "text", text: "After" }] },
         ])
       )
