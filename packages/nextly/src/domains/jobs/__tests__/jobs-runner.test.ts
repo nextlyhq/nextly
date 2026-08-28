@@ -6,7 +6,44 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { databaseRunAs } from "../jobs-runner";
+import {
+  DEFAULT_RETENTION_MS,
+  databaseRunAs,
+  resolveRetentionMs,
+} from "../jobs-runner";
+
+describe("resolveRetentionMs", () => {
+  it("takes the default when the option was not set", async () => {
+    expect(resolveRetentionMs(undefined)).toBe(DEFAULT_RETENTION_MS);
+  });
+
+  it("keeps everything when a deployment explicitly passes null", async () => {
+    // The documented opt-out: "retain the history, I prune it myself." A `??`
+    // here cannot tell this from the unset case, so the default came back and
+    // terminal rows older than the default window were deleted anyway — the
+    // option validated, and did nothing.
+    expect(resolveRetentionMs(null)).toBeNull();
+  });
+
+  it("distinguishes null from the default rather than agreeing by accident", async () => {
+    // The control for the case above. If the default were ever null, the
+    // assertion there would pass against an implementation that collapsed the
+    // two states — which is precisely the implementation it exists to reject.
+    expect(DEFAULT_RETENTION_MS).not.toBeNull();
+    expect(resolveRetentionMs(null)).not.toBe(resolveRetentionMs(undefined));
+  });
+
+  it("honours an explicit window", async () => {
+    expect(resolveRetentionMs(1_000)).toBe(1_000);
+  });
+
+  it("honours a zero window rather than reading it as unset", async () => {
+    // Zero is falsy: an implementation reaching for `||` instead of a
+    // three-state check would replace "prune everything terminal immediately"
+    // with the seven-day default.
+    expect(resolveRetentionMs(0)).toBe(0);
+  });
+});
 
 describe("databaseRunAs", () => {
   it("reads an active SQLite user, whose flag is 1 rather than true", async () => {

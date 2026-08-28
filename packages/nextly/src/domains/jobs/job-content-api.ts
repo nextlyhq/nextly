@@ -41,6 +41,7 @@
  * @module domains/jobs/job-content-api
  */
 
+import type { Nextly } from "../../init/nextly-instance";
 import type { UserContext } from "../collections/services/collection-types";
 
 /**
@@ -65,10 +66,35 @@ const BOUND_OPERATIONS = [
 
 export type BoundOperation = (typeof BOUND_OPERATIONS)[number];
 
-/** The subset of the Direct API this binds, in its own shape. */
+/**
+ * The two fields this client owns.
+ *
+ * Removed from every bound signature rather than accepted and ignored. A
+ * handler that could write `overrideAccess: true` and see it silently dropped
+ * would read the binding as a default it may override; the compiler saying no
+ * is what makes it a guarantee.
+ */
+type AccessFields = "overrideAccess" | "user";
+
+/** One bound operation: the Direct API's own signature, minus what this owns. */
+type Bound<TOperation> = TOperation extends (args: infer TArgs) => infer TResult
+  ? (args: Omit<TArgs, AccessFields>) => TResult
+  : never;
+
+/**
+ * The subset of the Direct API this binds.
+ *
+ * Derived from `Nextly` so the argument and result types are the Direct API's
+ * own — a second hand-written shape would drift from it, and the drift would
+ * surface as a job handler that compiles against a signature the runtime no
+ * longer has.
+ */
 export type JobContentApi = {
-  [K in BoundOperation]: (args: never) => Promise<unknown>;
+  [K in BoundOperation]: Bound<Nextly[K]>;
 };
+
+/** The Direct API surface this needs, named so the runner can inject a double. */
+export type JobContentSource = Pick<Nextly, BoundOperation>;
 
 /**
  * Wrap `source` so every bound call carries this job's identity.
@@ -79,21 +105,26 @@ export type JobContentApi = {
  */
 export function createJobContentApi(
   user: UserContext | null,
-  source: Record<BoundOperation, (args: never) => Promise<unknown>>
+  source: JobContentSource
 ): JobContentApi {
-  const bound = {} as JobContentApi;
+  const bound = {} as Record<BoundOperation, unknown>;
   for (const name of BOUND_OPERATIONS) {
-    bound[name] = (args: never) => {
+    // The generic per-slug signatures cannot be preserved through this loop, so
+    // the call is made untyped here and the assembled object is asserted to
+    // `JobContentApi` once. The types callers see are the Direct API's own; the
+    // erasure is confined to these two lines.
+    const operation = source[name] as (args: unknown) => unknown;
+    bound[name] = (args: unknown) => {
       const caller = (args ?? {}) as Record<string, unknown>;
-      return source[name]({
+      return operation({
         ...caller,
         // Applied AFTER the caller's own arguments, so neither an explicit
         // `overrideAccess: true` nor a spread that lands last can restore the
         // bypass.
         overrideAccess: false,
         ...(user === null ? {} : { user }),
-      } as never);
+      });
     };
   }
-  return bound;
+  return bound as JobContentApi;
 }
