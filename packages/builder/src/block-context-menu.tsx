@@ -62,6 +62,20 @@
  * touch long-press, and the canvas root already carries a full set for
  * dragging; on one element the two would overwrite each other.
  *
+ * ## Touch and pen open it by a different route, filtered the same way
+ *
+ * Radix opens a long-press from its own 700ms `pointerdown` timer and never
+ * dispatches a `contextmenu` event, so the canvas's own filtering — which runs
+ * on that event — does not see it at all. Left alone, a long press on a block
+ * that was not selected would open the PREVIOUS selection's verbs, and Delete
+ * among them acts on a block the author is not looking at.
+ *
+ * So the pointer-down below asks {@link contextMenuTargetOf}, the same
+ * question the canvas asks, and does one of two things: moves the selection to
+ * the pressed block, or prevents the default — which is what stops Radix's
+ * timer, since it composes its handler behind this one and skips its own when
+ * the default has been prevented.
+ *
  * ## This menu is reached by POINTER only, and that is a limitation
  *
  * Measured in a real browser: a right-click opens it correctly, at the pointer,
@@ -91,6 +105,7 @@ import {
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
+import { contextMenuTargetOf } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { useBlockActionsContext } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
@@ -132,10 +147,36 @@ export function BlockContextMenu({
   );
   const run = React.useMemo(() => blockActionRunners(verbs), [verbs]);
 
+  /*
+   * The touch and pen route into this menu, which arrives as a pointer press
+   * rather than as a context event. Mouse presses are left alone: they open
+   * through `contextmenu`, which the canvas has already filtered and selected
+   * for by the time Radix sees it.
+   */
+  const select = editor.select;
+  const pressed = React.useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType === "mouse") return;
+      const id = contextMenuTargetOf(event.target);
+      if (id === null) {
+        // Nothing to act on. Preventing the default is what keeps Radix's
+        // long-press timer from opening a menu over chrome or over text.
+        event.preventDefault();
+        return;
+      }
+      // Already chosen means already correct, and replacing would drop the
+      // rest of a multiple selection the press was meant to act on.
+      if (!selectedIds.includes(id)) select(id, "replace");
+    },
+    [select, selectedIds]
+  );
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div style={TRANSPARENT_WRAPPER}>{children}</div>
+        <div style={TRANSPARENT_WRAPPER} onPointerDown={pressed}>
+          {children}
+        </div>
       </ContextMenuTrigger>
       {/*
         Nothing to act on means nothing to draw. The canvas stops the event

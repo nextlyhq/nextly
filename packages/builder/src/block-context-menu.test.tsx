@@ -210,6 +210,63 @@ describe("the canvas's right-click menu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("selects the pressed block before a touch long-press can open", () => {
+    /*
+     * Radix opens a long-press from its OWN 700ms pointerdown timer and never
+     * dispatches a `contextmenu` event, so the canvas's filtering — which runs
+     * on that event — never sees this route. Without moving the selection
+     * here, a long press on an unselected block opens the previous selection's
+     * verbs, and Delete among them acts on a block the author is not looking
+     * at. That is why the selection is asserted, not the menu: the menu here
+     * is Radix's to open, and the SUBJECT is what this must get right.
+     */
+    register();
+    const editor = editorSpy(pair(), "b");
+    const { container } = mount(editor);
+
+    fireEvent.pointerDown(blockElement(container), { pointerType: "touch" });
+
+    expect(editor.select).toHaveBeenCalledWith("a", "replace");
+  });
+
+  it("leaves a mouse press to the context event that follows it", () => {
+    // The control on the other side. A rule that selected on every pointer
+    // press would move the selection on the way to a plain left click, which
+    // the canvas already handles on its own event.
+    register();
+    const editor = editorSpy(pair(), "b");
+    const { container } = mount(editor);
+
+    fireEvent.pointerDown(blockElement(container), { pointerType: "mouse" });
+
+    expect(editor.select).not.toHaveBeenCalled();
+  });
+
+  it("stops a touch long-press that is not aimed at a block", () => {
+    /*
+     * Preventing the default is the mechanism, not a formality: Radix composes
+     * its pointer handler BEHIND this one and skips its own when the default
+     * has been prevented, so this is what keeps the timer from opening a menu
+     * over chrome or over text being edited.
+     *
+     * `fireEvent` returns false when a handler prevented the default, which is
+     * the only observable of that decision from here.
+     */
+    register();
+    const editor = editorSpy(pair(), "a");
+    const { container } = mount(editor);
+    const chrome = window.document.createElement("button");
+    chrome.setAttribute("data-nx-chrome", "");
+    blockElement(container).appendChild(chrome);
+
+    const notPrevented = fireEvent.pointerDown(chrome, {
+      pointerType: "touch",
+    });
+
+    expect(notPrevented).toBe(false);
+    expect(editor.select).not.toHaveBeenCalled();
+  });
+
   it("keeps an unavailable verb, carrying the reason it is unavailable", () => {
     /*
      * A lock is the one reason `toolbarActions` reports, because it is the one
