@@ -74,11 +74,27 @@ function liveFailure(
   failure: { about: readonly string[]; issue: SelectorFailure } | null,
   nodeClassIds: readonly string[]
 ): SelectorFailure | null {
-  if (failure === null || failure.about !== nodeClassIds) return null;
+  if (failure === null || !sameClassIds(failure.about, nodeClassIds)) {
+    return null;
+  }
   if (failure.issue.kind === "node-full" && nodeHasRoom(nodeClassIds)) {
     return null;
   }
   return failure.issue;
+}
+
+/**
+ * Whether two class lists are the same list.
+ *
+ * By CONTENT, not by reference. A caller that has no stored classes hands over
+ * a fresh `[]` on every render — `?? []` in the style inspector does exactly
+ * that — so an identity comparison would discard a failure on the next
+ * unrelated re-render, which is every render. Content also gets the intended
+ * behaviour for free: removing a chip changes the list, and that is precisely
+ * when a stale failure should go.
+ */
+function sameClassIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 /** What the author is told, per cause. */
@@ -201,6 +217,14 @@ export function ClassSelector({
    */
   const currentIds = React.useRef(nodeClassIds);
   currentIds.current = nodeClassIds;
+  /*
+   * What is typed RIGHT NOW, for the same reason. The field stays editable
+   * while a creation is in flight, so an author can begin the next class name
+   * before the first one lands — and clearing on success would take away what
+   * they had typed since.
+   */
+  const currentQuery = React.useRef(query);
+  currentQuery.current = query;
 
   if (library === undefined) {
     return (
@@ -247,6 +271,7 @@ export function ClassSelector({
        * the typed name the moment the author pressed Enter, before anything
        * knew whether it had landed.
        */
+      const submitted = query;
       setSaving(true);
       void onCreateClass(option.slug).then(created => {
         setSaving(false);
@@ -261,11 +286,15 @@ export function ClassSelector({
         // refuses here exactly as it would for an existing class rather than
         // being special-cased into a second rule — and against the node as it
         // is NOW, not as it was when the request left.
-        applyExisting(created.classId, currentIds.current);
+        applyExisting(
+          created.classId,
+          currentIds.current,
+          currentQuery.current === submitted
+        );
       });
       return;
     }
-    applyExisting(option.choice.id, nodeClassIds);
+    applyExisting(option.choice.id, nodeClassIds, true);
   };
 
   /**
@@ -275,7 +304,11 @@ export function ClassSelector({
    * the id the host just minted, so the per-node bound and the store's refusal
    * are enforced in one place rather than once per caller.
    */
-  function applyExisting(classId: string, against: readonly string[]): void {
+  function applyExisting(
+    classId: string,
+    against: readonly string[],
+    clearQuery: boolean
+  ): void {
     // Through the shared helper rather than an append written here. The bound
     // on how many classes a node may carry belongs to one place, and a second
     // append would keep working after that place learned to refuse.
@@ -292,6 +325,7 @@ export function ClassSelector({
       return;
     }
     setFailure(null);
+    if (!clearQuery) return;
     setQuery("");
     setActive(0);
   }

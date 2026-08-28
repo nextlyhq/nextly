@@ -166,14 +166,23 @@ describe("what Enter does", () => {
     expect(onNodeClassesChange).toHaveBeenCalledWith(["id-card"]);
   });
 
-  it("reports a creation as an intent, not as a node write", () => {
-    // The class has no id until the host has stored it, so a node write here
-    // would have to invent one.
+  it("reports a creation as an intent, then applies the id it answers with", async () => {
+    /*
+     * Both halves, and the second is the one that matters. Asserting only that
+     * no node write happened YET is satisfied by the promise not having settled
+     * — it holds just as well for a component that never applies the class at
+     * all. The apply has to be observed after the microtask runs.
+     */
     const { onCreateClass, onNodeClassesChange } = draw();
     type("call-to-action");
     fireEvent.keyDown(field(), { key: "Enter" });
+
     expect(onCreateClass).toHaveBeenCalledWith("call-to-action");
     expect(onNodeClassesChange).not.toHaveBeenCalled();
+
+    await React.act(async () => {});
+
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-call-to-action"]);
   });
 
   it("applies an exact match rather than creating beside it", () => {
@@ -474,6 +483,135 @@ describe("a failure that must not outlive the node it describes", () => {
     type("hero");
     fireEvent.keyDown(field(), { key: "Enter" });
     expect(screen.getByRole("alert").textContent).toMatch(/as many classes/i);
+  });
+});
+
+describe("a failure scoped by what the node holds, not by array identity", () => {
+  it("survives an unrelated re-render that reallocates the id list", () => {
+    /*
+     * A caller with no stored classes hands over a fresh `[]` every render —
+     * `?? []` in the style inspector does exactly that. Compared by reference,
+     * the failure would be discarded on the next re-render, which is every
+     * render, so the author would never see it.
+     */
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+    const create = vi.fn(async () => ({
+      ok: true as const,
+      classId: "id-new",
+    }));
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    // Same CONTENT, different array — an ordinary parent re-render.
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
+  it("still drops it when the content actually changes", () => {
+    // The control: comparing by content must not make the failure permanent.
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+    const create = vi.fn(async () => ({
+      ok: true as const,
+      classId: "id-new",
+    }));
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("a query typed while a creation is still in flight", () => {
+  it("is not cleared by the creation landing", async () => {
+    /*
+     * The field stays editable while the save is out, so an author can begin
+     * the next class name. Clearing unconditionally on success takes away what
+     * they typed after pressing Enter.
+     */
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const create = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={create}
+      />
+    );
+    type("first-one");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    type("second-one");
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-first" });
+    });
+
+    expect((field() as HTMLInputElement).value).toBe("second-one");
+  });
+
+  it("IS cleared when the author has typed nothing since", async () => {
+    // The control: the clear must still happen in the ordinary case.
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const create = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={create}
+      />
+    );
+    type("first-one");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-first" });
+    });
+
+    expect((field() as HTMLInputElement).value).toBe("");
   });
 });
 
