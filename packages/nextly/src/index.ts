@@ -621,6 +621,33 @@ export {
 // TAKES, because that is the only thing a plugin author choosing between the
 // two can see.
 export { schemaDraftSplit as resolvedCollectionDraftSplit } from "./domains/versions/draft-split-eligibility";
+
+// Background jobs. Exported from the root entry rather than only from the
+// domain barrel: a barrel that no published entry re-exports is unreachable
+// from an installed application, so the feature would exist for this
+// repository's own tests and for nobody else.
+export {
+  DEFAULT_MAX_ATTEMPTS,
+  MAX_JOB_SLUG_LENGTH,
+  defineJob,
+  JobRegistry,
+} from "./domains/jobs/job-registry";
+export type {
+  JobContext,
+  JobDefinition,
+  JobDefinitionInput,
+  JobRetryPolicy,
+} from "./domains/jobs/job-registry";
+export { JobsRepository } from "./domains/jobs/jobs-repository";
+export type {
+  EnqueueResult,
+  JobRow,
+  NewJob,
+} from "./domains/jobs/jobs-repository";
+export { runJobsPass } from "./domains/jobs/jobs-runner";
+export type { RunJobsPassOptions } from "./domains/jobs/jobs-runner";
+export type { RunJobsResult } from "./domains/jobs/run-jobs";
+
 export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
