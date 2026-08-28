@@ -61,6 +61,22 @@ export const MIN_ZOOM = 0.25;
 export const MAX_ZOOM = 4;
 
 /**
+ * A fixed scale the canvas can actually paint at, or `null` when it cannot.
+ *
+ * The bounds are not only about what STORAGE may hold. `CanvasZoom` is
+ * exported, so a host can construct `{ kind: "fixed", scale }` directly with
+ * any number the type admits — `NaN`, `Infinity`, zero, or something far
+ * outside these bounds — and none of those reach `readZoom` on the way in.
+ * Interpolated into a `zoom` declaration they produce an invalid rule or a
+ * canvas nobody can see, so the check belongs wherever a scale is USED rather
+ * than only where one is parsed.
+ */
+export function usableScale(scale: number): number | null {
+  if (!Number.isFinite(scale)) return null;
+  return scale < MIN_ZOOM || scale > MAX_ZOOM ? null : scale;
+}
+
+/**
  * A stored value read back as a zoom, or `null` when it is not one.
  *
  * `null` rather than a silent fall back to fit: a caller restoring preferences
@@ -69,9 +85,9 @@ export const MAX_ZOOM = 4;
  */
 export function readZoom(value: unknown): CanvasZoom | null {
   if (value === "fit") return FIT_ZOOM;
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (value < MIN_ZOOM || value > MAX_ZOOM) return null;
-  return { kind: "fixed", scale: value };
+  if (typeof value !== "number") return null;
+  const scale = usableScale(value);
+  return scale === null ? null : { kind: "fixed", scale };
 }
 
 /** A zoom as it is stored: the string `"fit"`, or the scale itself. */

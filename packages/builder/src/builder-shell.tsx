@@ -750,7 +750,8 @@ function useSeparatorRegionEscape(
 }
 
 function ShellRegions({
-  appliedScale,
+  appliedScale = 1,
+  onZoomPick,
   renderPanel,
   availablePanels,
   children,
@@ -765,6 +766,8 @@ function ShellRegions({
   active,
   loadCount,
 }: Omit<BuilderShellProps, "store"> & {
+  /** The zoom picker, or absent where the host wired none. */
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
   preferences: ShellPreferences;
   update: (change: (current: ShellPreferences) => ShellPreferences) => void;
   /**
@@ -913,11 +916,18 @@ function ShellRegions({
           shell owns preferences and this control edits one. A host drawing its
           own would hold the value in a second place, and the two would correct
           each other on every open.
+
+          Only where the host has WIRED it, though. The canvas belongs to the
+          host, so without `onZoomChange` there is nothing to apply a choice to:
+          the control would store a preference, report a percentage the canvas
+          does not honour, and read 100% whatever was picked. A shell that
+          predates this — the README example and the playground harness among
+          them — should gain no control rather than a dead one.
         */}
         <CanvasZoomControl
           zoom={preferences.zoom}
-          appliedScale={appliedScale ?? 1}
-          onChange={next => update(current => ({ ...current, zoom: next }))}
+          appliedScale={appliedScale}
+          onChange={onZoomPick}
         />
       </header>
 
@@ -1147,7 +1157,7 @@ export function BuilderShell({
   openInsertPanelToken,
   onShowEmptyElementsChange,
   onZoomChange,
-  appliedScale,
+  appliedScale = 1,
   ...props
 }: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
@@ -1260,6 +1270,22 @@ export function BuilderShell({
    * write preferences on every render, and every write reports back out, which
    * is a loop rather than a preference.
    */
+  /*
+   * The zoom picker, resolved here rather than where it is drawn.
+   *
+   * `undefined` when the host has wired nothing, which is what makes the
+   * control render nothing — see its own documentation for why a dead one is
+   * worse than none. Deciding it at the render site put the branch inside a
+   * region that is already the largest function in this file.
+   */
+  const onZoomPick = React.useMemo(
+    () =>
+      onZoomChange === undefined
+        ? undefined
+        : (next: CanvasZoom) => update(current => ({ ...current, zoom: next })),
+    [onZoomChange, update]
+  );
+
   // The zoom, held and reported the same way and for the same reasons.
   const onZoomChangeRef = React.useRef(onZoomChange);
   React.useEffect(() => {
@@ -1430,6 +1456,7 @@ export function BuilderShell({
               <PortalProvider container={overlayHost}>
                 <ShellRegions
                   appliedScale={appliedScale}
+                  onZoomPick={onZoomPick}
                   {...props}
                   preferences={preferences}
                   update={update}

@@ -52,7 +52,16 @@ export interface CanvasZoomControlProps {
    * report.
    */
   appliedScale: number;
-  onChange: (zoom: CanvasZoom) => void;
+  /**
+   * What to do with a chosen zoom, or absent where nothing can act on one.
+   *
+   * Absent renders NOTHING. The canvas belongs to the host, so a shell whose
+   * host has not wired this has nowhere to apply a choice: the control would
+   * store a preference, report a percentage the canvas does not honour, and go
+   * on reading 100% whatever was picked. A surface that predates the wiring
+   * should gain no control rather than a dead one.
+   */
+  onChange?: (zoom: CanvasZoom) => void;
 }
 
 /** A scale as a percentage, rounded to whole points. */
@@ -64,7 +73,8 @@ export function CanvasZoomControl({
   zoom,
   appliedScale,
   onChange,
-}: CanvasZoomControlProps): React.JSX.Element {
+}: CanvasZoomControlProps): React.JSX.Element | null {
+  if (onChange === undefined) return null;
   const shown = asPercent(appliedScale);
   return (
     <DropdownMenu>

@@ -953,6 +953,71 @@ describe("what the canvas reports about the box it got", () => {
       expect(zoomOf(rootOf(container))).toBe("");
     });
 
+    it("draws a chosen scale on a site that previews no viewport at all", () => {
+      /*
+       * Previewing needs a container name AND a site declaring viewport tiers,
+       * and the default configuration has neither — so there is no preview
+       * object, which is the state most sites are in. Nesting the scale inside
+       * that object left the control moving a number on screen and changing
+       * nothing for exactly those sites.
+       */
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          zoom={{ kind: "fixed", scale: 1.5 }}
+        />
+      );
+
+      expect(zoomOf(rootOf(container))).toBe("1.5");
+    });
+
+    it("refuses a scale it cannot paint at", () => {
+      /*
+       * `CanvasZoom` is exported, so a host can build one directly and never
+       * pass through the storage guard. Interpolated into a `zoom` declaration
+       * these produce either a rule the browser drops or a canvas beyond reach
+       * of the control that would undo it, so the check belongs where a scale
+       * is USED rather than only where one is parsed.
+       */
+      /*
+       * WITH a preview, which is the path the validation is load-bearing on.
+       * Without one the box style already declines to apply an unchosen scale,
+       * so a no-preview fixture passes whether or not the scale was checked —
+       * it cannot separate the two guards.
+       */
+      const previewing = atWidth(1280, { kind: "fixed", scale: Number.NaN });
+      region(912);
+      expect(zoomOf(rootOf(previewing.container))).not.toContain("NaN");
+      previewing.unmount();
+
+      for (const scale of [Number.NaN, Infinity, 0, 500]) {
+        const { container, unmount } = render(
+          <Canvas
+            document={
+              {
+                formatVersion: 1,
+                kind: "page",
+                nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+              } as never
+            }
+            siteStyles={{ css: "", classes: {} } as never}
+            zoom={{ kind: "fixed", scale }}
+          />
+        );
+        // Falls back to fitting, which paints nothing rather than painting a
+        // value the browser cannot use.
+        expect(zoomOf(rootOf(container))).toBe("");
+        unmount();
+      }
+    });
+
     it("draws a CHOSEN scale where fitting would not have", () => {
       /*
        * The case the old shape could not express. A fit that needs no shrinking
