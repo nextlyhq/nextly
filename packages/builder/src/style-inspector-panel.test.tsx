@@ -233,7 +233,10 @@ describe("the class selector, mounted above the style sections", () => {
       ] as BlockNode[],
     } as BlockDocument;
     const editor = editorFor(document);
-    const onCreateClass = vi.fn();
+    const onCreateClass = vi.fn(async () => ({
+      ok: true as const,
+      classId: "id-new",
+    }));
     render(
       <StyleInspectorPanel
         editor={editor}
@@ -323,7 +326,10 @@ describe("the class selector, mounted above the style sections", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
         classLibrary={LIBRARY}
       />
     );
@@ -355,7 +361,10 @@ describe("the class selector, mounted above the style sections", () => {
     const view = render(
       <StyleInspectorPanel
         editor={editorFor(first, "a")}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
         classLibrary={LIBRARY}
       />
     );
@@ -366,7 +375,10 @@ describe("the class selector, mounted above the style sections", () => {
     view.rerender(
       <StyleInspectorPanel
         editor={editorFor(first, "b")}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
         classLibrary={LIBRARY}
       />
     );
@@ -394,7 +406,10 @@ describe("the class selector, mounted above the style sections", () => {
     render(
       <StyleInspectorPanel
         editor={editor}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
         classLibrary={LIBRARY}
       />
     );

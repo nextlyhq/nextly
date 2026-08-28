@@ -43,7 +43,10 @@ function draw(overrides: Partial<ClassSelectorProps> = {}): {
   // "refused" and so reads as success — the fake would then be asserting a
   // shape the real host cannot use.
   const onNodeClassesChange = vi.fn(() => "applied" as const);
-  const onCreateClass = vi.fn();
+  const onCreateClass = vi.fn(async (slug: string) => ({
+    ok: true as const,
+    classId: `id-${slug}`,
+  }));
   render(
     <ClassSelector
       library={LIBRARY}
@@ -65,7 +68,10 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
       library={LIBRARY}
       nodeClassIds={initial.nodeClassIds}
       onNodeClassesChange={vi.fn(() => "applied" as const)}
-      onCreateClass={vi.fn()}
+      onCreateClass={vi.fn(async () => ({
+        ok: true as const,
+        classId: "id-new",
+      }))}
     />
   );
   return {
@@ -75,7 +81,10 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
           library={LIBRARY}
           nodeClassIds={nodeClassIds}
           onNodeClassesChange={vi.fn(() => "applied" as const)}
-          onCreateClass={vi.fn()}
+          onCreateClass={vi.fn(async () => ({
+            ok: true as const,
+            classId: "id-new",
+          }))}
         />
       ),
   };
@@ -96,7 +105,10 @@ describe("a library that has not been read yet", () => {
         library={undefined}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
       />
     );
     expect(screen.getByText(/loading classes/i)).toBeTruthy();
@@ -326,7 +338,10 @@ describe("a write the document refuses", () => {
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
       />
     );
     return { onNodeClassesChange };
@@ -365,7 +380,10 @@ describe("a write the document refuses", () => {
         library={LIBRARY}
         nodeClassIds={["id-hero"]}
         onNodeClassesChange={onNodeClassesChange}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
       />
     );
     fireEvent.click(
