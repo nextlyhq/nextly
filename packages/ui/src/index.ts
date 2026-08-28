@@ -543,6 +543,16 @@ export { parseKeys } from "./lib/shortcuts/key-spec";
  * uses rather than re-splitting the string.
  */
 export type { KeyChord, KeySequence } from "./lib/shortcuts/key-spec";
+/**
+ * @experimental Deciding whether a keystroke IS a given chord, for a surface that must act on one
+ * before the manager sees it — a capture-phase listener flushing uncommitted work ahead of a form's
+ * own submit. Exported so that surface asks the same question the manager asks, rather than keeping
+ * a second definition that is broader: `event.key === "s" && (metaKey || ctrlKey)` also fires on
+ * Ctrl+Shift+S, which the manager rejects and the browser uses for Save As.
+ */
+export { chordMatches, detectApplePlatform } from "./lib/shortcuts/key-spec";
+/** @experimental The modifier flags {@link chordMatches} reads; a `KeyboardEvent` satisfies it. */
+export type { ModifierState } from "./lib/shortcuts/key-spec";
 
 /** @experimental Form layout. No first-party plugin has exercised it in production yet. */
 export { FieldShell } from "./components/field-shell";

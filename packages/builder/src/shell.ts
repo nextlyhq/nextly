@@ -261,6 +261,60 @@ export { useInlineText, EDITING_ATTRIBUTE } from "./use-inline-text";
 export type { InlineTextEditing, UseInlineTextResult } from "./use-inline-text";
 export { inlineTargets, inlineTarget, inlineTextOp } from "./inline-text";
 /**
+ * Typing a block's PASSAGE directly on the canvas, and the one gesture that
+ * reaches either surface.
+ *
+ * `useInlineEditing` is what a host wires to the canvas: it owns both the plain
+ * and the rich edit, decides from the block's own schema which a double-click
+ * opened, and keeps at most one of them live. A host that supplies no rich-text
+ * loader still edits plain text; passages simply do not open.
+ *
+ * The rich editor is loaded on first edit, not on mount, because its node
+ * classes carry a 630KB chunk that an author who never edits a passage should
+ * never fetch.
+ */
+export { useInlineEditing } from "./use-inline-editing";
+export type { UseInlineEditingResult } from "./use-inline-editing";
+/**
+ * What finishing an inline edit did.
+ *
+ * A host must branch on this rather than on the presence of a document. A
+ * refused commit has kept the surface open because the author's words are in it
+ * and nowhere else — closing, navigating or opening another value on top of
+ * that is what loses them.
+ */
+export {
+  documentAfter,
+  INLINE_EDIT_DISCARDED,
+  INLINE_EDIT_UNCHANGED,
+} from "./inline-edit-outcome";
+export type {
+  InlineEditOutcome,
+  InlineEditDiscarded,
+  InlineEditRefusal,
+  InlineEditRefused,
+  InlineEditUnchanged,
+  InlineEditWritten,
+} from "./inline-edit-outcome";
+export { useInlineRichText } from "./use-inline-rich-text";
+export type {
+  InlineRichTextEditing,
+  InlineRichTextEditorLoader,
+  InlineRichTextFinished,
+  UseInlineRichTextResult,
+} from "./use-inline-rich-text";
+export {
+  richInlineTargets,
+  richInlineTarget,
+  richInlineTextOp,
+  richTextChanged,
+} from "./inline-rich-text";
+export type { InlineRichTextTarget } from "./inline-rich-text";
+export { inlinePropKind } from "./inline-prop-kind";
+export { namedTarget, firstInlineProp } from "./inline-target";
+export type { FirstInlineProp } from "./inline-target";
+export type { InlinePropKind } from "./inline-prop-kind";
+/**
  * The first-run checklist: what an author has not done on this page yet.
  *
  * Every step is DERIVED from the document rather than tracked, so it describes

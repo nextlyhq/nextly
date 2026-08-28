@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearBlocks,
   registerBlocks,
+  RICH_TEXT_PROP_TYPE,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -57,7 +58,56 @@ function withQuote(
   ]);
 }
 
+/** A block whose inline value is a TREE rather than a line of text. */
+function withPassage(props: Record<string, unknown> = {}) {
+  registerBlocks(
+    [
+      {
+        ...base,
+        name: "acme/passage",
+        props: {
+          content: { type: RICH_TEXT_PROP_TYPE, inline: true },
+          caption: { type: "text", inline: true },
+        },
+      },
+    ] as never,
+    { source: "inline-text-test" }
+  );
+  return documentOf([
+    { id: "a", type: "acme/passage", version: 1, props } as BlockNode,
+  ]);
+}
+
 describe("inlineTargets", () => {
+  it("refuses a value whose type is a tree, however it was declared", () => {
+    /*
+     * The `inline` flag alone would offer this, and everything downstream reads
+     * a value as text and writes a string back — so the caret would land in an
+     * empty element and clicking away would commit "" over the whole passage.
+     * The author loses the work by looking at it, and nothing reports an error.
+     *
+     * `caption` is in the same block and IS offered, which is what separates
+     * this from a rule that refuses any block holding rich text.
+     */
+    const stored = {
+      content: { root: { type: "root", children: [] } },
+      caption: "A caption",
+    };
+    const targets = inlineTargets(withPassage(stored), "a");
+
+    expect(targets.map(t => t.prop)).toEqual(["caption"]);
+  });
+
+  it("refuses it while it is EMPTY too", () => {
+    // Decided from the declared type, not from what the prop happens to hold.
+    // Read from the value, a passage an author had not written yet would be
+    // offered as text — and the first edit would store a string where every
+    // reader expects a tree.
+    const targets = inlineTargets(withPassage({ caption: "A caption" }), "a");
+
+    expect(targets.map(t => t.prop)).toEqual(["caption"]);
+  });
+
   it("offers only the values the block declared inline", () => {
     // `attribution` and `citeUrl` are real props with schemas and no `inline`,
     // so a canvas must not offer them: nothing marked their element, and an

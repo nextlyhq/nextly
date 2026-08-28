@@ -1506,6 +1506,65 @@ describe("rich-text phrasing-only containers", () => {
     expect(html).toContain("<figure");
   });
 
+  it("keeps the author's order when words follow the media", () => {
+    /*
+     * The fixture above ends in media, so it cannot tell "kept the words" from
+     * "gathered every word first". This one can: the passage reads
+     * Before-media-After, and collecting all phrasing into the heading renders
+     * `<h2>BeforeAfter</h2>` with the media behind text that came after it.
+     *
+     * The heading is not split around the media either — a second `h2` is a
+     * second entry in the document outline. Everything after the media follows
+     * it out instead, in the order it was written.
+     */
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [
+          { type: "text", text: "Before" },
+          IMAGE,
+          { type: "text", text: "After" },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+
+    expect(html).toContain("<h2>Before</h2>");
+    // The reordering this exists to prevent, named exactly.
+    expect(html).not.toContain("BeforeAfter");
+    // One heading, not one per run of words.
+    expect(html.match(/<h2>/g)).toHaveLength(1);
+    expect(html.indexOf("<figure")).toBeLessThan(html.indexOf("After"));
+  });
+
+  it("keeps the author's order in a disclosure label too", () => {
+    // The same rule through the other container that takes only phrasing, so
+    // the two cannot come to disagree about what order means.
+    const value = doc([
+      {
+        type: "collapsible-container",
+        children: [
+          {
+            type: "collapsible-title",
+            children: [
+              { type: "text", text: "Before" },
+              IMAGE,
+              { type: "text", text: "After" },
+            ],
+          },
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+
+    expect(html).toContain("<summary>Before</summary>");
+    expect(html).not.toContain("BeforeAfter");
+    expect(html.indexOf("<figure")).toBeLessThan(html.indexOf("After"));
+  });
+
   it("moves media out of a disclosure label into its body", () => {
     // `summary` takes phrasing content or a single heading, and it must be the
     // FIRST child of its `details` — so it cannot be replaced without removing
@@ -2252,5 +2311,74 @@ describe("rich-text a decoration that adds a second line", () => {
     );
     expect(html).not.toContain("<u>");
     expect(html).toContain("text-decoration-line:underline");
+  });
+});
+
+describe("a passage nested far deeper than any document limit", () => {
+  /**
+   * Containers that neither scan stops at.
+   *
+   * The type matters: nesting LINKS proves nothing, because the interactive
+   * scan matches the first one and returns without descending — a probe built
+   * that way renders one anchor at any depth and reports success it never
+   * earned. An unknown container is neither interactive nor block, so both
+   * scans walk every level of it.
+   *
+   * Built with a loop rather than by recursion, so the fixture itself cannot be
+   * what exhausts the stack.
+   */
+  function nested(levels: number): RichTextValue {
+    let node: RichTextValue["root"]["children"][number] = {
+      type: "text",
+      text: "MARKER",
+    };
+    for (let i = 0; i < levels; i++)
+      node = { type: "wrapper", children: [node] };
+    return doc([{ type: "paragraph", children: [node] }]);
+  }
+
+  /**
+   * The same chain, ending in a PARAGRAPH inside a HEADING.
+   *
+   * A heading may hold only phrasing content, so block content beneath it takes
+   * a different route through the renderer — one that rebuilds the tree as it
+   * splits it. A fixture ending in TEXT never reaches that route at all, which
+   * is why the case below passed while this one still overflowed.
+   */
+  function nestedUnderHeading(levels: number): RichTextValue {
+    let node: RichTextValue["root"]["children"][number] = {
+      type: "paragraph",
+      children: [{ type: "text", text: "MARKER" }],
+    };
+    for (let i = 0; i < levels; i++)
+      node = { type: "wrapper", children: [node] };
+    return doc([{ type: "heading", tag: "h2", children: [node] }]);
+  }
+
+  it("renders block content buried under a heading", () => {
+    // The route that rearranges rather than merely scans. Measured: 5,000
+    // levels threw `RangeError` here after the scans were already iterative.
+    const html = renderToStaticMarkup(
+      <RichText value={nestedUnderHeading(5000)} />
+    );
+
+    expect(html).toContain("MARKER");
+  });
+
+  it("renders instead of exhausting the call stack", () => {
+    /*
+     * The document limits count BLOCK nodes and cap total bytes; neither bounds
+     * the tree inside one prop. Measured on this renderer, five thousand such
+     * levels is roughly a fifth of a megabyte — far below the cap — and threw
+     * `RangeError: Maximum call stack size exceeded` while the scans recursed.
+     *
+     * A throw here is not one bad passage rendering as a placeholder. It escapes
+     * the render and takes the page route with it, so a visitor gets nothing.
+     */
+    const html = renderToStaticMarkup(<RichText value={nested(5000)} />);
+
+    // Asserted on the OUTPUT rather than on the absence of a throw: a scan that
+    // silently stopped descending would also not throw, and would be wrong.
+    expect(html).toContain("MARKER");
   });
 });
