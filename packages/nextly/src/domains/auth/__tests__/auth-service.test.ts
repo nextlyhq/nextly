@@ -142,7 +142,6 @@ describe("AuthService", () => {
       expect(result.email).toBe(email);
       expect(result.name).toBe("Test User");
       expect(result.passwordHash).toBeNull(); // Should never return password hash
-      expect(result.error).toBeUndefined();
     });
 
     it("should fail verification with invalid email", async () => {
@@ -223,15 +222,12 @@ describe("AuthService", () => {
         })
       );
 
-      // Act
-      const result = await service.changePassword(
-        userId,
-        currentPassword,
-        newPassword
-      );
-
-      // Assert
-      expect(result.error).toBeUndefined();
+      // Act + Assert: the method resolves to void. Its failure mode is a
+      // thrown NextlyError(AUTH_INVALID_CREDENTIALS), so completing without
+      // throwing IS the success signal — there is no envelope to inspect.
+      await expect(
+        service.changePassword(userId, currentPassword, newPassword)
+      ).resolves.toBeUndefined();
 
       // Verify password was actually changed
       const updatedUser = await testDb.db.query.users.findFirst({
@@ -240,12 +236,15 @@ describe("AuthService", () => {
       expect(updatedUser!.passwordHash).not.toBe(passwordHash);
       expect(updatedUser!.passwordUpdatedAt).toBeDefined();
 
-      // Verify new password works
+      // Verify new password works. `verifyCredentials` returns the user and
+      // throws AUTH_INVALID_CREDENTIALS otherwise, so resolving to THIS user
+      // is the assertion — and it is stronger than a boolean, because a stub
+      // returning some other account would satisfy a truthy check.
       const verifyResult = await service.verifyCredentials(
         updatedUser!.email,
         newPassword
       );
-      expect(verifyResult.success).toBe(true);
+      expect(verifyResult.email).toBe(updatedUser!.email);
     });
 
     it("should fail to change password with wrong current password", async () => {
@@ -316,7 +315,6 @@ describe("AuthService", () => {
       // Assert
       expect(result.token).toBeDefined();
       expect(result.token!.length).toBe(EXPECTED_TOKEN_LENGTH);
-      expect(result.error).toBeUndefined();
 
       // Verify token was stored in database (hashed)
       const tokens = await testDb.db.query.passwordResetTokens.findMany({
@@ -337,7 +335,6 @@ describe("AuthService", () => {
 
       // Assert: Should still return success (don't leak user existence)
       expect(result.token).toBeUndefined(); // But no token generated
-      expect(result.error).toBeUndefined();
 
       // Verify no token was created
       const tokens = await testDb.db.query.passwordResetTokens.findMany();
@@ -419,7 +416,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Act
@@ -430,7 +426,6 @@ describe("AuthService", () => {
 
       // Assert
       expect(result.email).toBe(email);
-      expect(result.error).toBeUndefined();
 
       // Verify password was changed
       const verifyResult = await service.verifyCredentials(email, newPassword);
@@ -465,7 +460,6 @@ describe("AuthService", () => {
 
       // Generate token
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Manually expire the token by updating the database
@@ -500,7 +494,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Act: Use token once
@@ -542,21 +535,22 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generatePasswordResetToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
-      // Act: Try to reset with an invalid/weak password
-      const result = await service.resetPasswordWithToken(
-        tokenResult.token!,
-        "weak" // Should fail validation
-      );
+      // Act + Assert: a weak new password is rejected with
+      // NextlyError(VALIDATION_ERROR) before the transaction commits.
+      await expect(
+        service.resetPasswordWithToken(tokenResult.token!, "weak")
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
 
-      // Assert: Operation should fail
-      expect(result.success).toBe(false);
-
-      // Verify original password still works (transaction rolled back)
+      // Verify original password still works (transaction rolled back).
+      // This is the actual subject of the test: the refusal must leave the
+      // account exactly as it was, so the old credentials still resolve.
       const verifyResult = await service.verifyCredentials(email, oldPassword);
-      expect(verifyResult.success).toBe(true);
+      expect(verifyResult.email).toBe(email);
 
       // Verify token wasn't marked as used (can try again)
       const { createHash } = await import("crypto");
@@ -575,9 +569,12 @@ describe("AuthService", () => {
   });
 
   describe("generateEmailVerificationToken()", () => {
-    it("should generate verification token for any email", async () => {
+    it("issues a token for a registered email, and nothing for an unknown one", async () => {
       // Arrange
       const email = "user@test.com";
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email }));
 
       // Act
       const result = await service.generateEmailVerificationToken(email);
@@ -585,7 +582,6 @@ describe("AuthService", () => {
       // Assert
       expect(result.token).toBeDefined();
       expect(result.token!.length).toBe(EXPECTED_TOKEN_LENGTH);
-      expect(result.error).toBeUndefined();
 
       // Verify token was stored in database (hashed)
       const tokens = await testDb.db.query.emailVerificationTokens.findMany({
@@ -594,11 +590,28 @@ describe("AuthService", () => {
       expect(tokens).toHaveLength(1);
       expect(tokens[0].expires).toBeInstanceOf(Date);
       expect(tokens[0].expires.getTime()).toBeGreaterThan(Date.now());
+
+      // The other half of the contract, and the reason the old name ("for any
+      // email") was wrong: an UNKNOWN address gets silent success — no token
+      // and no row — so this endpoint cannot be used to discover which
+      // addresses are registered.
+      const unknown =
+        await service.generateEmailVerificationToken("nobody@test.com");
+      expect(unknown.token).toBeUndefined();
+      expect(
+        await testDb.db.query.emailVerificationTokens.findMany({
+          where: { identifier: "nobody@test.com" },
+        })
+      ).toHaveLength(0);
     });
 
     it("should delete old verification tokens when generating new one", async () => {
       // Arrange
       const email = "user@test.com";
+
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email }));
 
       // Generate first token
       await service.generateEmailVerificationToken(email);
@@ -616,6 +629,9 @@ describe("AuthService", () => {
     it("should set correct expiry time (24 hours)", async () => {
       // Arrange
       const email = "user@test.com";
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ email }));
 
       const beforeGeneration = Date.now();
 
@@ -656,7 +672,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Act
@@ -664,7 +679,6 @@ describe("AuthService", () => {
 
       // Assert
       expect(result.email).toBe(email);
-      expect(result.error).toBeUndefined();
 
       // Verify user's email is now verified
       const user = await testDb.db.query.users.findFirst({
@@ -700,7 +714,6 @@ describe("AuthService", () => {
 
       // Generate token
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Manually expire the token
@@ -737,7 +750,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
 
       // Verify token exists before verification
       const tokensBefore =
@@ -768,7 +780,6 @@ describe("AuthService", () => {
       );
 
       const tokenResult = await service.generateEmailVerificationToken(email);
-      expect(tokenResult.success).toBe(true);
       expect(tokenResult.token).toBeDefined();
 
       // Store original token count
