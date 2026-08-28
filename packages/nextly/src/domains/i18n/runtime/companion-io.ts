@@ -176,6 +176,43 @@ interface CompanionWriteAdapter {
  * row are untouched. Uses the composite PK `(_parent, _locale)` as the conflict target. No-op when
  * `companionData` is empty. Optionally stamps a per-locale `_status` (entities with Draft/Published).
  */
+/**
+ * The `_updated_at` a companion write should carry, or nothing at all (i18n B2).
+ *
+ * Exported because TWO write paths reach the companion and both must answer this the same way.
+ * The update path goes through {@link upsertCompanionRow}; the collection CREATE path inserts the
+ * row directly through its transaction, so it spreads this in instead. A rule computed separately
+ * at each would be one edit away from disagreeing, and the disagreement is silent: a locale
+ * written by the path that forgot keeps a NULL stamp, reads as UNKNOWN, and is never reported
+ * stale. Nobody notices a warning that does not appear.
+ *
+ * 🔴 CONTENT decides the stamp, not the write. `_updated_at` answers "when was this language last
+ * WRITTEN", and a lifecycle transition writes no language. Stamping a `_status`-only change would
+ * move the source's timestamp past every target and report the whole site as needing review on an
+ * action that changed not one word — and publishing a stale target would clear its warning while
+ * the translation still said what it said.
+ *
+ * Structural columns are subtracted rather than `_status` alone, so a further structural column
+ * added later cannot be mistaken for content. Note `_status` arrives BOTH ways — inside
+ * `companionData` on an ordinary update, and as the separate `status` argument — so testing the
+ * argument alone would miss the common path.
+ *
+ * @returns `{ _updated_at }` when the write carries translated content, `{}` otherwise, so the
+ *   caller can spread it unconditionally.
+ */
+export function companionContentStamp(
+  companionData: Record<string, unknown>,
+  now?: Date
+): Record<string, unknown> {
+  const writesContent = Object.keys(companionData).some(
+    column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
+  );
+  if (!writesContent) return {};
+  return {
+    [COMPANION_UPDATED_AT_COLUMN]: new Date(now?.getTime() ?? Date.now()),
+  };
+}
+
 export async function upsertCompanionRow(
   adapter: CompanionWriteAdapter,
   companionTableName: string,
@@ -206,8 +243,12 @@ export async function upsertCompanionRow(
   // Opt-out rather than opt-in, because the failure of forgetting is silent. A locale written
   // through a path that skipped the stamp keeps a NULL `_updated_at`, reads as UNKNOWN, and is
   // never reported stale — the warning simply never fires for it, and nobody notices a warning
-  // that does not appear. `stampUpdatedAt: false` exists for a companion that physically predates
-  // the column, where naming it in the INSERT would fail the statement outright.
+  // that does not appear.
+  //
+  // `stampUpdatedAt: false` has two callers and they want the same thing for different reasons: a
+  // companion that physically predates the column, where naming it would fail the statement
+  // outright; and an archive REPLAY, where stamping would date an old translation to the moment
+  // it was restored. Both prefer UNKNOWN to a value that is not true.
   //
   // 🔴 CONTENT decides the stamp, not the write. `_updated_at` answers "when was this language
   // last WRITTEN", and a lifecycle transition writes no language. Publishing the source locale is
@@ -224,14 +265,10 @@ export async function upsertCompanionRow(
   // This also settles a divergence between endpoints: `publishAllLocales` writes `_status` with a
   // raw UPDATE that never reaches this function, so a publish through that path could not stamp
   // anyway. Two lifecycle transitions now behave the same way whichever endpoint performs them.
-  const writesContent = Object.keys(companionData).some(
-    column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
-  );
-  const stampedAt = new Date(options.now?.getTime() ?? Date.now());
   const withStamp =
-    options.stampUpdatedAt === false || !writesContent
+    options.stampUpdatedAt === false
       ? withStatus
-      : { ...withStatus, [COMPANION_UPDATED_AT_COLUMN]: stampedAt };
+      : { ...withStatus, ...companionContentStamp(companionData, options.now) };
   const cols = Object.keys(withStamp);
 
   const isMysql = adapter.dialect === "mysql";
