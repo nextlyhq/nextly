@@ -120,7 +120,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * changes. It costs one recompile per artifact, which is the safe direction —
  * the unbumped alternative is a stale stylesheet served indefinitely, silently.
  */
-const ENCODING = "v2";
+const ENCODING = "v3";
 
 /**
  * The identity of shared inputs that decline to identify themselves.
@@ -589,6 +589,11 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // of them raw would put a value the reduction exists to survive back into
     // the label.
     blockBaseParts(inputs.blockBases, reading),
+    // The element tier, through the SAME reduction, for the reason the block
+    // tier is here: two contexts differing only in their `h1` default compile
+    // to different stylesheets, and a stamp that cannot see the difference
+    // hands the first one's sheet to the second.
+    blockBaseParts(inputs.elementBases, reading),
   ]);
 }
 

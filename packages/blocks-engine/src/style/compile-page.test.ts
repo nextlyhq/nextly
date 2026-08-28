@@ -19,6 +19,7 @@ import type { StyleCompileContext } from "./compile-page";
 import {
   nodeClassName,
   nodeClassNames,
+  PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import {
@@ -259,16 +260,16 @@ describe("cascade tiers", () => {
     expect(out).toBe(
       [
         `${PAGE_ROOT_SELECTOR} { color: #111 }`,
-        // Inside `:where()`: a block type's default weighs nothing, so it
-        // loses to the node value below by CONSTRUCTION rather than by being
-        // written first.
-        `:where(${PAGE_ROOT_SELECTOR} .nx-bt-core--box) { color: #222 }`,
+        // Anchored to ONE page-root class with the rest inside `:where()`, so
+        // the default weighs 0-1-0: enough to clear a bare element reset, and
+        // below the node value on the line after this one.
+        `.${PAGE_ROOT_CLASS} :where(.nx-bt-core--box) { color: #222 }`,
         `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} { color: #333 }`,
       ].join("\n")
     );
   });
 
-  it("gives a block default no specificity, descendants included", () => {
+  it("weighs a block default at one class, descendants included", () => {
     const out = css(doc([node("n1", {})], {}), {
       ...CTX,
       blockBases: {
@@ -276,12 +277,10 @@ describe("cascade tiers", () => {
           base: {
             base: {
               color: "#222",
-              // `linkColor` is a catalog property whose shape carries the
-              // descendant `a`, so this fixture emits a SECOND rule whose
-              // selector has a part after the block class. Without it the test
-              // sees only the root rule and cannot tell a wrapper around the
-              // whole selector from one around the base alone — measured: a
-              // base-only wrap passed the earlier version of this test.
+              // A catalog property whose shape carries the descendant `a`, so
+              // this emits a SECOND rule with a part after the block class.
+              // Without it the test cannot tell a wrapper that covers the
+              // whole remainder from one that stops at the base.
               linkColor: "#333",
             },
           },
@@ -292,9 +291,7 @@ describe("cascade tiers", () => {
     const blockRules = out
       .split("\n")
       .filter(line => line.includes("nx-bt-core--box"));
-    // The population first: two rules, the root one and the descendant one.
-    // Asserting only "every rule is wrapped" is satisfied by a run that emitted
-    // one rule and never reached the case this test is named for.
+    // Population before the property: two rules, one of them the descendant.
     expect(blockRules).toHaveLength(2);
     expect(blockRules.some(rule => rule.includes("nx-bt-core--box a"))).toBe(
       true
@@ -302,9 +299,17 @@ describe("cascade tiers", () => {
 
     for (const rule of blockRules) {
       const selector = rule.slice(0, rule.indexOf("{")).trim();
-      expect(selector.startsWith(":where(")).toBe(true);
-      // And it CLOSES at the end: `:where(root .type) a` leaves the `a`
-      // outside, weighing 0-0-1, which is the partial guarantee this rejects.
+      // ONE class outside the wrapper, and it must not be the doubled root.
+      // Wrapping the whole selector weighs 0-0-0, and an ordinary unlayered
+      // reset — `h1, h2, … { font-size: inherit; margin: 0 }` — is 0-0-1 and
+      // beats it, so a default written that way loses to the reset it exists
+      // to answer. Measured in a browser against that reset: fully wrapped
+      // left an `h1` at 16px, anchored gave its declared 36px, and a host's
+      // own `.content h1` still won at 11px.
+      expect(selector.startsWith(`.${PAGE_ROOT_CLASS} :where(`)).toBe(true);
+      expect(selector.startsWith(PAGE_ROOT_SELECTOR)).toBe(false);
+      // And the wrapper closes at the end, so no part of the remainder sits
+      // outside carrying weight of its own.
       expect(selector.endsWith(")")).toBe(true);
     }
   });

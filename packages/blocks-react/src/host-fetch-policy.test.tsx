@@ -30,6 +30,7 @@ import { effectiveCompile, fetchPolicyLabel } from "./styles";
 import { createBlockResolver } from "./resolver";
 import { sharedStyleInputsId } from "./shared-style-inputs";
 import { coreBlocks } from "./blocks";
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 
 const ALLOWED: readonly RemotePattern[] = [
   { protocol: "https", hostname: "player.allowed.test" },
@@ -386,7 +387,9 @@ describe("a stored stylesheet records the policy that compiled it", () => {
         // deleted — it would assert nothing about the policy at all.
         styles={{
           ...stale,
-          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+          sharedInputsId: sharedStyleInputsId(
+            withTypographyDefaults(EMPTY_BREAKPOINTS)
+          ),
         }}
         styleContext={{ breakpoints: { viewport: [], container: [] } }}
         hostPolicy={{ remotePatterns: ALLOWED }}
@@ -407,7 +410,9 @@ describe("a stored stylesheet records the policy that compiled it", () => {
       // sheet is reused only when EVERY stamp it carries still describes the
       // render. Without this the artifact is refused for the shared inputs and
       // the test would pass or fail for a reason other than the policy.
-      sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+      sharedInputsId: sharedStyleInputsId(
+        withTypographyDefaults(EMPTY_BREAKPOINTS)
+      ),
     };
     const markup = renderToStaticMarkup(
       <PageRenderer
@@ -531,7 +536,9 @@ describe("a caller's own fetch predicate", () => {
         // test gives: only the unidentified PREDICATE may be what refuses this.
         styles={{
           ...stored,
-          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+          sharedInputsId: sharedStyleInputsId(
+            withTypographyDefaults(EMPTY_BREAKPOINTS)
+          ),
         }}
         styleContext={{
           breakpoints: { viewport: [], container: [] },
@@ -552,7 +559,9 @@ describe("a caller's own fetch predicate", () => {
         styles={{
           ...stored,
           fetchPolicyId: "mine-v3",
-          sharedInputsId: sharedStyleInputsId(EMPTY_BREAKPOINTS),
+          sharedInputsId: sharedStyleInputsId(
+            withTypographyDefaults(EMPTY_BREAKPOINTS)
+          ),
         }}
         styleContext={{
           breakpoints: { viewport: [], container: [] },
