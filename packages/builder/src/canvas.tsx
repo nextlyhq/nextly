@@ -1018,6 +1018,18 @@ export interface CanvasProps {
   /** The document being edited. */
   document: BlockDocument;
   /**
+   * Receives the canvas root element, for a caller that needs to measure
+   * against it.
+   *
+   * A drag that begins OUTSIDE the canvas — from a palette row — has no event
+   * whose `currentTarget` is this element, and it must resolve a drop position
+   * against the same box every other reader uses. This canvas owns that
+   * element, so handing it over is more honest than a caller finding it by
+   * class name: a query would be a second place that decides which element the
+   * canvas root is.
+   */
+  rootRef?: React.RefObject<HTMLDivElement | null>;
+  /**
    * The site sheet, the same value the published route passes. Required — see
    * the module docblock for why this one is not optional.
    */
@@ -1134,6 +1146,7 @@ export interface CanvasProps {
  */
 export function Canvas({
   document,
+  rootRef,
   siteStyles,
   selectedId = null,
   selectedIds,
@@ -1148,6 +1161,17 @@ export function Canvas({
   preview,
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
+
+  // Published after paint rather than through a merged ref callback: the
+  // element is the same for the life of the mount, and one assignment here is
+  // easier to follow than a callback that has to keep two refs agreeing.
+  useEffect(() => {
+    if (rootRef === undefined) return;
+    rootRef.current = root.current;
+    return () => {
+      rootRef.current = null;
+    };
+  }, [rootRef]);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,

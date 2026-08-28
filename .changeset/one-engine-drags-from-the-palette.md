@@ -26,7 +26,7 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-One drag engine, and it now accepts a subject that has no node yet.
+A block can now be dragged from the insert panel onto the canvas.
 
 Dragging a block from the insert panel onto the canvas shares everything with
 dragging a block already on it — where a drop may land, when the target is
@@ -37,3 +37,6 @@ position, an insert builds the node the palette described and adds it there.
 The node is built at the release rather than at the start of the gesture, so
 the document is untouched while the author is still choosing, and the whole
 drag leaves a single entry on the undo stack.
+
+Clicking a row still inserts, exactly as before. The drag only ever adds a
+second way to do it.
