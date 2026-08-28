@@ -19,6 +19,21 @@ import {
   getSortedBaseNames,
 } from "../migration-discovery";
 
+/**
+ * COVERAGE NOTE (AGENTS.md, deleted-test rule — "redundant").
+ *
+ * This file previously contained TWO top-level `describe("migration-discovery")`
+ * blocks with the same four inner suites and the same cases:
+ * `discoverMigrationGroups`, `selectVariant`, `getSortedBaseNames`, and the
+ * dialect-split round-trip. The second was a verbatim duplicate of this one and
+ * was removed.
+ *
+ * Every case it ran survives HERE, in the block below — nothing moved to
+ * another file. A reader comparing this against the history will see the
+ * deletion halve the file's line count without changing what is asserted, which
+ * is the distinction this note exists to make: deduplication, not a loss of
+ * discovery coverage.
+ */
 describe("migration-discovery", () => {
   let testDir: string;
 
