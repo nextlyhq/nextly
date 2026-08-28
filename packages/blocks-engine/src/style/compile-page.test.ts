@@ -259,10 +259,54 @@ describe("cascade tiers", () => {
     expect(out).toBe(
       [
         `${PAGE_ROOT_SELECTOR} { color: #111 }`,
-        `${PAGE_ROOT_SELECTOR} .nx-bt-core--box { color: #222 }`,
+        // Inside `:where()`: a block type's default weighs nothing, so it
+        // loses to the node value below by CONSTRUCTION rather than by being
+        // written first.
+        `:where(${PAGE_ROOT_SELECTOR} .nx-bt-core--box) { color: #222 }`,
         `${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} { color: #333 }`,
       ].join("\n")
     );
+  });
+
+  it("gives a block default no specificity, descendants included", () => {
+    const out = css(doc([node("n1", {})], {}), {
+      ...CTX,
+      blockBases: {
+        "core/box": {
+          base: {
+            base: {
+              color: "#222",
+              // `linkColor` is a catalog property whose shape carries the
+              // descendant `a`, so this fixture emits a SECOND rule whose
+              // selector has a part after the block class. Without it the test
+              // sees only the root rule and cannot tell a wrapper around the
+              // whole selector from one around the base alone — measured: a
+              // base-only wrap passed the earlier version of this test.
+              linkColor: "#333",
+            },
+          },
+        },
+      },
+    });
+
+    const blockRules = out
+      .split("\n")
+      .filter(line => line.includes("nx-bt-core--box"));
+    // The population first: two rules, the root one and the descendant one.
+    // Asserting only "every rule is wrapped" is satisfied by a run that emitted
+    // one rule and never reached the case this test is named for.
+    expect(blockRules).toHaveLength(2);
+    expect(blockRules.some(rule => rule.includes("nx-bt-core--box a"))).toBe(
+      true
+    );
+
+    for (const rule of blockRules) {
+      const selector = rule.slice(0, rule.indexOf("{")).trim();
+      expect(selector.startsWith(":where(")).toBe(true);
+      // And it CLOSES at the end: `:where(root .type) a` leaves the `a`
+      // outside, weighing 0-0-1, which is the partial guarantee this rejects.
+      expect(selector.endsWith(")")).toBe(true);
+    }
   });
 
   it("refuses a block type longer than the cap, so two cannot compile apart", () => {
@@ -552,8 +596,8 @@ describe("block type classes", () => {
         },
       }
     );
-    expect(out).toContain(".nx-bt-foo-bar--baz {");
-    expect(out).toContain(".nx-bt-foo--bar-baz {");
+    expect(out).toContain(".nx-bt-foo-bar--baz)");
+    expect(out).toContain(".nx-bt-foo--bar-baz)");
   });
 
   it("escapes the type in a warning pointer", () => {
