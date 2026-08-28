@@ -892,6 +892,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             );
           }
           expect(result.eventRecorded).toBe(false);
+          // A rolled-back transaction undoes every write, so no item's cache
+          // tags may be busted: intents collected before the abort must not
+          // survive onto the result.
+          expect(result.revalidationIntents).toBeUndefined();
         });
 
         it("stopOnError rejects out of the InTransaction twin so the caller's transaction rolls back", async () => {
@@ -923,6 +927,9 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
               )
             ).toBe(true);
             expect(result.eventRecorded).toBe(false);
+            // The integrity rollback undid every write too — no intents may
+            // survive for rows that never committed.
+            expect(result.revalidationIntents).toBeUndefined();
           });
 
           it("an integrity-marked failure rejects out of the InTransaction twin", async () => {
@@ -944,6 +951,8 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             expect(result.errors[0].error).toContain("Batch rolled back");
             expect(result.errors[1]).toMatchObject({ index: 1, error: "boom" });
             expect(result.eventRecorded).toBe(false);
+            // Rolled-back deletes bust no tags either.
+            expect(result.revalidationIntents).toBeUndefined();
           });
 
           it("any thrown error propagates out of the InTransaction twin", async () => {
