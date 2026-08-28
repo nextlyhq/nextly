@@ -39,17 +39,32 @@ import { DEFAULT_SWITCH_PX, DropIndicator, useCanvasDrag } from "./canvas-drag";
 import { useEditorState, type EditorState } from "./editor-state";
 import { registrySlotSource } from "./inserter";
 
-afterEach(() => {
+afterEach(async () => {
+  // Let a pending click-suppression teardown run before the next case starts.
+  // The suppressor is installed for ONE task, on purpose, but vitest runs these
+  // cases synchronously back to back — so without this, a suppressor armed by
+  // one release eats the NEXT case's click and an assertion of `clicks === 0`
+  // passes for the wrong reason. That is not hypothetical: it hid a broken fix
+  // from its own break-verification.
+  await new Promise(resolve => {
+    setTimeout(resolve, 0);
+  });
   cleanup();
   clearBlocks();
   captured = [];
   built = 0;
+  clicks = 0;
+  buildsType = "test/heading";
 });
 
 /** Pointer ids anything took capture of, so a palette drag can assert none. */
 let captured: number[] = [];
 /** How many times the palette was asked to build its node. */
 let built = 0;
+/** How many times the row's own click-to-insert handler ran. */
+let clicks = 0;
+/** What the palette's thunk answers with, so a test can make it disagree. */
+let buildsType = "test/heading";
 
 beforeAll(() => {
   const element = window.Element.prototype as unknown as Record<
@@ -133,12 +148,18 @@ function Host({ document: doc }: { document: BlockDocument }) {
       <button
         type="button"
         data-testid="palette-row"
+        // The row inserts on click, as the real palette row does. That path is
+        // the non-drag alternative and must keep working — and it is what a
+        // drag ending on this row would trigger a second time.
+        onClick={() => {
+          clicks += 1;
+        }}
         onPointerDown={event =>
           drag.beginInsertDrag(event, {
             blockName: "test/heading",
             makeNode: () => {
               built += 1;
-              return node(INSERTED, "test/heading");
+              return node(INSERTED, buildsType);
             },
           })
         }
@@ -212,12 +233,12 @@ function pressRow(row: HTMLElement, x: number, y: number): void {
  * never registered a document listener at all, and the gesture would be
  * untestable in the one arrangement it actually runs in.
  */
-function moveTo(x: number, y: number): void {
-  fireEvent.pointerMove(document, { pointerId: 7, clientX: x, clientY: y });
+function moveTo(x: number, y: number, pointerId = 7): void {
+  fireEvent.pointerMove(document, { pointerId, clientX: x, clientY: y });
 }
 
-function release(x: number, y: number): void {
-  fireEvent.pointerUp(document, { pointerId: 7, clientX: x, clientY: y });
+function release(x: number, y: number, pointerId = 7): void {
+  fireEvent.pointerUp(document, { pointerId, clientX: x, clientY: y });
 }
 
 function ids(): string[] {
@@ -356,6 +377,150 @@ describe("dragging a block from the palette onto the canvas", () => {
     expect(dragState.draggingBlockName).toBe("test/heading");
 
     release(200, 90);
+  });
+
+  it("is driven only by the pointer that began it", () => {
+    // The node-origin path gets this free from pointer capture, which retargets
+    // one pointer. A palette drag takes no capture on purpose, so its document
+    // listeners see every active pointer on a touch device.
+    const { container } = renderTwo();
+    const row = container.ownerDocument.body.querySelector("button")!;
+
+    pressRow(row, 300, 500);
+    moveTo(200, 154);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    // A SECOND finger moves somewhere else and lifts. Neither may touch this
+    // gesture: the moves would re-aim it, and the release would commit the
+    // first finger's target while that finger is still down.
+    //
+    // TWO moves, and the second is not padding. The switch rule anchors travel
+    // at the moment a rival target first appears, so a single event always has
+    // zero travel and can never switch the committed target — a one-move probe
+    // passes whether or not the pointer is checked, which is what an earlier
+    // version of this case did. A finger that is actually dragging produces a
+    // stream, and this is the shortest stream that could do damage.
+    moveTo(200, 20, 9);
+    moveTo(200, 40, 9);
+    release(200, 40, 9);
+
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    // The owning pointer still ends it, at the target IT settled on — which is
+    // also the control showing the second finger did not silently re-aim.
+    release(200, 154);
+    expect(ids()).toEqual(["a", "b", INSERTED]);
+    expect(editorRef?.undoDepth).toBe(1);
+  });
+
+  it("declines a node whose type is not the one the drop was resolved for", () => {
+    // The position and the nesting verdict were computed for the ADVERTISED
+    // type. A node of some other type was never asked about, and the op layer
+    // checks structural shape rather than the nesting rule — so nothing
+    // downstream would notice it landing somewhere its type forbids.
+    const { container } = renderTwo();
+    const row = container.ownerDocument.body.querySelector("button")!;
+    buildsType = "test/some-other-block";
+
+    pressRow(row, 300, 500);
+    moveTo(200, 90);
+    release(200, 90);
+
+    // The thunk WAS called, so the gesture reached the commit and the refusal
+    // is the type check rather than the drag failing earlier for some reason.
+    expect(built).toBe(1);
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+  });
+
+  it("swallows the click a drag ending on its own row would otherwise fire", () => {
+    // The row inserts on click. A drag that begins and ends on it is still one
+    // press and one release on a single element, so the browser reports a
+    // click — and the row would add a second block beside the dropped one.
+    const { container } = renderTwo();
+    const row = container.ownerDocument.body.querySelector("button")!;
+
+    pressRow(row, 300, 500);
+    moveTo(200, 90);
+    release(200, 90);
+    expect(ids()).toEqual(["a", INSERTED, "b"]);
+
+    // The synthesized click, which is the event the suppression exists for.
+    fireEvent.click(row);
+    expect(clicks).toBe(0);
+  });
+
+  it("swallows that click after Escape cancels the drag, too", () => {
+    // Escape ends the drag by a different route, and an abandoned drag still
+    // ends in a release. With the pointer back on the row it started from,
+    // that press and release are a click — so Escape would visibly cancel the
+    // drag and add a block anyway.
+    const { container } = renderTwo();
+    const row = container.ownerDocument.body.querySelector("button")!;
+
+    pressRow(row, 300, 500);
+    moveTo(200, 90);
+    fireEvent.keyDown(document, { key: "Escape" });
+    release(300, 500);
+    fireEvent.click(row);
+
+    expect(clicks).toBe(0);
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+  });
+
+  it("leaves a press that stayed a click able to insert", () => {
+    // The control on all of the above, and the one that matters most:
+    // suppression must not reach the non-drag path. Click-to-insert is the
+    // WCAG 2.2 SC 2.5.7 alternative, and a suppressor that ate every click
+    // would remove it while every assertion about drags stayed green.
+    const { container } = renderTwo();
+    const row = container.ownerDocument.body.querySelector("button")!;
+
+    pressRow(row, 300, 500);
+    moveTo(301, 501);
+    release(301, 501);
+    fireEvent.click(row);
+
+    expect(clicks).toBe(1);
+  });
+
+  it("stops its scroll loop when the host unmounts mid-drag", () => {
+    // `pump` reschedules itself every frame and stops only when it finds no
+    // active gesture. Unmounting removes the listeners but leaves the gesture,
+    // so the loop keeps running — holding the editor and the DOM, and still
+    // scrolling a canvas whose editor has closed.
+    const frames: number[] = [];
+    const cancelled: number[] = [];
+    const realRaf = window.requestAnimationFrame;
+    const realCancel = window.cancelAnimationFrame;
+    let next = 1;
+    window.requestAnimationFrame = ((): number => {
+      const id = next++;
+      frames.push(id);
+      return id;
+    }) as typeof window.requestAnimationFrame;
+    window.cancelAnimationFrame = ((id: number): void => {
+      cancelled.push(id);
+    }) as typeof window.cancelAnimationFrame;
+
+    try {
+      const { container, unmount } = renderTwo();
+      const row = container.ownerDocument.body.querySelector("button")!;
+      pressRow(row, 300, 500);
+      moveTo(200, 90);
+      // The instrument's control: activation must actually have scheduled a
+      // frame, or "the frame was cancelled" is a statement about nothing.
+      expect(frames.length).toBeGreaterThan(0);
+
+      unmount();
+      expect(cancelled).toContain(frames[frames.length - 1]);
+    } finally {
+      window.requestAnimationFrame = realRaf;
+      window.cancelAnimationFrame = realCancel;
+    }
   });
 
   it("detaches a previous palette gesture before starting another", () => {
