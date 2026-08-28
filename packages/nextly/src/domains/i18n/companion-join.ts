@@ -14,7 +14,17 @@
 
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
+import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
+
+/**
+ * A quoted table or alias reference, as `sql.identifier` produces one.
+ *
+ * Named because the staleness comparison joins the companion to itself and has to pass those
+ * references around: `sql.identifier` returns Drizzle's `Name`, not a `SQL`, and spelling the
+ * distinction out here is what keeps the helpers below honest instead of casting it away.
+ */
+type CompanionTableRef = ReturnType<typeof sql.identifier>;
 
 /** One localized field: its API/row key (camelCase) + its physical companion column (snake_case). */
 export interface LocalizedFieldRef {
@@ -458,6 +468,7 @@ export const TRANSLATION_FILTER_STATES = [
   "translated",
   "draft",
   "published",
+  "stale",
 ] as const;
 
 export type TranslationFilterState = (typeof TRANSLATION_FILTER_STATES)[number];
@@ -484,6 +495,14 @@ export function buildTranslationStatusCondition(args: {
   localizedColumns: string[];
   /** Whether the companion carries `_status` (draft/published filters need it). */
   hasStatus: boolean;
+  /**
+   * Whether the companion physically carries `_updated_at` (the `stale` filter needs it).
+   *
+   * A companion created before i18n B2 does not have the column until a reconcile reaches it, and
+   * naming a missing column would fail the whole query. Absent or `false` makes `stale` answer
+   * "nothing here is known to be stale" rather than erroring or, far worse, matching everything.
+   */
+  hasUpdatedAt?: boolean;
   defaultLocale: string;
   filter: TranslationStatusFilter;
 }): SQL | undefined {
@@ -499,16 +518,21 @@ export function buildTranslationStatusCondition(args: {
   const { locale, state } = filter;
   const isDefault = locale === defaultLocale;
 
-  const nonBlank =
+  // Qualified by an arbitrary table reference rather than by `t` directly, because the `stale` arm
+  // below needs the SAME non-blank rule applied to an ALIASED copy of this table. Two spellings of
+  // "this locale has content" would let one filter disagree with another about the same row, which
+  // is the two-tab defect this function already carries a fix for.
+  const nonBlankOn = (ref: CompanionTableRef): SQL =>
     localizedColumns.length > 0
       ? sql.join(
           localizedColumns.map(c => {
             const col = sql.identifier(c);
-            return sql`(${t}.${col} IS NOT NULL AND ${t}.${col} <> '')`;
+            return sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
           }),
           sql` OR `
         )
       : sql`1=0`;
+  const nonBlank = nonBlankOn(t);
 
   const rowFor = (cond: SQL) =>
     sql`SELECT 1 FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${locale} AND (${cond})`;
@@ -536,9 +560,94 @@ export function buildTranslationStatusCondition(args: {
       // status with nothing written is untranslated with a status attached,
       // not a draft translation.
       return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state} AND (${nonBlank})`)})`;
+    case "stale":
+      // i18n B2 — translated, but the source moved afterwards.
+      //
+      // 🔴 `1=0`, never `undefined`, in BOTH refusing branches, and the difference is the whole
+      // safety of this arm. `undefined` means "no restriction", so a worklist tab asking "what
+      // needs review" would answer with EVERY document of a collection that cannot answer the
+      // question at all — confidently, with nothing on screen to suggest the collection was the
+      // problem. `1=0` says "nothing here is KNOWN to be stale", which is what an unanswerable
+      // question honestly returns.
+      //
+      // The default locale IS the source, so it cannot be stale against itself.
+      if (isDefault || args.hasUpdatedAt !== true) return sql`1=0`;
+      return buildStaleCondition({
+        table: t,
+        mainIdColumn,
+        locale,
+        defaultLocale,
+        nonBlankOn,
+      });
     default:
       return undefined;
   }
+}
+
+/**
+ * "This locale has content, and the source locale was written after it was."
+ *
+ * A correlated comparison between two rows of the SAME companion — the target locale's against the
+ * default locale's — so the table is joined to itself and BOTH references must be aliased. The
+ * other arms of the filter above get away with the bare table name because they mention it once;
+ * a second unaliased reference inside a nested subquery would shadow the first, and every row
+ * would then be compared against itself, which is never greater and so reports nothing stale ever.
+ *
+ * 🔴 NULL is handled by SQL's three-valued logic and by nothing else here, which is worth stating
+ * because the obvious `IS NOT NULL` guards are ABSENT on purpose. `NULL > 2000` and `2000 > NULL`
+ * both evaluate to UNKNOWN, `WHERE` keeps only TRUE, so either missing timestamp yields no inner
+ * row and the document is not stale. Explicit guards were written first and then removed: they
+ * could be deleted with every test still green, which makes them untested code that reads as
+ * load-bearing — the next person to touch this would take them for the protection and leave the
+ * comparison unexamined.
+ *
+ * The two NULL cases and what they mean:
+ *
+ *  - the target has no `_updated_at` — it was written before the column existed. UNKNOWN.
+ *  - the source has no `_updated_at`, or no companion row at all — UNKNOWN.
+ *
+ * UNKNOWN is reported as "not stale", which under-reports, and that is the direction to fail in:
+ * over-reporting would put "needs review" on translations nobody has touched, and a warning that
+ * fires on everything is one people switch off. The design records the same choice as folding
+ * unknown into `translated` rather than giving it a state of its own.
+ *
+ * That reliance is load-bearing enough to be pinned rather than assumed: writing the comparison as
+ * `COALESCE(src, 0) > COALESCE(tgt, 0)` — the natural "defensive" spelling — reports every
+ * unstamped target as stale, and the unstamped-TARGET test below fails on exactly that.
+ *
+ * `>` and not `>=`: a source and target written in the same instant are a translation saved
+ * alongside its source, not a stale one. It also matters physically — SQLite stores whole epoch
+ * seconds, so writes inside one second are stored identically, and `>=` would report every
+ * same-second pair as stale.
+ */
+function buildStaleCondition(args: {
+  table: CompanionTableRef;
+  mainIdColumn: unknown;
+  locale: string;
+  defaultLocale: string;
+  nonBlankOn: (ref: CompanionTableRef) => SQL;
+}): SQL {
+  const { table, mainIdColumn, locale, defaultLocale, nonBlankOn } = args;
+  // Prefixed, because an alias shares a namespace with the caller's own tables and a bare `src`
+  // or `target` could collide with a real collection table in the enclosing query.
+  const tgt = sql.identifier("nx_stale_target");
+  const src = sql.identifier("nx_stale_source");
+  const parent = sql.identifier("_parent");
+  const localeCol = sql.identifier("_locale");
+  const stamp = sql.identifier(COMPANION_UPDATED_AT_COLUMN);
+
+  return sql`EXISTS (
+    SELECT 1 FROM ${table} ${tgt}
+    WHERE ${tgt}.${parent} = ${mainIdColumn}
+    AND ${tgt}.${localeCol} = ${locale}
+    AND (${nonBlankOn(tgt)})
+    AND EXISTS (
+      SELECT 1 FROM ${table} ${src}
+      WHERE ${src}.${parent} = ${mainIdColumn}
+      AND ${src}.${localeCol} = ${defaultLocale}
+      AND ${src}.${stamp} > ${tgt}.${stamp}
+    )
+  )`;
 }
 
 /** Per-locale translation state for one entry (i18n M7 — translation-status overview). */
@@ -568,6 +677,22 @@ export interface LocaleTranslationMeta {
    * rest of this map omits what does not apply.
    */
   pendingChange?: boolean;
+  /**
+   * Whether the SOURCE language was written after this one was (i18n B2).
+   *
+   * 🔴 Separate from `translated` and from `status`, exactly as `pendingChange` is, and for the
+   * same reason that field states: these are different facts about one language, and collapsing
+   * them loses one. A stale translation is still translated, and still published if it was
+   * published — so this is a qualifier the reader appends, never a state that replaces the one
+   * the language is in. Reporting a live translation as "needs review" INSTEAD of "published"
+   * would understate what the site is actually serving.
+   *
+   * Absent rather than `false` when nothing is known, matching how the rest of this map omits
+   * what does not apply — and here the distinction carries weight, because "not stale" and "no
+   * timestamps to compare" are different answers and only one of them is a claim about the
+   * content. A row written before `_updated_at` existed is unknown, never up to date.
+   */
+  stale?: boolean;
 }
 
 export interface TranslationStatusArgs {
@@ -640,6 +765,31 @@ function markPendingChanges(
  * Output shape (under `outKey`, default `_translations`):
  * `{ en: { translated: true, status: "published" }, de: { translated: false } }`
  */
+/**
+ * Was the SOURCE row written after the TARGET row was? (i18n B2.)
+ *
+ * The JS twin of the `stale` SQL arm, and deliberately the same rule: content is checked by the
+ * caller, both timestamps must be present, and the comparison is strict. Two spellings of "is
+ * this stale" would let the worklist tab and the per-row badge disagree about one document, which
+ * is the shape of defect this module already carries a fix for.
+ *
+ * Reads a `Date` because that is what the column's declared `timestamp` kind decodes to on all
+ * three dialects. Anything else — a driver returning a raw epoch, a column that was never
+ * declared and so never selected — answers `false` rather than guessing, because a wrong
+ * comparison here reports a translation nobody touched as needing review.
+ */
+function isStaleAgainstSource(
+  target: Record<string, unknown> | undefined,
+  source: Record<string, unknown> | undefined
+): boolean {
+  const targetAt = target?.[COMPANION_UPDATED_AT_COLUMN];
+  const sourceAt = source?.[COMPANION_UPDATED_AT_COLUMN];
+  if (!(targetAt instanceof Date) || !(sourceAt instanceof Date)) return false;
+  // Strict, matching the SQL. Equal stamps are a translation saved alongside its source — and on
+  // SQLite they are also two writes inside one second, since the column stores whole seconds.
+  return sourceAt.getTime() > targetAt.getTime();
+}
+
 export async function populateTranslationStatus(
   args: TranslationStatusArgs
 ): Promise<void> {
@@ -703,6 +853,24 @@ export async function populateTranslationStatus(
       };
       if (hasStatus && cr && typeof cr._status === "string") {
         entry.status = cr._status;
+      }
+      // Only ever set to `true`. Left absent when the comparison cannot answer, so a consumer
+      // reading `stale === false` is reading a real "not stale" rather than an unknown wearing
+      // its clothes.
+      //
+      // 🔴 `code !== defaultLocale` is BELT-AND-BRACES and is kept deliberately, so it does not
+      // read as load-bearing to the next person: for the source locale, `cr` and the source row
+      // are the same object, so the strict comparison is already false. That redundancy rests on
+      // object IDENTITY rather than on a rule, though — a future normalisation that handed this
+      // loop a copy, or a rounded timestamp, could make a row compare greater than itself — so
+      // the state the guard asserts is spelled out rather than inferred. No test separates the
+      // two mechanisms, and none can while both hold.
+      if (
+        code !== defaultLocale &&
+        hasContent &&
+        isStaleAgainstSource(cr, perLocaleRows[defaultLocale])
+      ) {
+        entry.stale = true;
       }
       meta[code] = entry;
     }

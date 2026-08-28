@@ -571,6 +571,11 @@ export class CollectionQueryService extends BaseService {
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
       hasStatus: companion.hasStatus,
+      // Carried beside `hasStatus` rather than defaulted inside the builder: an absent
+      // value there means "cannot answer", which makes the `stale` filter match nothing.
+      // Defaulting it to true instead would let a caller that never considered the column
+      // emit SQL naming it, so the safe default has to be the one a forgetful caller gets.
+      hasUpdatedAt: companion.hasUpdatedAt,
       defaultLocale: this.localization.defaultLocale,
       filter,
     });

@@ -112,3 +112,122 @@ describe("populateTranslationStatus (read failures)", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("populateTranslationStatus — staleness (i18n B2)", () => {
+  /** A db returning fixed companion rows, so the assertion is about the derivation. */
+  function dbReturning(rows: Record<string, unknown>[]) {
+    return {
+      select: () => ({ from: () => ({ where: () => Promise.resolve(rows) }) }),
+    } as never;
+  }
+
+  const SOURCE = "en";
+  const TARGET = "fr";
+
+  /** One companion row. `updatedAt` of `null` is a row written before the column existed. */
+  function companionRow(
+    locale: string,
+    title: string | null,
+    updatedAt: Date | null
+  ): Record<string, unknown> {
+    return {
+      _parent: "doc1",
+      _locale: locale,
+      _status: "published",
+      _updated_at: updatedAt,
+      title,
+    };
+  }
+
+  async function metaFor(
+    rows: Record<string, unknown>[]
+  ): Promise<
+    Record<string, { translated: boolean; status?: string; stale?: boolean }>
+  > {
+    const row: Record<string, unknown> = { id: "doc1" };
+    await populateTranslationStatus({
+      db: dbReturning(rows),
+      companionTable: { _parent: "p", _locale: "l" },
+      localizedFields: [{ name: "title", column: "title" }],
+      rows: [row],
+      locales: [SOURCE, TARGET],
+      defaultLocale: SOURCE,
+      hasStatus: true,
+      readiness: "ready",
+    });
+    return row._translations as never;
+  }
+
+  it("flags a translation whose source was written afterwards", async () => {
+    const meta = await metaFor([
+      companionRow(SOURCE, "Hello again", new Date(2000)),
+      companionRow(TARGET, "Bonjour", new Date(1000)),
+    ]);
+
+    expect(meta[TARGET].stale).toBe(true);
+    // 🔴 And it keeps the state it was in. This pair is the assertion: `stale`
+    // is a SECOND fact about the language, so a reader that renders it as a
+    // replacement takes a live translation out of "published" on every screen.
+    expect(meta[TARGET].translated).toBe(true);
+    expect(meta[TARGET].status).toBe("published");
+  });
+
+  it("does not flag one written after its source", async () => {
+    const meta = await metaFor([
+      companionRow(SOURCE, "Hello", new Date(1000)),
+      companionRow(TARGET, "Bonjour", new Date(2000)),
+    ]);
+
+    // The control. Without it, "always stale" passes the case above.
+    expect(meta[TARGET].stale).toBeUndefined();
+  });
+
+  it("leaves staleness ABSENT when either timestamp is unknown", async () => {
+    // Absent rather than `false`, and the difference carries weight: a consumer
+    // reading `stale === false` should be reading a real "not stale", not an
+    // unknown wearing its clothes. A row written before `_updated_at` existed
+    // cannot answer, and must never be rendered as up to date.
+    const unstampedTarget = await metaFor([
+      companionRow(SOURCE, "Hello again", new Date(2000)),
+      companionRow(TARGET, "Bonjour", null),
+    ]);
+    expect(unstampedTarget[TARGET].stale).toBeUndefined();
+    expect(unstampedTarget[TARGET].translated).toBe(true);
+
+    const unstampedSource = await metaFor([
+      companionRow(SOURCE, "Hello", null),
+      companionRow(TARGET, "Bonjour", new Date(1000)),
+    ]);
+    expect(unstampedSource[TARGET].stale).toBeUndefined();
+  });
+
+  it("does not flag a language that has no content", async () => {
+    const meta = await metaFor([
+      companionRow(SOURCE, "Hello again", new Date(2000)),
+      companionRow(TARGET, "", new Date(1000)),
+    ]);
+
+    // Blank means untranslated, so there is nothing to review — the instruction
+    // for this language is to write it, not to check it. Reporting both would
+    // put one document under two contradictory calls to action.
+    expect(meta[TARGET].translated).toBe(false);
+    expect(meta[TARGET].stale).toBeUndefined();
+  });
+
+  it("never flags the source language against itself", async () => {
+    const meta = await metaFor([
+      companionRow(SOURCE, "Hello", new Date(2000)),
+      companionRow(TARGET, "Bonjour", new Date(1000)),
+    ]);
+
+    // The default locale IS the source of the comparison.
+    //
+    // 🔴 This green holds by TWO independent mechanisms and cannot tell them
+    // apart: the explicit `code !== defaultLocale` guard, and the fact that the
+    // source row compared against itself is equal rather than greater.
+    // Break-verified and recorded as such — removing the guard leaves this
+    // passing. It is kept as an assertion of intent, not because this test
+    // proves it runs.
+    expect(meta[SOURCE].stale).toBeUndefined();
+  });
+});
