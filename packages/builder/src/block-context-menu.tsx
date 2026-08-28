@@ -84,21 +84,30 @@
  * this one's, and it does it by withholding the event — see its pointer-down
  * rule for why `preventDefault` here would be the wrong instrument.
  *
- * ## This menu is reached by POINTER only, and that is a limitation
+ * ## What opens it, and what is known about the keyboard
  *
- * Measured in a real browser: a right-click opens it correctly, at the pointer,
- * both at scale 1 and under the canvas's CSS `zoom`. Shift+F10 with the canvas
- * focused does NOT open it, and the structure says why — the focusable canvas
- * region is an ANCESTOR of this trigger, so a keyboard-invoked context event
- * originating there bubbles away from it rather than into it.
+ * Measured in a real browser: a right-click opens it at the pointer, both at
+ * scale 1 and under the canvas's CSS `zoom`, and a touch long-press opens it
+ * through Radix's own timer.
  *
- * It is shipped anyway because it takes nothing away. Every verb here is
- * already reachable without a pointer, through the keystrokes, the block
- * toolbar's roving tab stop, and the command palette — this is a fourth route
- * to them, not the only one. The fix is not to move this trigger up, which
- * would open a block menu over chrome that is not a block; it is to make the
- * blocks themselves focusable — a block is what a context-menu key should be
- * aimed at anyway, and a focusable one would carry this trigger with it.
+ * The platform's context-menu key sends a `contextmenu` event from whatever
+ * holds focus, so it reaches this by the same path a right-click does —
+ * PROVIDED focus is on something inside a block. A block that renders a
+ * focusable control is: `core/button` draws an anchor carrying the node marker
+ * itself. Focus on the canvas REGION is not, and cannot be: that region is an
+ * ancestor of this trigger, so an event from it travels away rather than into
+ * it, and there is no block under it to act on either way.
+ *
+ * That keyboard path is reasoned, not measured. The automation available here
+ * cannot generate the event — a synthesised `Shift+F10` produces no
+ * `contextmenu` event at all, measured with a capture listener, so it can
+ * neither confirm nor refute the behaviour and no claim is made from it.
+ *
+ * What does not depend on any of it: every verb here is reachable without a
+ * pointer regardless, through the keystrokes, the block toolbar's roving tab
+ * stop, and the command palette. This is one more route to them, never the
+ * only one — which is why blocks that carry no focusable control cost nothing
+ * by being unable to open it.
  *
  * @module block-context-menu
  */
@@ -113,7 +122,7 @@ import {
 import * as React from "react";
 
 import { blockActionRunners } from "./builder-commands";
-import { contextMenuTargetOf } from "./canvas";
+import { CANVAS_ROOT_CLASS, contextMenuTargetOf } from "./canvas";
 import type { EditorState } from "./editor-state";
 import { useBlockActionsContext } from "./keyboard-actions";
 import { toolbarActions } from "./toolbar-actions";
@@ -166,7 +175,15 @@ export function BlockContextMenu({
   const pressedTarget = React.useRef<string | null>(null);
   const noteTarget = React.useCallback(
     (event: React.SyntheticEvent<HTMLDivElement>) => {
-      pressedTarget.current = contextMenuTargetOf(event.target);
+      /*
+       * This wrapper's OWN canvas, which is the outermost one beneath it. A
+       * canvas nested inside a block of that canvas is deeper, so it is not
+       * what `querySelector` returns — and a block belonging to it is refused
+       * here rather than answered for by this menu.
+       */
+      const root = event.currentTarget.querySelector(`.${CANVAS_ROOT_CLASS}`);
+      pressedTarget.current =
+        root === null ? null : contextMenuTargetOf(event.target, root);
     },
     []
   );

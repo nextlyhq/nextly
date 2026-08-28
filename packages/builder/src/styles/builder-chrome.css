@@ -2012,6 +2012,17 @@
  * it: it marks a region deliberately made uneditable inside an editable one,
  * which is a block again rather than text.
  */
-.nx-canvas [contenteditable]:not([contenteditable="false"]) {
+.nx-canvas [contenteditable] {
   -webkit-touch-callout: default;
+}
+
+/*
+ * ...except a region the editor has deliberately made uneditable inside an
+ * editable one. That is a block again rather than text, so the block menu is
+ * the right menu there and the suppression stands. Written as its own rule
+ * rather than as a `:not()` on the one above: two plain selectors say the same
+ * thing, and the negated form was complex enough to be flagged.
+ */
+.nx-canvas [contenteditable="false"] {
+  -webkit-touch-callout: none;
 }

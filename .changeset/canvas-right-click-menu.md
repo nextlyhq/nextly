@@ -32,4 +32,4 @@ Nothing happened before: the editor had no context menu anywhere, so an author l
 
 Right-clicking a block also selects it first, so the menu always acts on the block under the pointer. Right-clicking one of several selected blocks keeps that selection instead of replacing it.
 
-It is reached by pointer only for now. Every verb in it is already reachable without a pointer through the keystrokes, the block toolbar and the command palette, so this adds a route rather than becoming the only one.
+A touch long press opens it too, on the block under the finger. The platform's context-menu key reaches it from any block that draws a focusable control, since that sends the same event a right-click does; a block that draws none cannot open it, and neither can the canvas background. Every verb in it stays reachable without a pointer regardless, through the keystrokes, the block toolbar and the command palette, so this adds a route rather than becoming the only one.
