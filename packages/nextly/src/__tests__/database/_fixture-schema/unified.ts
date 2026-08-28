@@ -608,6 +608,10 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
         default: { sql: "CURRENT_TIMESTAMP" },
       },
+      { name: "owner", type: "varchar(191)" },
+      { name: "orphaned_at", type: "timestamp" },
+      { name: "permission_group", type: "varchar(191)" },
+      { name: "danger", type: "boolean" },
     ],
     indexes: [
       {
@@ -863,49 +867,42 @@ export const nextlyTables: TableDefinition[] = [
     comment:
       "Metadata table for user-defined dynamic collections with JSON schema definitions",
     columns: [
-      {
-        name: "id",
-        type: "text",
-        primaryKey: true,
-      },
-      {
-        name: "name",
-        type: "varchar(255)",
-        nullable: false,
-        unique: true,
-      },
-      {
-        name: "label",
-        type: "varchar(255)",
-        nullable: false,
-      },
+      { name: "id", type: "text", primaryKey: true },
+      { name: "slug", type: "varchar(255)", nullable: false, unique: true },
+      { name: "labels", type: "jsonb", nullable: false },
       {
         name: "table_name",
         type: "varchar(255)",
         nullable: false,
         unique: true,
       },
+      { name: "description", type: "text" },
+      { name: "fields", type: "jsonb", nullable: false },
+      { name: "timestamps", type: "boolean", nullable: false, default: true },
+      { name: "status", type: "boolean", nullable: false, default: false },
+      { name: "localized", type: "boolean", nullable: false, default: false },
+      { name: "versions", type: "jsonb" },
+      { name: "revalidate", type: "jsonb" },
+      { name: "webhooks", type: "jsonb" },
+      { name: "admin", type: "jsonb" },
+      { name: "hooks", type: "jsonb" },
+      { name: "source", type: "varchar(50)", nullable: false, default: "ui" },
+      { name: "locked", type: "boolean", nullable: false, default: false },
+      { name: "config_path", type: "text" },
+      { name: "schema_hash", type: "text", nullable: false },
+      { name: "schema_version", type: "integer", nullable: false, default: 1 },
       {
-        name: "description",
-        type: "text",
-      },
-      {
-        name: "icon",
+        name: "migration_status",
         type: "varchar(50)",
-      },
-      {
-        name: "schema_definition",
-        type: "jsonb",
         nullable: false,
+        default: "pending",
       },
+      { name: "last_migration_id", type: "text" },
+      { name: "access_rules", type: "jsonb" },
       {
         name: "created_by",
         type: "text",
-        references: {
-          table: "users",
-          column: "id",
-          onDelete: "set null",
-        },
+        references: { table: "users", column: "id", onDelete: "set null" },
       },
       {
         name: "created_at",
@@ -935,7 +932,6 @@ export const nextlyTables: TableDefinition[] = [
       },
     ],
   },
-
   {
     name: "content_schema_events",
     comment:
@@ -1080,6 +1076,9 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
         default: { sql: "CURRENT_TIMESTAMP" },
       },
+      { name: "focal_x", type: "integer" },
+      { name: "focal_y", type: "integer" },
+      { name: "sizes", type: "text" },
     ],
     indexes: [
       {
