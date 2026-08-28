@@ -40,7 +40,12 @@ export const nextlyJobsMysql = mysqlTable(
 
     runAt: datetime("run_at", { fsp: 3 }),
 
-    runAsUserId: varchar("run_as_user_id", { length: 36 }),
+    // Matched to `users.id`, which MySQL stores as varchar(191). A narrower
+    // column here refuses a job queued by a legitimate user whose id is longer
+    // in strict mode, and truncates it to an id that resolves to nobody
+    // otherwise — and `resolveRunAs` fails a job closed when the id it reads
+    // resolves to no user, so a truncation would look like a deleted account.
+    runAsUserId: varchar("run_as_user_id", { length: 191 }),
 
     // 191 rather than 255: this column carries a unique index, and 191 is the
     // longest utf8mb4 key MySQL will index under the 767-byte prefix limit on

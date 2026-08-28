@@ -47,6 +47,22 @@ function executorOf(db: UsersReadDb): unknown {
 
 /** How long a finished job row is kept before a pass may remove it. */
 export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+
+/**
+ * How long finished rows are kept, from the option a deployment passed.
+ *
+ * Three states, not two: `undefined` is "unset, take the default", `null` is
+ * "keep everything, I prune it myself", and a number is a window. Nullish
+ * coalescing collapses the first two, which is what turned the documented
+ * opt-out back into the default and pruned history a deployment had asked to
+ * keep. Named and exported so that distinction is testable rather than one
+ * character inside a longer function.
+ */
+export function resolveRetentionMs(
+  option: number | null | undefined
+): number | null {
+  return option === undefined ? DEFAULT_RETENTION_MS : option;
+}
 /** Rows a single pass may remove, so a sweep cannot become a long delete. */
 export const DEFAULT_PRUNE_LIMIT = 100;
 
@@ -151,7 +167,7 @@ export async function runJobsPass(
   // this grows forever — a recurring workload writes one row per run, and every
   // finished row keeps its input and its error. Bounded per pass so a sweep
   // cannot become a long delete that outlives the tick running it.
-  const retentionMs = options?.retentionMs ?? DEFAULT_RETENTION_MS;
+  const retentionMs = resolveRetentionMs(options?.retentionMs);
   if (retentionMs !== null) {
     const now = options?.now ?? (() => new Date());
     try {

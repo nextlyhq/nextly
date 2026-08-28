@@ -60,10 +60,10 @@
  * @module domains/jobs/run-jobs
  */
 
-import { DEFAULT_MAX_ATTEMPTS, type JobRegistry } from "./job-registry";
 import { nextAttempt } from "./job-backoff";
-import type { FinalizeInput, FinalizeOutcome, JobRow } from "./jobs-repository";
 import { createJobContentApi } from "./job-content-api";
+import { DEFAULT_MAX_ATTEMPTS, type JobRegistry } from "./job-registry";
+import type { FinalizeInput, FinalizeOutcome, JobRow } from "./jobs-repository";
 import { resolveRunAs, type RunAsDeps } from "./resolve-run-as";
 
 /** Rows claimed and finalized per pass when the caller does not say. */
@@ -297,6 +297,21 @@ async function runOne(
   // Terminal, not retried: a deleted or deactivated user does not come back on
   // the next pass, and retrying would cycle an unrunnable row forever.
   if (!identity.ok) return terminal(identity.reason);
+
+  // Re-prove ownership before starting the handler. `markAttempt` fenced the
+  // row, but resolving the identity above is two database reads, and a lease
+  // that expires while they are in flight lets a successor claim the row. This
+  // runner would then wake up and start the handler anyway, because renewal
+  // does not begin until `withLeaseRenewal` — so the fence it passed describes
+  // a lease it no longer holds. `renewLease` is fenced on `lockedBy`, so one
+  // write both extends the lease and answers whether it is still ours.
+  const stillOursAfterIdentity = await deps.store.renewLease(
+    job.id,
+    runnerId,
+    now(),
+    deps.leaseMs ?? DEFAULT_LEASE_MS
+  );
+  if (!stillOursAfterIdentity) return LEASE_LOST;
 
   try {
     // Renew while the handler works. The lease is otherwise a wall-clock guess
