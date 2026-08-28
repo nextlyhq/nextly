@@ -341,9 +341,14 @@ describe("Direct API - Collection Operations", () => {
     });
 
     it("should update by where clause", async () => {
+      // BulkOperationResult, not the old `{success, failed}` pair of id
+      // arrays. `successes` carries RECORDS -- full ones for update, `{id}`
+      // for delete -- and the update path reads `.id` off the first to fetch
+      // the read-back. Handing it bare strings made that read `undefined.id`.
       mocks.collectionsHandler.bulkUpdateByQuery.mockResolvedValue({
-        success: ["post-1"],
-        failed: [],
+        successes: [{ id: "post-1", status: "published" }],
+        failures: [],
+        total: 1,
         successCount: 1,
         failedCount: 0,
       });
@@ -363,6 +368,14 @@ describe("Direct API - Collection Operations", () => {
       // canonical `{ message, item }` envelope.
       expect(result.item).toEqual({ id: "post-1", status: "published" });
       expect(result.message).toBe("Posts updated.");
+
+      // The read-back must use the id the bulk update RETURNED, not one the
+      // test happens to know. Without this the assertions above pass even if
+      // the wrong id -- or none -- is fetched, because the getEntry double
+      // answers the same row whatever it is asked for.
+      expect(mocks.collectionsHandler.getEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ collectionName: "posts", entryId: "post-1" })
+      );
     });
 
     it("should throw when neither id nor where provided", async () => {
@@ -415,9 +428,12 @@ describe("Direct API - Collection Operations", () => {
     });
 
     it("should delete by where clause and return DeleteResult", async () => {
+      // Delete's `successes` carry minimal `{id}` records, which the
+      // namespace flattens to the legacy DeleteResult's `string[]`.
       mocks.collectionsHandler.bulkDeleteByQuery.mockResolvedValue({
-        success: ["post-1", "post-2"],
-        failed: [],
+        successes: [{ id: "post-1" }, { id: "post-2" }],
+        failures: [],
+        total: 2,
         successCount: 2,
         failedCount: 0,
       });
