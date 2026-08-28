@@ -566,9 +566,28 @@ function useCanvasSurface(
   // asked still fires on every pane drag.
   const region = useRegionWidth(root, preview?.width !== undefined);
   const scale = canvasScale(preview?.width, region, zoom);
+  /*
+   * Reported through a ref, keyed on the scale and on whether anyone is
+   * listening — never on the reporter's identity.
+   *
+   * A host writing `onScale={s => setView({ ...view, scale: s })}` inline hands
+   * a new function every render. Depended on directly, each report updates the
+   * host, the update produces a new identity, and the new identity reports
+   * again: a render loop on a host that did nothing wrong.
+   *
+   * Existence is a dependency because it changes the answer. A host that wires
+   * the reporter after its first render — one resolving `onScale` from state,
+   * or a shell whose control mounts late — would otherwise hear nothing until
+   * the scale next moved, and sit on a stale number in the meantime.
+   */
+  const latestScaleReport = useRef(onScale);
   useEffect(() => {
-    onScale?.(scale);
-  }, [onScale, scale]);
+    latestScaleReport.current = onScale;
+  }, [onScale]);
+  const reportingScale = onScale !== undefined;
+  useEffect(() => {
+    latestScaleReport.current?.(scale);
+  }, [reportingScale, scale]);
   /*
    * CHOSEN means a scale the author asked for AND this canvas can paint at.
    * A refused one has already fallen back to fitting above, so treating it as
@@ -1065,20 +1084,18 @@ export interface CanvasProps {
    */
   dragHandlers?: CanvasDragHandlers;
   /**
-   * How large to draw the previewed page.
+   * The layout scale this canvas applies to the page it lays out.
    *
-   * Defaults to fitting, which is what this canvas did before the scale could
-   * be chosen — so a host offering no zoom control keeps exactly the behaviour
-   * it had.
+   * Defaults to fitting, so a host that offers no zoom control never has to
+   * name a scale.
    */
   zoom?: CanvasZoom;
   /**
    * The scale the canvas is actually painting at, reported as it changes.
    *
    * On the CANVAS rather than on {@link CanvasProps.preview}, because the
-   * scale is not a property of previewing a viewport: a site declaring no
-   * tiers has no preview at all and is still drawn at some size. Nested there,
-   * this went silent in exactly the configuration most sites start in.
+   * scale is not a property of previewing a viewport: a site that declares no
+   * tiers has no preview at all and is still laid out at some scale.
    *
    * Reported rather than exposed as state for the reason the width is: a
    * control computing its own would be a second answer to what is on screen,

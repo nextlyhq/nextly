@@ -1286,14 +1286,25 @@ export function BuilderShell({
     [onZoomChange, update]
   );
 
-  // The zoom, held and reported the same way and for the same reasons.
+  /*
+   * The zoom, held and reported the same way and for the same reasons, plus
+   * one the value above does not have: whether a listener EXISTS is itself a
+   * dependency.
+   *
+   * A host can resolve `onZoomChange` from its own state, so the prop moves
+   * from `undefined` to a callback after the first render. Keyed on the value
+   * alone, the effect would not re-run at that moment and the host would carry
+   * the default zoom until the author happened to pick another — its canvas
+   * drawn at a scale the control does not claim.
+   */
   const onZoomChangeRef = React.useRef(onZoomChange);
   React.useEffect(() => {
     onZoomChangeRef.current = onZoomChange;
   });
+  const reportingZoom = onZoomChange !== undefined;
   React.useEffect(() => {
     onZoomChangeRef.current?.(preferences.zoom);
-  }, [preferences.zoom]);
+  }, [reportingZoom, preferences.zoom]);
 
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
