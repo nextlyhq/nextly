@@ -454,6 +454,90 @@ describe("companion `_updated_at`", () => {
     expect(await readStamp(adapter, "p1", "en")).toBeNull();
   });
 
+  describe("the refresh that re-enables localization over a surviving companion", () => {
+    /** The runtime key/value table the transition claim lives in. */
+    async function createMeta(): Promise<void> {
+      await adapter.executeQuery(
+        `CREATE TABLE "nextly_meta" (` +
+          `"key" TEXT PRIMARY KEY, "value" TEXT, "updated_at" INTEGER NOT NULL)`
+      );
+    }
+
+    async function claim(key: string, value: string): Promise<void> {
+      await adapter.executeQuery(
+        `INSERT INTO "nextly_meta" ("key", "value", "updated_at") VALUES (?,?,?)`,
+        [key, value, 0]
+      );
+    }
+
+    async function refresh(guard?: {
+      key: string;
+      value: string;
+    }): Promise<void> {
+      const { refreshDefaultLocaleFromMain } = await import(
+        "../companion-copy"
+      );
+      await refreshDefaultLocaleFromMain(adapter, {
+        tableName: MAIN,
+        companionTableName: COMPANION,
+        fields: [{ name: "title", type: "text", localized: true }],
+        dialect: "sqlite",
+        locale: "en",
+        columns: ["title"],
+        ...(guard ? { guard } : {}),
+      });
+    }
+
+    it("clears the source stamp when the claim is still held", async () => {
+      await createCompanion();
+      await createMeta();
+      await claim("i18n.claim", "token-1");
+      const written = new Date("2026-08-28T12:00:00.000Z");
+      await upsertCompanionRow(
+        adapter,
+        COMPANION,
+        "p1",
+        "en",
+        { title: "Hello" },
+        undefined,
+        { now: written }
+      );
+
+      await refresh({ key: "i18n.claim", value: "token-1" });
+
+      // The content came from main and its chronology is unknown, so the stamp must not stay.
+      expect(await readStamp(adapter, "p1", "en")).toBeNull();
+    });
+
+    it("clears NOTHING when the claim has been superseded", async () => {
+      await createCompanion();
+      await createMeta();
+      await claim("i18n.claim", "token-2");
+      const written = new Date("2026-08-28T12:00:00.000Z");
+      await upsertCompanionRow(
+        adapter,
+        COMPANION,
+        "p1",
+        "en",
+        { title: "Hello" },
+        undefined,
+        { now: written }
+      );
+
+      // A worker whose claim has moved on.
+      await refresh({ key: "i18n.claim", value: "token-1" });
+
+      // 🔴 This statement is not the harmless one it looks like. It clears the stamp on EVERY row
+      // of the locale, and the locale it is called for is the SOURCE -- one half of every
+      // comparison in the collection. A superseded worker running it unguarded would erase the
+      // whole collection's chronology and hide every stale translation in it until each source row
+      // was rewritten, which is far larger than the one row it appears to touch.
+      expect(await readStamp(adapter, "p1", "en")).toBe(
+        Math.floor(written.getTime() / 1000)
+      );
+    });
+  });
+
   describe("the back-fill", () => {
     /** The companion as it stands on a database that predates B2: no `_updated_at`. */
     async function createLegacyCompanion(): Promise<void> {
