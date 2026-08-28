@@ -82,10 +82,11 @@ import type { SlotSpec } from "./block";
 import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
-import { MAX_NODES } from "./limits";
+import { MAX_DEPTH, MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
+import { isUsableSlotName } from "./registry";
 import { defineEntry, ownEntry } from "./safe-record";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
@@ -138,13 +139,19 @@ type ResolvedDefinition = NonNullable<ReturnType<SlotDefaultSource["get"]>>;
 /**
  * How deep a chain of declared defaults may go.
  *
- * A bound rather than a promise: the cycle set below already stops a block from
- * seeding itself at any remove, so this catches only a chain of DISTINCT types
- * long enough to be a mistake — eight containers deep is past any layout an
- * author would draw, and a declaration that wants more is describing a document
- * rather than a starting point.
+ * DERIVED from the document's own `MAX_DEPTH` rather than chosen here. A second
+ * number would be a second depth policy, and the lower of the two silently
+ * wins: a declaration nesting nine containers is legal by the document model
+ * and was truncated by a bound this module invented, with nothing reported.
+ *
+ * Less ONE, because the node these children hang from is created by the caller
+ * and counts toward the document's depth just as they do — spending the whole
+ * allowance below it yields a tree one level deeper than any document may hold.
+ *
+ * The cycle set is what stops a block seeding itself at any remove, so this
+ * bounds only a chain of DISTINCT types.
  */
-const MAX_SLOT_DEFAULT_DEPTH = 8;
+const MAX_SLOT_DEFAULT_DEPTH = MAX_DEPTH - 1;
 
 /**
  * How many nodes one expansion may create, and why a depth bound is not enough.
@@ -279,6 +286,13 @@ function expandFrom(
   let filledAnySlot = false;
 
   for (const [slotName, spec] of Object.entries(declaredSlots)) {
+    // Registration refuses a slot named for an `Object.prototype` member, and
+    // registration is not the only way a definition reaches here: a supplied
+    // definition the registry does not hold never passed that check. Filling
+    // such a slot materialises a key `assertNodeShape` then rejects, so the op
+    // is refused and the author's click does nothing, silently. The SAME
+    // predicate answers here, so the two paths cannot disagree about a name.
+    if (!isUsableSlotName(slotName)) continue;
     const children = childrenForSlot(spec?.defaultBlock, {
       type,
       slotName,
