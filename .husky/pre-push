@@ -75,7 +75,19 @@ pnpm run build
 # run repo-wide, so types were the one whole-repo question this hook was not
 # asking. A dependent TEST sweep is the expensive one and stays in CI, where
 # nobody is waiting on it.
+#
+# ADVISORY, not blocking. This is the one gate here whose scope is the whole
+# repository, so it can be red for a package the author never touched — and a
+# hook that refuses a push over someone else's broken package is a hook people
+# learn to pass `--no-verify` to, which costs every gate rather than this one.
+#
+# Reported instead, with the packages named, so an author can see at a glance
+# whether the failure is theirs. CI blocks on the same command; this is the
+# early warning, not the enforcement.
+set +e
 pnpm turbo check-types --continue
+TYPES_STATUS=$?
+set -e
 
 # The TESTS of the packages this branch actually changes.
 #
@@ -116,6 +128,13 @@ elif [ "$GATE_STATUS" -ne 0 ]; then
 elif [ -n "$GATE_FILTERS" ]; then
   # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
   pnpm turbo test --continue $GATE_FILTERS
+fi
+
+if [ "$TYPES_STATUS" -ne 0 ]; then
+  echo ""
+  echo "pre-push: NOTE — the repo-wide typecheck failed. Check whether the"
+  echo "  failing package is one you changed: this gate covers every package,"
+  echo "  so it can be red for someone else's work. CI blocks on it either way."
 fi
 
 # Last, so it is the line still on screen when the push proceeds.
