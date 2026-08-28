@@ -11,7 +11,10 @@
  */
 
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
-import { readVersionParam } from "@admin/components/features/versions/version-search-params";
+import {
+  readLocaleParam,
+  readVersionParam,
+} from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import type { PageProps } from "@admin/lib/routing";
@@ -22,11 +25,14 @@ export default function EntryVersionsPage({ params, searchParams }: PageProps) {
   // Without this the page announces itself only as "Version history", while the
   // URL carries an opaque id and the dashboard header shows no breadcrumbs — so
   // a reader cannot tell which entry the snapshots belong to without leaving.
-  const documentTitle = useVersionDocumentTitle({
-    kind: "collection",
-    slug,
-    entryId: id,
-  });
+  // The language the address names, so a link shared from a French history
+  // opens the French comparison under the French title regardless of what the
+  // reader's editor was last set to.
+  const locale = readLocaleParam(searchParams?.locale);
+  const documentTitle = useVersionDocumentTitle(
+    { kind: "collection", slug, entryId: id },
+    locale
+  );
 
   return (
     <VersionComparePage

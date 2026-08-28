@@ -61,7 +61,7 @@ vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (...a: unknown[]) => navigateMock(...a),
 }));
 
-import { VersionComparePage } from "../VersionComparePage";
+import { VersionComparePage, versionsHref } from "../VersionComparePage";
 
 const row = (versionNo: number, locale: string | null = null) => ({
   id: `v${versionNo}`,
@@ -423,5 +423,38 @@ describe("VersionComparePage — a failed next page", () => {
     expect(
       screen.queryByRole("button", { name: /Version/ })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("versionsHref — the address carries the language", () => {
+  const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
+
+  /**
+   * The locale travels with the pair. A link shared from a French history has
+   * to open the French comparison, named in French, for a reader whose editor
+   * was last in English — the destination cannot recover the language from
+   * `from` and `to` alone.
+   */
+  it("carries the locale beside the pair", () => {
+    const href = versionsHref(scope, { from: 8, to: 9 }, "fr");
+    expect(href).toContain("from=8");
+    expect(href).toContain("to=9");
+    expect(href).toContain("locale=fr");
+  });
+
+  /**
+   * The control, and it decides the shape: a non-localized document must carry
+   * NO locale rather than an empty one, which would read as a language that
+   * failed to resolve rather than one never asked for.
+   */
+  it("omits the locale entirely when there is none", () => {
+    const href = versionsHref(scope, { from: 8, to: 9 }, null);
+    expect(href).toContain("from=8");
+    expect(href).not.toContain("locale");
+  });
+
+  it("still addresses a history with no pair chosen", () => {
+    expect(versionsHref(scope)).not.toContain("?");
+    expect(versionsHref(scope, undefined, "fr")).toContain("locale=fr");
   });
 });
