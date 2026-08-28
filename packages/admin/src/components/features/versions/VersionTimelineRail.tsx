@@ -11,6 +11,7 @@
  */
 
 import { Badge, Button, Skeleton } from "@admin/components/ui";
+import { useLocalization } from "@admin/hooks/useLocalization";
 import { formatDateTime } from "@admin/lib/dates/format";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
@@ -55,6 +56,24 @@ function RailSkeleton() {
   );
 }
 
+/**
+ * The language a version holds, on a document that has more than one.
+ *
+ * A localized document captures a version per locale and this list interleaves
+ * them, so a row identified only by its number leaves an editor unable to tell
+ * whether version 5 is the English or the French one. Read from the same hook
+ * `VersionRow` uses, with the locale's human label falling back to its code, so
+ * the two lists name a language the same way.
+ *
+ * Nothing is said on a single-language install, where a badge on every row
+ * would carry no information.
+ */
+function LocaleBadge({ locale }: { locale: string | null }) {
+  const { enabled, getLocale } = useLocalization();
+  if (!enabled || locale === null) return null;
+  return <Badge variant="outline">{getLocale(locale)?.label ?? locale}</Badge>;
+}
+
 /** A row's first line: which version it is, its status, and any name given it. */
 function RowHeading({ version }: { version: VersionMeta }) {
   return (
@@ -64,6 +83,7 @@ function RowHeading({ version }: { version: VersionMeta }) {
           ? "Autosave"
           : `Version ${version.versionNo}`}
       </span>
+      <LocaleBadge locale={version.locale} />
       {version.status ? (
         <Badge variant={version.status === "published" ? "success" : "outline"}>
           {version.status}

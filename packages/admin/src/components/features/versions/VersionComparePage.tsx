@@ -197,8 +197,15 @@ export function VersionComparePage({
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <aside className="w-72 shrink-0 overflow-y-auto border-r border-border">
+      {/* Stacked below `lg`, side by side above it. The rail is a fixed 18rem,
+          and at a 375px viewport that leaves the comparison roughly 87px before
+          borders and padding — its pair description, filter and field values
+          all clipped. `DashboardLayout` already switches to a mobile header at
+          the same breakpoint, so the split is what has to give, not the
+          content beside it. Stacked, the rail keeps a bounded height so the
+          comparison is reachable without scrolling past the whole history. */}
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <aside className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border lg:max-h-none lg:w-72 lg:border-r lg:border-b-0">
           <VersionTimelineRail
             scope={scope}
             versions={versions}
