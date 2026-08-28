@@ -19,7 +19,7 @@
  */
 import type { FieldValidationRule } from "nextly/field-catalog";
 import { validationRulesForFieldType } from "nextly/field-catalog";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FormField, FormFieldType } from "../types";
 import { BUILT_IN_FORM_FIELD_TYPES } from "../types";
@@ -271,5 +271,103 @@ describe("the table is what the generator reads", () => {
         `${type}/${rule}: the table and the anchor disagree`
       ).toBe(enforced);
     }
+  });
+});
+
+describe("the generator follows the table, rather than agreeing with it", () => {
+  /**
+   * Whether the generator's answers MOVE with the table — which nothing above
+   * can see.
+   *
+   * Every other assertion in this file states what the generator accepts. A
+   * generator that decided each type in a hand-written branch accepts exactly
+   * the same values, so all of them hold against an implementation that never
+   * reads the table at all — the anchored block included, since its six
+   * outcomes are outcomes either implementation produces. Agreement is not
+   * derivation.
+   *
+   * What separates the two is the dependency between the answers, not any one
+   * of them. So these substitute a table differing in exactly one row, and
+   * read the generator's answer for that row back.
+   *
+   * Both directions are asserted and neither alone would do: dropping a rule
+   * and watching it stop biting also passes for a generator that applies
+   * nothing, and adding one also passes for a generator that applies
+   * everything.
+   */
+
+  /** `generateZodSchema`, built against a table that says this instead. */
+  async function generatorReading(
+    table: Record<FormFieldType, readonly FieldValidationRule[]>
+  ) {
+    vi.resetModules();
+    vi.doMock("./enforced-validation", async importOriginal => ({
+      ...(await importOriginal<typeof import("./enforced-validation")>()),
+      ENFORCED_VALIDATION_RULES: table,
+    }));
+    const { generateZodSchema: generate } = await import("./generate-schema");
+    return (f: FormField, value: unknown) =>
+      generate([f]).safeParse({ [f.name]: value }).success;
+  }
+
+  afterEach(() => {
+    vi.doUnmock("./enforced-validation");
+    vi.resetModules();
+  });
+
+  it("stops applying a rule its type's row stops listing", async () => {
+    const substituted = await generatorReading({
+      ...ENFORCED_VALIDATION_RULES,
+      text: ["minLength", "maxLength", "message"],
+    });
+
+    // The control, and this direction needs one. A substitution that never
+    // reached the generator would leave it reading no rules for the type, and
+    // "the dropped rule stopped biting" would be true for the wrong reason.
+    // A rule the row KEEPS must still bite, which distinguishes a table that
+    // arrived and changed from one that did not arrive.
+    expect(substituted(field("text", { minLength: 50 }), ACCEPTED.text)).toBe(
+      false
+    );
+    // The observation: the row no longer lists `pattern`, so the bound the
+    // field still carries is no longer read.
+    expect(
+      substituted(field("text", { pattern: "^ZZZ$" }), ACCEPTED.text)
+    ).toBe(true);
+  });
+
+  it("starts applying a rule its type's row starts listing", async () => {
+    // `textarea` is the type to grow a rule, because its schema body is
+    // `text`'s exactly: the real table's row is the only reason `pattern` is
+    // inert there, so a generator ignoring the table cannot follow this.
+    const substituted = await generatorReading({
+      ...ENFORCED_VALIDATION_RULES,
+      textarea: ["minLength", "maxLength", "pattern", "message"],
+    });
+
+    // Self-controlling, unlike the direction above: every way the substitution
+    // could fail to arrive — the real table, or none — leaves `pattern` inert
+    // and yields the opposite answer here.
+    expect(
+      substituted(field("textarea", { pattern: "^ZZZ$" }), ACCEPTED.textarea)
+    ).toBe(false);
+  });
+
+  it("follows the table where numeric bounds are read, too", async () => {
+    // A second and separate read of the table. Numeric bounds go through their
+    // own applier map, so a hand-written number branch — reinstated alone —
+    // would satisfy both probes above while ignoring the row that governs it.
+    const substituted = await generatorReading({
+      ...ENFORCED_VALIDATION_RULES,
+      number: ["max", "message"],
+    });
+
+    // The kept rule, controlling the arrival of the table as before.
+    expect(substituted(field("number", { max: -100 }), ACCEPTED.number)).toBe(
+      false
+    );
+    expect(substituted(field("number", { min: 100 }), ACCEPTED.number)).toBe(
+      true
+    );
   });
 });
