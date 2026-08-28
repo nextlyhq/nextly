@@ -765,6 +765,46 @@ describe("a creation resolving after the selection moved to another block", () =
     expect(writeB).not.toHaveBeenCalled();
   });
 
+  it("clears a stale refusal even while the library is away", async () => {
+    /*
+     * The library going absent must not suspend the invalidation. A refusal is
+     * cleared by the render that observes the node has left the state it was
+     * raised against, so a render that returns early for a missing library
+     * skips that observation — and a list that changes and comes back while
+     * the library is away arrives back matching, reviving an alert about an
+     * operation that did not just fail.
+     */
+    const refuse = vi.fn(() => "refused" as const);
+    const at = (
+      ids: readonly string[],
+      library: readonly NamedClass[] | undefined
+    ) => (
+      <ClassSelector
+        nodeId="node-a"
+        library={library}
+        libraryAbsence="pending"
+        nodeClassIds={ids}
+        onNodeClassesChange={refuse}
+        onCreateClass={createsClass()}
+      />
+    );
+
+    const view = render(at([], LIBRARY));
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    // The library goes away, and the node leaves the list the refusal names.
+    view.rerender(at([], undefined));
+    view.rerender(at(["id-card"], undefined));
+    // Back to that same list, still with no library to draw.
+    view.rerender(at([], undefined));
+    // The library returns.
+    view.rerender(at([], LIBRARY));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("applies to the block that asked when the parent keys by node", async () => {
     /*
      * The keyed mount is what the style inspector renders, and it does not
