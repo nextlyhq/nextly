@@ -97,8 +97,8 @@
  * toolbar's roving tab stop, and the command palette — this is a fourth route
  * to them, not the only one. The fix is not to move this trigger up, which
  * would open a block menu over chrome that is not a block; it is to make the
- * blocks themselves focusable, which is a separate defect already filed and is
- * what a keyboard context-menu key should be aimed at anyway.
+ * blocks themselves focusable — a block is what a context-menu key should be
+ * aimed at anyway, and a focusable one would carry this trigger with it.
  *
  * @module block-context-menu
  */
