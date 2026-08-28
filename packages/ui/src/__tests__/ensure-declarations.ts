@@ -177,7 +177,13 @@ function upToDate(): boolean {
  * So it rebuilds when it has to, and the deadline that made a build in a hook
  * dangerous does not apply to this one: under turbo the declarations are
  * already current, so the build never runs there. It runs where someone is
- * watching a file change and can afford two seconds.
+ * watching a file change and can afford it.
+ *
+ * Measured: the suite takes ~800ms when the declarations are already current
+ * and ~13s when it has to build them. That is well past vitest's ten-second
+ * hook default, which is why the budget on the hook stays — and it is also the
+ * number that explains the original failure, because an earlier note here put
+ * the build at about two seconds.
  */
 export function declarationsDir(): string {
   return upToDate() ? OUT_DIR : buildDeclarations();
