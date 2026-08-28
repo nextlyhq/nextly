@@ -1467,6 +1467,50 @@ describe("expanding a slot's declared default", () => {
     expect(slots?.right).toHaveLength(1);
   });
 
+  it("stops creating nodes once the document's node cap is spent", () => {
+    // Ten children at each of eight levels is a legal set of declarations and
+    // about a hundred million nodes. The DEPTH bound does not reach this: it
+    // limits how deep a declaration goes and says nothing about how wide, so
+    // without a node budget this test does not finish.
+    const wide = {
+      get: (type: string) => {
+        const match = /^core\/w(\d+)$/.exec(type);
+        if (match === null) return undefined;
+        const next = Number(match[1]) + 1;
+        return {
+          version: 1,
+          slots: {
+            children: {
+              defaultBlock: Array.from({ length: 10 }, () => ({
+                type: `core/w${next}`,
+              })),
+            },
+          },
+        };
+      },
+    };
+
+    const slots = expandSlotDefaults("core/w0", wide);
+
+    let created = 0;
+    const count = (nodes: readonly BlockNode[] | undefined): void => {
+      for (const node of nodes ?? []) {
+        created += 1;
+        for (const list of Object.values(node.slots ?? {})) count(list);
+      }
+    };
+    count(slots?.children);
+
+    // Bounded by the DOCUMENT's cap, because a subtree bigger than that could
+    // not be inserted into any document and so must not be built. Asserting
+    // merely "finite" would pass on a bound of any size, including one large
+    // enough to exhaust memory.
+    expect(created).toBeLessThanOrEqual(5000);
+    // And it did real work rather than refusing everything, which a budget of
+    // zero would also satisfy.
+    expect(created).toBeGreaterThan(100);
+  });
+
   it("stops expanding a chain of distinct types at the depth bound", () => {
     // Each type seeds the next, so no type repeats and the cycle set never
     // fires — the depth bound is the only thing that ends this.

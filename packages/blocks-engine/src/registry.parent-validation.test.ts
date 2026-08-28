@@ -169,6 +169,9 @@ describe("slot allow-list validation at registration", () => {
   });
 
   it("refuses a defaultBlock entry that is not an object", () => {
+    // A bare string is iterable, so a reader spreading it produces
+    // one-character values rather than failing — the entry has to be a record
+    // before anything reads `type` off it.
     expect(() =>
       registerBlocks(
         [withSlots({ default: { defaultBlock: ["core/column"] } })] as never,
@@ -178,6 +181,9 @@ describe("slot allow-list validation at registration", () => {
   });
 
   it("refuses a defaultBlock entry whose type is not a block name", () => {
+    // Expansion resolves the entry BY type. A name the grammar rejects can
+    // never resolve, so the child is silently dropped and the container
+    // arrives empty with nothing reported.
     expect(() =>
       registerBlocks(
         [
@@ -189,11 +195,32 @@ describe("slot allow-list validation at registration", () => {
   });
 
   it("refuses a defaultBlock entry whose props are not a plain object", () => {
+    // Props are spread into the child. A non-record spreads to nothing, so the
+    // declaration registers and the child arrives without the values it names.
     expect(() =>
       registerBlocks(
         [
           withSlots({
             default: { defaultBlock: [{ type: "core/column", props: 7 }] },
+          }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/defaultBlock must be an array/);
+  });
+
+  it("refuses defaultBlock props that are an exotic object", () => {
+    // A `Date`, `Map` or class instance is an object and not an array, so a
+    // predicate testing only those two accepts it. Expansion then spreads it
+    // into `{}` and the child arrives with NONE of the declared props, having
+    // registered without complaint. The prototype is what separates them.
+    expect(() =>
+      registerBlocks(
+        [
+          withSlots({
+            default: {
+              defaultBlock: [{ type: "core/column", props: new Date() }],
+            },
           }),
         ] as never,
         { source: "acme" }

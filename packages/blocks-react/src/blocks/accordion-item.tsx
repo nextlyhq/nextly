@@ -150,9 +150,9 @@ export const accordionItem = defineBlock<AccordionItemProps, PageContext>({
   parent: [ACCORDION_BLOCK],
   slots: {
     // No declared starting children. Unlike the accordion that holds it, this
-    // slot carries no allow-list — a section holds whatever a section holds,
-    // which is the substance of the port described above — so there is no child
-    // type it exists to hold and no starting block righter than none.
+    // slot carries no allow-list: a section holds whatever a section holds, so
+    // there is no child type it exists to hold and no starting block righter
+    // than none.
     children: {},
   },
   supports: ACCORDION_ITEM_SUPPORTS,

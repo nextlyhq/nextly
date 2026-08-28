@@ -68,6 +68,7 @@
 import type { SlotSpec } from "./block";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
+import { MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { defineEntry, ownEntry } from "./safe-record";
@@ -126,6 +127,23 @@ export interface SlotDefaultSource {
  * rather than a starting point.
  */
 const MAX_SLOT_DEFAULT_DEPTH = 8;
+
+/**
+ * How many nodes one expansion may create, and why a depth bound is not enough.
+ *
+ * The depth bound limits how DEEP a declaration reaches; it says nothing about
+ * how WIDE. Ten children at each of eight levels is a legal set of declarations
+ * and about a hundred million nodes, every one of them minting a UUID, long
+ * before anything asks whether the result could be inserted. A flat declaration
+ * larger than the document cap has the same shape more cheaply: fully built,
+ * then refused.
+ *
+ * `MAX_NODES` is the document's own cap rather than a number chosen here, so
+ * the budget answers the question that actually decides the insert — a subtree
+ * this expansion cannot fit into any document is one it must not spend time
+ * building.
+ */
+const MAX_SLOT_DEFAULT_NODES = MAX_NODES;
 
 /**
  * The nesting rules as they read from a block-definition source.
@@ -199,7 +217,8 @@ export function expandSlotDefaults(
     definitions,
     nestingFrom(definitions),
     new Set([type]),
-    0
+    0,
+    { remaining: MAX_SLOT_DEFAULT_NODES }
   );
 }
 
@@ -216,7 +235,8 @@ function expandFrom(
   definitions: SlotDefaultSource,
   nesting: NestingSource,
   ancestors: ReadonlySet<string>,
-  depth: number
+  depth: number,
+  budget: { remaining: number }
 ): Record<string, BlockNode[]> | undefined {
   if (depth >= MAX_SLOT_DEFAULT_DEPTH) return undefined;
   const declaredSlots = definitions.get(type)?.slots;
@@ -233,6 +253,7 @@ function expandFrom(
       nesting,
       ancestors,
       depth,
+      budget,
     });
     // A slot whose declaration produced nothing is omitted entirely, so a
     // container never claims a slot it did not fill.
@@ -258,6 +279,7 @@ function childrenForSlot(
     readonly nesting: NestingSource;
     readonly ancestors: ReadonlySet<string>;
     readonly depth: number;
+    readonly budget: { remaining: number };
   }
 ): BlockNode[] {
   if (declared === undefined) return [];
@@ -286,9 +308,14 @@ function childForEntry(
     readonly nesting: NestingSource;
     readonly ancestors: ReadonlySet<string>;
     readonly depth: number;
+    readonly budget: { remaining: number };
   }
 ): BlockNode | null {
-  const { definitions, nesting, ancestors, depth } = context;
+  const { definitions, nesting, ancestors, depth, budget } = context;
+  // Checked before the definition is even resolved: once the budget is spent
+  // nothing further can be built, so the cheapest possible refusal is the right
+  // one.
+  if (budget.remaining <= 0) return null;
   const definition = definitions.get(entry.type);
   // A node of an unregistered type renders as a placeholder the author did not
   // ask for and cannot repair.
@@ -320,6 +347,9 @@ function childForEntry(
     ...(entry.props ?? {}),
   });
 
+  // Spent BEFORE recursing, so a child's own declared children are drawn from
+  // what remains after it rather than from the budget its parent saw.
+  budget.remaining -= 1;
   return makeNode(
     entry.type,
     // The CHILD's own schema version, never the parent's: a node stamped with
@@ -332,7 +362,8 @@ function childForEntry(
       definitions,
       nesting,
       new Set([...ancestors, entry.type]),
-      depth + 1
+      depth + 1,
+      budget
     )
   );
 }
