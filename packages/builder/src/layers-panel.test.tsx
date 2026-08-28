@@ -30,7 +30,6 @@ import {
 
 import { keyHint } from "./key-hint";
 import { MOVE_KEYS } from "./keyboard-actions";
-import { BlockKeyboardActions } from "./keyboard-actions";
 import { LayersPanel } from "./layers-panel";
 import { useEditorState, type EditorState } from "./editor-state";
 
@@ -128,29 +127,15 @@ function Host({
 }): React.JSX.Element {
   const editor = useEditorState({ initialDocument: document });
   editorRef = editor;
-  const panel = <LayersPanel editor={editor} />;
   /*
-   * The bindings are part of the composition under test, not scenery — and the
-   * SHAPE of that composition is load-bearing.
+   * Rendered with NO provider around it in the default case, deliberately.
    *
-   * The product does not wrap this panel in the bindings. `BlocksField` draws
-   * it through the shell's panel region while `BlockKeyboardActions` wraps the
-   * shell's children, so the two are SIBLING subtrees. A harness that wrapped
-   * the panel directly proved the hint appears in an arrangement the product
-   * never builds, and would have stayed green while the legend was invisible
-   * to every real author.
-   *
-   * So the panel is rendered beside the bindings here, never inside them.
+   * This component is exported, and a host may mount it on its own. An earlier
+   * revision read the shortcut manager from here, which made a `ShortcutProvider`
+   * mandatory for a panel that had never needed one — a crash for direct
+   * consumers, and a harness that always supplied one could not have seen it.
    */
-  if (keys === "absent") return <ShortcutProvider>{panel}</ShortcutProvider>;
-  return (
-    <ShortcutProvider>
-      {panel}
-      <BlockKeyboardActions editor={editor} enabled={keys === "bound"}>
-        <span />
-      </BlockKeyboardActions>
-    </ShortcutProvider>
-  );
+  return <LayersPanel editor={editor} moveHints={keys === "bound"} />;
 }
 
 function renderPanel(
@@ -287,7 +272,7 @@ describe("LayersPanel", () => {
      */
     renderPanel(nestedDocument(), "absent");
 
-    expect(window.document.getElementById("nx-layers-move-hint")).toBeNull();
+    expect(hintFor(screen.getByRole("tree"))).toBeNull();
     expect(
       screen.getByRole("tree").getAttribute("aria-describedby")
     ).toBeNull();
@@ -302,7 +287,7 @@ describe("LayersPanel", () => {
      */
     renderPanel(nestedDocument(), "disabled");
 
-    expect(window.document.getElementById("nx-layers-move-hint")).toBeNull();
+    expect(hintFor(screen.getByRole("tree"))).toBeNull();
   });
 
   it("makes the hint the tree's own description", () => {

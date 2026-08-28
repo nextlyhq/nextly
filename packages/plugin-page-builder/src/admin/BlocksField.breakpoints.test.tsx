@@ -39,7 +39,13 @@ const seen: {
   inspector: Record<string, unknown> | undefined;
   canvas: Record<string, unknown> | undefined;
   switcher: Record<string, unknown> | undefined;
-} = { inspector: undefined, canvas: undefined, switcher: undefined };
+  layers: Record<string, unknown> | undefined;
+} = {
+  inspector: undefined,
+  canvas: undefined,
+  switcher: undefined,
+  layers: undefined,
+};
 
 /** What `usePluginClientConfig` answers with for the test in hand. */
 let clientConfig: Record<string, unknown> | undefined;
@@ -54,7 +60,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
    */
   const real = await importOriginal<Record<string, unknown>>();
   const record =
-    (key: "inspector" | "canvas" | "switcher") =>
+    (key: "inspector" | "canvas" | "switcher" | "layers") =>
     (props: Record<string, unknown>): React.JSX.Element => {
       seen[key] = props;
       return <div data-recorder={key} />;
@@ -71,14 +77,23 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       inspector,
       topBar,
       children,
+      renderPanel,
     }: {
       inspector: React.ReactNode;
       topBar?: React.ReactNode;
       children?: React.ReactNode;
+      renderPanel?: (panel: string) => React.ReactNode;
     }): React.JSX.Element => (
       <div>
         {topBar}
         {inspector}
+        {/*
+          The panel region, drawn as a SIBLING of the children — which is what
+          the real shell does, and the whole reason a panel cannot read what the
+          children provide. A mock that dropped `renderPanel` could not see a
+          panel wired wrongly, or wired not at all.
+        */}
+        {renderPanel?.("layers")}
         {children}
       </div>
     ),
@@ -98,7 +113,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     EditorCommandPalette: nothing,
     DropIndicator: nothing,
     InsertPanel: nothing,
-    LayersPanel: nothing,
+    LayersPanel: record("layers"),
     OnboardingChecklist: nothing,
     SelectionBreadcrumb: nothing,
     SpacingOverlay: nothing,
@@ -231,6 +246,25 @@ afterEach(() => {
 });
 
 describe("the container the canvas is compiled against", () => {
+  it("tells the layers panel that the move keystrokes are bound", () => {
+    /*
+     * The panel cannot work this out where it sits. It is drawn in the shell's
+     * panel region while `BlockKeyboardActions` wraps the shell's CHILDREN, and
+     * the real shell renders those as siblings — so anything the panel reads
+     * from its own position answers about the wrong subtree.
+     *
+     * This file is where that is observable, because it is the only place the
+     * two halves are composed the way the product composes them. A case living
+     * beside the panel can assert what the panel does with the fact and never
+     * whether it is given one, which is how the legend came to be invisible to
+     * every real author while its own tests passed.
+     */
+    openEditor();
+
+    expect(seen.layers).toBeDefined();
+    expect(seen.layers?.moveHints).toBe(true);
+  });
+
   it("tells the inspector about the SAME one it compiled with", () => {
     /*
      * The panel decides whether the window may answer for which tiers are live.

@@ -52,17 +52,6 @@ import {
  * commonest structural edit in the editor is undiscoverable and awkward on a
  * laptop, and the two letters carry no relationship to the direction they move.
  */
-/**
- * The layer these bindings register under.
- *
- * Named rather than spelled at the registration alone, because a surface that
- * TELLS an author about a keystroke has to ask the shortcut manager whether
- * that keystroke is live — and it can only ask about a layer it can name.
- * Matching on a retyped string would let the question and the registration
- * drift into a hint for bindings nothing holds.
- */
-export const BLOCK_ACTIONS_LAYER = "builder-block-actions";
-
 export const MOVE_KEYS: ReadonlyArray<{
   keys: string;
   direction: MoveDirection;
@@ -605,7 +594,7 @@ export function useBlockKeyboardActions({
   );
 
   useShortcuts([...bindings, ...editing, ...inlineEditing], {
-    name: BLOCK_ACTIONS_LAYER,
+    name: "builder-block-actions",
     enabled,
   });
 
