@@ -147,6 +147,17 @@ describe("what the selector offers next", () => {
     );
   });
 
+  it("keeps library order among SEVERAL matches, not the order it filtered", () => {
+    // A query returning one row cannot see this: the ordering and the filtering
+    // are separate steps and a single result satisfies either. `a` matches two
+    // classes whose library order (badge, card) differs from both their storage
+    // order (card, badge) and any lexical tie they could be sorted by.
+    expect(applicableClasses(LIBRARY, [], "a").map(r => r.slug)).toEqual([
+      "badge",
+      "card",
+    ]);
+  });
+
   it("ignores case and surrounding space, which a typed query carries", () => {
     expect(applicableClasses(LIBRARY, [], "  HERO ").map(r => r.slug)).toEqual([
       "hero",
