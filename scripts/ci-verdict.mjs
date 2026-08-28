@@ -562,6 +562,22 @@ export const REVIEW_THREADS_QUERY =
   " pageInfo { hasNextPage endCursor } } } } }";
 
 /**
+ * The reviewers whose threads may be exempted, once blocking has won.
+ *
+ * A login named in both lists is required for coverage AND excluded from
+ * blocking, so it would be exempt from holding the merge while still being
+ * asked to review it. Blocking wins, and the rule is exported so every gate
+ * applies the same one: a second gate filtering differently clears a pull
+ * request the first refuses.
+ */
+export function advisoryExemptions(blocking, advisory) {
+  const blockingList = Array.isArray(blocking) ? blocking : [];
+  return (Array.isArray(advisory) ? advisory : []).filter(
+    login => !blockingList.includes(login)
+  );
+}
+
+/**
  * Review threads still open.
  *
  * Read from thread state rather than reconstructed from comment counts: a
@@ -728,9 +744,7 @@ export function report({
   // than at each use: a login left in both would be exempted from thread
   // blocking by the advisory list while being required for coverage.
   const blockingList = blocking ?? [];
-  const effectiveAdvisory = advisory.filter(
-    login => !blockingList.includes(login)
-  );
+  const effectiveAdvisory = advisoryExemptions(blockingList, advisory);
   const required = [...new Set([...blockingList, ...effectiveAdvisory])];
   // Taken from the revision SET, never from the order map. Ordering is withheld
   // where ancestry is not linear, and reusing it here would make a merge commit

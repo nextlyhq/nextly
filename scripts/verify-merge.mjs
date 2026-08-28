@@ -893,12 +893,22 @@ const REPO = "nextlyhq/nextly";
  * list would name the default while the other gate honoured the override, and
  * the two would clear and reject the same pull request.
  *
+ * Reduced by the sibling's own overlap rule, so a login named in BOTH policies
+ * keeps its blocking status here as it does there. Applying the raw advisory
+ * list would exempt a reviewer that is simultaneously required, letting this
+ * gate pass a pull request the other one holds.
+ *
  * A policy that cannot be resolved yields no exemptions, so every thread
  * counts. That is the strict direction: a gate unable to read its policy must
  * not hand out exemptions it cannot justify.
  */
-export const ADVISORY_REVIEWERS =
-  verdict.resolveReviewers(process.env).advisory ?? [];
+/** The overlap rule, from the sibling that owns it, so both gates apply one. */
+export const advisoryExemptions = verdict.advisoryExemptions;
+
+export const ADVISORY_REVIEWERS = (() => {
+  const policy = verdict.resolveReviewers(process.env);
+  return verdict.advisoryExemptions(policy.blocking, policy.advisory);
+})();
 
 /**
  * The second reviewer's account, for the COVERAGE question — whether it has

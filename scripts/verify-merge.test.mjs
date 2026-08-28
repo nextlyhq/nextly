@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   ADVISORY_REVIEWERS,
   CODERABBIT,
+  advisoryExemptions,
   REVIEW_THREAD_NODE_FIELDS,
   assertCompleteFileList,
   flatPages,
@@ -1402,17 +1403,14 @@ describe("exitCode", () => {
 
 describe("advisory review threads do not block the merge gate", () => {
   /**
-   * This file used to count EVERY unresolved thread, so the advisory reviewer
-   * held the merge through a door the policy had closed elsewhere. The count is
-   * now taken by the sibling's shared implementation, which needs to know who
-   * opened each thread — and can only know it if the request asks.
+   * The count is taken by the sibling's shared implementation, which needs to
+   * know who opened each thread and can only know it if the request asks.
    *
    * Asserted on the exported string the query is built from, because a fixture
-   * cannot establish this: every unit test supplies whatever author fields it
-   * writes into its own objects, so dropping `__typename` here leaves them all
-   * green while, in production, nothing canonicalises to a bot, nothing is ever
-   * advisory, and every advisory thread blocks again — the exact defect this
-   * change removes, reachable by editing one line nothing else watches.
+   * cannot establish it: every unit test supplies whatever author fields it
+   * writes into its own objects, so a selection missing `__typename` leaves
+   * them all green while in production nothing canonicalises to a bot, nothing
+   * is ever advisory, and every advisory thread blocks.
    */
   it("asks for the author fields the shared policy reads", () => {
     expect(REVIEW_THREAD_NODE_FIELDS).toContain("author { login __typename }");
@@ -1467,12 +1465,36 @@ describe("advisory review threads do not block the merge gate", () => {
       new URL("./verify-merge.mjs", import.meta.url),
       "utf8"
     );
-    expect(source).toContain("verdict.resolveReviewers(process.env).advisory");
+    expect(source).toContain("verdict.resolveReviewers(process.env)");
+    // And reduced by the sibling's overlap rule, so a login named in BOTH
+    // policies keeps its blocking status here as it does there. The raw
+    // advisory list would exempt a reviewer that is simultaneously required,
+    // letting this gate pass a pull request the other one holds.
+    expect(source).toContain("verdict.advisoryExemptions(");
     // Population: the export exists, so a rename cannot satisfy this by
     // matching nothing.
     expect(source).toContain("export const ADVISORY_REVIEWERS");
     // And the value is usable under the default environment.
     expect(ADVISORY_REVIEWERS).toContain("coderabbitai[bot]");
+  });
+
+  /**
+   * Blocking wins over advisory wherever the two policies name one login.
+   *
+   * Asserted through the shared rule rather than through this module's
+   * environment-resolved constant, because the constant is computed once at
+   * load and cannot be varied per case — and the property that matters is the
+   * rule both gates apply, not the value one of them happened to resolve.
+   */
+  it("never exempts a reviewer that is also blocking", () => {
+    const CODEX = "chatgpt-codex-connector[bot]";
+    // The premise: without the overlap, the advisory login IS exempted.
+    expect(advisoryExemptions([CODEX], [CODERABBIT])).toEqual([CODERABBIT]);
+    // And a login in both keeps its blocking status.
+    expect(advisoryExemptions([CODEX], [CODERABBIT, CODEX])).toEqual([
+      CODERABBIT,
+    ]);
+    expect(advisoryExemptions([CODEX], [CODEX])).toEqual([]);
   });
 
   /**

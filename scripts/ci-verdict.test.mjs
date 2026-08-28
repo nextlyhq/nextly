@@ -4,6 +4,7 @@ import {
   EXIT_NOT_CLEAN,
   REVIEW_THREADS_QUERY,
   REVIEW_THREAD_NODE_FIELDS,
+  advisoryExemptions,
   canonicalActorLogin,
   changesRequested,
   completeRevisionSet,
@@ -881,6 +882,35 @@ describe("unresolvedThreads", () => {
     expect(report({ ...BASE, threads: undefined }).unresolved_threads).toBe(
       "unavailable"
     );
+  });
+});
+
+describe("advisoryExemptions", () => {
+  /**
+   * A login named in both policies is required for coverage AND excluded from
+   * blocking, so an unreduced advisory list would exempt a reviewer that is
+   * simultaneously being asked to review. Blocking wins, and both gates read
+   * this one rule — a gate filtering differently clears what the other holds.
+   */
+  it("removes a login that is also blocking", () => {
+    expect(advisoryExemptions([CODEX], [RABBIT, CODEX])).toEqual([RABBIT]);
+    expect(advisoryExemptions([CODEX], [CODEX])).toEqual([]);
+  });
+
+  /** The control: with no overlap the advisory list is returned intact. */
+  it("leaves a purely advisory login alone", () => {
+    expect(advisoryExemptions([CODEX], [RABBIT])).toEqual([RABBIT]);
+  });
+
+  /**
+   * An unreadable policy exempts nothing, which counts every thread. A gate
+   * that cannot read its policy must not hand out exemptions it cannot
+   * justify, and returning the input unfiltered would do exactly that.
+   */
+  it("exempts nothing when either list is unreadable", () => {
+    expect(advisoryExemptions(undefined, [RABBIT])).toEqual([RABBIT]);
+    expect(advisoryExemptions([CODEX], undefined)).toEqual([]);
+    expect(advisoryExemptions(undefined, undefined)).toEqual([]);
   });
 });
 
