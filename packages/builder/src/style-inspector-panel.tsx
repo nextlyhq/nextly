@@ -429,7 +429,13 @@ function SelectedNodeClasses({
       library={library}
       nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
       onNodeClassesChange={classIds =>
-        editor.applyAll([nodeClassesOp(nodeId, classIds)])
+        // `applyAll` answers null when the store refuses — a document at its
+        // byte limit rejects an edit the class rules found perfectly valid.
+        // Reported back so the selector keeps the draft rather than clearing
+        // it as though the write had landed.
+        editor.applyAll([nodeClassesOp(nodeId, classIds)]) === null
+          ? "refused"
+          : "applied"
       }
       onCreateClass={onCreateClass}
     />
