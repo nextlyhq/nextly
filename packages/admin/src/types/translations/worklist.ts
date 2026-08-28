@@ -44,26 +44,58 @@ const WORKLIST_ORDER = [
   "published",
 ] as const satisfies readonly LanguageState[];
 
+/**
+ * The one tab that is NOT a language state (i18n B2 — "changed since translated").
+ *
+ * 🔴 Deliberately not added to `LANGUAGE_STATES`, and this is the load-bearing decision of B2's
+ * vocabulary. `languageState()` is a mutually exclusive classifier — missing, then published, then
+ * draft, then translated, first match wins — and staleness is ORTHOGONAL to every one of them: a
+ * stale translation is still translated, and still published if it was published. A fifth member
+ * would make the classifier return "stale" INSTEAD of "published", so the entry list's dots and
+ * the editor's language panel would stop reporting a live translation as live.
+ *
+ * The admin already ruled on this exact shape once, for `pendingChange`, and said why: "the
+ * language IS still published, and saying only 'unpublished changes' would suggest nothing of it
+ * is live. Both facts matter and they are different facts." Staleness is the same kind of fact,
+ * so it takes the same treatment — an orthogonal flag, appended to the state rather than
+ * replacing it.
+ *
+ * A FILTER, though, is a question rather than a classification, and "which documents need review"
+ * is as legitimate a question as "which are drafts". So the worklist's tab list is one entry wider
+ * than the state catalog, and that difference is the honest one rather than an oversight.
+ */
+const WORKLIST_STALE = "stale" as const;
+
 /** Sentence wording into a button label: "not translated" -> "Not translated". */
 function asTabLabel(label: string): string {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
 export const WORKLIST_STATES: readonly {
-  value: LanguageState;
+  value: WorklistState;
   label: string;
-}[] = WORKLIST_ORDER.map(value => ({
-  value,
-  label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
-}));
+}[] = [
+  ...WORKLIST_ORDER.map(value => ({
+    value,
+    label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
+  })),
+  {
+    value: WORKLIST_STALE,
+    // "Needs review", not "Stale". The wire value says what the system measured; the label says
+    // what the translator should DO about it. A translation whose source moved may well still be
+    // correct, so the instruction is to look, not to assume it is wrong.
+    label: "Needs review",
+  },
+];
 
 /**
- * A state the worklist can show — the canonical language state, not a copy.
+ * A state the worklist can show: any language state, plus staleness.
  *
- * An alias rather than a restatement, so a state added or removed there is a
- * compile error here rather than a tab that quietly stops matching.
+ * The language half is an ALIAS rather than a restatement, so a state added or removed there is a
+ * compile error here rather than a tab that quietly stops matching. The union's second member is
+ * the deliberate widening documented on {@link WORKLIST_STALE}.
  */
-export type WorklistState = LanguageState;
+export type WorklistState = LanguageState | typeof WORKLIST_STALE;
 
 /** The state a URL asked for, or the question this page exists for. */
 export function worklistStateFrom(raw: string | undefined): WorklistState {

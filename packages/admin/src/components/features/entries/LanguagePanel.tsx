@@ -308,6 +308,7 @@ function LanguageRows({
           isDefault={locale.code === defaultLocale}
           state={languageState(translations?.[locale.code])}
           pendingChange={translations?.[locale.code]?.pendingChange}
+          stale={translations?.[locale.code]?.stale}
           isActive={locale.code === active}
           canSeed={canSeed}
           metaKnown={metaKnown}
@@ -427,6 +428,61 @@ function filteredLanguages<T extends { code: string; label: string }>(
   return { offersFilter, shown: locales.filter(l => matchesQuery(l, query)) };
 }
 
+/**
+ * A marker that merely describes the language: which one is the default, which reads
+ * right-to-left. Muted, because nothing is being asked of the reader.
+ */
+const MARKER_PLAIN_CLASS =
+  "shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground";
+
+/**
+ * A marker naming something the author has to act on. Bordered and in the foreground colour, so
+ * it separates from the descriptive ones at a glance.
+ */
+const MARKER_ACTIONABLE_CLASS =
+  "shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground";
+
+/**
+ * The markers a language row shows, in a FIXED order.
+ *
+ * Derived as a list rather than written as four conditionals in the JSX, and the order being
+ * stated once here is the point: a row whose markers reorder according to which happen to be set
+ * reads as a different kind of row each time, and an order spread across four independent `&&`
+ * branches is not something anybody can check.
+ *
+ * All of them are `shrink-0`, which is measured rather than stylistic. In a 277px rail the row's
+ * describing half is the part that gives way, so a marker that shrank would truncate to nothing
+ * exactly when the row is tight — and "published · unpublished changes" truncating to
+ * "publishe…" hides the one fact in the row an author has to act on. The state text beside them
+ * is the thing that yields instead.
+ */
+function rowMarkers(flags: {
+  isDefault?: boolean;
+  rtl?: boolean;
+  pendingChange?: boolean;
+  stale?: boolean;
+}): { text: string; title?: string; actionable: boolean }[] {
+  const markers: { text: string; title?: string; actionable: boolean }[] = [];
+  if (flags.isDefault) markers.push({ text: "default", actionable: false });
+  if (flags.rtl) markers.push({ text: "rtl", actionable: false });
+  if (flags.pendingChange) {
+    markers.push({
+      text: "changes",
+      title: "This language has changes that have not been published",
+      actionable: true,
+    });
+  }
+  if (flags.stale) {
+    markers.push({
+      text: "review",
+      title:
+        "The source language was edited after this translation was written",
+      actionable: true,
+    });
+  }
+  return markers;
+}
+
 function LanguageRow({
   code,
   label,
@@ -434,6 +490,7 @@ function LanguageRow({
   isDefault,
   state,
   pendingChange,
+  stale,
   isActive,
   canSeed,
   metaKnown,
@@ -448,6 +505,8 @@ function LanguageRow({
   state: LanguageState;
   /** Whether this language holds a saved change nobody has published. */
   pendingChange?: boolean;
+  /** i18n B2: the source language moved after this one was written. */
+  stale?: boolean;
   isActive: boolean;
   canSeed: boolean;
   metaKnown: boolean;
@@ -473,32 +532,20 @@ function LanguageRow({
         <span className="shrink-0 whitespace-nowrap text-sm font-medium">
           {label}
         </span>
-        {isDefault && (
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-            default
-          </span>
-        )}
-        {rtl && (
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-            rtl
-          </span>
-        )}
-        {/* A chip, not part of the state text, and measured that way: in a
-            277px rail "published · unpublished changes" truncated to
-            "publishe…", which hides the one fact in the row an author has to
-            act on. The chip does not shrink, so it survives at any width — the
-            same device the `default` and `rtl` markers already use. */}
-        {pendingChange && (
+        {rowMarkers({ isDefault, rtl, pendingChange, stale }).map(marker => (
           <span
-            className="shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground"
-            title="This language has changes that have not been published"
+            key={marker.text}
+            className={
+              marker.actionable ? MARKER_ACTIONABLE_CLASS : MARKER_PLAIN_CLASS
+            }
+            title={marker.title}
           >
-            changes
+            {marker.text}
           </span>
-        )}
+        ))}
         <span
           className="min-w-0 truncate text-xs text-muted-foreground"
-          title={languageStateLabel(state, pendingChange)}
+          title={languageStateLabel(state, { pendingChange, stale })}
         >
           {LANGUAGE_STATE_LABEL[state]}
         </span>
