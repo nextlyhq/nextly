@@ -1251,7 +1251,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             container: canvasPreviewContainer,
             ...(requestedWidth === undefined ? {} : { width: requestedWidth }),
             onMeasured: setMeasuredWidth,
-            onScale: setAppliedScale,
           },
     [canvasPreviewContainer, requestedWidth]
   );
@@ -1716,6 +1715,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             <BlockContextMenu editor={editor}>
               <Canvas
                 zoom={zoom}
+                /*
+                  On the CANVAS, not inside `preview`. The scale is reported
+                  whether or not a viewport is being previewed, and an extra key
+                  on that inferred object is accepted and ignored rather than
+                  refused — so the reporter simply never ran.
+                */
+                onScale={setAppliedScale}
                 document={editor.document}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
