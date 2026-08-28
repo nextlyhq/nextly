@@ -61,15 +61,6 @@ import type { ContainerProps } from "./container";
 export { COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
 
 /**
- * How many columns a freshly placed row starts with.
- *
- * Two rather than one, because a row of one is a box and an author who wanted
- * a box would have reached for one; and rather than three, because removing a
- * column is a click and adding one is a decision.
- */
-export const INITIAL_COLUMNS = 2;
-
-/**
  * The row's default layout, in properties the compiler actually accepts.
  *
  * `auto-fit` collapses empty tracks and `minmax(240px, 1fr)` makes every
@@ -120,25 +111,23 @@ export const columns = defineBlock<ContainerProps, PageContext>({
     children: {
       allow: [COLUMN_BLOCK],
       /**
-       * EMPTY, deliberately, until something expands templates.
+       * The two columns a freshly placed row starts with.
        *
-       * A seeded template needs its ids minted per INSTANCE: two rows
-       * expanded from one literal template carry the same node ids, and the
-       * engine reports `duplicate-node-id` on the second. Nothing in the
-       * repository reads `SlotSpec.template`, so there is no expansion path
-       * to do that minting — and shipping nodes whose ids are correct only if
-       * a future reader remembers to replace them is a trap rather than a
-       * default.
+       * A row must start with children at all, because this slot admits only
+       * `core/column` and that block names this one as its only parent — so an
+       * empty row is a container whose single legal child can be placed nowhere
+       * else on the page, and the author has to build both halves by hand.
        *
-       * Naming the ids "placeholders" was the first attempt and it changed no
-       * behaviour: the collision is a property of the nodes, not of what they
-       * are called. An empty template makes it unreachable instead.
+       * Two rather than one, because a row of one is a box and an author who
+       * wanted a box would have reached for one; and rather than three, because
+       * removing a column is a click and adding one is a decision.
        *
-       * The two-column default belongs with the expander, which is the layer
-       * that can mint ids. `INITIAL_COLUMNS` records the intended number so
-       * that work does not have to re-derive it.
+       * The entries are written out rather than repeated from a count. Each
+       * declares one child, so an unequal split — a different width per column —
+       * is a change to an entry rather than a change of shape, and this list is
+       * the only place the number lives.
        */
-      template: [],
+      defaultBlock: [{ type: COLUMN_BLOCK }, { type: COLUMN_BLOCK }],
     },
   },
   baseStyles: COLUMNS_BASE_STYLES,

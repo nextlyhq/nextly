@@ -130,10 +130,12 @@ export const card = defineBlock<ContainerProps, PageContext>({
       // be the `core/columns` arrangement, and a row restricts its slot because
       // a column is meaningless elsewhere — nothing about a card's contents is.
       //
-      // EMPTY template, for the reason `columns.tsx` records at length: nothing
-      // in the repository expands `SlotSpec.template`, and literal node ids
-      // would collide (`duplicate-node-id`) the moment something does.
-      template: [],
+      // And no `defaultBlock`, which follows from the same fact. A row declares
+      // one because `core/column` names `core/columns` as its only parent, so
+      // an empty row is a container whose only legal child exists nowhere else.
+      // A card's slot admits every block, so no starting child is more correct
+      // than none, and guessing one would put a block on the page the author
+      // has to delete.
     },
   },
   baseStyles: CARD_BASE_STYLES,

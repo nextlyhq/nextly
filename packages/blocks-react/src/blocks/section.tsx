@@ -40,9 +40,11 @@ export const section = defineBlock<ContainerProps, PageContext>({
   example: { props: { as: "section", contained: true } },
   slots: {
     // Named children with no allow-list: a page region holds whatever a page
-    // holds. Plasmic's guidance is to always give a slot default contents, so
-    // an empty section is never an invisible one.
-    children: { template: [] },
+    // holds, so no starting block is more correct than none. A section that
+    // arrives empty is not therefore an invisible one — the editor draws a box
+    // for any container whose slot is empty, which covers every unrestricted
+    // container rather than only the ones that thought to declare a default.
+    children: {},
   },
   supports: CONTAINER_SUPPORTS,
   render: renderContainer,
