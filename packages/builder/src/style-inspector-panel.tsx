@@ -382,18 +382,14 @@ function styleUnavailable(
     };
   }
 
-  if (inspection.sections.length === 0) {
-    return {
-      available: false,
-      reason: (
-        <div className="nx-style-inspector" data-empty="no-style-support">
-          <p className="nx-inspector__note">
-            This block does not offer style properties.
-          </p>
-        </div>
-      ),
-    };
-  }
+  /*
+   * A block offering no style properties is NOT unavailable, and that is the
+   * distinction this function turns on. The three refusals above are about
+   * there being no single node an edit could address — a multi-selection, an
+   * ambiguous id, nothing selected. This one is only about the block's own
+   * controls, and named classes compile independently of them: such a block
+   * can still carry a class, so the class surface has to survive it.
+   */
   return { available: true, inspection };
 }
 
@@ -423,6 +419,13 @@ function SelectedNodeClasses({
   if (onCreateClass === undefined) return null;
   return (
     <ClassSelector
+      /*
+       * Keyed by NODE, for the reason the style sections are. The typed query
+       * and the highlighted row are state about the node in hand; unkeyed,
+       * React reuses this component when the selection changes and Enter can
+       * apply the previous block's pending choice to the new one.
+       */
+      key={nodeId}
       library={library}
       nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
       onNodeClassesChange={classIds =>
@@ -574,6 +577,11 @@ export function StyleInspectorPanel({
         library={classLibrary}
         onCreateClass={onCreateClass}
       />
+      {inspected.sections.length === 0 ? (
+        <p className="nx-inspector__note" data-empty="no-style-support">
+          This block does not offer style properties.
+        </p>
+      ) : null}
       <Accordion
         type="single"
         collapsible

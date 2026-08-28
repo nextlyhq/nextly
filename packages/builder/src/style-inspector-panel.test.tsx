@@ -312,6 +312,68 @@ describe("the class selector, mounted above the style sections", () => {
     });
   });
 
+  it("appears for a block that offers no style properties at all", () => {
+    /*
+     * Named classes compile independently of a block's own style support, so
+     * such a block can still carry one. Exiting early on an empty section list
+     * left the only surface that can apply a class unreachable for exactly the
+     * blocks whose styling has to come from classes.
+     */
+    register({});
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: /add a class/i })
+    ).toBeDefined();
+    // And it still says the block has no style controls, rather than pretending.
+    expect(screen.getByText(/does not offer style properties/i)).toBeDefined();
+  });
+
+  it("forgets a typed query when the selection moves to another block", () => {
+    /*
+     * The query and the highlighted row are state about the node in hand.
+     * Unkeyed, React reuses the component across a selection change while the
+     * write callback switches to the new node — so Enter applies the PREVIOUS
+     * block's pending choice to the block now selected.
+     */
+    register({ spacing: true });
+    const first = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+        { id: "b", type: "acme/box", version: 1, props: {} },
+      ] as BlockNode[],
+    } as BlockDocument;
+
+    const view = render(
+      <StyleInspectorPanel
+        editor={editorFor(first, "a")}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "hero" } });
+    expect((field() as HTMLInputElement).value).toBe("hero");
+
+    view.rerender(
+      <StyleInspectorPanel
+        editor={editorFor(first, "b")}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+    expect((field() as HTMLInputElement).value).toBe("");
+  });
+
   it("reports a creation to the host rather than writing it", () => {
     // The class has no id until the host has stored it, so a node write here
     // would have to invent one.
