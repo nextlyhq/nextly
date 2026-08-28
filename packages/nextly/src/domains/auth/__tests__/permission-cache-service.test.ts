@@ -135,15 +135,17 @@ describe("PermissionCacheService", () => {
         "role-1",
       ]);
 
-      await cacheService.invalidateByUser("user-1");
+      const invalidated = await cacheService.invalidateByUser("user-1");
 
-      // Asserted on the OBSERVABLE effect, not on the returned count. The
-      // count is wrong on SQLite: `invalidateByUser` reads `result.rowCount`,
-      // which better-sqlite3 does not set — it reports `changes` — so the
-      // method returns 0 while having tombstoned the rows. Filed rather than
-      // asserted, because a test that expected 0 here would lock the defect in
-      // and one that expected a positive number would fail for a reason that
-      // has nothing to do with invalidation working.
+      // Both halves, now that the count is truthful. It previously read
+      // `result.rowCount`, which better-sqlite3 does not set — it reports
+      // `changes` — so the method returned 0 while having tombstoned the rows.
+      // The count now goes through the shared dialect-aware helper, so a caller
+      // branching on it takes the right path.
+      //
+      // Asserting BOTH matters: the effect alone passes even if the count lies,
+      // and the count alone passes even if nothing was invalidated.
+      expect(invalidated).toBe(2);
       expect(
         await cacheService.getCachedPermission("user-1", "read", "users")
       ).toBeNull();
