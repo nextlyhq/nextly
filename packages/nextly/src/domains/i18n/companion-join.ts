@@ -523,7 +523,19 @@ export function buildTranslationStatusCondition(args: {
     case "draft":
     case "published":
       if (!hasStatus) return undefined;
-      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state}`)})`;
+      // The lifecycle state AND actual content. `_status` alone is not enough:
+      // a companion row can carry a status while every localized column is
+      // still blank, and such a row satisfied BOTH this arm and `missing`
+      // above — which is `NOT EXISTS (row with non-blank content)`. The same
+      // document then appeared under "Not translated" and under "Draft" at
+      // once, and a translator could not tell which tab was lying.
+      //
+      // Conjoining `nonBlank` settles it in the direction the rest of this
+      // function already takes: throughout, "translated" means a companion row
+      // with non-blank content (spec §8's blank=untranslated rule), so a
+      // status with nothing written is untranslated with a status attached,
+      // not a draft translation.
+      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state} AND (${nonBlank})`)})`;
     default:
       return undefined;
   }
