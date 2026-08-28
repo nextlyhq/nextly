@@ -556,6 +556,7 @@ function useCanvasPointer(
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 } {
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -616,10 +617,32 @@ function useCanvasPointer(
     },
     [marked, onSelect]
   );
+  /*
+   * The same withholding, for the gesture that carries no context event.
+   *
+   * A menu mounted above the canvas can open a touch or pen LONG PRESS from a
+   * timer of its own, started on this event — no `contextmenu` is ever
+   * dispatched, so the rule above never runs and every rejection it makes is
+   * skipped. Withholding the press from anything above keeps one decision
+   * governing both ways in.
+   *
+   * `stopPropagation` and NOT `preventDefault`, which is the whole point of
+   * doing it here. This fires at the start of every contact, long before
+   * anything knows whether it will become a long press, and cancelling the
+   * default that early takes caret placement and text selection away from an
+   * author who was only tapping into a sentence.
+   */
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (contextMenuTargetOf(event.target) === null) event.stopPropagation();
+    },
+    []
+  );
   return {
     onClick: click,
     onDoubleClick: doubleClick,
     onContextMenu: contextMenu,
+    onPointerDown: pointerDown,
   };
 }
 
@@ -988,6 +1011,15 @@ export function Canvas({
     [selectedIds, selectedId]
   );
   const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const dragPointerDown = dragHandlers?.onPointerDown;
+  const canvasPointerDown = pointer.onPointerDown;
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragPointerDown?.(event);
+      canvasPointerDown(event);
+    },
+    [canvasPointerDown, dragPointerDown]
+  );
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
@@ -1037,11 +1069,11 @@ export function Canvas({
       onClick={pointer.onClick}
       onDoubleClick={pointer.onDoubleClick}
       onContextMenu={pointer.onContextMenu}
-      // Spread rather than merged with a handler of this component's own: the
-      // canvas has no pointer behaviour of its own apart from the drag, so
-      // there is nothing to combine, and merging would create a second place
-      // where the two could be ordered wrongly.
+      // Spread whole, because the set cannot be partially applied — then the
+      // one member this component also has something to say about is composed
+      // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
+      onPointerDown={pointerDown}
     >
       {page}
       {overlay}
