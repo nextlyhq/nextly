@@ -98,6 +98,22 @@ function RowHeading({ version }: { version: VersionMeta }) {
   );
 }
 
+/**
+ * Why a row cannot be compared, or null when it can.
+ *
+ * The two answers are different and a reader needs to tell them apart: the
+ * oldest version has nothing before it and never will, while a version whose
+ * predecessor lies beyond the loaded pages becomes comparable as soon as more
+ * history is fetched. Collapsing them into one disabled state would say the
+ * history ends here, which for the second is untrue.
+ */
+function unpairableReason(previous: Predecessor): string | null {
+  if (previous.kind === "version") return null;
+  return previous.kind === "first"
+    ? "Nothing before this version to compare it against"
+    : "Load more history to compare this version";
+}
+
 /** One version in the rail. */
 function TimelineRow({
   scope,
@@ -118,13 +134,22 @@ function TimelineRow({
   // shown without being selectable rather than hidden — it is still a record of
   // the document having been touched.
   const versionNo = version.versionNo;
+  // Choosing a row compares it against the version before it, so a row with no
+  // predecessor TO compare against cannot be chosen — and says which of the two
+  // reasons applies rather than accepting the click and doing nothing. Left
+  // enabled, the button reported success by changing nothing, which reads as a
+  // page that has stopped responding.
+  const unpairable = versionNo === null ? null : unpairableReason(previous);
   return (
     <li>
       <button
         type="button"
         aria-current={active ? "true" : undefined}
-        disabled={versionNo === null}
-        onClick={() => versionNo !== null && onSelect(versionNo)}
+        disabled={versionNo === null || unpairable !== null}
+        title={unpairable ?? undefined}
+        onClick={() =>
+          versionNo !== null && unpairable === null && onSelect(versionNo)
+        }
         className={`w-full border-b border-border px-4 py-3 text-left transition-colors hover:bg-muted/60 disabled:opacity-60 ${
           active ? "bg-muted" : ""
         }`}

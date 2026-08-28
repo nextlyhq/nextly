@@ -46,13 +46,17 @@ function version(overrides: Partial<VersionMeta> = {}): VersionMeta {
   };
 }
 
-function renderRail(versions: VersionMeta[]) {
+function renderRail(
+  versions: VersionMeta[],
+  extra: { hasNextPage?: boolean } = {}
+) {
   return render(
     <VersionTimelineRail
       scope={scope}
       versions={versions}
       selected={null}
       onSelect={vi.fn()}
+      hasNextPage={extra.hasNextPage}
     />
   );
 }
@@ -115,5 +119,67 @@ describe("VersionTimelineRail — a row names its language", () => {
 
     expect(screen.getByText("Version 5")).toBeInTheDocument();
     expect(screen.queryByText("French")).not.toBeInTheDocument();
+  });
+});
+
+describe("VersionTimelineRail — a row that cannot be compared says so", () => {
+  beforeEach(() => {
+    useLocalization.mockReset();
+    useLocalization.mockReturnValue({ enabled: false, getLocale: () => null });
+  });
+
+  /**
+   * Choosing a row compares it against the version before it. A row with no
+   * predecessor to compare against used to stay enabled and silently discard
+   * the click — the button reported success by changing nothing, which reads
+   * as a page that has stopped responding.
+   */
+  it("disables the oldest version, whose predecessor does not exist", () => {
+    // A complete history: nothing before v1, and no further pages.
+    renderRail([
+      version({ id: "v2", versionNo: 2 }),
+      version({ versionNo: 1 }),
+    ]);
+
+    const rows = screen.getAllByRole("button", { name: /Version/ });
+    const oldest = rows.find(r => r.textContent?.includes("Version 1"));
+    expect(oldest).toBeDefined();
+    expect(oldest).toBeDisabled();
+    expect(oldest).toHaveAttribute(
+      "title",
+      "Nothing before this version to compare it against"
+    );
+  });
+
+  /**
+   * The other reason, and it must NOT read the same. A version whose
+   * predecessor lies beyond the loaded pages becomes comparable as soon as
+   * more history is fetched, so telling the reader the history ends here would
+   * be untrue.
+   */
+  it("distinguishes a predecessor that is merely not loaded yet", () => {
+    renderRail([version({ versionNo: 4 })], { hasNextPage: true });
+
+    const row = screen.getByRole("button", { name: /Version 4/ });
+    expect(row).toBeDisabled();
+    expect(row).toHaveAttribute(
+      "title",
+      "Load more history to compare this version"
+    );
+  });
+
+  /**
+   * The control. Every row would otherwise be disabled and the assertions
+   * above would pass on a rail nobody can use at all.
+   */
+  it("leaves a row with a loaded predecessor selectable", () => {
+    renderRail([
+      version({ id: "v2", versionNo: 2 }),
+      version({ versionNo: 1 }),
+    ]);
+
+    const row = screen.getByRole("button", { name: /Version 2/ });
+    expect(row).toBeEnabled();
+    expect(row).not.toHaveAttribute("title");
   });
 });

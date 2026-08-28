@@ -164,12 +164,20 @@ export function VersionComparePage({
         list.hasNextPage ?? false
       );
       if (previous.kind !== "version") return;
-      navigateTo(
-        withQuery(window.location.pathname, {
-          from: previous.versionNo,
-          to: versionNo,
-        })
-      );
+      const target = withQuery(window.location.pathname, {
+        from: previous.versionNo,
+        to: versionNo,
+      });
+      // `navigateTo` skips a push only when its argument equals
+      // `window.location.pathname`, which a target carrying a query never does
+      // — so choosing the row already on screen stacked another identical
+      // entry, and Back walked through indistinguishable copies of one
+      // comparison before leaving the page. Compared here against the full
+      // current URL, which is what actually distinguishes two comparisons.
+      if (target === `${window.location.pathname}${window.location.search}`) {
+        return;
+      }
+      navigateTo(target);
     },
     [versions, list.hasNextPage]
   );
@@ -212,7 +220,12 @@ export function VersionComparePage({
             selected={pair.kind === "pair" ? pair.to : null}
             onSelect={selectPair}
             isLoading={list.isLoading}
-            isError={list.isError}
+            // Only a failure that left NOTHING on screen replaces the rail. A
+            // failed next page also flips the query to error while its loaded
+            // pages remain, and passing that through discarded every row a
+            // reader already had, along with the Load more control that would
+            // have retried it. The history sheet draws the same distinction.
+            isError={list.isError && versions.length === 0}
             hasNextPage={list.hasNextPage}
             isFetchingNextPage={list.isFetchingNextPage}
             onLoadMore={() => void list.fetchNextPage()}
