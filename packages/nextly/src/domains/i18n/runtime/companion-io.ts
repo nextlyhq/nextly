@@ -21,7 +21,10 @@ import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
-import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
+import {
+  COMPANION_STRUCTURAL_COLUMNS,
+  COMPANION_UPDATED_AT_COLUMN,
+} from "../companion-columns";
 import type { LocalizedFieldRef } from "../companion-join";
 import { claimGuardCondition } from "../migration/transition-state";
 import type {
@@ -205,9 +208,28 @@ export async function upsertCompanionRow(
   // never reported stale — the warning simply never fires for it, and nobody notices a warning
   // that does not appear. `stampUpdatedAt: false` exists for a companion that physically predates
   // the column, where naming it in the INSERT would fail the statement outright.
+  //
+  // 🔴 CONTENT decides the stamp, not the write. `_updated_at` answers "when was this language
+  // last WRITTEN", and a lifecycle transition writes no language. Publishing the source locale is
+  // a `_status` change and nothing else — stamping it would move the source's timestamp past
+  // every target's and report the whole site as needing review, on an action that changed not one
+  // word. The reverse is as bad: publishing a stale target would clear its warning while the
+  // translation still says what it said.
+  //
+  // Structural columns are subtracted rather than `_status` alone, so a further one added to the
+  // companion later cannot be mistaken for content by this test. Note `_status` arrives BOTH ways
+  // — inside `companionData` on an ordinary update, and as the `status` argument — so testing the
+  // argument alone would miss the common path.
+  //
+  // This also settles a divergence between endpoints: `publishAllLocales` writes `_status` with a
+  // raw UPDATE that never reaches this function, so a publish through that path could not stamp
+  // anyway. Two lifecycle transitions now behave the same way whichever endpoint performs them.
+  const writesContent = Object.keys(companionData).some(
+    column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
+  );
   const stampedAt = new Date(options.now?.getTime() ?? Date.now());
   const withStamp =
-    options.stampUpdatedAt === false
+    options.stampUpdatedAt === false || !writesContent
       ? withStatus
       : { ...withStatus, [COMPANION_UPDATED_AT_COLUMN]: stampedAt };
   const cols = Object.keys(withStamp);
@@ -428,8 +450,16 @@ export async function reconcileCompanionColumns(
     // companion whose translated columns are all present but which predates `_updated_at` still
     // has work to do, and testing the localized columns alone would return here and leave every
     // such companion permanently unstamped.
-    if (hasUpdatedAt && desired.every(f => present.has(toColumn(f.name))))
-      return;
+    //
+    // 🔴 An entity with a VERSION SCOPE never leaves here, and that is deliberate. Its
+    // `_updated_at` back-fill owes a statement whose completion physical shape cannot report: a
+    // successfully back-filled row whose locale had no durable history is NULL, exactly like one
+    // that was never seeded. So the reconcile re-issues the guarded UPDATE rather than inferring
+    // completion from the column being present — see `buildUpdatedAtBackfill`. An entity with no
+    // version scope emits no back-fill at all, so for it this stays a plain early return.
+    const columnsInStep =
+      hasUpdatedAt && desired.every(f => present.has(toColumn(f.name)));
+    if (columnsInStep && args.versionScope === undefined) return;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -460,30 +490,51 @@ export async function reconcileCompanionColumns(
     }
   } catch (error) {
     // Same check-then-act window as the create path: a concurrent sync or reload may have added
-    // the very columns this run was adding, and `ADD COLUMN` is not idempotent. Re-introspect
-    // and treat "the shape we wanted is now present" as success, whoever produced it.
-    try {
-      const { introspectLiveSnapshot: reread } = await import(
-        "../../schema/pipeline/diff/introspect-live"
-      );
-      const after = await reread(adapter.getDrizzle(), adapter.dialect, [
-        companionTableName,
-      ]);
-      const now = new Set(
-        after.tables
-          .find(t => t.name === companionTableName)
-          ?.columns.map(c => c.name) ?? []
-      );
-      if (
-        now.has(COMPANION_UPDATED_AT_COLUMN) &&
-        desired.every(f => now.has(toColumn(f.name)))
-      )
-        return;
-    } catch {
-      // Fall through to reporting the original error: if we cannot even re-read the table,
-      // the reconcile genuinely did not succeed.
-    }
+    // the very columns this run was adding, and `ADD COLUMN` is not idempotent. Treat "the shape
+    // we wanted is now present" as success, whoever produced it.
+    //
+    // 🔴 SHAPE only. This says nothing about the `_updated_at` back-fill having run, and must not
+    // be read as though it did — a back-filled row whose locale had no durable history is NULL,
+    // exactly like one never seeded, so no introspection can report that. The back-fill is
+    // re-issued on the next reconcile instead of being inferred complete here.
+    if (await companionShapeIsPresent(adapter, companionTableName, desired))
+      return;
     onError?.(error);
+  }
+}
+
+/**
+ * Does the live companion now carry every column this reconcile wanted?
+ *
+ * Answers only the physical shape, and answers `false` when it cannot look: a table that cannot
+ * be re-read has not been shown to be healthy, so the caller reports its original error rather
+ * than swallowing it on the strength of a failed check.
+ */
+async function companionShapeIsPresent(
+  adapter: CompanionIntrospectAdapter,
+  companionTableName: string,
+  desired: CompanionFieldLike[]
+): Promise<boolean> {
+  try {
+    const { introspectLiveSnapshot } = await import(
+      "../../schema/pipeline/diff/introspect-live"
+    );
+    const after = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      [companionTableName]
+    );
+    const now = new Set(
+      after.tables
+        .find(t => t.name === companionTableName)
+        ?.columns.map(c => c.name) ?? []
+    );
+    return (
+      now.has(COMPANION_UPDATED_AT_COLUMN) &&
+      desired.every(f => now.has(toColumn(f.name)))
+    );
+  } catch {
+    return false;
   }
 }
 

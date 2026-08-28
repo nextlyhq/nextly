@@ -78,15 +78,21 @@ describe("companion `_updated_at`", () => {
     await adapter.disconnect();
   });
 
-  /** Create the companion through the production reconcile path. */
-  async function createCompanion(): Promise<void> {
+  /**
+   * Create the companion through the production reconcile path.
+   *
+   * `withStatus` builds the per-locale `_status` column, which only a Draft/Published entity has.
+   * The lifecycle tests need it; the rest do not, and creating it unconditionally would have them
+   * exercising a shape their entity does not carry.
+   */
+  async function createCompanion(withStatus = false): Promise<void> {
     for (const statement of buildCompanionReconcileStatements({
       slug: "posts",
       tableName: MAIN,
       oldLocalized: [],
       newLocalized: [{ name: "title", type: "text", localized: true }],
       dialect: "sqlite",
-      status: false,
+      status: withStatus,
       builtBy: "codeFirst",
       companionExists: false,
     })) {
@@ -175,6 +181,73 @@ describe("companion `_updated_at`", () => {
     );
   });
 
+  it("does NOT stamp a write that only changes the lifecycle status", async () => {
+    await createCompanion(true);
+    const written = new Date("2026-08-28T09:00:00.000Z");
+    const published = new Date("2026-08-28T15:00:00.000Z");
+
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { title: "Bonjour" },
+      undefined,
+      { now: written }
+    );
+
+    // Publishing. `_status` travels INSIDE `companionData` on the ordinary update path, which is
+    // why the test sends it that way rather than through the `status` argument.
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { _status: "published" },
+      undefined,
+      { now: published }
+    );
+
+    // 🔴 `_updated_at` answers "when was this language last WRITTEN", and a lifecycle transition
+    // writes no language. Stamping it would move the SOURCE past every target on a publish that
+    // changed not one word, reporting the whole site as needing review; and publishing a stale
+    // TARGET would clear its warning while the translation still says what it said.
+    expect(await readStamp(adapter, "p1", "fr")).toBe(
+      Math.floor(written.getTime() / 1000)
+    );
+  });
+
+  it("stamps a write that changes content AND status together", async () => {
+    await createCompanion(true);
+    const first = new Date("2026-08-28T09:00:00.000Z");
+    const second = new Date("2026-08-28T15:00:00.000Z");
+
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { title: "Bonjour" },
+      undefined,
+      { now: first }
+    );
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { title: "Salut", _status: "published" },
+      undefined,
+      { now: second }
+    );
+
+    // The control that stops "never stamp when `_status` is present" from passing the case above.
+    // Save-and-publish in one write IS a content change, and must move the timestamp.
+    expect(await readStamp(adapter, "p1", "fr")).toBe(
+      Math.floor(second.getTime() / 1000)
+    );
+  });
+
   it("leaves the column NULL for a row written before it existed", async () => {
     await createCompanion();
 
@@ -213,15 +286,56 @@ describe("companion `_updated_at`", () => {
     }
 
     async function createVersions(): Promise<void> {
+      // `version_no` is NULL on a working draft and on an autosave, and NOT NULL on a durable
+      // version. The back-fill reads only durable rows, so the column has to be here or the
+      // fixture cannot express the distinction the statement turns on.
       await adapter.executeQuery(
         `CREATE TABLE "${VERSIONS_TABLE}" (` +
           `"id" TEXT PRIMARY KEY, "scope_kind" TEXT NOT NULL, "scope_slug" TEXT NOT NULL, ` +
-          `"entry_id" TEXT NOT NULL, "locale" TEXT, "created_at" INTEGER NOT NULL)`
+          `"entry_id" TEXT NOT NULL, "locale" TEXT, "version_no" INTEGER, ` +
+          `"created_at" INTEGER NOT NULL)`
       );
     }
 
-    /** Run ADD COLUMN + back-fill exactly as the reconcile emits them. */
-    async function reconcile(): Promise<void> {
+    /** Insert version rows. A `null` version number is a working draft or an autosave. */
+    async function seedVersions(
+      rows: [
+        id: string,
+        slug: string,
+        kind: string,
+        entry: string,
+        locale: string,
+        versionNo: number | null,
+        createdAt: number,
+      ][]
+    ): Promise<void> {
+      for (const [
+        id,
+        slug,
+        kind,
+        entry,
+        locale,
+        versionNo,
+        createdAt,
+      ] of rows) {
+        await adapter.executeQuery(
+          `INSERT INTO "${VERSIONS_TABLE}" ` +
+            `("id", "scope_kind", "scope_slug", "entry_id", "locale", "version_no", "created_at") ` +
+            `VALUES (?,?,?,?,?,?,?)`,
+          [id, kind, slug, entry, locale, versionNo, createdAt]
+        );
+      }
+    }
+
+    /**
+     * Run the reconcile's own statements against the database.
+     *
+     * `companionHasUpdatedAt` is the caller's INTROSPECTION result, so a second sync passes
+     * `true` — the column is there by then. Defaulting it to false in both calls would emit a
+     * second `ADD COLUMN` and fail on the duplicate, which is the fixture lying rather than the
+     * code misbehaving.
+     */
+    async function reconcile(hasUpdatedAt = false): Promise<void> {
       for (const statement of buildCompanionReconcileStatements({
         slug: "posts",
         tableName: MAIN,
@@ -231,7 +345,7 @@ describe("companion `_updated_at`", () => {
         status: false,
         builtBy: "codeFirst",
         companionExists: true,
-        companionHasUpdatedAt: false,
+        companionHasUpdatedAt: hasUpdatedAt,
         versionScope: "collection",
       })) {
         await adapter.executeQuery(statement);
@@ -241,13 +355,11 @@ describe("companion `_updated_at`", () => {
     it("seeds each locale from ITS OWN version history, not one value for all", async () => {
       await createLegacyCompanion();
       await createVersions();
-      await adapter.executeQuery(
-        `INSERT INTO "${VERSIONS_TABLE}" ` +
-          `("id", "scope_kind", "scope_slug", "entry_id", "locale", "created_at") VALUES ` +
-          `('v1', 'collection', 'posts', 'p1', 'fr', 1000), ` +
-          `('v2', 'collection', 'posts', 'p1', 'fr', 3000), ` +
-          `('v3', 'collection', 'posts', 'p1', 'de', 2000)`
-      );
+      await seedVersions([
+        ["v1", "posts", "collection", "p1", "fr", 1, 1000],
+        ["v2", "posts", "collection", "p1", "fr", 2, 3000],
+        ["v3", "posts", "collection", "p1", "de", 1, 2000],
+      ]);
 
       await reconcile();
 
@@ -268,12 +380,10 @@ describe("companion `_updated_at`", () => {
       await createLegacyCompanion();
       await createVersions();
       // Inserted oldest-last, so a query taking whichever row it meets first gets 1000.
-      await adapter.executeQuery(
-        `INSERT INTO "${VERSIONS_TABLE}" ` +
-          `("id", "scope_kind", "scope_slug", "entry_id", "locale", "created_at") VALUES ` +
-          `('v1', 'collection', 'posts', 'p1', 'fr', 5000), ` +
-          `('v2', 'collection', 'posts', 'p1', 'fr', 1000)`
-      );
+      await seedVersions([
+        ["v1", "posts", "collection", "p1", "fr", 2, 5000],
+        ["v2", "posts", "collection", "p1", "fr", 1, 1000],
+      ]);
 
       await reconcile();
 
@@ -286,14 +396,12 @@ describe("companion `_updated_at`", () => {
     it("does not read another collection's or another entry's history", async () => {
       await createLegacyCompanion();
       await createVersions();
-      await adapter.executeQuery(
-        `INSERT INTO "${VERSIONS_TABLE}" ` +
-          `("id", "scope_kind", "scope_slug", "entry_id", "locale", "created_at") VALUES ` +
-          `('v1', 'collection', 'posts',  'p1', 'fr', 4000), ` +
-          `('v2', 'collection', 'authors','p1', 'fr', 9000), ` +
-          `('v3', 'single',     'posts',  'p1', 'fr', 8000), ` +
-          `('v4', 'collection', 'posts',  'p2', 'fr', 7000)`
-      );
+      await seedVersions([
+        ["v1", "posts", "collection", "p1", "fr", 1, 4000],
+        ["v2", "authors", "collection", "p1", "fr", 1, 9000],
+        ["v3", "posts", "single", "p1", "fr", 1, 8000],
+        ["v4", "posts", "collection", "p2", "fr", 1, 7000],
+      ]);
 
       await reconcile();
 
@@ -303,17 +411,55 @@ describe("companion `_updated_at`", () => {
       expect(await readStamp(adapter, "p1", "fr")).toBe(4000);
     });
 
-    it("is idempotent, so a half-applied reconcile finishes on the next run", async () => {
+    it("RE-ISSUES the back-fill when the column already exists", async () => {
+      // 🔴 The failure this replaces was mine, and the test that used to sit here could not see
+      // it: it replayed the back-fill STATEMENT by hand and concluded the reconcile recovers.
+      // The reconcile did not. Pairing the ADD with the back-fill made the column's PRESENCE
+      // stand for the back-fill having run — so if the ADD committed and the UPDATE did not,
+      // every later run saw the column, concluded the companion was in step, and left the rows
+      // unknown permanently. Staleness would silently never fire for that collection.
+      //
+      // This asserts the RECONCILE's own output, which is the thing that recovers.
       await createLegacyCompanion();
       await createVersions();
-      await adapter.executeQuery(
-        `INSERT INTO "${VERSIONS_TABLE}" ` +
-          `("id", "scope_kind", "scope_slug", "entry_id", "locale", "created_at") VALUES ` +
-          `('v1', 'collection', 'posts', 'p1', 'fr', 4000)`
-      );
+      await seedVersions([["v1", "posts", "collection", "p1", "fr", 1, 4000]]);
 
+      // The half-applied state: the column landed, the back-fill did not.
+      await adapter.executeQuery(
+        `ALTER TABLE "${COMPANION}" ADD COLUMN "${COMPANION_UPDATED_AT_COLUMN}" INTEGER`
+      );
+      expect(await readStamp(adapter, "p1", "fr")).toBeNull();
+
+      // Now the reconcile runs again and introspects the column as PRESENT.
+      const statements = buildCompanionReconcileStatements({
+        slug: "posts",
+        tableName: MAIN,
+        oldLocalized: [{ name: "title", type: "text", localized: true }],
+        newLocalized: [{ name: "title", type: "text", localized: true }],
+        dialect: "sqlite",
+        status: false,
+        builtBy: "codeFirst",
+        companionExists: true,
+        companionHasUpdatedAt: true,
+        versionScope: "collection",
+      });
+      // It must not try to ADD a column that is there, and it must still seed.
+      expect(statements.some(st => st.includes("ADD COLUMN"))).toBe(false);
+      for (const statement of statements) await adapter.executeQuery(statement);
+
+      expect(await readStamp(adapter, "p1", "fr")).toBe(4000);
+    });
+
+    it("never moves a stamp a real write has already set", async () => {
+      // What makes re-issuing safe in every state. `WHERE _updated_at IS NULL` is monotonic: the
+      // statement can only fill an absent value, never move one. Without that, a routine sync
+      // would drag a live translation's timestamp back to its version-history value and
+      // resurrect a staleness warning the translator had already cleared.
+      await createLegacyCompanion();
+      await createVersions();
+      await seedVersions([["v1", "posts", "collection", "p1", "fr", 1, 4000]]);
       await reconcile();
-      // A real write lands after the migration and must survive the next reconcile.
+
       await upsertCompanionRow(
         adapter,
         COMPANION,
@@ -323,27 +469,34 @@ describe("companion `_updated_at`", () => {
         undefined,
         { now: new Date(6_000_000) }
       );
-
-      // 🔴 The back-fill alone, replayed. This is what makes the pair safe to run unattended --
-      // and `WHERE _updated_at IS NULL` is what makes it so. Without that guard a replay would
-      // overwrite the live stamp with the version-history value, silently moving a translation
-      // backwards in time and resurrecting a staleness warning that was already cleared.
-      for (const statement of buildCompanionReconcileStatements({
-        slug: "posts",
-        tableName: MAIN,
-        oldLocalized: [{ name: "title", type: "text", localized: true }],
-        newLocalized: [{ name: "title", type: "text", localized: true }],
-        dialect: "sqlite",
-        status: false,
-        builtBy: "codeFirst",
-        companionExists: true,
-        companionHasUpdatedAt: false,
-        versionScope: "collection",
-      }).filter(s => !s.includes("ADD COLUMN"))) {
-        await adapter.executeQuery(statement);
-      }
-
       expect(await readStamp(adapter, "p1", "fr")).toBe(6000);
+
+      // A later sync re-issues the back-fill against a row that now has a value.
+      await reconcile(true);
+      expect(await readStamp(adapter, "p1", "fr")).toBe(6000);
+    });
+
+    it("ignores working drafts and autosaves, which never reached the companion", async () => {
+      // 🔴 The write path gates its companion upsert on `!storeAsWorkingDraft`, so a held draft
+      // leaves a version row behind and writes NOTHING to the companion. Counting those rows here
+      // would seed the source from an edit the companion never received — and a target translated
+      // before that draft would be reported stale by the migration while an identical draft made
+      // AFTER the migration reports nothing. Same facts, different answer depending on when the
+      // upgrade happened to run.
+      await createLegacyCompanion();
+      await createVersions();
+      await seedVersions([
+        ["v1", "posts", "collection", "p1", "fr", 1, 1000],
+        // Newer, but not durable: a working draft and an autosave.
+        ["v2", "posts", "collection", "p1", "fr", null, 9000],
+        ["v3", "posts", "collection", "p1", "fr", null, 8000],
+      ]);
+
+      await reconcile();
+
+      // 1000, not 9000. Both decoys are newer, so a missing `version_no IS NOT NULL` returns a
+      // larger number rather than an error.
+      expect(await readStamp(adapter, "p1", "fr")).toBe(1000);
     });
 
     it("emits no back-fill for an entity kind with no version history", async () => {

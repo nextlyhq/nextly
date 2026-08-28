@@ -143,6 +143,16 @@ export function buildCompanionReconcileSql(
  *
  * ## What it deliberately does not do
  *
+ * ## Durable versions only, because the runtime counts only durable writes
+ *
+ * `version_no IS NOT NULL` excludes working drafts and autosaves, and the exclusion is what keeps
+ * this statement answering the same question the write path does. The collection write path gates
+ * its companion upsert on `!storeAsWorkingDraft`, so a held draft never reaches the companion at
+ * all — while it does leave a version row behind. Counting those rows here would seed a source
+ * locale's timestamp from an edit the companion never received, so a target translated before
+ * that draft would be reported stale by the migration and NOT by an identical draft written after
+ * it. Same document, same facts, different answer depending on when the upgrade ran.
+ *
  * `nextly_versions.locale` is NULL for a snapshot taken while the document was not localized,
  * and such a snapshot holds the DEFAULT language's content — so those rows are arguably evidence
  * for the default locale's timestamp. They are not read here: matching them could only raise the
@@ -167,7 +177,8 @@ function buildUpdatedAtBackfill(args: {
       `WHERE ${versions}.${q("scope_kind", dialect)} = ${lit(versionScope)} ` +
       `AND ${versions}.${q("scope_slug", dialect)} = ${lit(slug)} ` +
       `AND ${versions}.${q("entry_id", dialect)} = ${comp}.${q("_parent", dialect)} ` +
-      `AND ${versions}.${q("locale", dialect)} = ${comp}.${q("_locale", dialect)}) ` +
+      `AND ${versions}.${q("locale", dialect)} = ${comp}.${q("_locale", dialect)} ` +
+      `AND ${versions}.${q("version_no", dialect)} IS NOT NULL) ` +
       `WHERE ${comp}.${q(COMPANION_UPDATED_AT_COLUMN, dialect)} IS NULL`,
   ];
 }
@@ -237,6 +248,27 @@ export function buildCompanionReconcileStatements(
     stmts.push(
       `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${companionUpdatedAtDdl(dialect)}`
     );
+  }
+  // 🔴 The back-fill is emitted whenever a version scope is known, NOT only alongside the ADD —
+  // and separating the two is the whole point.
+  //
+  // Pairing them made the column's PRESENCE stand for the back-fill having run, and those are
+  // different facts. If the ADD commits and the UPDATE does not, every later run introspects the
+  // column, concludes the companion is in step, and never seeds it: existing rows stay unknown
+  // permanently and staleness silently never fires for that collection — the exact failure this
+  // feature exists to remove, reintroduced by its own migration.
+  //
+  // No probe can rescue the paired form, which is why the answer is to re-issue rather than to
+  // detect. After a SUCCESSFUL back-fill, every row whose locale had no durable history is still
+  // NULL — so "are there NULLs?" cannot tell a back-fill that never ran from one that ran and
+  // found nothing. There is no physical signal to read.
+  //
+  // Re-issuing is safe in every state because `WHERE _updated_at IS NULL` makes it monotonic: it
+  // can only fill a value that is absent, never move one a real write has set. So the statement is
+  // recovery when the first attempt failed, a no-op when it succeeded, and a late seed when
+  // history has appeared since. The cost is one guarded UPDATE per localized entity per sync,
+  // which is a command an operator runs, not a request path.
+  if (args.companionHasUpdatedAt !== undefined) {
     stmts.push(
       ...buildUpdatedAtBackfill({
         companionTable,
