@@ -60,8 +60,29 @@ pnpm run build
 # The scope is DERIVED from the diff rather than listed here, so it cannot go
 # stale as packages are added. Empty means no workspace changed, and the run is
 # skipped rather than becoming a whole-repo test sweep nobody would keep.
+#
+# Three outcomes, not two, and the status says which. A change that redefines
+# the workspace or task graph cannot be narrowed to the packages it happens to
+# sit beside, so it asks for the UNFILTERED run instead. Reporting that as a
+# failure made those files impossible to push: this script runs under `set -e`,
+# so it died before testing anything, and no retry could clear it because
+# running the gates by hand does not change the diff. The only escape was
+# bypassing the hook, which is worse than the narrowing being guarded against.
+#
+# `set +e` around the call only: the status IS the answer here, and letting the
+# shell abort on a non-zero one would discard it.
+set +e
 GATE_FILTERS=$(node scripts/gate-scope.mjs --filters)
-if [ -n "$GATE_FILTERS" ]; then
+GATE_STATUS=$?
+set -e
+
+if [ "$GATE_STATUS" -eq 2 ]; then
+  echo "pre-push: the diff redefines the workspace or task graph — testing every workspace."
+  pnpm turbo test --continue
+elif [ "$GATE_STATUS" -ne 0 ]; then
+  echo "pre-push: gate-scope could not derive a trustworthy scope; refusing." >&2
+  exit "$GATE_STATUS"
+elif [ -n "$GATE_FILTERS" ]; then
   # shellcheck disable=SC2086 -- one flag per line, intentionally word-split
   pnpm turbo test --continue $GATE_FILTERS
 fi
