@@ -5,7 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import { PluginIcon } from "@admin/components/shared/plugin-icon";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
-import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  useTableColumns,
+} from "@admin/components/ui/table/list-view";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { UI } from "@admin/constants/ui";
 import {
@@ -198,25 +201,11 @@ export default function PluginsTable() {
     ];
   }, []);
 
-  const toggleableColumns = useMemo(
-    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
-    [allColumns]
-  );
-
-  /* The reader's column choice outlives the tab it was made in. */
-  const columnsControl = useListColumns({
+  const { columns, columnsControl } = useTableColumns({
     storageKey: "plugins",
-    columns: toggleableColumns,
+    columns: allColumns,
+    alwaysVisible: ALWAYS_VISIBLE,
   });
-
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({
-        ...col,
-        hidden: !columnsControl.isColumnVisible(col.name),
-      })),
-    [allColumns, columnsControl]
-  );
 
   // Before the table, because its empty state is a STATEMENT: "no plugins
   // installed" read from a request that has not answered is wrong while it is

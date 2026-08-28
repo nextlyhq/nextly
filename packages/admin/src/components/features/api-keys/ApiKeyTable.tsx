@@ -17,7 +17,10 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  useTableColumns,
+} from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { usePagination } from "@admin/hooks/usePagination";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
@@ -204,25 +207,11 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
     ];
   }, []);
 
-  const toggleableColumns = useMemo(
-    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
-    [allColumns]
-  );
-
-  /* The reader's column choice outlives the tab it was made in. */
-  const columnsControl = useListColumns({
+  const { columns, columnsControl } = useTableColumns({
     storageKey: "api-keys",
-    columns: toggleableColumns,
+    columns: allColumns,
+    alwaysVisible: ALWAYS_VISIBLE,
   });
-
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({
-        ...col,
-        hidden: !columnsControl.isColumnVisible(col.name),
-      })),
-    [allColumns, columnsControl]
-  );
 
   const filteredData = useMemo(() => {
     const term = search.trim().toLowerCase();
