@@ -32,13 +32,9 @@ describe("PermissionCacheService", () => {
     // have to — nothing enforced the key — which is one thing this rewrite
     // gains: a write that would violate referential integrity in production
     // now fails here rather than passing.
-    await testDb.db
-      .insert(testDb.schema.users)
-      .values([
-        userFactory({ id: "user-1" }),
-        userFactory({ id: "user-2" }),
-        userFactory({ id: "user-123" }),
-      ]);
+    for (const id of ["user-1", "user-2", "user-123"]) {
+      await testDb.db.insert(testDb.schema.users).values(userFactory({ id }));
+    }
   });
 
   afterEach(async () => {

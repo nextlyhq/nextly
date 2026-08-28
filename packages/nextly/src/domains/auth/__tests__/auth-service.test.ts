@@ -18,6 +18,29 @@ const HOUR_IN_MS = 60 * 60 * 1000; // 1 hour in milliseconds
 const TOKEN_EXPIRY_HOURS = 24; // Token expiry time in hours
 const TIME_TOLERANCE_MS = 2000; // ±2 seconds tolerance for time comparisons (CI stability)
 
+/**
+ * bcrypt cost for hashes this suite CREATES as fixtures.
+ *
+ * Production uses 12, which is the point of a KDF and which bcryptjs — a pure-JS
+ * implementation with no native binding — pays in full: roughly a second per hash
+ * on a developer machine and several times that on a loaded runner. A test that
+ * seeds a user and then exercises a path which hashes again was measured at
+ * ~2.9s locally and ~9.8s on CI, against a 10s testTimeout. That is not a
+ * failure yet; it is a test whose passing depends on the machine.
+ *
+ * A fixture's hash strength protects nothing: the value never leaves the
+ * in-memory database, and what these tests exercise is the code path, not the
+ * KDF. bcrypt encodes its cost inside the hash, so `verifyPassword` reads a
+ * cost-4 hash exactly as it reads a cost-12 one — the production verifier is
+ * still the thing under test.
+ *
+ * This does NOT lower the cost the SERVICE uses when it hashes; that is
+ * `defaultSaltRounds` in `auth/password`, whose own comment says it should
+ * become env-tunable. Until it is, a service-side hash still costs full price
+ * and this only removes the fixture's share.
+ */
+const FIXTURE_SALT_ROUNDS = 4;
+
 describe("AuthService", () => {
   let testDb: TestDb;
   let service: AuthService;
@@ -73,7 +96,10 @@ describe("AuthService", () => {
       };
 
       // Act
-      await expect(service.registerUser(userData)).rejects.toThrow();
+      await expect(service.registerUser(userData)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
 
       // Verify user was NOT created
       const dbUser = await testDb.db.query.users.findFirst({
@@ -85,7 +111,10 @@ describe("AuthService", () => {
     it("should reject registration with duplicate email", async () => {
       // Arrange: Create existing user
       const existingEmail = "existing@test.com";
-      const passwordHash = await hashPassword("ValidPassword123!");
+      const passwordHash = await hashPassword(
+        "ValidPassword123!",
+        FIXTURE_SALT_ROUNDS
+      );
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
           email: existingEmail,
@@ -99,7 +128,10 @@ describe("AuthService", () => {
           email: existingEmail,
           password: "DifferentPassword123!",
         })
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "DUPLICATE",
+        statusCode: 409,
+      });
     });
 
     it.skip("should register user without name (name is optional)", async () => {
@@ -125,7 +157,7 @@ describe("AuthService", () => {
       // Arrange: Create user with known password
       const email = "user@test.com";
       const password = "ValidPassword123!";
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -148,14 +180,20 @@ describe("AuthService", () => {
       // Act
       await expect(
         service.verifyCredentials("nonexistent@test.com", "anypassword")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should fail verification with invalid password", async () => {
       // Arrange: Create user
       const email = "user@test.com";
       const correctPassword = "ValidPassword123!";
-      const passwordHash = await hashPassword(correctPassword);
+      const passwordHash = await hashPassword(
+        correctPassword,
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -167,7 +205,10 @@ describe("AuthService", () => {
       // Act: Try with wrong password
       await expect(
         service.verifyCredentials(email, "WrongPassword!")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should fail verification for user without password (OAuth user)", async () => {
@@ -183,14 +224,17 @@ describe("AuthService", () => {
       // Act
       await expect(
         service.verifyCredentials(email, "anypassword")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should normalize email (case-insensitive)", async () => {
       // Arrange: Create user with lowercase email
       const email = "user@test.com";
       const password = "ValidPassword123!";
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(password, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -213,7 +257,10 @@ describe("AuthService", () => {
       const userId = randomUUID();
       const currentPassword = "CurrentPassword123!";
       const newPassword = "NewPassword456!";
-      const passwordHash = await hashPassword(currentPassword);
+      const passwordHash = await hashPassword(
+        currentPassword,
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -251,7 +298,10 @@ describe("AuthService", () => {
       // Arrange
       const userId = randomUUID();
       const currentPassword = "CurrentPassword123!";
-      const passwordHash = await hashPassword(currentPassword);
+      const passwordHash = await hashPassword(
+        currentPassword,
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -263,7 +313,10 @@ describe("AuthService", () => {
       // Act: Try with wrong current password
       await expect(
         service.changePassword(userId, "WrongPassword123!", "NewPassword456!")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
 
       // Verify password was NOT changed
       const user = await testDb.db.query.users.findFirst({
@@ -279,7 +332,10 @@ describe("AuthService", () => {
       // Act
       await expect(
         service.changePassword(nonExistentUserId, "anypassword", "newpassword")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
 
     it("should fail to change password for user without password (OAuth user)", async () => {
@@ -295,7 +351,10 @@ describe("AuthService", () => {
       // Act
       await expect(
         service.changePassword(userId, "anypassword", "newpassword")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "AUTH_INVALID_CREDENTIALS",
+        statusCode: 401,
+      });
     });
   });
 
@@ -406,7 +465,7 @@ describe("AuthService", () => {
       const email = "user@test.com";
       const oldPassword = "OldPassword123!";
       const newPassword = "NewPassword456!";
-      const passwordHash = await hashPassword(oldPassword);
+      const passwordHash = await hashPassword(oldPassword, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -446,7 +505,10 @@ describe("AuthService", () => {
       // Act
       await expect(
         service.resetPasswordWithToken(invalidToken, "NewPassword123!")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject expired token", async () => {
@@ -478,13 +540,19 @@ describe("AuthService", () => {
       // Act
       await expect(
         service.resetPasswordWithToken(tokenResult.token!, "NewPassword123!")
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        code: "TOKEN_EXPIRED",
+        statusCode: 401,
+      });
     });
 
     it.skip("should only allow token to be used once", async () => {
       // Arrange: Create user and generate reset token
       const email = "user@test.com";
-      const passwordHash = await hashPassword("OldPassword123!");
+      const passwordHash = await hashPassword(
+        "OldPassword123!",
+        FIXTURE_SALT_ROUNDS
+      );
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -525,7 +593,7 @@ describe("AuthService", () => {
       // Arrange: Create user and generate reset token
       const email = "user@test.com";
       const oldPassword = "OldPassword123!";
-      const passwordHash = await hashPassword(oldPassword);
+      const passwordHash = await hashPassword(oldPassword, FIXTURE_SALT_ROUNDS);
 
       await testDb.db.insert(testDb.schema.users).values(
         userFactory({
@@ -699,7 +767,10 @@ describe("AuthService", () => {
       const invalidToken = "invalid-verification-token";
 
       // Act
-      await expect(service.verifyEmail(invalidToken)).rejects.toThrow();
+      await expect(service.verifyEmail(invalidToken)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should reject expired token", async () => {
@@ -730,7 +801,12 @@ describe("AuthService", () => {
         .where(eq(testDb.schema.emailVerificationTokens.tokenHash, tokenHash));
 
       // Act
-      await expect(service.verifyEmail(tokenResult.token!)).rejects.toThrow();
+      await expect(
+        service.verifyEmail(tokenResult.token!)
+      ).rejects.toMatchObject({
+        code: "TOKEN_EXPIRED",
+        statusCode: 401,
+      });
 
       // Verify user's email is still not verified
       const user = await testDb.db.query.users.findFirst({

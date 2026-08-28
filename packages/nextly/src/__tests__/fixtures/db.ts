@@ -82,6 +82,12 @@ function ddlFor(table: SQLiteTable): string[] {
     const parts = [`"${column.name}"`, column.getSQLType()];
     if (column.primary) parts.push("PRIMARY KEY");
     if (column.notNull) parts.push("NOT NULL");
+    // A COLUMN-level `.unique()` — `slug: text("slug").unique()` — is not one
+    // of `cfg.indexes`, so the loop below never sees it. Omitting it does not
+    // make a test fail; it makes a collision test PASS while the fixture
+    // accepts the duplicate that production rejects, which is the shape of
+    // false green this fixture exists to avoid producing.
+    if (column.isUnique) parts.push("UNIQUE");
     // Only a LITERAL default belongs in DDL. A `$defaultFn` column reports
     // `hasDefault` with no value because Drizzle supplies it client-side, and
     // writing `DEFAULT undefined` would be a syntax error.
@@ -93,9 +99,20 @@ function ddlFor(table: SQLiteTable): string[] {
     return parts.join(" ");
   });
 
-  const statements = [
-    `CREATE TABLE IF NOT EXISTS "${cfg.name}" (${columns.join(", ")});`,
-  ];
+  // Table-level `unique().on(a, b)` constraints, which are neither columns nor
+  // indexes in Drizzle's config. Emitted inside CREATE TABLE so a composite
+  // uniqueness rule is enforced from the first insert.
+  const tableUniques = (cfg.uniqueConstraints ?? []).map(constraint => {
+    const cols = constraint.columns
+      .map(c => c.name)
+      .filter((n): n is string => typeof n === "string");
+    return cols.length > 0
+      ? `UNIQUE (${cols.map(c => `"${c}"`).join(", ")})`
+      : null;
+  });
+
+  const body = [...columns, ...tableUniques.filter(Boolean)].join(", ");
+  const statements = [`CREATE TABLE IF NOT EXISTS "${cfg.name}" (${body});`];
   for (const index of cfg.indexes) {
     const built = index.config;
     if (!built.unique) continue;
@@ -186,7 +203,10 @@ export async function createTestDb(): Promise<{
   const adapter = createSqliteAdapter({ memory: true });
   await adapter.connect();
 
-  const sqlite = adapter.getDrizzle().$client as Database.Database;
+  // `getDrizzle` is generic and its DEFAULT type parameter is the plain Drizzle
+  // database, which does not declare `$client` even though the instance carries
+  // it. Asking for the shape we need is narrower than casting the default away.
+  const sqlite = adapter.getDrizzle<{ $client: Database.Database }>().$client;
 
   // Enable foreign keys for referential integrity
   sqlite.pragma("foreign_keys = ON");

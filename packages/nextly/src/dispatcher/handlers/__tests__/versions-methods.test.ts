@@ -82,7 +82,7 @@ describe("listVersionsForDocument", () => {
       entryId: "e1",
       user,
       authenticatedScope,
-    } as Parameters<typeof listVersionsForDocument>[0]);
+    } as unknown as Parameters<typeof listVersionsForDocument>[0]);
 
     expect(assertReadableSpy).toHaveBeenCalledWith(
       "collection",
