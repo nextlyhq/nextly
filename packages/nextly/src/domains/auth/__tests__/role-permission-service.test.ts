@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 import {
   createTestDb,
@@ -10,7 +10,10 @@ import {
   bulkPermissionsFactory,
 } from "../../../__tests__/fixtures/permissions";
 import { roleFactory } from "../../../__tests__/fixtures/roles";
+import { userFactory } from "../../../__tests__/fixtures/users";
 import { expectArrayLength } from "../../../__tests__/utils/assertions";
+import { container } from "../../../di/container";
+import { PermissionCacheService } from "../services/permission-cache-service";
 import { RolePermissionService } from "../services/role-permission-service";
 
 describe("RolePermissionService", () => {
@@ -20,9 +23,22 @@ describe("RolePermissionService", () => {
   beforeEach(async () => {
     testDb = await createTestDb();
     service = new RolePermissionService(testDb.adapter, testLogger);
+    // Every mutation here fires `invalidatePermissionCache`, which does NOT use
+    // the adapter handed to the constructor -- it resolves its own from the DI
+    // container, and wraps the whole tier in a catch that only logs. With
+    // nothing registered, `container.get("adapter")` threw on every call, the
+    // catch swallowed it, and the database cache was never invalidated while
+    // every assignment assertion below still passed. Registering it is what
+    // makes the eviction control at the bottom of this file able to fail.
+    container.register("adapter", () => testDb.adapter);
+    container.register("logger", () => testLogger);
   });
 
   afterEach(async () => {
+    // The container is module-global and shared across files. Leaving a closed
+    // adapter registered would hand the next suite a handle to a database this
+    // one already tore down.
+    container.clear?.();
     await testDb.reset();
     await testDb.close();
   });
@@ -851,6 +867,56 @@ describe("RolePermissionService", () => {
       const uuidRegex =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
       expect(uuidRegex.test(result[0].id)).toBe(true);
+    });
+  });
+
+  describe("permission-cache invalidation", () => {
+    // The control this file lacked. Every mutation above fires
+    // `invalidatePermissionCache`, whose database tier is wrapped in a catch
+    // that only logs -- so if it fails, nothing here notices and a user keeps
+    // grants that were just revoked until the TTL expires. That is the
+    // permissive direction, which is the one worth a test.
+    //
+    // It is a POSITIVE control: it seeds a real cache row and asserts the
+    // mutation evicts it. Asserting only that the role_permissions row changed
+    // passes just as well when the cache is never touched, which is exactly
+    // what was happening before the adapter was registered above.
+    it("evicts a cached grant when a permission is removed from the role", async () => {
+      const role = roleFactory({ name: "Editor" });
+      const permission = permissionFactory({
+        action: "read",
+        resource: "users",
+      });
+      await testDb.db.insert(testDb.schema.roles).values(role);
+      await testDb.db.insert(testDb.schema.permissions).values(permission);
+      await testDb.db
+        .insert(testDb.schema.users)
+        .values(userFactory({ id: "user-1" }));
+      await service.addPermissionToRole(role.id, {
+        action: permission.action,
+        resource: permission.resource,
+      });
+
+      const cache = new PermissionCacheService(testDb.adapter, testLogger);
+      await cache.setCachedPermission("user-1", "read", "users", true, [
+        role.id,
+      ]);
+      expect(await cache.getCachedPermission("user-1", "read", "users")).toBe(
+        true
+      );
+
+      await service.removePermissionFromRole(role.id, {
+        action: permission.action,
+        resource: permission.resource,
+      });
+      // The invalidation is fired with `void`, so it settles after the call
+      // returns. Waiting is the honest way to observe it; asserting
+      // immediately would be a race that passes on a fast machine.
+      await vi.waitFor(async () => {
+        expect(
+          await cache.getCachedPermission("user-1", "read", "users")
+        ).toBeNull();
+      });
     });
   });
 });
