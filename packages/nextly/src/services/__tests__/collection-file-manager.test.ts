@@ -1,5 +1,10 @@
-// Targeted tests for CollectionFileManager.invalidateSchema(slug).
-// invalidateSchema is the post-rename/drop hook the dispatcher calls
+// Targeted tests for CollectionFileManager.invalidateSchemaForSlug(slug).
+//
+// The SLUG-keyed half of a pair. `refreshSchema(tableName, freshTable)` is the
+// other, and it exists because dropping the entry and rebuilding lazily raced:
+// the rebuild re-read `dynamic_collections.fields`, so an in-flight write could
+// hand back the stale schema again. This one still drops-and-rebuilds, and is
+// the post-rename/drop hook the dispatcher calls
 // to drop the cached runtime Drizzle schema so the next loadDynamicSchema
 // rebuilds against the freshly-written `dynamic_collections.fields` JSON.
 
@@ -63,7 +68,7 @@ describe("CollectionFileManager.loadCompanionSchema (i18n M4)", () => {
   });
 });
 
-describe("CollectionFileManager.invalidateSchema", () => {
+describe("CollectionFileManager.invalidateSchemaForSlug", () => {
   it("removes a previously registered schema so loadDynamicSchema can no longer return it from cache", async () => {
     const fm = makeFileManager();
 
@@ -73,7 +78,7 @@ describe("CollectionFileManager.invalidateSchema", () => {
     const cached = await fm.loadDynamicSchema("job");
     expect(cached).toEqual({ __marker: "old" });
 
-    fm.invalidateSchema("job");
+    fm.invalidateSchemaForSlug("job");
 
     // No adapter / metadataFetcher set, so a cache miss now throws
     // the "not found in registry" guard. That is the correct signal
@@ -93,7 +98,7 @@ describe("CollectionFileManager.invalidateSchema", () => {
     const cached = await fm.loadDynamicSchema("blog-posts");
     expect(cached).toEqual({ __marker: "registered" });
 
-    fm.invalidateSchema("blog-posts");
+    fm.invalidateSchemaForSlug("blog-posts");
 
     await expect(fm.loadDynamicSchema("blog-posts")).rejects.toThrow(
       /not found in registry/
@@ -102,7 +107,7 @@ describe("CollectionFileManager.invalidateSchema", () => {
 
   it("is a no-op when the slug was never registered (does not throw)", () => {
     const fm = makeFileManager();
-    expect(() => fm.invalidateSchema("never-registered")).not.toThrow();
+    expect(() => fm.invalidateSchemaForSlug("never-registered")).not.toThrow();
   });
 
   it("only invalidates the targeted slug — unrelated entries stay cached", async () => {
@@ -113,7 +118,7 @@ describe("CollectionFileManager.invalidateSchema", () => {
       dc_event: { __marker: "event" },
     });
 
-    fm.invalidateSchema("job");
+    fm.invalidateSchemaForSlug("job");
 
     // job evicted, event still cached.
     await expect(fm.loadDynamicSchema("job")).rejects.toThrow(

@@ -50,8 +50,66 @@ import {
   type ClassOption,
 } from "./class-library";
 
+/**
+ * What went wrong on the last attempt, in the terms the author is told.
+ *
+ * Three distinguishable causes rather than one flag: the node being full is
+ * predictable from the ids in hand, a refused node write is only knowable by
+ * asking the document, and a refused creation carries the site style's own
+ * words. Collapsed into one boolean, the message would name the wrong cause.
+ */
+type SelectorFailure =
+  | { readonly kind: "node-full" }
+  | { readonly kind: "not-written" }
+  | { readonly kind: "not-created"; readonly reason: string };
+
+/**
+ * The stored failure, if it still describes the node in hand.
+ *
+ * A capacity refusal is checked against the node as well as matched to it: the
+ * element may have gained room since the attempt, and an alert saying it is
+ * full would then be describing a state it is no longer in.
+ */
+function liveFailure(
+  failure: { about: readonly string[]; issue: SelectorFailure } | null,
+  nodeClassIds: readonly string[]
+): SelectorFailure | null {
+  if (failure === null || failure.about !== nodeClassIds) return null;
+  if (failure.issue.kind === "node-full" && nodeHasRoom(nodeClassIds)) {
+    return null;
+  }
+  return failure.issue;
+}
+
+/** What the author is told, per cause. */
+function failureMessage(failure: SelectorFailure): string {
+  if (failure.kind === "not-created") return failure.reason;
+  if (failure.kind === "not-written") {
+    return "This change could not be applied to the document.";
+  }
+  return "This element already has as many classes as the page can apply.";
+}
+
 /** Whether a write to the selected node's classes reached the document. */
 export type ClassWriteOutcome = "applied" | "refused";
+
+/**
+ * What creating a class produced: its new id, or why it could not be created.
+ *
+ * The ID comes back rather than the host applying the class itself. Creating
+ * is a SITE-STYLE write and applying is a NODE write — two documents — and the
+ * host owns only the first. Returning the id lets the application go through
+ * the same path every other apply takes, so the per-node bound and the store's
+ * own refusal are enforced once instead of twice.
+ *
+ * A REASON rather than a bare refusal, because this one has words available:
+ * the site-style save reports per-section issues, where a node write can only
+ * answer null. `breakpoints` in the page-builder admin already returns its
+ * refusal this way.
+ */
+export type ClassCreation =
+  | { readonly ok: true; readonly classId: string }
+  | { readonly ok: false; readonly reason: string };
 
 export interface ClassSelectorProps {
   /**
@@ -63,6 +121,16 @@ export interface ClassSelectorProps {
    * the one still loading.
    */
   library: readonly NamedClass[] | undefined;
+  /**
+   * Why there is no library, when there is none.
+   *
+   * `undefined` has two causes and they need different words: a read still in
+   * flight will finish, and a refused or failed one will not. Told apart for
+   * the reason the tokens studio tells them apart — a panel saying "reading…"
+   * forever after a 403 describes a state the site is not in, and gives the
+   * author nothing to do about it.
+   */
+  libraryAbsence?: "pending" | "failed";
   /** The class ids the selected node carries, as stored. */
   nodeClassIds: readonly string[];
   /**
@@ -81,30 +149,67 @@ export interface ClassSelectorProps {
    * Create a class under this slug and put it on the selected node.
    *
    * One intent, for the reason in the module note: the id does not exist yet.
+   *
+   * Asynchronous and answering, because creating a class is a SITE-STYLE write
+   * — a different document from the one the node lives in, saved over the
+   * network and refusable. A void contract would clear the typed name on a
+   * refusal exactly as it does on success, which is the same failure
+   * {@link ClassSelectorProps.onNodeClassesChange} returns an outcome to avoid.
+   *
+   * It creates only. Putting the class ON the node is this component's job,
+   * through the same callback every other application uses.
    */
-  onCreateClass: (slug: string) => void;
+  onCreateClass: (slug: string) => Promise<ClassCreation>;
 }
 
 /** The classes on the selected node, with a field for adding another. */
 export function ClassSelector({
   library,
+  libraryAbsence,
   nodeClassIds,
   onNodeClassesChange,
   onCreateClass,
 }: ClassSelectorProps): React.ReactElement {
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState(0);
-  const [refused, setRefused] = React.useState(false);
-  // The store's refusal, which is a different failure from the node being full:
-  // that one is predictable from the ids in hand, this one is only knowable by
-  // asking the document. Kept apart so the message can say which happened.
-  const [writeRefused, setWriteRefused] = React.useState(false);
+  /*
+   * ONE failure at a time, carrying the node it was produced against.
+   *
+   * Separate flags each go stale on their own: a refusal outlived the host
+   * handing this component a different node, so an alert went on describing an
+   * element no longer selected. Storing the ids it is ABOUT and comparing them
+   * on render means a change of node invalidates it with no effect to keep in
+   * step — the same reason the capacity refusal is derived rather than
+   * remembered.
+   */
+  const [failure, setFailure] = React.useState<{
+    readonly about: readonly string[];
+    readonly issue: SelectorFailure;
+  } | null>(null);
+  // In flight, so a second Enter cannot queue a duplicate class while the
+  // first save is still on the network.
+  const [saving, setSaving] = React.useState(false);
   const listId = React.useId();
+  /*
+   * What the node holds RIGHT NOW, for the callback that runs after a save.
+   *
+   * A site-style save is asynchronous, and an author can remove a chip while it
+   * is in flight. The success handler closes over the render that started the
+   * request, so applying from that render's ids would write back the classes as
+   * they stood before the removal — undoing it, from a callback about something
+   * else entirely.
+   */
+  const currentIds = React.useRef(nodeClassIds);
+  currentIds.current = nodeClassIds;
 
   if (library === undefined) {
     return (
       <div className="nx-classes">
-        <p className="nx-inspector__note">Loading classes…</p>
+        <p className="nx-inspector__note">
+          {libraryAbsence === "failed"
+            ? "This site's classes could not be read."
+            : "Loading classes…"}
+        </p>
       </div>
     );
   }
@@ -113,19 +218,18 @@ export function ClassSelector({
   const { options, hidden } = selectorOptions(library, nodeClassIds, query);
   const unapplied = unappliedNodeClassCount(nodeClassIds);
   /*
-   * DERIVED from the current node rather than read from state alone. A stored
-   * refusal outlives the node it described: removing a chip, an undo, or the
-   * host selecting a different element all give the node room again while the
-   * flag still says it is full. Deriving it cannot drift, where an effect that
-   * cleared the flag would have to be kept in step with every one of those.
+   * The failure to draw, or none. Scoped twice over: it must have been produced
+   * against THIS node, and a capacity refusal must still be true of it — the
+   * node may have gained room since, through a removal, an undo, or the host
+   * selecting a smaller element.
    */
-  const showRefusal = refused && !nodeHasRoom(nodeClassIds);
+  const shown = liveFailure(failure, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps a
   // highlight instead of silently sending Enter back to the first row.
   const highlighted = Math.min(active, Math.max(options.length - 1, 0));
 
   const commit = (option: ClassOption | undefined): void => {
-    if (option === undefined) return;
+    if (option === undefined || saving) return;
     if (option.kind === "create") {
       /*
        * The same node bound the apply path observes, asked before the class
@@ -134,32 +238,63 @@ export function ClassSelector({
        * is checked directly rather than left for the host to rediscover.
        */
       if (!nodeHasRoom(nodeClassIds)) {
-        setRefused(true);
+        setFailure({ about: nodeClassIds, issue: { kind: "node-full" } });
         return;
       }
-      onCreateClass(option.slug);
-    } else {
-      // Through the shared helper rather than an append written here. The
-      // bound on how many classes a node may carry belongs to one place, and a
-      // second append would keep working after that place learned to refuse.
-      const outcome = withClassApplied(nodeClassIds, option.choice.id);
-      if (!outcome.ok) {
-        setRefused(true);
-        return;
-      }
-      if (onNodeClassesChange(outcome.classIds) === "refused") {
-        // The draft survives, deliberately. An author whose write was refused
-        // has lost nothing they typed, and the next thing they do is likely to
-        // be trying it again.
-        setWriteRefused(true);
-        return;
-      }
+      /*
+       * Not awaited here, and the query is not cleared until it answers. A
+       * site-style save is a network write: clearing on dispatch would lose
+       * the typed name the moment the author pressed Enter, before anything
+       * knew whether it had landed.
+       */
+      setSaving(true);
+      void onCreateClass(option.slug).then(created => {
+        setSaving(false);
+        if (!created.ok) {
+          setFailure({
+            about: nodeClassIds,
+            issue: { kind: "not-created", reason: created.reason },
+          });
+          return;
+        }
+        // Applied through the ordinary path, so a node already at its limit
+        // refuses here exactly as it would for an existing class rather than
+        // being special-cased into a second rule — and against the node as it
+        // is NOW, not as it was when the request left.
+        applyExisting(created.classId, currentIds.current);
+      });
+      return;
     }
-    setRefused(false);
-    setWriteRefused(false);
+    applyExisting(option.choice.id, nodeClassIds);
+  };
+
+  /**
+   * Put a class the library already holds onto the node.
+   *
+   * One path for both kinds of apply. A newly created class reaches it with
+   * the id the host just minted, so the per-node bound and the store's refusal
+   * are enforced in one place rather than once per caller.
+   */
+  function applyExisting(classId: string, against: readonly string[]): void {
+    // Through the shared helper rather than an append written here. The bound
+    // on how many classes a node may carry belongs to one place, and a second
+    // append would keep working after that place learned to refuse.
+    const outcome = withClassApplied(against, classId);
+    if (!outcome.ok) {
+      setFailure({ about: against, issue: { kind: "node-full" } });
+      return;
+    }
+    if (onNodeClassesChange(outcome.classIds) === "refused") {
+      // The draft survives, deliberately. An author whose write was refused
+      // has lost nothing they typed, and the next thing they do is likely to
+      // be trying it again.
+      setFailure({ about: against, issue: { kind: "not-written" } });
+      return;
+    }
+    setFailure(null);
     setQuery("");
     setActive(0);
-  };
+  }
 
   return (
     <div className="nx-classes">
@@ -169,7 +304,11 @@ export function ClassSelector({
           const landed = onNodeClassesChange(
             withClassRemoved(nodeClassIds, id)
           );
-          setWriteRefused(landed === "refused");
+          setFailure(
+            landed === "refused"
+              ? { about: nodeClassIds, issue: { kind: "not-written" } }
+              : null
+          );
         }}
       />
       <Input
@@ -208,14 +347,9 @@ export function ClassSelector({
           {`${hidden} more — keep typing to narrow the list.`}
         </p>
       ) : null}
-      {writeRefused ? (
+      {shown !== null ? (
         <p className="nx-classes__issue" role="alert">
-          This change could not be applied to the document.
-        </p>
-      ) : null}
-      {showRefusal ? (
-        <p className="nx-classes__issue" role="alert">
-          This element already has as many classes as the page can apply.
+          {failureMessage(shown)}
         </p>
       ) : null}
       {unapplied > 0 ? (

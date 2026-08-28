@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
-import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  type TestDb,
+  testLogger,
+} from "../../../__tests__/fixtures/db";
 import {
   roleFactory,
   bulkRolesFactory,
@@ -14,12 +18,12 @@ describe("RoleInheritanceService", () => {
 
   beforeEach(async () => {
     testDb = await createTestDb();
-    service = new RoleInheritanceService(testDb.db, testDb.schema);
+    service = new RoleInheritanceService(testDb.adapter, testLogger);
   });
 
   afterEach(async () => {
     await testDb.reset();
-    testDb.close();
+    await testDb.close();
   });
 
   describe("addRoleInheritance()", () => {

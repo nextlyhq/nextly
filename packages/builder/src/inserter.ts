@@ -25,9 +25,11 @@
  */
 
 import {
+  allBlocks,
   canBeRoot,
   canNest,
   canNestInSlot,
+  expandSlotDefaults,
   findNode,
   getBlock,
   locateNode,
@@ -37,6 +39,7 @@ import {
   type BlockNode,
   type NestingSource,
   type NestingVerdict,
+  type SlotDefaultSource,
 } from "@nextlyhq/blocks-engine";
 
 import { emptySlotOf } from "./empty-slot";
@@ -505,24 +508,92 @@ export function insertionPointFor(
 }
 
 /**
- * The node an entry inserts.
+ * The node an entry inserts, carrying whatever children its block declares it
+ * starts with.
  *
  * Props are deep-copied. The entry outlives every insert made from it, so
  * handing out its own object would let an edit to one inserted block reach the
  * catalog — and through it every block inserted from that entry afterwards.
  * A shallow copy is not enough, because a default value may be an array or a
  * nested object and those would still be shared.
+ *
+ * The children come from `expandSlotDefaults` rather than from anything written
+ * here, so "what does this slot start with" is answered in one place: the block
+ * declares it, the engine expands it with ids minted per instance, and a
+ * container that declares nothing still arrives with no `slots` key at all.
+ * Building the children here instead would put a second answer beside the
+ * declaration, and the two would agree only until one of them changed.
  */
-export function nodeForEntry(entry: InsertEntry): BlockNode {
-  return makeNode(entry.blockName, entry.version, structuredClone(entry.props));
+export function nodeForEntry(
+  entry: InsertEntry,
+  definitions: SlotDefaultSource,
+  nesting?: NestingSource
+): BlockNode {
+  return makeNode(
+    entry.blockName,
+    entry.version,
+    structuredClone(entry.props),
+    // The nesting source travels with the definitions rather than being
+    // rederived inside the engine. A caller that supplies its own rules uses
+    // them to decide what may be OFFERED, and a seeded child that skipped them
+    // would be a placement the caller's own rules forbid, arriving by being
+    // declared rather than chosen.
+    expandSlotDefaults(entry.blockName, definitions, nesting)
+  );
+}
+
+/**
+ * The registry as a block-definition source.
+ *
+ * Reads the DEFINITION rather than the node, because a container inserted from
+ * the palette has no `slots` key until something is put in it — which is
+ * precisely the container that needs filling.
+ */
+export function registryBlockSource(): SlotDefaultSource {
+  return { get: type => getBlock(type) };
+}
+
+/**
+ * The definitions an insert expands declared starting children from, given the
+ * palette's own catalog.
+ *
+ * Supplied definitions are consulted FIRST and the registry second, which is
+ * what keeps the offer and the insert reading one declaration. A caller may
+ * hand the palette a definition the registry does not hold — a host block, a
+ * fixture — and the catalog then offers it; resolving only against the registry
+ * would find no declaration for that block and insert it stripped of the
+ * children it declares, silently, because an absent declaration and a declared
+ * emptiness are the same answer.
+ *
+ * The fallback is the other half and not a leftover: an entry names child TYPES
+ * the supplied list has no reason to contain, so those still resolve against
+ * everything registered. Consulting the supplied list first changes which
+ * declaration wins for a name in both, and that is the intended order — the
+ * palette offered THAT definition, so the insert must build THAT block.
+ */
+export function blockSourceFor(
+  definitions: readonly AnyBlockDefinition[] | undefined
+): SlotDefaultSource {
+  // Both readings are taken ONCE, here, rather than on each lookup. A source
+  // that consulted the live registry per call would answer from a different
+  // set of definitions than the catalog its caller built alongside it, so a
+  // row offered from one reading could be inserted with children from another.
+  const byName = new Map<string, AnyBlockDefinition>();
+  for (const definition of allBlocks()) byName.set(definition.name, definition);
+  // Supplied definitions are written second, so they WIN for a name in both:
+  // the palette offered that definition, so the insert must build that block.
+  for (const definition of definitions ?? []) {
+    byName.set(definition.name, definition);
+  }
+  return { get: type => byName.get(type) };
 }
 
 /**
  * The registry as a slot source.
  *
- * Reads the DEFINITION's declared slots rather than the node's, because a
- * container inserted from the palette has no `slots` key until something is put
- * in it — which is precisely the container that needs filling.
+ * DERIVED from `registryBlockSource` rather than reading the registry again:
+ * the names of a block's slots are a narrower view of its declaration, and two
+ * readings of one registry would agree until one of them learned to filter.
  *
  * Here rather than beside either caller. The palette asks it where an insert
  * would land and the canvas asks it which regions a drag can aim at, and those
@@ -530,9 +601,10 @@ export function nodeForEntry(entry: InsertEntry): BlockNode {
  * is a block that behaves differently depending on how an author reached it.
  */
 export function registrySlotSource(): SlotSource {
+  const definitions = registryBlockSource();
   return {
     slotsOf: type => {
-      const declared = getBlock(type)?.slots;
+      const declared = definitions.get(type)?.slots;
       return declared === undefined ? undefined : Object.keys(declared);
     },
   };

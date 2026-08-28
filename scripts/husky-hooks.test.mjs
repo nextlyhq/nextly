@@ -117,6 +117,21 @@ describe("the pre-push hook specifically", () => {
     expect(await hook("pre-push")).toMatch(/^#!\/usr\/bin\/env sh\r?\n/);
   });
 
+  it("does not let the repo-wide typecheck refuse the push", async () => {
+    /*
+     * The only gate here whose scope is the whole repository, so it can be red
+     * for a package the author never touched. A hook that refuses over someone
+     * else's breakage is one people pass `--no-verify` to, which costs every
+     * gate rather than this one. CI blocks on the same command.
+     */
+    const source = shellCode(await hook("pre-push"));
+
+    expect(source).toMatch(/^set \+e\n\s*pnpm turbo check-types/m);
+    expect(source).toMatch(/^TYPES_STATUS=\$\?/m);
+    // Reported, so it is not silent either.
+    expect(source).toMatch(/if \[ "\$TYPES_STATUS" -ne 0 \]/);
+  });
+
   it("typechecks the whole repo, which nothing here did before", async () => {
     // `lint` and `build` above already run repo-wide, so types were the one
     // whole-repo question this hook was not asking — and an API or type break

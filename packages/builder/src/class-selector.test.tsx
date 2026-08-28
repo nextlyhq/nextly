@@ -43,7 +43,10 @@ function draw(overrides: Partial<ClassSelectorProps> = {}): {
   // "refused" and so reads as success — the fake would then be asserting a
   // shape the real host cannot use.
   const onNodeClassesChange = vi.fn(() => "applied" as const);
-  const onCreateClass = vi.fn();
+  const onCreateClass = vi.fn(async (slug: string) => ({
+    ok: true as const,
+    classId: `id-${slug}`,
+  }));
   render(
     <ClassSelector
       library={LIBRARY}
@@ -65,7 +68,10 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
       library={LIBRARY}
       nodeClassIds={initial.nodeClassIds}
       onNodeClassesChange={vi.fn(() => "applied" as const)}
-      onCreateClass={vi.fn()}
+      onCreateClass={vi.fn(async () => ({
+        ok: true as const,
+        classId: "id-new",
+      }))}
     />
   );
   return {
@@ -75,7 +81,10 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
           library={LIBRARY}
           nodeClassIds={nodeClassIds}
           onNodeClassesChange={vi.fn(() => "applied" as const)}
-          onCreateClass={vi.fn()}
+          onCreateClass={vi.fn(async () => ({
+            ok: true as const,
+            classId: "id-new",
+          }))}
         />
       ),
   };
@@ -96,7 +105,10 @@ describe("a library that has not been read yet", () => {
         library={undefined}
         nodeClassIds={[]}
         onNodeClassesChange={vi.fn(() => "applied" as const)}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
       />
     );
     expect(screen.getByText(/loading classes/i)).toBeTruthy();
@@ -326,7 +338,10 @@ describe("a write the document refuses", () => {
         library={LIBRARY}
         nodeClassIds={[]}
         onNodeClassesChange={onNodeClassesChange}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
       />
     );
     return { onNodeClassesChange };
@@ -365,7 +380,10 @@ describe("a write the document refuses", () => {
         library={LIBRARY}
         nodeClassIds={["id-hero"]}
         onNodeClassesChange={onNodeClassesChange}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
       />
     );
     fireEvent.click(
@@ -374,6 +392,176 @@ describe("a write the document refuses", () => {
     expect(screen.getByRole("alert").textContent).toMatch(
       /could not be applied/i
     );
+  });
+});
+
+describe("a failure that must not outlive the node it describes", () => {
+  const full = Array.from(
+    { length: MAX_CLASSES_PER_NODE },
+    (_, index) => `id-filler-${index}`
+  );
+
+  it("drops a refused WRITE when the host hands it another node", () => {
+    /*
+     * Every failure carries the ids it was produced against. Without that, a
+     * refusal outlives the element: the alert goes on describing a node that
+     * is no longer selected, and the author reads it as being about the one
+     * in front of them.
+     */
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "refused" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("drops a refused CREATION the same way", async () => {
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: false as const,
+          reason: "The site style refused this.",
+        }))}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    await screen.findByText(/site style refused/i);
+
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a failure that IS still about the node in hand", () => {
+    // The control: invalidating on identity must not throw away a failure the
+    // author has not yet had a chance to read.
+    drawFor({ nodeClassIds: full });
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toMatch(/as many classes/i);
+  });
+});
+
+describe("a creation that lands after the node has moved on", () => {
+  it("applies against the node as it is NOW, not as it was", async () => {
+    /*
+     * A site-style save is asynchronous and an author can remove a chip while
+     * it is in flight. Applying from the render that STARTED the request would
+     * write back the classes as they stood before the removal — undoing it,
+     * from a callback about something else entirely.
+     */
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const onCreateClass = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    const onNodeClassesChange = vi.fn(() => "applied" as const);
+
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-hero", "id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={onCreateClass}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onCreateClass).toHaveBeenCalled();
+
+    // The author removes a chip while the save is still out.
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={onCreateClass}
+      />
+    );
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-made" });
+    });
+
+    // `id-hero` must NOT come back: it was removed after the request left.
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-card", "id-made"]);
+  });
+});
+
+describe("why the library is absent", () => {
+  it("says a read is loading when it is still in flight", () => {
+    render(
+      <ClassSelector
+        library={undefined}
+        libraryAbsence="pending"
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.getByText(/loading classes/i)).toBeTruthy();
+  });
+
+  it("says a read FAILED, rather than loading forever", () => {
+    /*
+     * A failed read will not finish. A surface that goes on saying "loading"
+     * describes a state the site is not in and gives the author nothing to do
+     * about it — the distinction the tokens studio already draws.
+     */
+    render(
+      <ClassSelector
+        library={undefined}
+        libraryAbsence="failed"
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.getByText(/could not be read/i)).toBeTruthy();
+    expect(screen.queryByText(/loading classes/i)).toBeNull();
   });
 });
 

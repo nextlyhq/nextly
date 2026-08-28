@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // `TestDb` is the fixture's own return type (`Awaited<ReturnType<typeof
 // createTestDb>>`), so this annotation tracks the helper instead of
 // restating its shape.
-import { createTestDb, type TestDb } from "../../__tests__/fixtures/db";
+import {
+  createTestDb,
+  testLogger,
+  type TestDb,
+} from "../../__tests__/fixtures/db";
 import { MediaService } from "../media";
 
 const mockStorageUpload = vi.fn().mockResolvedValue({
@@ -78,7 +82,7 @@ describe("MediaService", () => {
     mockOptimizeImage.mockClear();
 
     testDb = await createTestDb();
-    mediaService = new MediaService(testDb.db, testDb.schema);
+    mediaService = new MediaService(testDb.adapter, testLogger);
 
     testUserId = "test-user-001";
     await testDb.db.insert(testDb.schema.users).values({
@@ -481,8 +485,11 @@ describe("MediaService", () => {
       expect(result.message).toBe("Media deleted successfully");
 
       expect(mockStorageDelete).toHaveBeenCalledTimes(2);
-      expect(mockStorageDelete).toHaveBeenCalledWith("test.jpg");
-      expect(mockStorageDelete).toHaveBeenCalledWith("thumb_test.jpg");
+      // The bucket travels with the path: `storage.delete(path, "media")`.
+      // A single-argument assertion passes only while the call has exactly one,
+      // so it silently stopped describing this call when the bucket was added.
+      expect(mockStorageDelete).toHaveBeenCalledWith("test.jpg", "media");
+      expect(mockStorageDelete).toHaveBeenCalledWith("thumb_test.jpg", "media");
 
       const check = await mediaService.getMediaById(mediaId);
       expect(check.success).toBe(false);

@@ -113,6 +113,10 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
+  companionWriteVia,
+  upsertCompanionRow,
+} from "../../i18n/runtime/companion-io";
+import {
   cachedCompanionReadiness,
   companionNotReadyMessage,
   isCompanionReady,
@@ -1219,55 +1223,6 @@ export class CollectionMutationService extends BaseService {
         `${this.localization.locales.map(l => l.code).join(", ")}.`,
       data: null,
     };
-  }
-
-  /**
-   * Upsert the companion `_locales` row for `(parentId, locale)` with the provided localized
-   * columns (i18n M5, updateEntry). Only the provided columns are written — an existing row for
-   * another locale, or other localized fields on this locale's row, are left untouched. Uses the
-   * PK `(_parent, _locale)` conflict target. Runs inside the caller's transaction via `tx.execute`.
-   */
-  private async upsertCompanionRow(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter tx surface
-    tx: any,
-    companionTableName: string,
-    parentId: string,
-    locale: string,
-    companionData: Record<string, unknown>
-  ): Promise<void> {
-    const cols = Object.keys(companionData);
-    if (cols.length === 0) return;
-    const isMysql = this.dialect === "mysql";
-    const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-    const params: unknown[] = [];
-    const ph = () =>
-      this.dialect === "postgresql" ? `$${params.length}` : "?";
-
-    const allCols = ["_parent", "_locale", ...cols];
-    const valuePlaceholders = allCols
-      .map(c => {
-        params.push(
-          c === "_parent"
-            ? parentId
-            : c === "_locale"
-              ? locale
-              : companionData[c]
-        );
-        return ph();
-      })
-      .join(", ");
-
-    const conflict = isMysql
-      ? `ON DUPLICATE KEY UPDATE ${cols.map(c => `${q(c)} = VALUES(${q(c)})`).join(", ")}`
-      : `ON CONFLICT (${q("_parent")}, ${q("_locale")}) DO UPDATE SET ${cols
-          .map(c => `${q(c)} = excluded.${q(c)}`)
-          .join(", ")}`;
-
-    await tx.execute(
-      `INSERT INTO ${q(companionTableName)} (${allCols.map(q).join(", ")}) ` +
-        `VALUES (${valuePlaceholders}) ${conflict}`,
-      params
-    );
   }
 
   /**
@@ -6291,8 +6246,8 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
-            await this.upsertCompanionRow(
-              tx,
+            await upsertCompanionRow(
+              companionWriteVia(tx, this.dialect),
               localizedUpdate.companionTableName,
               params.entryId,
               localizedUpdate.writeLocale,

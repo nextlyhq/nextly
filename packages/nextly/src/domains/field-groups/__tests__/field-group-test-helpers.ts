@@ -66,6 +66,12 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
   };
 }
 
+/** Sentinel handle returned by a tx double's `getDrizzle()`.
+ *
+ * Distinct from the adapter's so a test can prove WHICH connection a read was
+ * routed through, not merely that some handle was passed. */
+export const TX_DRIZZLE_HANDLE = { __handle: "tx" } as const;
+
 export function createMockTxContext(overrides: MockRecord = {}): MockRecord {
   return {
     select: vi.fn().mockResolvedValue([]),
@@ -73,6 +79,14 @@ export function createMockTxContext(overrides: MockRecord = {}): MockRecord {
     insert: vi.fn().mockResolvedValue({ id: "tx-new-id" }),
     update: vi.fn().mockResolvedValue([{ id: "tx-updated-id" }]),
     delete: vi.fn().mockResolvedValue(undefined),
+    // The component-delete path resolves each component on the TRANSACTION's
+    // own connection before deleting, because on a single-connection pool the
+    // delete transaction already holds the only connection and a pooled
+    // registry read would wait on itself. Absent from the double, that call
+    // threw -- and the production `catch` swallowed it to a debug log, so the
+    // delete simply never happened and the test read as "0 calls" rather than
+    // as an error.
+    getDrizzle: vi.fn().mockReturnValue(TX_DRIZZLE_HANDLE),
     ...overrides,
   };
 }

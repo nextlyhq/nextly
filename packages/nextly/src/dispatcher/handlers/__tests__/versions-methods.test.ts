@@ -15,6 +15,12 @@ vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: (...a: unknown[]) => assertReadableSpy(...a),
   redactSnapshotForUser: (...a: unknown[]) => redactSpy(...a),
   resolveSingleDocumentId: (...a: unknown[]) => resolveSingleIdSpy(...a),
+  // A factory mock replaces the whole module, so anything the handler imports
+  // and this object omits is undefined at the call site rather than falling
+  // through to the real export. The real one returns `Promise<void>` and
+  // mutates the snapshot in place, so a mock that RETURNED one would describe a
+  // contract the module does not have.
+  hydrateVersionSnapshot: () => Promise.resolve(),
 }));
 
 vi.mock("../../../di", () => ({
@@ -46,11 +52,44 @@ describe("listVersionsForDocument", () => {
       user,
     });
 
+    // The fifth argument is the caller's authenticated scope, forwarded even
+    // when absent. Asserted explicitly because it is a security parameter:
+    // version history is a read of the LIVE document, and the scope is what
+    // makes a scoped API key be judged on its own read grant rather than on
+    // the grants of the account that owns it.
     expect(assertReadableSpy).toHaveBeenCalledWith(
       "collection",
       "posts",
       "e1",
-      user
+      user,
+      undefined
+    );
+  });
+
+  it("forwards the caller's authenticated scope to the document gate", async () => {
+    // The half that matters, and that nothing covered: a DROPPED scope does
+    // not fail loudly. It silently promotes a scoped key to the permissions of
+    // the account behind it, so a super-admin-owned key would read history for
+    // documents its own grant forbids. The test above passes either way,
+    // because an absent scope forwards as `undefined` whether or not the
+    // argument is threaded at all.
+    listSpy.mockResolvedValue([]);
+    const authenticatedScope = { kind: "apiKey", grants: ["posts:read"] };
+
+    await listVersionsForDocument({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId: "e1",
+      user,
+      authenticatedScope,
+    } as unknown as Parameters<typeof listVersionsForDocument>[0]);
+
+    expect(assertReadableSpy).toHaveBeenCalledWith(
+      "collection",
+      "posts",
+      "e1",
+      user,
+      authenticatedScope
     );
   });
 

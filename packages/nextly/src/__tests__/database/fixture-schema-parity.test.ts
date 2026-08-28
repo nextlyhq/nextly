@@ -20,22 +20,24 @@ import { getCoreSchema } from "../../schemas/index";
 import { nextlyTables } from "./_fixture-schema/unified";
 
 /**
- * Tables whose fixture definition predates this check and describes an older
- * schema. `dynamic_collections` is the clearest case: it still declares
- * `name`, `label`, `icon` and `schema_definition`, none of which the real table
- * has had for a long time.
+ * There is no exemption list any more, and that is the point.
  *
- * They are exempted rather than corrected because the fixture emits CREATE TABLE
- * for one helper test that asserts a table is selectable, so no consumer reads
- * the columns these tables declare. The list may only ever SHRINK: a table not
- * named here is checked, so nothing can join it without deleting a line here.
+ * This file used to carry `PREDATES_THIS_CHECK`, naming four tables whose
+ * fixture definitions had drifted from production. The premise was that no
+ * consumer read those columns — which stopped being true for `users` when a
+ * helper test began inserting real rows through the adapter, and stopped being
+ * true for the rest once the fixture gained a table resolver and a caller could
+ * reach them via `adapter.select`. `dynamic_collections` then failed with
+ * `no such column: "slug"`: the resolver named the production table while the
+ * DDL created the legacy one.
+ *
+ * All four are now corrected — 26 columns added and 4 stale ones removed — so
+ * the set is empty. An empty exemption kept "in case" is the shape this
+ * repository has been bitten by before (two dead LAYOUT_FIELD_TYPES sets, each
+ * under a comment promising behaviour the code could not deliver), so it is
+ * deleted rather than emptied. Every fixture table is checked, and a new
+ * divergence has nowhere to hide.
  */
-const PREDATES_THIS_CHECK = new Set([
-  "users",
-  "permissions",
-  "media",
-  "dynamic_collections",
-]);
 
 /** Column names per core table, as the pipeline actually compiles them. */
 function productionColumns(): Map<string, Set<string>> {
@@ -54,7 +56,6 @@ describe("fixture schema parity", () => {
     const drift: string[] = [];
 
     for (const fixture of nextlyTables) {
-      if (PREDATES_THIS_CHECK.has(fixture.name)) continue;
       const real = production.get(fixture.name);
       // A fixture-only table is not drift: the fixture carries a couple of
       // scratch tables that exist for its own tests and no production table.
@@ -75,7 +76,6 @@ describe("fixture schema parity", () => {
     const stale: string[] = [];
 
     for (const fixture of nextlyTables) {
-      if (PREDATES_THIS_CHECK.has(fixture.name)) continue;
       const real = production.get(fixture.name);
       if (!real) continue;
 

@@ -25,10 +25,15 @@ const contributedField = (
 ): FieldDefinition =>
   ({ name: "value", ...overrides }) as unknown as FieldDefinition;
 
-describe("getColumnDescriptor — toggle", () => {
-  it("maps a toggle field to a boolean column (Postgres)", () => {
+describe("getColumnDescriptor — checkbox", () => {
+  it("maps a checkbox field to a boolean column (Postgres)", () => {
+    // The type is `checkbox`, not `toggle`. `toggle` appears nowhere in the
+    // FieldType union or in the descriptor's switch, so it was reaching the
+    // unrecognised-type fallback and coming back as `text` -- and the test
+    // read that as the boolean mapping being broken. The mapping is fine; the
+    // name was wrong.
     const desc = getColumnDescriptor(
-      { name: "is_active", type: "toggle" } as never,
+      { name: "is_active", type: "checkbox" } as never,
       "postgresql",
       "collection"
     );

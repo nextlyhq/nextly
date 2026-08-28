@@ -131,7 +131,10 @@ describe("what InspectorPanel forwards to the style tab", () => {
     render(
       <InspectorPanel
         editor={editor}
-        onCreateClass={vi.fn()}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
         classLibrary={[
           { id: "id-hero", slug: "hero", orderIndex: 0, styles: {} },
         ]}
