@@ -26,6 +26,11 @@
 import type { CssNode } from "css-tree";
 import parse from "css-tree/parser";
 
+// Shared with the URL policy rather than spelled again here. A control
+// character is refused for one reason in both places — it survives no round
+// trip through a stylesheet or an attribute intact — and two copies of that
+// character set would drift into a value one layer accepts and the next
+// rejects.
 import { hasControlCharacter } from "../url-policy";
 
 /** Why a value was refused. Each maps to a stable validation issue code. */

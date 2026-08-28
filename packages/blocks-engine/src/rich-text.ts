@@ -49,6 +49,7 @@
  * mismatch is silent in the worst possible way — the editor treats a tree as
  * text, reads no text out of it, and commits an empty string over the passage.
  */
+import { authoredText } from "./authored-text";
 import { isLinkableUrl } from "./url-policy";
 
 export const RICH_TEXT_PROP_TYPE = "richText";
@@ -327,11 +328,27 @@ function labelOf(item: unknown): string | null {
   // by a word that never appears on it — the mirror of the defect that made
   // these labels worth reading in the first place.
   if (!isLinkableUrl(fields.url)) return null;
-  const text = fields.text;
-  return typeof text === "string" && text.length > 0 ? text : null;
+  // Through the SAME projection the renderer draws with, not a `typeof` test of
+  // its own. A stored number is authored text there, so a button whose label is
+  // `0` shows the character "0" on the page; a string-only check here described
+  // that page by a label it does not carry.
+  const text = authoredText(fields.text);
+  return text.length > 0 ? text : null;
 }
 
 function leafText(node: RichTextNode): string | null {
+  /*
+   * A block-level leaf carries a LABEL, not text, even though it stores it
+   * under the same key — so it is asked first and asked through `labelOf`.
+   *
+   * Reading `node.text` for it instead gets two things wrong at once, and both
+   * disagree with what the reader draws. A label stored as a number is drawn
+   * and would be skipped here; and a button whose URL this format cannot
+   * express is NOT drawn, yet its label would be reported. `labelOf` is the
+   * decision the group items already go through, and a standalone button is
+   * the same button with nothing beside it.
+   */
+  if (BLOCK_LEVEL_LEAVES.has(node.type)) return labelOf(node);
   if (typeof node.text === "string") return node.text;
   if (node.type === "linebreak") return " ";
   return listedLabels(node);

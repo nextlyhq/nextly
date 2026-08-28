@@ -10,30 +10,34 @@
  *
  * @module blocks/props
  */
-import { isFetchableUrl, isLinkableUrl } from "@nextlyhq/blocks-engine";
+import {
+  authoredText,
+  isAuthoredText,
+  isFetchableUrl,
+  isLinkableUrl,
+} from "@nextlyhq/blocks-engine";
 import type { RemotePatternInput } from "@nextlyhq/blocks-engine";
 
-/** A string prop, or the fallback when the stored value is not usable text. */
 /**
  * Whether a stored value is text an author actually put there.
+ *
+ * Re-exported from the engine rather than declared here, because link
+ * eligibility is not the only decision this renderer shares with the plain-text
+ * projections taken from the same document: what a page DRAWS and what a
+ * description SAYS about it have to answer this identically, and a copy here
+ * agreed on the day it was written and then drifted.
  *
  * Separate from {@link text} because a few props need to tell a MISSING value
  * from an empty one, and `text()` maps both to `""`. An image's `alt` is the
  * case that matters: absent means "nobody said", while an explicit `""` is the
  * documented way to mark an image decorative, and those call for opposite
- * behaviour. Sharing this predicate keeps the two from drifting apart.
+ * behaviour.
  */
-export function isAuthoredText(value: unknown): boolean {
-  // A number is text a person would recognise, and a stored `0` or `2024` is
-  // almost always a value someone typed. Booleans, objects and null are not.
-  return (
-    typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
+export { isAuthoredText };
 
+/** A string prop, or the fallback when the stored value is not usable text. */
 export function text(value: unknown, fallback = ""): string {
-  return isAuthoredText(value) ? String(value) : fallback;
+  return authoredText(value, fallback);
 }
 
 /** A stored value constrained to one of a fixed set, or the fallback. */
