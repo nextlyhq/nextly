@@ -2026,3 +2026,57 @@
 .nx-canvas [contenteditable="false"] {
   -webkit-touch-callout: none;
 }
+
+/*
+ * The reordering hint under the layers tree.
+ *
+ * Quiet by construction: it is a standing legend rather than a message, so it
+ * has to be readable without competing with the tree it describes. Kept at the
+ * panel's own text size floor rather than smaller, because a hint nobody can
+ * read is the same as the missing hint it replaced.
+ */
+.nx-layers-panel__hint {
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  border-top: 1px solid var(--nx-border);
+  color: var(--nx-muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  list-style: none;
+}
+
+/*
+ * One binding per row, with the keystroke in a column of its own.
+ *
+ * A run of them separated inline wraps mid-binding at this width — the key and
+ * the words it belongs to end up on different lines — which turns a legend
+ * meant to be scanned into a paragraph to be read.
+ */
+.nx-layers-panel__hint-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/* Wide enough that the four labels start on one line rather than four. */
+.nx-layers-panel__hint-row .nx-layers-panel__hint-key {
+  flex: none;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+/*
+ * The keystroke reads as a key, so it is set apart from the words around it.
+ * `inline-block` rather than a bare span: the glyphs are narrow and the label
+ * beside them is not, and without a box the two run together at small sizes.
+ */
+.nx-layers-panel__hint-key {
+  display: inline-block;
+  padding: 0 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  background: var(--nx-muted);
+  color: var(--nx-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  white-space: nowrap;
+}

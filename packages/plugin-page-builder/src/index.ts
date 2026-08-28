@@ -90,14 +90,23 @@ export {
 } from "./preview-viewports";
 export type { SiteStyleReader } from "./site-style-storage";
 
-// The class-usage record and the walk that repairs it. Both are public because
-// the record is a CACHE of something derivable: a host that has written pages
-// outside the hook — a restore, an import, a direct database edit — needs the
-// rebuild to bring the record back into agreement with the documents, and a
-// cache with no reachable way to rebuild it is a second source of truth.
+// The class-usage index, the derivation behind it, and the walk that repairs
+// it.
+//
+// `classUsageOf` is the derivation: it answers which classes a document
+// references, and it is the same answer the write path records. A host that
+// needs that question answered for a document it holds asks here rather than
+// walking the tree itself, so there is one reading of what a reference is.
+//
+// The rebuild is public because the index is DERIVED and its maintenance runs
+// post-commit: a host that has written pages outside that path — a restore, an
+// import, a direct database edit — has rows that no longer describe the
+// documents, and a derived store with no reachable way to rebuild it is a
+// second source of truth. The stores and the report come with it because a
+// caller cannot invoke the walk without supplying the first or reading the
+// second.
 export { classUsageOf } from "./class-usage";
 export type { ClassUsage } from "./class-usage";
-export { rebuildClassUsage } from "./class-usage-rebuild";
 export {
   rebuildClassUsageIndex,
   type ClassUsageDocumentStore,
@@ -108,7 +117,6 @@ export type { ClassUsageIndexStore } from "./class-usage-maintenance";
 // the rebuild without naming the variant, and a caller left to spell it as a
 // string can spell it wrong.
 export type { ClassUsageVariant } from "./collections/class-usage-index";
-export type { PageUsageStore, RebuildReport } from "./class-usage-rebuild";
 /*
  * `editorChoiceFields` is gone, along with the per-entry editor switch.
  *

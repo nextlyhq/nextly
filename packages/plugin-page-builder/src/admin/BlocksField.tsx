@@ -1591,7 +1591,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
             );
           }
-          if (panel === "layers") return <LayersPanel editor={editor} />;
+          if (panel === "layers") {
+            /*
+              The panel cannot work this out for itself. It is drawn here, in
+              the shell's panel region, while `BlockKeyboardActions` below wraps
+              the shell's CHILDREN — sibling subtrees, so nothing the panel can
+              read from where it sits reports what this file knows by writing
+              both. Passed as a fact rather than inferred.
+            */
+            return <LayersPanel editor={editor} moveHints />;
+          }
           if (panel === "tokens") {
             return (
               <TokensStudio

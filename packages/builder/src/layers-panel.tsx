@@ -32,21 +32,62 @@
  * clearing it returns the tree to what the author had open. Only the author's
  * set is stored.
  *
+ * ## The panel says how to reorder, because nothing else does
+ *
+ * The bindings that move a block already work here — the tree holds focus and
+ * the editor's own keystrokes act on the selection, so an author standing in
+ * this panel can already reorder and nest without touching the canvas. Nothing
+ * told them so, and a capability nobody can find reads exactly like a missing
+ * one.
+ *
+ * The hint is DERIVED from the bindings rather than written beside them. A
+ * retyped "Alt+Up" is correct until someone rebinds the keystroke, and then it
+ * is a label that teaches a key which does nothing — with no test that can
+ * fail, because the two are only related by having been typed by the same
+ * person on the same day.
+ *
+ * It is also the tree's accessible description, not merely text near it. A
+ * sighted author reads it because it sits under the tree; a screen-reader user
+ * hears it on entering the tree, which is the moment the question arises.
+ *
  * @module layers-panel
  */
 
 import { allBlocks } from "@nextlyhq/blocks-engine";
-import { Input, TreeView, type TreeNode } from "@nextlyhq/ui";
+import {
+  Input,
+  TreeView,
+  detectApplePlatform,
+  type TreeNode,
+} from "@nextlyhq/ui";
 import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
+import { keyHint } from "./key-hint";
+import { MOVE_KEYS } from "./keyboard-actions";
+import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 
 export interface LayersPanelProps {
   /** The editor whose document this shows and whose selection it drives. */
   editor: EditorState;
+  /**
+   * Whether the block-move keystrokes are bound for THIS editor.
+   *
+   * Owned by the host, which is the only place that can answer it. This panel
+   * is drawn in the shell's panel region while the keystrokes are registered by
+   * a component wrapping the shell's children, and those are sibling subtrees —
+   * so nothing readable from where this sits describes the bindings beside it.
+   * A host with two editors on one page has two answers, and only it knows
+   * which belongs to which.
+   *
+   * Defaults to `false`, so a panel told nothing says nothing: the legend is a
+   * claim that pressing something does something, and silence is the safe
+   * direction for a claim that cannot be checked from here.
+   */
+  moveHints?: boolean;
 }
 
 /** One badge: an icon nobody has to see, and a word every reader gets. */
@@ -123,7 +164,34 @@ function rowOf(
   };
 }
 
-export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
+/**
+ * The short label each direction gets in the legend.
+ *
+ * The binding's own `description` is a SENTENCE — "Move the selected block into
+ * the container above it" — because it is written to be announced after the
+ * move happens, where the subject has to be named. Four of those stacked under
+ * a tree is a paragraph rather than a legend, and it reads as prose to be
+ * waded through rather than a key to be scanned.
+ *
+ * So the legend names the DIRECTION, which the binding table already carries as
+ * an enum. That keeps this a projection of something the editor decided rather
+ * than a second wording of it: total over `MoveDirection`, so a direction added
+ * to the move rule fails to compile here instead of silently drawing nothing.
+ *
+ * One verb across all four, matching the arrow that runs them, so the pairs
+ * read as opposites rather than as four unrelated commands.
+ */
+const DIRECTION_LABEL: Readonly<Record<MoveDirection, string>> = {
+  up: "Move up",
+  down: "Move down",
+  indent: "Move in",
+  outdent: "Move out",
+};
+
+export function LayersPanel({
+  editor,
+  moveHints = false,
+}: LayersPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
   const [opened, setOpened] = React.useState<readonly string[]>([]);
 
@@ -179,6 +247,53 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
     [search.roots, icons]
   );
 
+  /*
+   * Which keyboard is in front of the author, resolved AFTER mounting.
+   *
+   * `detectApplePlatform` reads `navigator`, which a server render does not
+   * have — it answers false there, so a server would emit `Alt` and the first
+   * browser render `⌥`, and React would find markup it did not produce and
+   * throw the subtree away. Held as `null` until it is known, so the legend is
+   * absent rather than briefly wrong: this module's whole rule is that a hint
+   * naming the wrong key is worse than no hint at all.
+   */
+  /*
+   * Per INSTANCE, not a module constant. A host may mount two editors on one
+   * page, and a fixed id would have both trees pointing at the same element —
+   * an ambiguous lookup, where assistive technology can read one panel's tree
+   * the other panel's description.
+   */
+  const hintId = React.useId();
+  const [apple, setApple] = React.useState<boolean | null>(null);
+  React.useEffect(() => {
+    setApple(detectApplePlatform());
+  }, []);
+
+  /*
+   * Built from the binding table, so a rebound keystroke moves the hint with
+   * it. A binding this cannot spell is dropped rather than guessed at — see
+   * `keyHint` for why a wrong hint is worse than no hint.
+   */
+  const hints = React.useMemo(
+    () =>
+      apple === null || !moveHints
+        ? []
+        : MOVE_KEYS.flatMap(({ keys, direction, description }) => {
+            const shown = keyHint(keys, apple);
+            return shown === null
+              ? []
+              : [
+                  {
+                    keys,
+                    shown,
+                    label: DIRECTION_LABEL[direction],
+                    description,
+                  },
+                ];
+          }),
+    [apple, moveHints]
+  );
+
   return (
     <div className="nx-layers-panel">
       <div className="nx-layers-panel__search">
@@ -219,7 +334,39 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
           onExpandedChange={next =>
             setOpened(next.filter(id => !search.expand.includes(id)))
           }
+          // The hint is the tree's DESCRIPTION, so it is announced on entering
+          // the tree rather than only readable by someone who can see it below.
+          aria-describedby={hints.length === 0 ? undefined : hintId}
         />
+      )}
+
+      {/*
+        Outside the empty and no-match branches deliberately: the bindings are
+        what an author reaches for once there ARE layers to move, and a page
+        with none has nothing to say this about.
+      */}
+      {tree.length === 0 || nodes.length === 0 || hints.length === 0 ? null : (
+        <ul className="nx-layers-panel__hint" id={hintId}>
+          {hints.map(({ keys, shown, label, description }) => (
+            <li className="nx-layers-panel__hint-row" key={keys}>
+              <span className="nx-layers-panel__hint-key" aria-hidden="true">
+                {shown}
+              </span>
+              {/*
+                The short label is what is DRAWN; the binding's own sentence is
+                what is read out, because a description announced without its
+                subject — "Move in" — says less than the sentence the shortcut
+                manager already carries for exactly this.
+              */}
+              <span className="nx-layers-panel__hint-label" aria-hidden="true">
+                {label}
+              </span>
+              <span className="nx-sr-only">
+                {shown}: {description}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
