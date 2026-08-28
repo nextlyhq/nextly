@@ -74,13 +74,21 @@ describe("createJobContentApi", () => {
     expect(find).toHaveBeenCalledWith(
       expect.objectContaining({ overrideAccess: false })
     );
-    // `user` must be ABSENT, not present-and-undefined: a predicate testing
-    // presence reads the latter as "has a user, and it is nothing".
+    // `user` must be present and UNDEFINED, not absent. Every operation begins
+    // with `mergeConfig(ctx.defaultConfig, args)` — `{ ...defaultConfig,
+    // ...args }` — so an absent key lets a configured default user merge back
+    // in, and the least-privileged job would run as whoever that names.
+    //
+    // Nothing downstream reads these by presence: `directApiActor` and
+    // `callerAccess` reach them as `config.user?.id` and
+    // `config.actor?.actorType`, so present-and-undefined is indistinguishable
+    // from absent to every consumer, and distinguishable only to the merge.
     const passed = find.mock.lastCall?.[0] as
       | Record<string, unknown>
       | undefined;
     expect(passed).toBeDefined();
-    expect("user" in (passed ?? {})).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(passed, "user")).toBe(true);
+    expect(passed?.user).toBeUndefined();
   });
 
   it("passes the caller's own arguments through untouched", () => {
@@ -101,5 +109,110 @@ describe("createJobContentApi", () => {
     expect(find).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 7, sort: "-createdAt" })
     );
+  });
+});
+
+describe("the options this client OWNS", () => {
+  it("strips EVERY authorization-bearing option, not just the two it sets", async () => {
+    // Every authority-bearing option is owned by this client, not just the two
+    // it sets. `actor` is the sharpest: `apiKeyScopeAllows` reads its
+    // `permissions` array as AUTHORITATIVE rather than consulting the bound
+    // user's grants, so a caller supplying one grants itself what it names.
+    const find = vi.fn(async () => ({ items: [] }));
+    const client = createJobContentApi({ id: "u1", roles: ["editor"] }, {
+      find,
+    } as never);
+
+    await (client.find as (args: unknown) => Promise<unknown>)({
+      collection: "posts",
+      actor: { actorType: "apiKey", permissions: ["delete-posts"] },
+      trusted: () => true,
+      enforceFieldAccess: false,
+      fieldAccessUser: { id: "somebody-else", roles: ["admin"] },
+      frameworkFilter: true,
+      overrideAccess: true,
+      user: { id: "somebody-else", roles: ["admin"] },
+    });
+
+    const sent = find.mock.calls[0]?.[0] as Record<string, unknown>;
+    for (const owned of [
+      "actor",
+      "trusted",
+      "enforceFieldAccess",
+      "fieldAccessUser",
+      "frameworkFilter",
+    ]) {
+      // Present and undefined, which is what overrides an instance default in
+      // `mergeConfig`'s spread. Asserting absence here would pass against a
+      // `delete`, and a `delete` leaves the default standing.
+      expect(Object.prototype.hasOwnProperty.call(sent, owned)).toBe(true);
+      expect(sent[owned]).toBeUndefined();
+    }
+    // The two this client DOES set are set to its own values, not the caller's.
+    expect(sent.overrideAccess).toBe(false);
+    expect(sent.user).toEqual({ id: "u1", roles: ["editor"] });
+  });
+
+  it("CLEARS an owned option so an instance default cannot reinstate it", async () => {
+    // Every operation begins with `mergeConfig(ctx.defaultConfig, args)`, which
+    // is `{ ...defaultConfig, ...args }`. A DELETED key is merely absent from
+    // `args`, so the instance default survives into the authorized call — an
+    // instance configured with `actor` would hand the job an API-key scope
+    // whose `permissions` array is read as authoritative, behind a wrapper
+    // advertising a bound identity. Present-and-undefined is what wins the
+    // spread.
+    const find = vi.fn(async () => ({ items: [] }));
+    const client = createJobContentApi({ id: "u1", roles: ["editor"] }, {
+      find,
+    } as never);
+
+    await (client.find as (args: unknown) => Promise<unknown>)({
+      collection: "posts",
+      actor: { actorType: "apiKey", permissions: ["delete-posts"] },
+    });
+
+    const sent = find.mock.calls[0]?.[0] as Record<string, unknown>;
+    // The key must be PRESENT and undefined. `not.toHaveProperty` would pass on
+    // a deleted key, which is the implementation this case exists to reject.
+    expect(Object.prototype.hasOwnProperty.call(sent, "actor")).toBe(true);
+    expect(sent.actor).toBeUndefined();
+  });
+
+  it("clears `user` too, so an anonymous job cannot inherit a configured one", async () => {
+    // A job queued by nobody acts as nobody. With `user` merely deleted, an
+    // instance default would be merged back in and the least-privileged job
+    // would run as whoever that default names.
+    const find = vi.fn(async () => ({ items: [] }));
+    const client = createJobContentApi(null, { find } as never);
+
+    await (client.find as (args: unknown) => Promise<unknown>)({
+      collection: "posts",
+    });
+
+    const sent = find.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(sent, "user")).toBe(true);
+    expect(sent.user).toBeUndefined();
+    expect(sent.overrideAccess).toBe(false);
+  });
+
+  it("still forwards the options that carry no authority", async () => {
+    // The control. Stripping everything would satisfy the case above while
+    // making the client useless: a job could not choose a locale, a depth, or
+    // pass context to its hooks.
+    const find = vi.fn(async () => ({ items: [] }));
+    const client = createJobContentApi(null, { find } as never);
+
+    await (client.find as (args: unknown) => Promise<unknown>)({
+      collection: "posts",
+      locale: "de",
+      depth: 2,
+      context: { from: "a job" },
+    });
+
+    expect(find.mock.calls[0]?.[0]).toMatchObject({
+      locale: "de",
+      depth: 2,
+      context: { from: "a job" },
+    });
   });
 });

@@ -419,6 +419,38 @@ describe("runJobs", () => {
     expect(result).toMatchObject({ claimed: 1, done: 0 });
   });
 
+  it("does not let a THROWN lease fence abort the rest of the drain", async () => {
+    // The fence sits between the two failure boundaries in `runOne`, so a
+    // transient adapter error there escaped `runJobs` entirely: the row stayed
+    // leased and every later candidate in the batch was skipped. One unlucky
+    // write would stop the whole drain.
+    const handler = vi.fn(async () => {});
+    const s: JobsStore & { finalized: unknown[] } = {
+      ...store([row({ id: "j1" }), row({ id: "j2" })]),
+      renewLease: async () => {
+        throw new Error("adapter blew up");
+      },
+    };
+
+    const result = await runJobs({
+      store: s,
+      registry: registryWith(defineJob({ slug: "test:noop", handler })),
+      runAs: runAs(),
+      contentApi: noContentApi,
+      now: () => NOW,
+    });
+
+    // Both rows were claimed and both were RECORDED, rather than the pass
+    // dying on the first one.
+    expect(result.claimed).toBe(2);
+    expect(s.finalized).toHaveLength(2);
+    // Charged as an ordinary attempt, so the job comes back on its own backoff.
+    expect(handler).not.toHaveBeenCalled();
+    expect((s.finalized[0] as { lastError?: string }).lastError).toContain(
+      "adapter blew up"
+    );
+  });
+
   it("hands the handler a content client already bound to the resolved user", async () => {
     // The identity is only real if it reaches the CALLS. The Direct API
     // defaults to overrideAccess: true, so a handler importing `nextly`
