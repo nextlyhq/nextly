@@ -633,6 +633,57 @@ describe("a query typed while a creation is still in flight", () => {
   });
 });
 
+describe("a refusal raised by a creation that landed after an edit", () => {
+  it("is shown, rather than discarded for describing a stale list", async () => {
+    /*
+     * The two fixes meet here. The apply runs against the node as it is NOW,
+     * so the failure it raises is about THAT list — scoped to the list the
+     * closure was created with instead, the content check rejects it the
+     * instant it is set and the author is told nothing at all.
+     */
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const create = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+
+    const view = render(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={["id-hero", "id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    // A chip goes while the save is out — same node, different class list.
+    view.rerender(
+      <ClassSelector
+        nodeId="node-a"
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={create}
+      />
+    );
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-made" });
+    });
+
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-card", "id-made"]);
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be applied/i
+    );
+  });
+});
+
 describe("two blocks that look identical from the class list alone", () => {
   it("drops a refusal when the node changes but its class list does not", () => {
     /*
