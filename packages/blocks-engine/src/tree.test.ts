@@ -1274,4 +1274,224 @@ describe("expanding a slot's declared default", () => {
     expect(slots?.children?.[0]?.props).toEqual({ width: "wide" });
     expect(slots?.children?.[0]?.props).not.toBe(declared);
   });
+
+  /**
+   * A resolver whose children carry the parts a real definition has and the
+   * fixture above omits: prop defaults, a parent restriction, and slots of
+   * their own. The fixture above is deliberately minimal, which is why every
+   * assertion below needs its own.
+   */
+  const rich = {
+    get: (type: string) =>
+      ({
+        "core/columns": {
+          version: 1,
+          slots: {
+            children: {
+              allow: ["core/column"],
+              defaultBlock: [{ type: "core/column" }],
+            },
+          },
+        },
+        // Declares a child its slot does not admit, which is the shape a
+        // plugin produces by renaming a block and updating one of the two
+        // places that name it.
+        "core/mismatched": {
+          version: 1,
+          slots: {
+            children: {
+              allow: ["core/column"],
+              defaultBlock: [{ type: "core/heading" }],
+            },
+          },
+        },
+        // Declares a child that refuses this parent — the other half of the
+        // rule, which the slot's own allow-list cannot see.
+        "core/wrong-parent": {
+          version: 1,
+          slots: { children: { defaultBlock: [{ type: "core/column" }] } },
+        },
+        "core/column": {
+          version: 7,
+          defaultProps: { as: "div", contained: false },
+          parent: ["core/columns", "core/nested"],
+        },
+        "core/heading": { version: 2, defaultProps: { level: 2 } },
+        // A container whose own declaration seeds another container.
+        "core/nested": {
+          version: 1,
+          parent: ["core/columns"],
+          slots: { children: { defaultBlock: [{ type: "core/column" }] } },
+        },
+      })[type],
+  };
+
+  it("starts a seeded child on its own prop defaults", () => {
+    const slots = expandSlotDefaults("core/columns", rich);
+
+    // The separating property is the DEFAULTS being present. An implementation
+    // that passes the entry's props straight through yields `{}` here, and a
+    // child created that way differs from the same block inserted from the
+    // palette — one block with two starting states, decided by how the author
+    // happened to create it.
+    expect(slots?.children?.[0]?.props).toEqual({
+      as: "div",
+      contained: false,
+    });
+  });
+
+  it("lets a declaration override only the props it names", () => {
+    const overriding = {
+      get: (type: string) =>
+        type === "core/columns"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  allow: ["core/column"],
+                  defaultBlock: [
+                    { type: "core/column", props: { contained: true } },
+                  ],
+                },
+              },
+            }
+          : rich.get(type),
+    };
+
+    const slots = expandSlotDefaults("core/columns", overriding);
+
+    // `as` survives from the defaults and `contained` is the declaration's.
+    // Asserting only the overridden key would pass on an implementation that
+    // DISCARDS the defaults, which is the case this pairs with above.
+    expect(slots?.children?.[0]?.props).toEqual({
+      as: "div",
+      contained: true,
+    });
+  });
+
+  it("refuses a declared child the slot does not admit", () => {
+    const slots = expandSlotDefaults("core/mismatched", rich);
+
+    // Seeding it would build a document the editor's own validation then
+    // reports as `not-allowed-in-slot` — a block illegal to drag in, arriving
+    // by being declared.
+    expect(slots).toBeUndefined();
+  });
+
+  it("refuses a declared child that does not admit this parent", () => {
+    const slots = expandSlotDefaults("core/wrong-parent", rich);
+
+    // `core/column` names `core/columns` and `core/nested` as its parents, and
+    // this is neither. The slot here declares no `allow`, so ONLY the child's
+    // own restriction can refuse it — which is why this is a separate case
+    // from the slot mismatch above rather than a second example of it.
+    expect(slots).toBeUndefined();
+  });
+
+  it("expands a declared child's own declared children", () => {
+    const slots = expandSlotDefaults("core/columns", {
+      get: (type: string) =>
+        type === "core/columns"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  allow: ["core/nested"],
+                  defaultBlock: [{ type: "core/nested" }],
+                },
+              },
+            }
+          : rich.get(type),
+    });
+
+    const nested = slots?.children?.[0];
+    expect(nested?.type).toBe("core/nested");
+    // The grandchild is the assertion. Without recursion the nested container
+    // arrives with no `slots` key at all, so the same block declares different
+    // starting children depending on whether an author inserted it or a parent
+    // seeded it.
+    expect(nested?.slots?.children).toHaveLength(1);
+    expect(nested?.slots?.children?.[0]?.type).toBe("core/column");
+  });
+
+  it("stops a declaration that seeds its own type", () => {
+    const cyclic = {
+      get: (type: string) =>
+        type === "core/a"
+          ? {
+              version: 1,
+              slots: { children: { defaultBlock: [{ type: "core/b" }] } },
+            }
+          : type === "core/b"
+            ? {
+                version: 1,
+                slots: { children: { defaultBlock: [{ type: "core/a" }] } },
+              }
+            : undefined,
+    };
+
+    // Terminating at all is the property. Without the ancestor set this
+    // recurses until the stack gives out, so the assertion below is only
+    // reachable when the cycle is cut.
+    const slots = expandSlotDefaults("core/a", cyclic);
+
+    const b = slots?.children?.[0];
+    expect(b?.type).toBe("core/b");
+    // Cut at the repeat rather than one level later: `core/a` is already being
+    // expanded, so `core/b` fills no slot and carries no `slots` key.
+    expect(b?.slots).toBeUndefined();
+  });
+
+  it("lets two sibling slots seed the same child type", () => {
+    const twoSlots = {
+      get: (type: string) =>
+        type === "core/pair"
+          ? {
+              version: 1,
+              slots: {
+                left: { defaultBlock: [{ type: "core/leaf" }] },
+                right: { defaultBlock: [{ type: "core/leaf" }] },
+              },
+            }
+          : type === "core/leaf"
+            ? { version: 1 }
+            : undefined,
+    };
+
+    const slots = expandSlotDefaults("core/pair", twoSlots);
+
+    // The cycle guard tracks the types on ONE path, not every type seen. A set
+    // shared across siblings would fill `left` and leave `right` empty, which
+    // is a shape an author would reasonably draw being silently refused.
+    expect(slots?.left).toHaveLength(1);
+    expect(slots?.right).toHaveLength(1);
+  });
+
+  it("stops expanding a chain of distinct types at the depth bound", () => {
+    // Each type seeds the next, so no type repeats and the cycle set never
+    // fires — the depth bound is the only thing that ends this.
+    const chain = {
+      get: (type: string) => {
+        const match = /^core\/d(\d+)$/.exec(type);
+        if (match === null) return undefined;
+        const next = Number(match[1]) + 1;
+        return {
+          version: 1,
+          slots: { children: { defaultBlock: [{ type: `core/d${next}` }] } },
+        };
+      },
+    };
+
+    let node = expandSlotDefaults("core/d0", chain)?.children?.[0];
+    let depth = 1;
+    while (node?.slots?.children?.[0] !== undefined) {
+      node = node.slots.children[0];
+      depth += 1;
+    }
+
+    // Bounded, and bounded where the constant says. An unbounded expansion
+    // never reaches this line, and asserting merely "finite" would pass on a
+    // bound of any size.
+    expect(depth).toBe(8);
+  });
 });

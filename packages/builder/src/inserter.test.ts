@@ -16,6 +16,7 @@ import {
   clearBlocks,
   registerBlocks,
   registryNestingSource,
+  type AnyBlockDefinition,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 
@@ -23,6 +24,7 @@ import {
   UNCATEGORISED,
   type SlotSource,
   allowedEntries,
+  blockSourceFor,
   catalogFrom,
   entryAllowedAt,
   filterEntries,
@@ -864,6 +866,88 @@ describe("nodeForEntry", () => {
       );
 
       expect(nodeForEntry(plain, rowDefinitions).slots).toBeUndefined();
+    });
+  });
+
+  describe("choosing the definitions an insert expands from", () => {
+    /**
+     * A container and its child that are NEVER registered.
+     *
+     * `catalogFrom` rather than the `catalog` helper above, because that helper
+     * REGISTERS what it is handed — which would erase the very condition under
+     * test. The palette offers whatever a caller supplies, so these are blocks
+     * an author can see and choose while the registry knows nothing about them.
+     */
+    const suppliedRow = {
+      ...base,
+      name: "acme/supplied-row",
+      slots: { children: { defaultBlock: [{ type: "acme/supplied-cell" }] } },
+    };
+    const suppliedCell = { ...base, name: "acme/supplied-cell", version: 4 };
+
+    /** Supplied, but naming a child only the registry holds. */
+    const mixedRow = {
+      ...base,
+      name: "acme/mixed-row",
+      slots: { children: { defaultBlock: [{ type: "acme/registered-cell" }] } },
+    };
+    // Version 1: registration refuses a higher version with no migration
+    // chain, so the registered fixtures cannot carry a distinguishing version
+    // the way the supplied ones do. The child's PRESENCE is the proof of
+    // resolution anyway — an unresolvable type contributes no child at all.
+    const registeredCell = { ...base, name: "acme/registered-cell" };
+
+    it("expands a supplied definition the registry does not hold", () => {
+      const source = blockSourceFor([
+        suppliedRow,
+        suppliedCell,
+      ] as unknown as readonly AnyBlockDefinition[]);
+      const node = nodeForEntry(
+        entry(catalogFrom([suppliedRow] as never), "acme/supplied-row"),
+        source
+      );
+
+      // The separating property is the CHILD being there. Resolving only
+      // through the registry finds no declaration for a supplied block, and an
+      // absent declaration is indistinguishable from a declared emptiness — so
+      // the block is offered and then inserted stripped of what it declares,
+      // with nothing reported.
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/supplied-cell",
+      ]);
+      // The child's own version, which proves the CHILD resolved through the
+      // supplied list too rather than the parent alone.
+      expect(node.slots?.children?.[0]?.version).toBe(4);
+    });
+
+    it("falls back to the registry for a type the supplied list omits", () => {
+      registerBlocks([registeredCell] as never, { source: "acme" });
+      const source = blockSourceFor([
+        mixedRow,
+      ] as unknown as readonly AnyBlockDefinition[]);
+      const node = nodeForEntry(
+        entry(catalogFrom([mixedRow] as never), "acme/mixed-row"),
+        source
+      );
+
+      // A declaration names child TYPES the supplied list has no reason to
+      // carry. Consulting the supplied list FIRST must not stop the registry
+      // answering for the rest, or the fix for the case above would break
+      // every ordinary insert.
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/registered-cell",
+      ]);
+    });
+
+    it("uses the registry when no definitions are supplied", () => {
+      const node = nodeForEntry(
+        entry(catalog([mixedRow, registeredCell]), "acme/mixed-row"),
+        blockSourceFor(undefined)
+      );
+
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/registered-cell",
+      ]);
     });
   });
 });

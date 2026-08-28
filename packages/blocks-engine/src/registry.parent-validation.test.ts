@@ -120,4 +120,64 @@ describe("slot allow-list validation at registration", () => {
       })
     ).toThrow(/must be a plain object/);
   });
+
+  it("refuses a defaultBlock that is not an array", () => {
+    // The shape that reaches the expansion's `for...of` as
+    // `TypeError: declared is not iterable` — at the author's CLICK on the
+    // block rather than at the declaration, naming neither the plugin nor the
+    // block that caused it.
+    expect(() =>
+      registerBlocks(
+        [withSlots({ default: { defaultBlock: "core/column" } })] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/defaultBlock must be an array/);
+  });
+
+  it("refuses a defaultBlock entry that is not an object", () => {
+    expect(() =>
+      registerBlocks(
+        [withSlots({ default: { defaultBlock: ["core/column"] } })] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/defaultBlock must be an array/);
+  });
+
+  it("refuses a defaultBlock entry whose type is not a block name", () => {
+    expect(() =>
+      registerBlocks(
+        [
+          withSlots({ default: { defaultBlock: [{ type: "column" }] } }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/defaultBlock must be an array/);
+  });
+
+  it("refuses a defaultBlock entry whose props are not a plain object", () => {
+    expect(() =>
+      registerBlocks(
+        [
+          withSlots({
+            default: { defaultBlock: [{ type: "core/column", props: 7 }] },
+          }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/defaultBlock must be an array/);
+  });
+
+  it("accepts a defaultBlock entry that names only a type", () => {
+    // `props` is optional and the child's own defaults stand underneath it, so
+    // an entry naming just a type is the ordinary case. A validator that
+    // required `props` would refuse every first-party declaration.
+    expect(() =>
+      registerBlocks(
+        [
+          withSlots({ default: { defaultBlock: [{ type: "core/column" }] } }),
+        ] as never,
+        { source: "acme" }
+      )
+    ).not.toThrow();
+  });
 });

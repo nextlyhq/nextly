@@ -207,25 +207,56 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
         );
       }
       const allow = (spec as { allow?: unknown }).allow;
-      if (allow === undefined) continue;
-      // A namespace wildcard is permitted here and is not a block NAME, so this cannot reuse
-      // `isBlockName`: `core/*` names a set rather than a block.
-      const wellFormed =
-        Array.isArray(allow) &&
-        allow.every(entry => {
-          if (typeof entry !== "string") return false;
-          // A wildcard is checked by substituting a placeholder segment, so the name grammar is
-          // asked ONCE. Testing both forms as alternatives narrows the value to `never` on the
-          // second branch, because the predicate is a type guard.
-          const asName = entry.endsWith("/*")
-            ? `${entry.slice(0, -2)}/x`
-            : entry;
-          return isBlockName(asName);
+      // Each field is validated on its own rather than behind the other's
+      // presence: a slot may declare `defaultBlock` and no `allow` at all,
+      // which is the ordinary case, and a `continue` here would carry the
+      // defaultBlock check past every one of them.
+      if (allow !== undefined) {
+        // A namespace wildcard is permitted here and is not a block NAME, so this cannot reuse
+        // `isBlockName`: `core/*` names a set rather than a block.
+        const wellFormed =
+          Array.isArray(allow) &&
+          allow.every(entry => {
+            if (typeof entry !== "string") return false;
+            // A wildcard is checked by substituting a placeholder segment, so the name grammar is
+            // asked ONCE. Testing both forms as alternatives narrows the value to `never` on the
+            // second branch, because the predicate is a type guard.
+            const asName = entry.endsWith("/*")
+              ? `${entry.slice(0, -2)}/x`
+              : entry;
+            return isBlockName(asName);
+          });
+        if (!wellFormed) {
+          fail(
+            "NEXTLY_BLOCK_INVALID",
+            `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
+          );
+        }
+      }
+      // `defaultBlock` is read when an author INSERTS this block, which is the
+      // worst place for a definition error to surface: a non-array is iterated
+      // by the expansion and throws `TypeError: declared is not iterable` at
+      // the click, naming neither the plugin nor the block that declared it.
+      // Checked here for exactly the reason `allow` above is — the type rejects
+      // it at the authoring site, and definitions also arrive from JavaScript
+      // plugins and from JSON, where it does not.
+      const defaultBlock = (spec as { defaultBlock?: unknown }).defaultBlock;
+      if (defaultBlock === undefined) continue;
+      const entriesWellFormed =
+        Array.isArray(defaultBlock) &&
+        defaultBlock.every(entry => {
+          if (!isPlainRecord(entry)) return false;
+          // Only `type` is required. `props` is optional and the child's own
+          // defaults stand underneath it, so an entry naming just a type is the
+          // ordinary case rather than an incomplete one.
+          if (!isBlockName((entry as { type?: unknown }).type)) return false;
+          const props = (entry as { props?: unknown }).props;
+          return props === undefined || isPlainRecord(props);
         });
-      if (!wellFormed) {
+      if (!entriesWellFormed) {
         fail(
           "NEXTLY_BLOCK_INVALID",
-          `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
+          `block "${def.name}" slot "${slotName}" defaultBlock must be an array of entries like { type: "core/column" }, each with an optional plain-object props.`
         );
       }
     }
