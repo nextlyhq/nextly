@@ -1737,3 +1737,101 @@ describe("the page scope", () => {
     expect(out).toContain(atBound);
   });
 });
+
+describe("element defaults", () => {
+  /**
+   * The tier exists so an `h1` and an `h3` differ under a host reset. A block
+   * default cannot do it: those are keyed by block TYPE and a heading's level
+   * is a PROP, so one `core/heading` default gives every level one size.
+   */
+  const TYPOGRAPHY = {
+    h1: { base: { base: { fontSize: "2.25rem" } } },
+    p: { base: { base: { lineHeight: 1.6 } } },
+  };
+
+  it("emits one rule per declared element, weighing a single class", () => {
+    const out = css(doc([node("n1")]), { ...CTX, elementBases: TYPOGRAPHY });
+
+    const lines = out.split("\n").filter(line => /:where\((h1|p)\)/.test(line));
+    // Population before the property: a filter that matched nothing would
+    // satisfy every per-line claim below.
+    expect(lines).toHaveLength(2);
+    for (const rule of lines) {
+      const selector = rule.slice(0, rule.indexOf("{")).trim();
+      // One class outside the wrapper, and the element inside it. `0-1-0`
+      // clears a bare `h1 { font-size: inherit }` reset at `0-0-1` and still
+      // yields to a host's own `.content h1` at `0-1-1`.
+      expect(selector.startsWith(`.${PAGE_ROOT_CLASS} :where(`)).toBe(true);
+      expect(selector.endsWith(")")).toBe(true);
+      // NOT the doubled root. That prefix exists to make an AUTHOR's values
+      // outrank host CSS; a default borrowing it stops being a default.
+      expect(selector.startsWith(PAGE_ROOT_SELECTOR)).toBe(false);
+    }
+    expect(out).toContain("font-size: 2.25rem");
+    expect(out).toContain("line-height: 1.6");
+  });
+
+  it("drops an element the compiler does not emit", () => {
+    // A tag reaches a SELECTOR, so the set is a closed list rather than an
+    // escaped string. `blockquote` is a plausible thing for a host to supply
+    // and is not one of the elements this library renders text as.
+    //
+    // The declared type already refuses it, and that is not the case being
+    // covered: a compile context is a HOST's value. It arrives from JavaScript
+    // that was never checked, or off a stored artifact compiled by a version
+    // whose list differed, and the compiler is what has to hold either way.
+    const out = css(doc([node("n1")]), {
+      ...CTX,
+      elementBases: {
+        ...TYPOGRAPHY,
+        blockquote: { base: { base: { color: "#111" } } },
+      },
+    } as unknown as StyleCompileContext);
+
+    expect(out).not.toContain("blockquote");
+    // The control: the tags that ARE in the list still emitted, so this cannot
+    // pass by dropping everything.
+    expect(out).toContain(":where(h1)");
+  });
+
+  it("keeps a scoped document's defaults exactly as overridable", () => {
+    // A scope constrains the anchor; it must not add to it. Appended plainly
+    // the pair weighs `0-2-0` and beats a host's `.content h1` at `0-1-1`, so a
+    // scoped document would keep the defaults precisely where an unscoped one
+    // yields — scoping deciding a cascade question it has no business in.
+    const scoped = css(doc([node("n1")]), {
+      ...CTX,
+      elementBases: TYPOGRAPHY,
+      scope: "nx-doc-a",
+    });
+
+    // The scope still has to MATCH: dropping it would leak this document's
+    // defaults onto another rendered beside it.
+    expect(scoped).toContain(".nx-doc-a");
+    // ...and it carries no weight, so the anchor is the one page-root class.
+    expect(scoped).toContain(
+      `.${PAGE_ROOT_CLASS}:where(.nx-doc-a) :where(h1) {`
+    );
+    expect(scoped).not.toContain(`.${PAGE_ROOT_CLASS}.nx-doc-a :where(h1)`);
+  });
+
+  it("yields to a node's own value for the same property", () => {
+    // The tier is a baseline, not a policy. A node value is `0-3-0` against the
+    // default's `0-1-0`, so the author wins wherever they said anything.
+    const out = css(
+      doc([node("n1", { base: { base: { fontSize: "5rem" } } })]),
+      { ...CTX, elementBases: TYPOGRAPHY }
+    );
+
+    const defaultRule = out
+      .split("\n")
+      .find(line => line.includes(":where(h1)"));
+    const nodeRule = out
+      .split("\n")
+      .find(line => line.includes(nodeClassName("n1")));
+    expect(defaultRule).toContain("2.25rem");
+    expect(nodeRule).toContain("5rem");
+    // Both present, and the node's selector is the heavier one.
+    expect(nodeRule?.startsWith(PAGE_ROOT_SELECTOR)).toBe(true);
+  });
+});

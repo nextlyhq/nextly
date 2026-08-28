@@ -95,15 +95,16 @@ Not every builder rule weighs the same. Specificity is written the way devtools
 shows it: (ids, classes, types), where a pseudo-class such as `:hover` counts in
 the middle column.
 
-| What it styles                | Selector                                        | Specificity |
-| ----------------------------- | ----------------------------------------------- | ----------- |
-| Page-wide settings            | `.nx-pb-page.nx-pb-page`                        | 0-2-0       |
-| Links inside the page         | `.nx-pb-page.nx-pb-page a`                      | 0-2-1       |
-| A block type's defaults       | `.nx-pb-page.nx-pb-page .nx-bt-core--section`   | 0-3-0       |
-| One node's own styles         | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`            | 0-3-0       |
-| Links inside a node           | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a`          | 0-3-1       |
-| Hovered links inside a node   | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a:hover`    | 0-4-1       |
-| Hiding a node at a breakpoint | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2` | 0-4-0       |
+| What it styles                    | Selector                                        | Specificity |
+| --------------------------------- | ----------------------------------------------- | ----------- |
+| A heading or paragraph's baseline | `.nx-pb-page :where(h1)`                        | 0-1-0       |
+| A block type's defaults           | `.nx-pb-page :where(.nx-bt-core--section)`      | 0-1-0       |
+| Page-wide settings                | `.nx-pb-page.nx-pb-page`                        | 0-2-0       |
+| Links inside the page             | `.nx-pb-page.nx-pb-page a`                      | 0-2-1       |
+| One node's own styles             | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`            | 0-3-0       |
+| Links inside a node               | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a`          | 0-3-1       |
+| Hovered links inside a node       | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a:hover`    | 0-4-1       |
+| Hiding a node at a breakpoint     | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2` | 0-4-0       |
 
 The rule behind the table, which matters more than the rows: **a property that
 styles something inside the element adds that thing's own weight.** Link colour
@@ -111,21 +112,47 @@ is the case that exists today, and the last three rows are what it produces.
 Anything similar added later follows the same pattern rather than appearing as
 a new exception, so read the table as worked examples of the rule.
 
-Two of the rows are deliberate rather than incidental.
+Three of the rows are deliberate rather than incidental.
 
-**Page settings weigh less** because they are the outermost element's own
-styles, and everything inside should be able to say otherwise — a block that
-sets its own colour is meant to beat the page's default colour.
+**The two DEFAULT rows weigh one class, and the doubling is deliberately
+withheld from them.** Everything else in the table is something a person chose
+in the builder, and the repeated class exists so those choices outrank your
+site's CSS. A default is not a choice — nobody asked for it, it is what the
+block library supplies when nobody has said anything — so it is anchored to a
+single `.nx-pb-page` with the rest of the selector inside `:where()`. One class
+is enough to clear a bare element reset (`h1 { font-size: inherit }` at 0-0-1),
+and it stays below your own `.content h1` at 0-1-1. If your stylesheet has an
+opinion about headings, your opinion wins; if it does not, a heading still looks
+like a heading.
+
+That is the whole contract for these two tiers: **a default is something your
+site can override with ordinary CSS, and an authored value is not.**
+
+**Page settings weigh less** than a node's own styles because they are the
+outermost element's own styles, and everything inside should be able to say
+otherwise — a block that sets its own colour is meant to beat the page's
+default colour.
 
 **Hiding weighs more** because it has to beat the node's own `display`,
 including one set on a state. `.nx-pb-a1b2:focus-visible { display: block }`
 would otherwise outrank a plain `display: none` and leave a focused element on
 screen at a width you hid it at.
 
-**States add nothing.** Hover, focus and the rest are emitted inside `:where()`,
-which contributes zero, so `:hover` styles weigh exactly what the same node's
-base styles weigh and win on source order instead. Rendering a document under a
-scope adds one class to every row above.
+**A node's own states add nothing.** Hover, focus and the rest are emitted
+inside `:where()` — `.nx-pb-a1b2:where(:focus-visible)` — which contributes
+zero, so those styles weigh exactly what the same node's base styles weigh and
+win on source order instead. A state on something INSIDE the node is a
+different case and does count, which is why the hovered-link row is `0-4-1`
+rather than `0-3-1`: there the pseudo-class attaches to the descendant, not to
+the node, and the table's rule about descendants applies to it as written.
+
+**A scope adds one class to the authored rows and nothing to the default rows.**
+Rendering a document under a scope constrains every selector to that document,
+but on the two default tiers the scope class is emitted inside `:where()` — so a
+scoped document's defaults weigh exactly what an unscoped document's do. Without
+that, scoping a document would quietly push its defaults above your `.content
+h1`, and the same page would be overridable in one embedding and not in
+another.
 
 If you are ever unsure, read the winning rule's specificity in devtools and
 write something that beats it, rather than working from this table. The table

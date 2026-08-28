@@ -61,13 +61,22 @@ function heading(size: string, lineHeight: number): NodeStyles {
 /**
  * The defaults, keyed by the element each applies to.
  *
+ * Typed as the compiler's own field rather than `Record<string, NodeStyles>`,
+ * because the compiler holds the elements to a closed list and DROPS a tag
+ * outside it. A misspelled key would otherwise typecheck, compile to nothing,
+ * and show up as one heading level that never got its size — the quietest
+ * possible failure. Derived from the field it feeds so the two cannot disagree
+ * about which elements exist.
+ *
  * The scale is the classic major-third-ish ramp every precedent lands near
  * rather than a computed one: a computed ratio has to be tuned per family to
  * stop the small end colliding, and a baseline that ships before the fonts
  * manager cannot know the family. Line height tightens as size grows because a
  * long line of large text needs proportionally less leading to stay readable.
  */
-export const TYPOGRAPHY_DEFAULTS: Readonly<Record<string, NodeStyles>> = {
+export const TYPOGRAPHY_DEFAULTS: NonNullable<
+  StyleCompileContext["elementBases"]
+> = {
   h1: heading("2.25rem", 1.15),
   h2: heading("1.75rem", 1.2),
   h3: heading("1.375rem", 1.3),
