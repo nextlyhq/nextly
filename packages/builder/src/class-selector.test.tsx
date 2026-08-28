@@ -477,6 +477,54 @@ describe("a failure that must not outlive the node it describes", () => {
   });
 });
 
+describe("a creation that lands after the node has moved on", () => {
+  it("applies against the node as it is NOW, not as it was", async () => {
+    /*
+     * A site-style save is asynchronous and an author can remove a chip while
+     * it is in flight. Applying from the render that STARTED the request would
+     * write back the classes as they stood before the removal — undoing it,
+     * from a callback about something else entirely.
+     */
+    let resolve: (v: { ok: true; classId: string }) => void = () => {};
+    const onCreateClass = vi.fn(
+      () =>
+        new Promise<{ ok: true; classId: string }>(r => {
+          resolve = r;
+        })
+    );
+    const onNodeClassesChange = vi.fn(() => "applied" as const);
+
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-hero", "id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={onCreateClass}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onCreateClass).toHaveBeenCalled();
+
+    // The author removes a chip while the save is still out.
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={onCreateClass}
+      />
+    );
+
+    await React.act(async () => {
+      resolve({ ok: true, classId: "id-made" });
+    });
+
+    // `id-hero` must NOT come back: it was removed after the request left.
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-card", "id-made"]);
+  });
+});
+
 describe("why the library is absent", () => {
   it("says a read is loading when it is still in flight", () => {
     render(

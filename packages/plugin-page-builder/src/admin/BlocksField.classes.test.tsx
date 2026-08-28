@@ -235,10 +235,15 @@ describe("why the library is absent", () => {
 
 describe("creating a class", () => {
   it("writes the classes section and answers with the new id", async () => {
-    clientConfig = {
-      siteStyle: {
+    // STORED rather than config-supplied: a config class is layered under
+    // storage and is deliberately not written back, which is a different test
+    // below. What this one is about is an existing stored library gaining one.
+    storedRead = {
+      data: {
         classes: [{ id: "id-hero", slug: "hero", orderIndex: 0, styles: {} }],
       },
+      isPending: false,
+      error: null,
     };
     openEditor();
 
@@ -267,13 +272,15 @@ describe("creating a class", () => {
   });
 
   it("orders it past every existing class, so applying it wins", async () => {
-    clientConfig = {
-      siteStyle: {
+    storedRead = {
+      data: {
         classes: [
           { id: "a", slug: "one", orderIndex: 0, styles: {} },
           { id: "b", slug: "two", orderIndex: 7, styles: {} },
         ],
       },
+      isPending: false,
+      error: null,
     };
     openEditor();
 
@@ -292,6 +299,44 @@ describe("creating a class", () => {
 
     expect(saved).toHaveLength(1);
     expect(Object.keys(saved[0] ?? {})).toEqual(["classes"]);
+  });
+
+  it("stores only what differs from the site's own config classes", async () => {
+    /*
+     * `canvasSiteStyle` is the MERGED library the canvas compiles. Saving it
+     * whole would copy every config-supplied class into the database on the
+     * first creation and mask the site's code from then on — the argument
+     * `tokenOverrideOf` already makes for tokens.
+     */
+    clientConfig = {
+      siteStyle: {
+        classes: [
+          { id: "id-cfg", slug: "from-config", orderIndex: 0, styles: {} },
+        ],
+      },
+    };
+    openEditor();
+
+    await classProps().onCreateClass!("mine");
+
+    const written = saved[0]?.classes as { id: string; slug: string }[];
+    expect(written.map(c => c.slug)).toEqual(["mine"]);
+    expect(written.map(c => c.id)).not.toContain("id-cfg");
+  });
+
+  it("refuses to create at all when the library could not be read", async () => {
+    /*
+     * A failed read leaves `useSiteStyle` answering with the config defaults
+     * alone. Composing against that would build a library missing everything
+     * stored, and the save would DELETE those classes rather than add one.
+     */
+    storedRead = { data: undefined, isPending: false, error: new Error("403") };
+    openEditor();
+
+    const created = await classProps().onCreateClass!("mine");
+
+    expect(created.ok).toBe(false);
+    expect(saved).toHaveLength(0);
   });
 
   it("reports a refusal instead of claiming the class exists", async () => {
