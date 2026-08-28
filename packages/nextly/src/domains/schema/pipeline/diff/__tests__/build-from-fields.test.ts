@@ -201,7 +201,15 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
   });
 
   it("maps number fields to float8 (introspection udt_name for double precision)", () => {
-    const fields: MinimalField[] = [{ name: "price", type: "number" }];
+    // A number field only takes float storage when it asks for it:
+    // `options.format === "float"` is what the UI sets, and code-first can also
+    // opt in with `dbType: "decimal"`. The spelling is the point of this test --
+    // `float8` is what PostgreSQL introspection reports as udt_name, so the
+    // DESIRED table has to say `float8` too, or every diff would see a phantom
+    // type change against a column that is already correct.
+    const fields: MinimalField[] = [
+      { name: "price", type: "number", options: { format: "float" } },
+    ];
 
     const table = buildDesiredTableFromFields(
       "dc_products",
@@ -216,6 +224,25 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
       nullable: true,
       default: undefined,
     });
+  });
+
+  it("maps a code-first number with no format to int4, not to a float", () => {
+    // The default this file previously assumed away. A code-first number
+    // without `dbType` or `options.format` is an INTEGER, which
+    // field-column-descriptor states is deliberate: it matches the DDL
+    // dynamic-collection-schema-service emits. Asserted here because the two
+    // must agree -- if the desired table said float8 while the DDL wrote int4,
+    // the diff would try to "fix" every such column on every push.
+    const fields: MinimalField[] = [{ name: "qty", type: "number" }];
+
+    const table = buildDesiredTableFromFields(
+      "dc_products",
+      fields as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+
+    expect(findColumn(table.columns, "qty")?.type).toBe("int4");
   });
 
   it("maps checkbox fields to bool (introspection udt_name)", () => {
@@ -280,10 +307,27 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
     ]);
   });
 
-  it("skips layout-only field types (no DB column)", () => {
+  it("skips the field types whose values live in another table", () => {
+    // This replaces an assertion about "layout-only" types `row` and `tabs`.
+    // Neither exists: grep finds no such field type outside that test, and the
+    // two LAYOUT_FIELD_TYPES collections meant to name them are empty and
+    // unreachable (finding:layout-field-type-sets-are-empty-and-dead). The old
+    // test therefore asserted the OPPOSITE of a deliberate rule --
+    // `fieldProducesColumn` documents that an unrecognised type counts as a
+    // column, "so a field type whose plugin has not registered yet is still
+    // held to the rules that columns carry rather than quietly escaping them."
+    //
+    // The rule it was reaching for is real, so it is asserted here through the
+    // mechanisms that actually implement it: a component keeps its values in
+    // its own comp_{slug} table, and a many-to-many relationship keeps its
+    // links in a junction table. Neither needs a column on the parent row.
     const fields: MinimalField[] = [
-      { name: "row1", type: "row" },
-      { name: "tab1", type: "tabs" },
+      { name: "hero", type: "component" },
+      {
+        name: "tags",
+        type: "relationship",
+        options: { relationType: "manyToMany" },
+      },
       { name: "summary", type: "text" },
     ];
 
@@ -296,6 +340,25 @@ describe("buildDesiredTableFromFields - postgresql user fields", () => {
 
     expect(userColumns(table.columns)).toHaveLength(1);
     expect(userColumns(table.columns)[0].name).toBe("summary");
+  });
+
+  it("gives an UNRECOGNISED field type a column rather than dropping it", () => {
+    // The other half of that rule, and the reason the two cannot be collapsed:
+    // silently emitting no column for a type nobody recognises would let an
+    // unregistered plugin field escape every constraint a column carries. The
+    // documented choice is to treat it as text.
+    const fields: MinimalField[] = [
+      { name: "mystery", type: "not-a-registered-type" },
+    ];
+
+    const table = buildDesiredTableFromFields(
+      "dc_posts",
+      fields as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+
+    expect(userColumns(table.columns).map(c => c.name)).toEqual(["mystery"]);
   });
 });
 
@@ -340,7 +403,10 @@ describe("buildDesiredTableFromFields - mysql user fields", () => {
   });
 
   it("maps number fields to double", () => {
-    const fields: MinimalField[] = [{ name: "price", type: "number" }];
+    // Float storage is opt-in — see the postgresql case above.
+    const fields: MinimalField[] = [
+      { name: "price", type: "number", options: { format: "float" } },
+    ];
 
     const table = buildDesiredTableFromFields(
       "dc_products",
@@ -398,7 +464,10 @@ describe("buildDesiredTableFromFields - sqlite user fields", () => {
   });
 
   it("maps number fields to lowercase 'real'", () => {
-    const fields: MinimalField[] = [{ name: "price", type: "number" }];
+    // Float storage is opt-in — see the postgresql case above.
+    const fields: MinimalField[] = [
+      { name: "price", type: "number", options: { format: "float" } },
+    ];
 
     const table = buildDesiredTableFromFields(
       "dc_products",
