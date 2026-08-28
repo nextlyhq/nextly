@@ -65,6 +65,7 @@
  * primitive was ALREADY going to rebuild, and never as a repair pass of its
  * own.
  */
+import type { SlotSpec } from "./block";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
 import { defineEntry, ownEntry } from "./safe-record";
@@ -84,6 +85,88 @@ export function makeNode(
   const node: BlockNode = { id: newId(), type, version, props };
   if (slots) node.slots = slots;
   return node;
+}
+
+/**
+ * How `expandSlotDefaults` resolves a block type to what it needs to know.
+ *
+ * A one-method source rather than the registry, matching how the rest of this
+ * package takes its inputs: resolving a type differs per caller — the editor
+ * asks the global registry, a test supplies a fixture — and the rule applied to
+ * the result is the same either way.
+ */
+export interface SlotDefaultSource {
+  get(
+    type: string
+  ): { version: number; slots?: Record<string, SlotSpec> } | undefined;
+}
+
+/**
+ * The children a freshly placed block of `type` starts with, ready for
+ * `makeNode`'s `slots` argument.
+ *
+ * This is the layer that makes a declared default safe. A block declares its
+ * starting children by TYPE (`SlotSpec.defaultBlock`), and every node is minted
+ * here through `makeNode` — so each call produces ids that have never existed,
+ * and two parents expanded from one declaration cannot repeat each other's.
+ * Holding the children as stored nodes instead would make that collision the
+ * default behaviour rather than an unreachable one.
+ *
+ * Answers `undefined`, not an empty record, when nothing is to be created.
+ * `makeNode` writes a `slots` key only when one is supplied, so `undefined`
+ * leaves a container carrying no `slots` at all — which is what an empty
+ * container is, and what the editor's own emptiness check reads.
+ *
+ * Two things are deliberately skipped rather than refused, because a block
+ * definition is code this package does not own and a bad entry in one must not
+ * make the block unplaceable:
+ * - an entry whose type the source cannot resolve contributes no child, since
+ *   a node of an unregistered type renders as a placeholder the author did not
+ *   ask for and cannot repair;
+ * - a slot left with no children that way is omitted entirely, so a container
+ *   never claims a slot it did not fill.
+ */
+export function expandSlotDefaults(
+  type: string,
+  definitions: SlotDefaultSource
+): Record<string, BlockNode[]> | undefined {
+  const declaredSlots = definitions.get(type)?.slots;
+  if (declaredSlots === undefined) return undefined;
+
+  const expanded: Record<string, BlockNode[]> = {};
+  let filledAnySlot = false;
+
+  for (const [slotName, spec] of Object.entries(declaredSlots)) {
+    const declared = spec?.defaultBlock;
+    if (declared === undefined) continue;
+
+    const children: BlockNode[] = [];
+    for (const entry of declared) {
+      // The CHILD's own schema version, never the parent's: a node stamped with
+      // its parent's version is read by the migration runner as older or newer
+      // than it is, and gets upgrade steps meant for a different block.
+      const childVersion = definitions.get(entry.type)?.version;
+      if (childVersion === undefined) continue;
+      // Props are deep-copied. The declaration outlives every block expanded
+      // from it, so handing out its own object would let an edit to one
+      // inserted block reach the block definition — and through it every block
+      // expanded from it afterwards. A shallow copy is not enough, because a
+      // declared value may be an array or a nested object.
+      children.push(
+        makeNode(entry.type, childVersion, structuredClone(entry.props ?? {}))
+      );
+    }
+
+    if (children.length === 0) continue;
+    // `defineEntry` rather than assignment: a slot name is chosen by whichever
+    // package defined the block, so it is not a string this package controls,
+    // and assigning to `__proto__` would create no key while replacing the
+    // record's prototype.
+    defineEntry(expanded, slotName, children);
+    filledAnySlot = true;
+  }
+
+  return filledAnySlot ? expanded : undefined;
 }
 
 /** Where an insert or move lands: a parent's slot, or the top level when `parentId` is absent. */

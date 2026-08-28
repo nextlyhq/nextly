@@ -51,8 +51,27 @@ export interface SlotSpec {
    * (`"core/*"`). Omitted means any block is allowed.
    */
   allow?: string[];
-  /** Children inserted when the block is first placed. */
-  template?: BlockNode[];
+  /**
+   * What this slot starts with when its block is first placed.
+   *
+   * Each entry declares one starting child by TYPE, and a type cannot carry an
+   * id. That is the whole point: an expander mints a fresh id per entry per
+   * instance, so two parents built from one declaration cannot collide on
+   * `duplicate-node-id`. A stored list of NODES has the opposite property —
+   * its ids are literal, so the second expansion repeats the first's — which is
+   * why this names types rather than holding nodes.
+   *
+   * A LIST of per-item declarations rather than a type and a count, because the
+   * entries must be allowed to differ: an unequal split declares a different
+   * width per column, and one shared `props` cannot express that. The uniform
+   * case repeats an entry, which costs a few characters and keeps one shape.
+   *
+   * Order is the order the children are created in. An entry naming a type the
+   * expander cannot resolve contributes no child, so an unknown type yields a
+   * shorter slot rather than a node the renderer would replace with a
+   * placeholder.
+   */
+  defaultBlock?: readonly { type: string; props?: Record<string, unknown> }[];
   /**
    * Editing restriction for this slot, inherited by its children:
    * `"all"` locks everything, `"insert"` forbids adding/removing children,
