@@ -228,6 +228,22 @@ describe("slot allow-list validation at registration", () => {
     ).toThrow(/defaultBlock must be an array/);
   });
 
+  it("refuses a sparse defaultBlock array", () => {
+    // `Array.prototype.every` SKIPS a hole, so a predicate written with it
+    // reports `Array(1)` as well-formed; `for...of` visits the hole and yields
+    // `undefined`, which the expansion then reads `type` off. The two disagree
+    // about the same array, and only an index check sees it.
+    const sparse = Array(1) as unknown[];
+    expect(Object.hasOwn(sparse, 0)).toBe(false);
+
+    expect(() =>
+      registerBlocks(
+        [withSlots({ default: { defaultBlock: sparse } })] as never,
+        { source: "acme" }
+      )
+    ).toThrow(/defaultBlock must be an array/);
+  });
+
   it("accepts a defaultBlock entry that names only a type", () => {
     // `props` is optional and the child's own defaults stand underneath it, so
     // an entry naming just a type is the ordinary case. A validator that

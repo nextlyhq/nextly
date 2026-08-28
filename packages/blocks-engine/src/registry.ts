@@ -94,6 +94,23 @@ export function isBlockName(value: unknown): value is string {
 }
 
 /**
+ * Whether every index of an array is an OWN element rather than a hole.
+ *
+ * An explicit index loop, because every callback-based array method skips
+ * holes — `every`, `some`, `filter` and `forEach` alike — so a predicate
+ * written with one cannot observe the thing it is being asked about. That is
+ * not a detail of this check: it is the reason a sparse array survives
+ * validation and then reaches a `for...of`, which does NOT skip, and yields
+ * `undefined`.
+ */
+function hasNoHoles(values: readonly unknown[]): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Object.hasOwn(values, index)) return false;
+  }
+  return true;
+}
+
+/**
  * Whether a slot name can be stored and read back as its own key.
  *
  * The rejected names are the ones `Object.prototype` OWNS. Reading
@@ -269,8 +286,13 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       // plugins and from JSON, where it does not.
       const defaultBlock = (spec as { defaultBlock?: unknown }).defaultBlock;
       if (defaultBlock === undefined) continue;
+      // A HOLE is not a missing element to `Array.prototype.every`, which skips
+      // it, while `for...of` visits it and yields `undefined` — so a sparse
+      // array validated by the first is read by the second. Checked by index
+      // because no callback-based method can see what it does not visit.
+      const dense = Array.isArray(defaultBlock) && hasNoHoles(defaultBlock);
       const entriesWellFormed =
-        Array.isArray(defaultBlock) &&
+        dense &&
         defaultBlock.every(entry => {
           if (!isPlainRecord(entry)) return false;
           // Only `type` is required. `props` is optional and the child's own

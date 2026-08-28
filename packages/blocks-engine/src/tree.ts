@@ -66,11 +66,13 @@
  * own.
  */
 import type { SlotSpec } from "./block";
+import { isBlockType } from "./document";
 import type { BlockNode } from "./document";
 import { walkForest } from "./forest-walk";
 import { MAX_NODES } from "./limits";
 import { canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
+import { isPlainRecord } from "./plain-record";
 import { defineEntry, ownEntry } from "./safe-record";
 
 /** Stable unique node id. `crypto.randomUUID` exists in Node ≥ 20 and browsers. */
@@ -116,6 +118,9 @@ export interface SlotDefaultSource {
       }
     | undefined;
 }
+
+/** What {@link SlotDefaultSource} answers with for a type it knows. */
+type ResolvedDefinition = NonNullable<ReturnType<SlotDefaultSource["get"]>>;
 
 /**
  * How deep a chain of declared defaults may go.
@@ -282,7 +287,13 @@ function childrenForSlot(
     readonly budget: { remaining: number };
   }
 ): BlockNode[] {
-  if (declared === undefined) return [];
+  // The SHAPE is checked here and not only at registration, because
+  // registration is no longer the only way a definition reaches this function.
+  // `blockSourceFor` deliberately admits a caller-supplied definition the
+  // registry does not hold, so a host or fixture declaration never passes
+  // `registerBlocks` at all — and a non-array reaching the loop below throws
+  // `TypeError: declared is not iterable` at the author's click.
+  if (!Array.isArray(declared)) return [];
   const children: BlockNode[] = [];
   for (const entry of declared) {
     const child = childForEntry(entry, context);
@@ -299,24 +310,42 @@ function childrenForSlot(
  * become a child at all. Each `null` below is a distinct refusal, and keeping
  * them together is what lets the loop above read as the shape it builds.
  */
-function childForEntry(
-  entry: { readonly type: string; readonly props?: Record<string, unknown> },
-  context: {
-    readonly type: string;
-    readonly slotName: string;
-    readonly definitions: SlotDefaultSource;
-    readonly nesting: NestingSource;
-    readonly ancestors: ReadonlySet<string>;
-    readonly depth: number;
-    readonly budget: { remaining: number };
-  }
-): BlockNode | null {
-  const { definitions, nesting, ancestors, depth, budget } = context;
+type EntryContext = {
+  readonly type: string;
+  readonly slotName: string;
+  readonly definitions: SlotDefaultSource;
+  readonly nesting: NestingSource;
+  readonly ancestors: ReadonlySet<string>;
+  readonly depth: number;
+  readonly budget: { remaining: number };
+};
+
+/**
+ * The entry's resolved type and definition, or `null` for any reason it must
+ * not become a child.
+ *
+ * Every refusal lives here and none of them in the construction below, so the
+ * two questions stay apart: whether this declaration MAY become a child, and
+ * what that child is. Each `null` is a distinct reason, and the comments name
+ * the failure each one prevents rather than restating the condition.
+ */
+function resolvedEntry(
+  entry: unknown,
+  context: EntryContext
+): { type: string; definition: ResolvedDefinition } | null {
+  const { definitions, nesting, ancestors, budget } = context;
   // Checked before the definition is even resolved: once the budget is spent
   // nothing further can be built, so the cheapest possible refusal is the right
   // one.
   if (budget.remaining <= 0) return null;
-  const definition = definitions.get(entry.type);
+  // An entry is not trusted to BE an entry. A sparse array yields `undefined`
+  // here — `Array.prototype.every` skips a hole while `for...of` visits it, so
+  // a declaration validated by the first is read by the second — and an
+  // unregistered supplied definition never passed any shape check at all.
+  if (!isPlainRecord(entry)) return null;
+  const type = entry.type;
+  if (!isBlockType(type)) return null;
+  const definition = definitions.get(type);
   // A node of an unregistered type renders as a placeholder the author did not
   // ask for and cannot repair.
   if (definition === undefined) return null;
@@ -324,14 +353,24 @@ function childForEntry(
   // neither implies the other: the child says where it belongs, the slot says
   // what it holds, and a seed has to satisfy both to be a placement the author
   // could have made themselves.
-  if (!canNest(entry.type, context.type, nesting).allowed) return null;
-  if (
-    !canNestInSlot(entry.type, context.type, context.slotName, nesting).allowed
-  )
+  if (!canNest(type, context.type, nesting).allowed) return null;
+  if (!canNestInSlot(type, context.type, context.slotName, nesting).allowed) {
     return null;
+  }
   // Already being expanded on this path, so creating it again would not
   // terminate.
-  if (ancestors.has(entry.type)) return null;
+  if (ancestors.has(type)) return null;
+  return { type, definition };
+}
+
+function childForEntry(
+  entry: unknown,
+  context: EntryContext
+): BlockNode | null {
+  const { definitions, nesting, ancestors, depth, budget } = context;
+  const resolved = resolvedEntry(entry, context);
+  if (resolved === null) return null;
+  const { type, definition } = resolved;
 
   // The child's own defaults UNDERNEATH the entry's values, so a seeded child
   // starts where a directly inserted one starts and the declaration overrides
@@ -342,26 +381,40 @@ function childForEntry(
   // one inserted block reach back into the definition, and through it every
   // block expanded from it afterwards. A shallow copy is not enough, because a
   // declared value may be an array or a nested object.
-  const props = structuredClone({
-    ...(definition.defaultProps ?? {}),
-    ...(entry.props ?? {}),
-  });
+  // `isPlainRecord` judges the prototype, not the contents, so a declared prop
+  // holding a function or a symbol is a plain object that `structuredClone`
+  // refuses with a `DataCloneError`. Uncaught, that throws at the author's
+  // click rather than anywhere a plugin author would see it. The child is
+  // dropped instead, which is what every other unusable entry here does — a
+  // container arriving without one declared child is a state the editor
+  // already renders, and a thrown insert is not.
+  let props: Record<string, unknown>;
+  try {
+    props = structuredClone({
+      ...(definition.defaultProps ?? {}),
+      ...(isPlainRecord(entry) && isPlainRecord(entry.props)
+        ? entry.props
+        : {}),
+    });
+  } catch {
+    return null;
+  }
 
   // Spent BEFORE recursing, so a child's own declared children are drawn from
   // what remains after it rather than from the budget its parent saw.
   budget.remaining -= 1;
   return makeNode(
-    entry.type,
+    type,
     // The CHILD's own schema version, never the parent's: a node stamped with
     // its parent's version is read by the migration runner as older or newer
     // than it is, and gets upgrade steps meant for a different block.
     definition.version,
     props,
     expandFrom(
-      entry.type,
+      type,
       definitions,
       nesting,
-      new Set([...ancestors, entry.type]),
+      new Set([...ancestors, type]),
       depth + 1,
       budget
     )

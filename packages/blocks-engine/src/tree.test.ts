@@ -1467,6 +1467,94 @@ describe("expanding a slot's declared default", () => {
     expect(slots?.right).toHaveLength(1);
   });
 
+  it("refuses a malformed declaration that never passed registration", () => {
+    // A supplied definition reaches the expansion WITHOUT `registerBlocks`,
+    // because `blockSourceFor` deliberately admits one the registry does not
+    // hold. Registration is therefore not the only shape boundary, and a
+    // non-array here reaches `for...of` as `TypeError: declared is not
+    // iterable` at the author's click.
+    // A NUMBER rather than a string, deliberately. A string is iterable, so
+    // `for...of` walks its characters and each one is refused by the entry
+    // check further down — the declaration is malformed and the array guard is
+    // never what catches it. A non-iterable is the value that actually reaches
+    // `TypeError: declared is not iterable`.
+    const malformed = {
+      get: (type: string) =>
+        type === "core/host"
+          ? { version: 1, slots: { children: { defaultBlock: 42 } } }
+          : type === "core/column"
+            ? { version: 1 }
+            : undefined,
+    };
+
+    expect(() =>
+      expandSlotDefaults("core/host", malformed as never)
+    ).not.toThrow();
+    expect(expandSlotDefaults("core/host", malformed as never)).toBeUndefined();
+  });
+
+  it("creates no children from a declaration that is a bare string", () => {
+    // The other half of the shape above, and a different mechanism: a string
+    // IS iterable, so the loop yields one-character values rather than
+    // throwing. Each is refused as an entry, so the container arrives empty
+    // instead of holding a child per letter.
+    const stringy = {
+      get: (type: string) =>
+        type === "core/host"
+          ? { version: 1, slots: { children: { defaultBlock: "core/column" } } }
+          : type === "core/column"
+            ? { version: 1 }
+            : undefined,
+    };
+
+    expect(expandSlotDefaults("core/host", stringy as never)).toBeUndefined();
+  });
+
+  it("refuses a declared entry that is a hole in a sparse array", () => {
+    const sparse = Array(1) as unknown[];
+    const holed = {
+      get: (type: string) =>
+        type === "core/host"
+          ? { version: 1, slots: { children: { defaultBlock: sparse } } }
+          : undefined,
+    };
+
+    // The hole arrives as `undefined`, and reading `type` off it throws.
+    expect(() => expandSlotDefaults("core/host", holed as never)).not.toThrow();
+    expect(expandSlotDefaults("core/host", holed as never)).toBeUndefined();
+  });
+
+  it("drops a child whose declared props cannot be cloned", () => {
+    // A prototype check says this is a plain object; `structuredClone` refuses
+    // its contents with a DataCloneError. Uncaught, the insert throws.
+    const uncloneable = {
+      get: (type: string) =>
+        type === "core/host"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  defaultBlock: [
+                    { type: "core/leaf", props: { onClick: () => undefined } },
+                  ],
+                },
+              },
+            }
+          : type === "core/leaf"
+            ? { version: 1 }
+            : undefined,
+    };
+
+    expect(() =>
+      expandSlotDefaults("core/host", uncloneable as never)
+    ).not.toThrow();
+    // Dropped rather than created empty: a child carrying none of its declared
+    // props is not the block the declaration named.
+    expect(
+      expandSlotDefaults("core/host", uncloneable as never)
+    ).toBeUndefined();
+  });
+
   it("stops creating nodes once the document's node cap is spent", () => {
     // Ten children at each of eight levels is a legal set of declarations and
     // about a hundred million nodes. The DEPTH bound does not reach this: it
