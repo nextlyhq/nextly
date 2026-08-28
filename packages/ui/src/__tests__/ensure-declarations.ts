@@ -31,11 +31,13 @@
  * ## The build is a TASK, not something a test hook pays for
  *
  * It used to run inside `beforeAll` with a 120-second budget. The work is about
- * two seconds; the budget is wall-clock, and on a runner already executing the
- * rest of the turbo graph it was exceeded — so the suite failed with
+ * THIRTEEN seconds — measured, and six times what an earlier note here claimed
+ * — against a budget that is wall-clock, so on a runner already executing the
+ * rest of the turbo graph it was exceeded: the suite failed with
  * `Hook timed out in 120000ms` on branches that had not touched this package,
  * and it reddened `main` itself. Raising the number only moves where that
- * happens.
+ * happens, and the gap between the two figures is most of why 120 seconds
+ * looked like plenty.
  *
  * So the build is a turbo task the test DEPENDS on. Turbo schedules it, caches
  * it against declared inputs, and imposes no deadline on it. The suite then
@@ -119,6 +121,18 @@ export function buildDeclarations(): string {
   return OUT_DIR;
 }
 
+/**
+ * The workspace directory holding the tsconfig this package extends.
+ *
+ * Exported so the surface suite can assert the link still exists — see
+ * {@link BUILD_INPUTS} for why the whole directory is watched rather than the
+ * one file the chain currently resolves to.
+ */
+export const EXTENDS_PACKAGE_DIR = "tsconfig";
+
+/** The package specifier {@link EXTENDS_PACKAGE_DIR} is reached by. */
+export const EXTENDS_PACKAGE = "@nextlyhq/tsconfig";
+
 /** What the declaration build reads, for deciding whether it is out of date. */
 const BUILD_INPUTS = [
   "src",
@@ -129,6 +143,19 @@ const BUILD_INPUTS = [
   "tsup.config.ts",
   "tsup.server-safe.config.ts",
   "tsconfig.json",
+  // The config `tsconfig.json` EXTENDS, which lives in another package and so
+  // is not reached by anything above. The declaration build reads the resolved
+  // options, so a change to the shared bundler config changes the output with
+  // nothing here moving.
+  //
+  // The whole package, not the file: resolving an `extends` chain is the
+  // dependency tracking this helper deliberately does not do, and a directory
+  // of JSON configs is small enough that watching all of it is cheaper than
+  // being clever. `turbo` covers the same ground properly through `^build`;
+  // this is for the runs it never sees. {@link EXTENDS_PACKAGE} is asserted by
+  // the surface suite, so the day this package stops extending that one, a test
+  // says so rather than the check quietly watching the wrong directory.
+  join("..", EXTENDS_PACKAGE_DIR),
   "package.json",
 ];
 

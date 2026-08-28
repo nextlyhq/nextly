@@ -371,12 +371,14 @@
     },
     // The declaration build the ui package's published-surface guard reads.
     //
-    // A task rather than something the suite does inside a hook. It is about
-    // two seconds of work under a wall-clock budget, and on a runner already
-    // executing the rest of this graph that budget was exceeded — so the suite
-    // failed with a hook timeout on branches that had not touched the package,
-    // and reddened `main` itself. Here it is scheduled, cached against declared
-    // inputs, and under no deadline.
+    // A task rather than something the suite does inside a hook. Measured at
+    // ~13s of work — the suite takes ~800ms when the declarations are already
+    // current and ~12.9s when it has to build them — and it ran under a
+    // wall-clock budget, so on a runner already executing the rest of this
+    // graph the budget was exceeded: the suite failed with a hook timeout on
+    // branches that had not touched the package, and reddened `main` itself.
+    // Here it is scheduled, cached against declared inputs, and under no
+    // deadline.
     //
     // Inputs are what the declaration bundler reads. `dist` is deliberately not
     // an output: the guard builds somewhere private, because other packages

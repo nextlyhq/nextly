@@ -21,6 +21,8 @@ import {
 import {
   DECLARATION_ENTRIES,
   declarationsDir,
+  EXTENDS_PACKAGE,
+  EXTENDS_PACKAGE_DIR,
 } from "./__tests__/ensure-declarations";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -574,5 +576,28 @@ describe("ui release tags do not shadow the documentation", () => {
     // "nothing was parsed" just as readily as "nothing is wrong".
     const probe = path.join(SRC, "__tests__", "shadowed-tag-probe.fixture.ts");
     expect(shadowed(probe)).toHaveLength(1);
+  });
+});
+
+describe("what the freshness check watches", () => {
+  it("watches the config package this one actually extends", () => {
+    /*
+     * The declaration build reads its compiler options through an `extends`
+     * chain that leaves this package, so the freshness check watches the
+     * directory at the other end of it. That directory is named rather than
+     * resolved — following the chain is the dependency tracking this helper
+     * deliberately refuses to do — which leaves one assumption to keep honest:
+     * that the chain still starts where it is assumed to.
+     *
+     * Without this, a package that stopped extending `@nextlyhq/tsconfig` would
+     * leave the check watching a directory nothing reads, and a stale build
+     * would pass in every run turbo does not schedule.
+     */
+    const config = readFileSync(path.join(PKG_ROOT, "tsconfig.json"), "utf8");
+
+    expect(config).toContain(`"extends": "${EXTENDS_PACKAGE}/`);
+    expect(existsSync(path.join(PKG_ROOT, "..", EXTENDS_PACKAGE_DIR))).toBe(
+      true
+    );
   });
 });
