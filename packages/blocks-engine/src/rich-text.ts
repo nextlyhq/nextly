@@ -49,6 +49,7 @@
  * mismatch is silent in the worst possible way — the editor treats a tree as
  * text, reads no text out of it, and commits an empty string over the passage.
  */
+import { authoredText } from "./authored-text";
 import { isLinkableUrl } from "./url-policy";
 
 export const RICH_TEXT_PROP_TYPE = "richText";
@@ -327,8 +328,12 @@ function labelOf(item: unknown): string | null {
   // by a word that never appears on it — the mirror of the defect that made
   // these labels worth reading in the first place.
   if (!isLinkableUrl(fields.url)) return null;
-  const text = fields.text;
-  return typeof text === "string" && text.length > 0 ? text : null;
+  // Through the SAME projection the renderer draws with, not a `typeof` test of
+  // its own. A stored number is authored text there, so a button whose label is
+  // `0` shows the character "0" on the page; a string-only check here described
+  // that page by a label it does not carry.
+  const text = authoredText(fields.text);
+  return text.length > 0 ? text : null;
 }
 
 function leafText(node: RichTextNode): string | null {

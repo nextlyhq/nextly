@@ -1696,6 +1696,72 @@ describe("rich-text phrasing-only containers keep their label", () => {
     expect(html).not.toContain("<h2></h2>");
   });
 
+  it("keeps the trailing link when the moved run holds a button", () => {
+    /*
+     * The case the image fixtures cannot reach, and the reason they cannot:
+     * an image is not interactive, so ONE wrapper copy around the moved run
+     * renders fine. A button IS interactive, and an `<a>` may not contain
+     * another, so {@link LinkView} drops a wrapper holding one — taking the
+     * link off `After` as well, which the author linked and which nothing
+     * objects to on its own.
+     *
+     * Asserted as the anchor around `After` rather than as "the html contains
+     * a link", which every one of these fixtures satisfies through `Before`.
+     */
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [
+          linked([
+            { type: "text", text: "Before" },
+            { type: "button-link", url: "https://example.com/go", text: "Go" },
+            { type: "text", text: "After" },
+          ]),
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+    expect(html).toContain('<a href="https://example.com">After</a>');
+    // The heading keeps its own words linked, and the button is NOT re-wrapped
+    // in the anchor that would have been taken apart around it.
+    expect(html).toContain('<h2><a href="https://example.com">Before</a></h2>');
+    expect(html).not.toContain('<a href="https://example.com"><p');
+    // The author's order survives the split: a segment is emitted where the
+    // node it follows was, not gathered to one end.
+    expect(html.indexOf("Before")).toBeLessThan(html.indexOf("Go"));
+    expect(html.indexOf("Go")).toBeLessThan(html.indexOf("After"));
+  });
+
+  it("keeps a non-interactive moved run in ONE wrapper", () => {
+    /*
+     * The control on the other side. Segmenting unconditionally would emit a
+     * separate anchor per node and fragment a run the wrapper may legally hold,
+     * so the image case must still render as a single link around both.
+     */
+    const value = doc([
+      {
+        type: "heading",
+        tag: "h2",
+        children: [
+          linked([
+            { type: "text", text: "Before" },
+            IMAGE,
+            { type: "text", text: "After" },
+          ]),
+        ],
+      },
+    ] as unknown as RichTextValue["root"]["children"]);
+
+    const html = renderToStaticMarkup(<RichText value={value} />);
+    // One anchor holding the figure AND the words that followed it.
+    expect(html).toContain('<a href="https://example.com"><figure');
+    expect(html).toContain("After</a>");
+    // Two anchors in total: the heading's, and the moved run's single copy.
+    expect(html.split('<a href="https://example.com"').length - 1).toBe(2);
+  });
+
   it("splits the same wrapper inside a disclosure label", () => {
     // The sibling container. A rule applied to headings alone leaves the
     // disclosure with an empty label by the identical route.

@@ -470,8 +470,57 @@ function partitionChild(
   const inner = partitionPhrasing(kidsOf(child), permits, depth + 1);
   return {
     keeps: inner.keeps.length > 0 ? [{ ...child, children: inner.keeps }] : [],
-    moves: inner.moves.length > 0 ? [{ ...child, children: inner.moves }] : [],
+    moves: rewrapMoved(child, inner.moves),
   };
+}
+
+/**
+ * A moved run back inside its inline wrapper, split where the wrapper cannot
+ * hold what it would contain.
+ *
+ * ONE copy around the whole run is the obvious shape and it silently drops the
+ * author's link. A link may not contain another interactive element, so
+ * {@link LinkView} renders such a wrapper as its children alone — and a single
+ * button in the middle of the run therefore unwraps the phrasing AFTER it too,
+ * which the author had linked and which nothing else in the run objects to. The
+ * same passage with an image in place of the button keeps its trailing link,
+ * so the two spellings of one document disagreed.
+ *
+ * Segmenting instead: each run of nodes the wrapper may legally hold gets its
+ * OWN copy, and a node it may not hold is emitted beside them, unwrapped. Order
+ * is preserved throughout, which is the property the move exists to protect.
+ *
+ * Only an interactive wrapper is at risk. Any other inline wrapper — a format
+ * span, a mark — has no such rule against its contents and is copied whole,
+ * because splitting it would fragment a run for no gain.
+ */
+function rewrapMoved(
+  wrapper: RichTextNode,
+  moved: readonly RichTextNode[]
+): RichTextNode[] {
+  if (moved.length === 0) return [];
+  if (!INTERACTIVE_NODES.has(wrapper.type))
+    return [{ ...wrapper, children: [...moved] }];
+
+  const out: RichTextNode[] = [];
+  let run: RichTextNode[] = [];
+  const closeRun = () => {
+    if (run.length === 0) return;
+    out.push({ ...wrapper, children: run });
+    run = [];
+  };
+  for (const node of moved) {
+    // The node itself as well as its descendants: the wrapper is taken apart by
+    // an interactive element at any depth inside it, not only a direct child.
+    if (holdsInteractive([node])) {
+      closeRun();
+      out.push(node);
+      continue;
+    }
+    run.push(node);
+  }
+  closeRun();
+  return out;
 }
 
 /**

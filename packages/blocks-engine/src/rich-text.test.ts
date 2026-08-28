@@ -357,6 +357,71 @@ describe("richTextToPlainText around a block-like leaf", () => {
     ).toBe("Only Real this");
   });
 
+  it("reports a numeric label the renderer draws as text", () => {
+    /*
+     * The renderer treats a finite NUMBER as authored text, so a stored
+     * `text: 0` — a legacy row, an import, a migration — draws the character
+     * "0" on the page. A string-only check here described that page by a label
+     * it does carry, which is the same disagreement between two readers of one
+     * document that the URL check above exists to prevent.
+     *
+     * `0` specifically, because it is the value a truthiness test also drops:
+     * a fix written as `text ? text : null` passes for `2024` and fails here.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Pick" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "/zero", text: 0 },
+                  { url: "/year", text: 2024 },
+                ],
+              },
+              { type: "text", text: "one" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Pick 0 2024 one");
+  });
+
+  it("still omits a stored value no reader would draw as text", () => {
+    /*
+     * The control on the other side. Accepting every non-string would report
+     * `true` and `[object Object]` — artefacts of the conversion rather than
+     * anything an author wrote — so a rule of "stringify whatever is there"
+     * passes the test above and describes the page by words nobody typed.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              {
+                type: "button-group",
+                buttons: [
+                  { url: "/a", text: true },
+                  { url: "/b", text: { label: "nested" } },
+                  { url: "/c", text: ["x"] },
+                  { url: "/d", text: Number.NaN },
+                  { url: "/e", text: "Real" },
+                ],
+              },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only Real this");
+  });
+
   it("skips a button group carrying no labels rather than inventing a gap", () => {
     // The control: a group with nothing readable must not contribute, and must
     // not throw on shapes storage can hold.
