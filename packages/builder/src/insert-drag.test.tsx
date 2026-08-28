@@ -1,0 +1,417 @@
+// @vitest-environment jsdom
+
+/**
+ * Dragging a block from the palette onto the canvas.
+ *
+ * The property under test is not "a block appears". It is that the palette and
+ * the canvas share ONE drag engine, and the observable that separates a shared
+ * engine from a second, parallel one is the SHAPE of the edit rather than its
+ * result: exactly one op, written at the release, never before it. A fork that
+ * inserted a provisional node at drag-start and moved it would look identical
+ * on screen and leave two entries on the undo stack.
+ *
+ * So `undoDepth` is asserted across the whole gesture rather than at the end,
+ * and the switch rule and Escape are exercised from a palette-origin drag
+ * specifically — each is invisible by default, and a second implementation has
+ * no reason to reproduce any of them.
+ *
+ * **Rectangles are stubbed, as jsdom reports every element as zero-sized.** The
+ * geometry itself is pure and asserted in `drop-targets.test.ts`; what is real
+ * here is the gesture.
+ *
+ * @module insert-drag.test
+ */
+import { cleanup, fireEvent, render } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import * as React from "react";
+
+import {
+  clearBlocks,
+  registerBlocks,
+  type BlockDocument,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
+
+import { Canvas, CANVAS_ROOT_CLASS } from "./canvas";
+import { DEFAULT_SWITCH_PX, DropIndicator, useCanvasDrag } from "./canvas-drag";
+import { useEditorState, type EditorState } from "./editor-state";
+import { registrySlotSource } from "./inserter";
+
+afterEach(() => {
+  cleanup();
+  clearBlocks();
+  captured = [];
+  built = 0;
+});
+
+/** Pointer ids anything took capture of, so a palette drag can assert none. */
+let captured: number[] = [];
+/** How many times the palette was asked to build its node. */
+let built = 0;
+
+beforeAll(() => {
+  const element = window.Element.prototype as unknown as Record<
+    string,
+    unknown
+  >;
+  element.setPointerCapture = function setPointerCapture(id: number): void {
+    captured.push(id);
+  };
+  element.releasePointerCapture = function releasePointerCapture(): void {};
+  element.hasPointerCapture = function hasPointerCapture(): boolean {
+    return true;
+  };
+  element.scrollIntoView = function scrollIntoView(): void {};
+});
+
+const BLOCKS = [
+  {
+    name: "test/heading",
+    version: 1,
+    description: "A heading.",
+    example: { props: {} },
+    editor: { label: "Heading" },
+    render: () => React.createElement("h2", null, "heading"),
+  },
+];
+
+function node(id: string, type: string): BlockNode {
+  return { id, type, version: 1, props: {} } as BlockNode;
+}
+
+function documentOf(nodes: BlockNode[]): BlockDocument {
+  return { formatVersion: 1, kind: "page", nodes } as BlockDocument;
+}
+
+let editorRef: EditorState | null = null;
+/** What the hook reported on the last render, for the drag-state assertions. */
+let dragState: { draggingId: string | null; draggingBlockName: string | null } =
+  { draggingId: null, draggingBlockName: null };
+
+/** The id the palette's thunk gives whatever it builds. */
+const INSERTED = "brand-new";
+
+/**
+ * A host that mounts the canvas AND a palette row, which is the composition
+ * this feature only exists inside.
+ *
+ * The row is an ordinary button rather than the real `InsertPanel`: what is
+ * under test is the engine's entry point, and mounting the panel would drag in
+ * cmdk's filtering and the registry catalog to reach the same `beginInsertDrag`
+ * call by a longer route.
+ */
+function Host({ document: doc }: { document: BlockDocument }) {
+  const editor = useEditorState({ initialDocument: doc });
+  editorRef = editor;
+  const shell = React.useRef<HTMLDivElement | null>(null);
+  const canvasRoot = React.useRef<HTMLElement | null>(null);
+
+  // Resolved after paint, because the root is rendered by `Canvas` rather than
+  // by this component: there is no ref to forward without changing that
+  // component's public shape to serve a test.
+  React.useEffect(() => {
+    canvasRoot.current =
+      shell.current?.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`) ??
+      null;
+  });
+
+  const drag = useCanvasDrag({
+    editor,
+    slots: registrySlotSource(),
+    nesting: { parentsOf: () => undefined, slotAllowOf: () => undefined },
+    canvasRoot,
+  });
+  dragState = {
+    draggingId: drag.draggingId,
+    draggingBlockName: drag.draggingBlockName,
+  };
+
+  return (
+    <div ref={shell}>
+      <button
+        type="button"
+        data-testid="palette-row"
+        onPointerDown={event =>
+          drag.beginInsertDrag(event, {
+            blockName: "test/heading",
+            makeNode: () => {
+              built += 1;
+              return node(INSERTED, "test/heading");
+            },
+          })
+        }
+      >
+        Heading
+      </button>
+      <Canvas
+        document={editor.document}
+        siteStyles={{ css: "" } as never}
+        selectedId={editor.selectedId}
+        onSelect={editor.select}
+        dragHandlers={drag.handlers}
+        overlay={<DropIndicator target={drag.target} />}
+      />
+    </div>
+  );
+}
+
+function layout(container: HTMLElement, heights: Record<string, number>): void {
+  const root = container.querySelector<HTMLElement>(`.${CANVAS_ROOT_CLASS}`);
+  if (root === null) throw new Error("no canvas root rendered");
+  root.getBoundingClientRect = () =>
+    ({ x: 0, y: 0, width: 400, height: 1000, top: 0, left: 0 }) as DOMRect;
+
+  let top = 0;
+  root
+    .querySelectorAll<HTMLElement>(`[${NODE_ID_ATTRIBUTE}]`)
+    .forEach(element => {
+      const id = element.getAttribute(NODE_ID_ATTRIBUTE) ?? "";
+      const height = heights[id] ?? 100;
+      const box = { x: 0, y: top, width: 400, height, top, left: 0 } as DOMRect;
+      element.getBoundingClientRect = () => box;
+      top += height;
+    });
+}
+
+/** Two stacked blocks: 0-100 and 100-200. */
+function renderTwo() {
+  registerBlocks(BLOCKS as never, { source: "insert-drag-test" });
+  const result = render(
+    <Host
+      document={documentOf([
+        node("a", "test/heading"),
+        node("b", "test/heading"),
+      ])}
+    />
+  );
+  layout(result.container, { a: 100, b: 100 });
+  const row = result.getByTestId("palette-row");
+  return { ...result, row };
+}
+
+function pressRow(row: HTMLElement, x: number, y: number): void {
+  fireEvent.pointerDown(row, {
+    button: 0,
+    pointerId: 7,
+    clientX: x,
+    clientY: y,
+  });
+}
+
+/**
+ * Moves and releases go to the DOCUMENT, which is the point.
+ *
+ * A palette drag is followed there because the row is not an ancestor of the
+ * canvas. Firing these at the canvas root would pass against an engine that
+ * never registered a document listener at all, and the gesture would be
+ * untestable in the one arrangement it actually runs in.
+ */
+function moveTo(x: number, y: number): void {
+  fireEvent.pointerMove(document, { pointerId: 7, clientX: x, clientY: y });
+}
+
+function release(x: number, y: number): void {
+  fireEvent.pointerUp(document, { pointerId: 7, clientX: x, clientY: y });
+}
+
+function ids(): string[] {
+  return (editorRef?.document.nodes ?? []).map(n => n.id);
+}
+
+describe("dragging a block from the palette onto the canvas", () => {
+  it("commits ONE insert, at the release, where the line was drawn", () => {
+    const { container } = renderTwo();
+    expect(editorRef?.undoDepth).toBe(0);
+
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+    // Past DEFAULT_ACTIVATION_PX, into the lower half of the first block, which
+    // is the position after it.
+    moveTo(200, 90);
+
+    // The gesture is live and has NOT touched the document. This is the
+    // assertion a provisional-insert implementation fails.
+    expect(dragState.draggingBlockName).toBe("test/heading");
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+    expect(built).toBe(0);
+
+    release(200, 90);
+
+    expect(ids()).toEqual(["a", INSERTED, "b"]);
+    // Exactly one, and it is the whole point: two would mean the node was
+    // materialised early and moved into place.
+    expect(editorRef?.undoDepth).toBe(1);
+    expect(built).toBe(1);
+  });
+
+  it("selects what it just inserted, against a real editor", () => {
+    // The regression this file exists to cover. `select` resolves against the
+    // document `apply` has just published, so asserting that select was CALLED
+    // — which is all a mocked editor can see — passes whether or not the
+    // selection ever lands.
+    const { container } = renderTwo();
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+    moveTo(200, 90);
+    release(200, 90);
+
+    expect(editorRef?.selectedId).toBe(INSERTED);
+  });
+
+  it("edits nothing when the press never travels far enough to be a drag", () => {
+    // The click-to-insert path is the WCAG 2.2 SC 2.5.7 alternative and must
+    // survive: a press that stays a click has to reach the row's own handler
+    // rather than being consumed as a zero-length drag.
+    const { container } = renderTwo();
+
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+    moveTo(301, 501);
+    release(301, 501);
+
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+    expect(built).toBe(0);
+  });
+
+  it("never captures the pointer, so the row's own click still resolves", () => {
+    // Capture would retarget the click to the capturing element, and the
+    // palette row inserts on click — so capturing here would make every release
+    // anywhere report a click on the row.
+    const { container } = renderTwo();
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+    moveTo(200, 90);
+
+    expect(captured).toEqual([]);
+
+    release(200, 90);
+  });
+
+  it("holds the committed target until the pointer travels past the switch band", () => {
+    // Hysteresis, exercised from a palette-origin drag. Nothing about "insert
+    // on drop" requires it, so a second engine written for the panel would not
+    // have it — which is what makes this a same-engine assertion rather than a
+    // behavioural nicety.
+    //
+    // Asserted through WHAT THE RELEASE COMMITS rather than through the
+    // indicator's style attribute. The style is a position in pixels, and two
+    // different insertion points can round to one string, so a held target and
+    // a switched one are not reliably distinguishable there — an earlier
+    // version of this case asserted exactly that and survived deleting the
+    // band, proving nothing.
+    const { container } = renderTwo();
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+
+    // Below the second block's midpoint (150), so the committed target is the
+    // position AFTER it.
+    moveTo(200, 154);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    // Back across that midpoint, but by less than the band. The rival position
+    // — before the second block — is what an engine without hysteresis would
+    // commit to here.
+    const nudge = DEFAULT_SWITCH_PX - 2;
+    moveTo(200, 154 - nudge);
+    release(200, 154 - nudge);
+
+    // Held: the block lands where the pointer settled, not where it flicked.
+    expect(ids()).toEqual(["a", "b", INSERTED]);
+  });
+
+  it("Escape abandons the drag without editing the document", () => {
+    // Escape is listened for on the document and gated on a drag being in
+    // flight. An insert-drag has NO node, so a gate written against the
+    // dragged node's id leaves exactly this gesture uncancellable.
+    const { container } = renderTwo();
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+    moveTo(200, 90);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(dragState.draggingBlockName).toBeNull();
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+
+    // And the abandoned gesture is really over: a release afterwards must not
+    // commit the target it had settled on.
+    release(200, 90);
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+  });
+
+  it("reports no dragged NODE id, because an insert has none yet", () => {
+    // The discriminating half of the drag state. A block being dragged from the
+    // palette addresses nothing in the document, and an id invented to fill
+    // this field would be handed to anything drawing the dragged node.
+    const { container } = renderTwo();
+    pressRow(container.ownerDocument.body.querySelector("button")!, 300, 500);
+    moveTo(200, 90);
+
+    expect(dragState.draggingId).toBeNull();
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    release(200, 90);
+  });
+
+  it("starts no drag at all when the host supplied no canvas", () => {
+    // The control on `beginInsertDrag`'s own guard: with no canvas root the
+    // press must be left completely alone, so the row's click keeps working.
+    registerBlocks(BLOCKS as never, { source: "insert-drag-test" });
+    function NoCanvas() {
+      const editor = useEditorState({
+        initialDocument: documentOf([node("a", "test/heading")]),
+      });
+      editorRef = editor;
+      const drag = useCanvasDrag({
+        editor,
+        slots: registrySlotSource(),
+        nesting: { parentsOf: () => undefined, slotAllowOf: () => undefined },
+      });
+      dragState = {
+        draggingId: drag.draggingId,
+        draggingBlockName: drag.draggingBlockName,
+      };
+      return (
+        <button
+          type="button"
+          data-testid="palette-row"
+          onPointerDown={event =>
+            drag.beginInsertDrag(event, {
+              blockName: "test/heading",
+              makeNode: () => {
+                built += 1;
+                return node(INSERTED, "test/heading");
+              },
+            })
+          }
+        >
+          Heading
+        </button>
+      );
+    }
+    const result = render(<NoCanvas />);
+    // The guard's observable content is that the press is INERT rather than
+    // half-started: without it the gesture is built around a null root and the
+    // first rectangle read throws inside the handler. Asserting only that no
+    // drag began cannot see that, because a crash also leaves no drag — so the
+    // failure is caught where an exception inside a listener actually surfaces,
+    // which is the window rather than the call.
+    const errors: string[] = [];
+    const record = (event: ErrorEvent): void => {
+      errors.push(String(event.error ?? event.message));
+    };
+    window.addEventListener("error", record);
+    try {
+      pressRow(result.getByTestId("palette-row"), 300, 500);
+      moveTo(200, 90);
+      release(200, 90);
+    } finally {
+      window.removeEventListener("error", record);
+    }
+
+    expect(errors).toEqual([]);
+    expect(dragState.draggingBlockName).toBeNull();
+    expect(built).toBe(0);
+    expect(editorRef?.undoDepth).toBe(0);
+  });
+});
