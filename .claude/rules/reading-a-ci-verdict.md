@@ -483,14 +483,36 @@ naming the mechanism before calling something flake.
 The same shape outside CI. Both bots here can report nothing for reasons that
 have nothing to do with the code.
 
-**Match the bot's COMPLETE login, which carries a `[bot]` suffix.** Measured on
-this repo's PRs:
+**Match the bot's COMPLETE login, which carries a `[bot]` suffix — IN REST.**
+Measured on this repo's PRs:
 
 ```text
 chatgpt-codex-connector[bot]
 coderabbitai[bot]
 pkg-pr-new[bot]
 ```
+
+**GraphQL spells the same accounts WITHOUT the suffix**, and this instruction
+applied there returns zero, byte-identically to "no findings". Measured on #1286
+in one minute:
+
+```text
+REST     pulls/1286/comments   .user.login   coderabbitai[bot]
+GraphQL  reviewThreads author  .login        coderabbitai
+GraphQL  same node             .__typename   Bot
+```
+
+The exposure is unavoidable for thread state, because `isResolved` is
+GraphQL-only — so any "is anything still open" question is forced onto the API
+where this rule, read literally, fails silently. Reconcile at the boundary:
+`__typename == "Bot"` proves the account is an app rather than a user that
+registered the same name, and the suffix is then appended to recover the REST
+spelling everything else compares against. `scripts/ci-verdict.mjs` exports
+`canonicalActorLogin` for exactly this and both gates go through it.
+
+**`__typename` identifies; it cannot discriminate.** Every reviewer here reports
+`Bot` — blocking and advisory alike — so a policy keyed on it exempts the
+blocking reviewer too. Identity from `__typename`, _which_ bot from the login.
 
 Filtering for `chatgpt-codex-connector` returns zero, byte-identically to "not
 yet reviewed". That cost four watch cycles on #785 reporting no verdict while a
@@ -535,10 +557,13 @@ reporting a pass.
 
 The properties, each earned by a version that got it wrong:
 
-- **Identify the reviewer by its COMPLETE login**, `...[bot]` suffix included.
-  Equality on the un-suffixed name returns zero, byte-identically to "not yet
-  reviewed"; a substring match accepts any login containing the word, so anyone
-  able to comment can present a clean-looking verdict.
+- **Identify the reviewer by its COMPLETE login**, `...[bot]` suffix included —
+  which is how REST spells it. Equality on the un-suffixed name returns zero,
+  byte-identically to "not yet reviewed"; a substring match accepts any login
+  containing the word, so anyone able to comment can present a clean-looking
+  verdict. **GraphQL returns the same account without the suffix**, so this
+  equality fails there for every bot; canonicalise the GraphQL side first
+  (`canonicalActorLogin`) rather than loosening the match.
 - **Read `pulls/$PR/reviews`, not `pulls/$PR/comments`.** The latter returns
   only inline comments, and a clean review has none — so the outcome being
   waited for is the one that endpoint cannot report.
