@@ -187,10 +187,9 @@ describe("the Style tab beside Content", () => {
 describe("when there is nothing to style", () => {
   it("says to select a block, rather than rendering an empty panel", () => {
     /*
-     * The one guard of the four with no direct test until now — the wrapper's
-     * no-selection case covers `InspectorPanel`, not this panel, and the two
-     * say different words. Found by breaking the shared guard and watching
-     * only three of the four fail.
+     * Not covered by the wrapper's own no-selection case: that one renders
+     * `InspectorPanel`, which says "Select a block to edit it." This panel says
+     * "style", and a query matching one does not match the other.
      */
     register({ spacing: true });
     const { container } = render(
