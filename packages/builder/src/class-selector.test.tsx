@@ -39,7 +39,10 @@ function draw(overrides: Partial<ClassSelectorProps> = {}): {
   onNodeClassesChange: ReturnType<typeof vi.fn>;
   onCreateClass: ReturnType<typeof vi.fn>;
 } {
-  const onNodeClassesChange = vi.fn();
+  // Answers the contract. A bare `vi.fn()` returns undefined, which is not
+  // "refused" and so reads as success — the fake would then be asserting a
+  // shape the real host cannot use.
+  const onNodeClassesChange = vi.fn(() => "applied" as const);
   const onCreateClass = vi.fn();
   render(
     <ClassSelector
@@ -61,7 +64,7 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
     <ClassSelector
       library={LIBRARY}
       nodeClassIds={initial.nodeClassIds}
-      onNodeClassesChange={vi.fn()}
+      onNodeClassesChange={vi.fn(() => "applied" as const)}
       onCreateClass={vi.fn()}
     />
   );
@@ -71,7 +74,7 @@ function drawFor(initial: { nodeClassIds: readonly string[] }): {
         <ClassSelector
           library={LIBRARY}
           nodeClassIds={nodeClassIds}
-          onNodeClassesChange={vi.fn()}
+          onNodeClassesChange={vi.fn(() => "applied" as const)}
           onCreateClass={vi.fn()}
         />
       ),
@@ -92,7 +95,7 @@ describe("a library that has not been read yet", () => {
       <ClassSelector
         library={undefined}
         nodeClassIds={[]}
-        onNodeClassesChange={vi.fn()}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
         onCreateClass={vi.fn()}
       />
     );
@@ -307,6 +310,70 @@ describe("a node the page cannot fully apply", () => {
   it("says nothing for a node within the limit", () => {
     draw({ nodeClassIds: ["id-hero"] });
     expect(screen.queryByText(/lists .* more class/i)).toBeNull();
+  });
+});
+
+describe("a write the document refuses", () => {
+  /*
+   * A different failure from the node being full: that one is predictable from
+   * the ids in hand, this one is only knowable by asking the document — a page
+   * at its byte limit rejects an edit whose class was perfectly valid.
+   */
+  function drawRefusing() {
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+    render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={vi.fn()}
+      />
+    );
+    return { onNodeClassesChange };
+  }
+
+  it("keeps the typed query rather than clearing it as though applied", () => {
+    drawRefusing();
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect((field() as HTMLInputElement).value).toBe("hero");
+  });
+
+  it("says the change did not reach the document", () => {
+    drawRefusing();
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be applied/i
+    );
+  });
+
+  it("clears the query when the write DOES land", () => {
+    // The control: the two outcomes must be distinguishable, or the assertion
+    // above would hold for a selector that never cleared anything.
+    draw();
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect((field() as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reports a refused REMOVAL too, not only a refused apply", () => {
+    const onNodeClassesChange = vi.fn(() => "refused" as const);
+    render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-hero"]}
+        onNodeClassesChange={onNodeClassesChange}
+        onCreateClass={vi.fn()}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /remove hero from this element/i })
+    );
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be applied/i
+    );
   });
 });
 

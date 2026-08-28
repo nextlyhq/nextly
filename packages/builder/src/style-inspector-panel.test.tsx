@@ -374,6 +374,42 @@ describe("the class selector, mounted above the style sections", () => {
     expect((field() as HTMLInputElement).value).toBe("");
   });
 
+  it("tells the selector when the document refused the write", () => {
+    /*
+     * `applyAll` answers null when the store refuses — a page at its byte limit
+     * rejects an edit the class rules found valid. Discarded, the selector
+     * clears the query and resets as though the class had been applied, so the
+     * author loses the typed choice and is told nothing.
+     */
+    register({ spacing: true });
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "a", type: "acme/box", version: 1, props: {} },
+      ] as BlockNode[],
+    } as BlockDocument;
+    const editor = editorFor(document);
+    editor.applyAll.mockReturnValue(null);
+
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        onCreateClass={vi.fn()}
+        classLibrary={LIBRARY}
+      />
+    );
+    const field = () => screen.getByRole("combobox", { name: /add a class/i });
+    fireEvent.change(field(), { target: { value: "hero" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
+    expect((field() as HTMLInputElement).value).toBe("hero");
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /could not be applied/i
+    );
+  });
+
   it("reports a creation to the host rather than writing it", () => {
     // The class has no id until the host has stored it, so a node write here
     // would have to invent one.

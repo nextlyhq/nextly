@@ -50,6 +50,9 @@ import {
   type ClassOption,
 } from "./class-library";
 
+/** Whether a write to the selected node's classes reached the document. */
+export type ClassWriteOutcome = "applied" | "refused";
+
 export interface ClassSelectorProps {
   /**
    * The site's class library, or `undefined` while the host has not read it.
@@ -62,8 +65,18 @@ export interface ClassSelectorProps {
   library: readonly NamedClass[] | undefined;
   /** The class ids the selected node carries, as stored. */
   nodeClassIds: readonly string[];
-  /** The node's classes after an apply or a remove. */
-  onNodeClassesChange: (classIds: string[]) => void;
+  /**
+   * The node's classes after an apply or a remove, and whether it landed.
+   *
+   * Returns an outcome rather than nothing, because the store can refuse a
+   * write the rules here cannot anticipate: this module judges the class, while
+   * the document has its own limits and a page at its byte cap rejects an edit
+   * whose value is perfectly valid. Discarding that refusal would clear the
+   * query and reset the highlight as though the class had been applied, leaving
+   * the author with no explanation and no draft — the same failure the style
+   * controls in this package already return an outcome to avoid.
+   */
+  onNodeClassesChange: (classIds: string[]) => ClassWriteOutcome;
   /**
    * Create a class under this slug and put it on the selected node.
    *
@@ -82,6 +95,10 @@ export function ClassSelector({
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState(0);
   const [refused, setRefused] = React.useState(false);
+  // The store's refusal, which is a different failure from the node being full:
+  // that one is predictable from the ids in hand, this one is only knowable by
+  // asking the document. Kept apart so the message can say which happened.
+  const [writeRefused, setWriteRefused] = React.useState(false);
   const listId = React.useId();
 
   if (library === undefined) {
@@ -130,9 +147,16 @@ export function ClassSelector({
         setRefused(true);
         return;
       }
-      onNodeClassesChange(outcome.classIds);
+      if (onNodeClassesChange(outcome.classIds) === "refused") {
+        // The draft survives, deliberately. An author whose write was refused
+        // has lost nothing they typed, and the next thing they do is likely to
+        // be trying it again.
+        setWriteRefused(true);
+        return;
+      }
     }
     setRefused(false);
+    setWriteRefused(false);
     setQuery("");
     setActive(0);
   };
@@ -141,7 +165,12 @@ export function ClassSelector({
     <div className="nx-classes">
       <AppliedChips
         applied={applied}
-        onRemove={id => onNodeClassesChange(withClassRemoved(nodeClassIds, id))}
+        onRemove={id => {
+          const landed = onNodeClassesChange(
+            withClassRemoved(nodeClassIds, id)
+          );
+          setWriteRefused(landed === "refused");
+        }}
       />
       <Input
         className="nx-classes__query"
@@ -177,6 +206,11 @@ export function ClassSelector({
       {hidden > 0 ? (
         <p className="nx-inspector__note">
           {`${hidden} more — keep typing to narrow the list.`}
+        </p>
+      ) : null}
+      {writeRefused ? (
+        <p className="nx-classes__issue" role="alert">
+          This change could not be applied to the document.
         </p>
       ) : null}
       {showRefusal ? (
