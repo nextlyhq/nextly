@@ -40,6 +40,19 @@
  * preserve — each reasoned correctly from its own case, and the fourth case had
  * nothing to derive an answer from.
  *
+ * **Where the line falls, because the two cases look alike from a diff.** A
+ * primitive here handles what breaks ITSELF and does not police what breaks a
+ * later stage. `expandSlotDefaults` catching a `structuredClone` that THROWS is
+ * the first kind: without it the function cannot complete and the call site
+ * gets an exception instead of a node. Refusing a value that clones perfectly
+ * and is merely unstorable — a nested `Date`, a `BigInt` — would be the second,
+ * and is the fourth answer this rule exists to prevent.
+ *
+ * Stated here rather than only where it was decided, because it reads as an
+ * omission from any one call site: a reviewer looking at a clone guard and a
+ * missing storability check sees two spellings of one question. It is two
+ * questions, and only this module says so.
+ *
  * What they DO refuse is an ARGUMENT that would break id-addressing: a subtree
  * carrying a duplicate id, or an id already in the destination. That is a
  * different question. It is about an invariant these primitives depend on to
