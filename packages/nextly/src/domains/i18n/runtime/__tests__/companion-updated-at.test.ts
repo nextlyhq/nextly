@@ -29,7 +29,11 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../companion-columns";
 import { buildCompanionReconcileStatements } from "../../migration/reconcile-companion";
-import { companionWriteVia, upsertCompanionRow } from "../companion-io";
+import {
+  companionContentStamp,
+  companionWriteVia,
+  upsertCompanionRow,
+} from "../companion-io";
 
 const MAIN = "dc_posts";
 const COMPANION = `${MAIN}_locales`;
@@ -246,6 +250,91 @@ describe("companion `_updated_at`", () => {
     expect(await readStamp(adapter, "p1", "fr")).toBe(
       Math.floor(second.getTime() / 1000)
     );
+  });
+
+  describe("the shared stamp rule", () => {
+    // 🔴 Tested directly, because THREE call sites depend on it and only two of them go through
+    // `upsertCompanionRow`. The collection CREATE path inserts the companion row itself and
+    // spreads this in; a rule restated there would be one edit away from disagreeing, and the
+    // disagreement is silent — the forgotten path leaves NULL, which reads as UNKNOWN and is
+    // never reported stale.
+
+    it("stamps a write carrying translated content", () => {
+      const now = new Date("2026-08-28T09:00:00.000Z");
+      expect(companionContentStamp({ title: "Bonjour" }, now)).toEqual({
+        [COMPANION_UPDATED_AT_COLUMN]: now,
+      });
+    });
+
+    it("stamps nothing for a lifecycle-only write", () => {
+      expect(companionContentStamp({ _status: "published" })).toEqual({});
+    });
+
+    it("stamps nothing for an empty write", () => {
+      expect(companionContentStamp({})).toEqual({});
+    });
+
+    it("stamps when content and status travel together", () => {
+      // The control. "No stamp whenever `_status` is present" satisfies the two cases above and
+      // breaks save-and-publish, which IS a content change.
+      const now = new Date("2026-08-28T09:00:00.000Z");
+      expect(
+        companionContentStamp({ title: "Salut", _status: "published" }, now)
+      ).toEqual({ [COMPANION_UPDATED_AT_COLUMN]: now });
+    });
+  });
+
+  it("stamps a row inserted by the CREATE path's own statement", async () => {
+    await createCompanion();
+    const now = new Date("2026-08-28T09:30:00.000Z");
+
+    // 🔴 The collection create path does NOT call `upsertCompanionRow` — it builds its own INSERT
+    // on the open transaction, because the parent row was created in the same statement batch and
+    // there is no conflict to resolve. This reproduces that shape: the shared rule spread into a
+    // plain insert. A test that called the upsert here would pass while the real create path left
+    // every new document unstamped, which is exactly what it did before this fix.
+    const stamp = companionContentStamp({ title: "Bonjour" }, now);
+    const stampColumns = Object.keys(stamp);
+    const cols = ["_parent", "_locale", "title", ...stampColumns];
+    await adapter.executeQuery(
+      `INSERT INTO "${COMPANION}" (${cols.map(c => `"${c}"`).join(", ")}) ` +
+        `VALUES (${cols.map(() => "?").join(", ")})`,
+      [
+        "p1",
+        "fr",
+        "Bonjour",
+        // The stamp is a `Date`, which is what every dialect's driver takes and what the SQLite
+        // adapter converts to epoch seconds. Narrowed here rather than spread as `unknown`, so
+        // this reads as the same bind the real create path performs.
+        ...stampColumns.map(column => stamp[column] as Date),
+      ]
+    );
+
+    expect(await readStamp(adapter, "p1", "fr")).toBe(
+      Math.floor(now.getTime() / 1000)
+    );
+  });
+
+  it("leaves a REPLAYED translation's chronology unknown rather than dating it now", async () => {
+    await createCompanion();
+
+    // What `restoreI18nArchive` does when localization is re-enabled: it replays archived
+    // per-field values through this seam. The archive stores `field`/`value` rows and never held
+    // the original `_updated_at`, so there is nothing to put back.
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { title: "Bonjour" },
+      undefined,
+      { stampUpdatedAt: false }
+    );
+
+    // 🔴 NULL, not the replay time. Stamping would fabricate a chronology in the dangerous
+    // direction: source content edited after re-enabling but before the replay would look OLDER
+    // than the archived translation, so a genuinely stale target would be reported current.
+    expect(await readStamp(adapter, "p1", "fr")).toBeNull();
   });
 
   it("leaves the column NULL for a row written before it existed", async () => {

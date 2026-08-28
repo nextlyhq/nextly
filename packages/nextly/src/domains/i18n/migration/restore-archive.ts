@@ -129,7 +129,16 @@ export async function restoreI18nArchive(
       companionTableName,
       g.entryId,
       g.locale,
-      g.data
+      g.data,
+      undefined,
+      // 🔴 Replay must not date these translations to the moment they were restored (i18n B2).
+      // The archive stores per-FIELD rows -- `field` and `value` -- so it never held the original
+      // `_updated_at` and there is nothing to put back. Stamping instead would fabricate a
+      // chronology: source content edited after re-enabling but before the replay would look
+      // OLDER than the archived translation, and a genuinely stale target would be reported
+      // current. Unknown is the true answer, and unknown is a state the comparison already
+      // handles safely.
+      { stampUpdatedAt: false }
     );
   }
 
