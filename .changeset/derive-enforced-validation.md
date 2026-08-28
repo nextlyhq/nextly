@@ -29,3 +29,9 @@
 Make the form schema generator read the same per-type rule set the field
 editor reads, so a validation rule cannot be offered by one and ignored by
 the other.
+
+That now includes the custom error message, which the generator applied
+whatever the rule set said, and the pattern override on a phone field: a
+stored pattern used to stand the phone's own format check down even where
+the rule set did not enforce patterns, leaving the field accepting any
+text at all.

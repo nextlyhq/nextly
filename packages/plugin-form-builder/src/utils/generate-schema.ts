@@ -141,6 +141,40 @@ function generateFieldSchema(field: FormField): z.ZodTypeAny | null {
  * Generate schema for text field.
  */
 /**
+ * The author's own wording for a failure, or `undefined` when this field's type
+ * does not enforce `message`.
+ *
+ * Asked of the row rather than read off `validation` directly, for the reason
+ * the table exists at all: the editor decides whether to OFFER the control from
+ * that row, so a generator honouring a stored message regardless would enforce
+ * a value the author was never shown a box for — and, worse, the table would
+ * describe a rule it did not govern.
+ *
+ * `message` was the one rule that stayed outside this. It agreed with the table
+ * only because every row happens to list it, which is agreement by coincidence:
+ * drop `message` from a row and the control disappears while the wording went
+ * on being applied.
+ */
+function customMessage(field: FormField): string | undefined {
+  const enforced = ENFORCED_VALIDATION_RULES[field.type] ?? [];
+  if (!enforced.includes("message")) return undefined;
+  return field.validation?.errorMessage;
+}
+
+/**
+ * A field's stored bounds, with the custom message already resolved by the row.
+ *
+ * Handed to the appliers so they cannot read an ungated message: they take a
+ * validation object, and giving them one whose `errorMessage` has been through
+ * {@link customMessage} makes the rule hold for every applier without each of
+ * them having to remember it.
+ */
+function enforcedValidation(field: FormField): AnyFieldValidation {
+  const stored = (field.validation ?? {}) as AnyFieldValidation;
+  return { ...stored, errorMessage: customMessage(field) };
+}
+
+/**
  * Which rules a type's schema applies, and how each one constrains a string.
  *
  * The WHICH comes from {@link ENFORCED_VALIDATION_RULES}, which the field
@@ -213,6 +247,21 @@ const NUMBER_RULE_APPLIERS: Partial<
 };
 
 /**
+ * Whether an author-supplied pattern actually replaces a type's intrinsic one.
+ *
+ * Two conditions, and both are load-bearing: a pattern must be stored, AND the
+ * type's row must enforce `pattern`. A type that keeps its own shape check —
+ * a phone, a URL — stands it down only for an override that will really be
+ * applied, because standing down for one that will not leaves nothing behind.
+ */
+function overridesPattern(field: FormField): boolean {
+  const enforced = ENFORCED_VALIDATION_RULES[field.type] ?? [];
+  if (!enforced.includes("pattern")) return false;
+  const validation = (field.validation ?? {}) as AnyFieldValidation;
+  return Boolean(validation.pattern);
+}
+
+/**
  * Constrain a string schema by the rules this field's TYPE enforces.
  *
  * A rule the type does not list is not applied even when the field carries a
@@ -229,7 +278,7 @@ function applyStringRules(
   field: FormField,
   patternMessage: string
 ): z.ZodString {
-  const validation = (field.validation ?? {}) as AnyFieldValidation;
+  const validation = enforcedValidation(field);
   let constrained = schema;
   for (const rule of ENFORCED_VALIDATION_RULES[field.type] ?? []) {
     const apply = STRING_RULE_APPLIERS[rule];
@@ -240,7 +289,7 @@ function applyStringRules(
 
 function generateTextSchema(field: TextFormField): z.ZodTypeAny {
   const schema = applyStringRules(z.string(), field, "Invalid format");
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -250,12 +299,12 @@ function generateEmailSchema(field: EmailFormField): z.ZodTypeAny {
   // The format check is the type's own, not a validation rule: an email field
   // is an email field whether or not its author bounded it further.
   const schema = applyStringRules(
-    z.string().email(field.validation?.errorMessage || "Invalid email address"),
+    z.string().email(customMessage(field) || "Invalid email address"),
     field,
     "Invalid email format"
   );
 
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -268,12 +317,12 @@ function generateNumberSchema(field: NumberFormField): z.ZodTypeAny {
   let schema = z.number({
     error: issue =>
       issue.input === undefined
-        ? field.validation?.errorMessage || "This field is required"
+        ? customMessage(field) || "This field is required"
         : "Must be a number",
   });
 
   // The same rule set the editor reads decides which bounds apply here.
-  const validation = (field.validation ?? {}) as AnyFieldValidation;
+  const validation = enforcedValidation(field);
   for (const rule of ENFORCED_VALIDATION_RULES[field.type] ?? []) {
     const apply = NUMBER_RULE_APPLIERS[rule];
     if (apply) schema = apply(schema, validation);
@@ -293,18 +342,24 @@ function generatePhoneSchema(field: PhoneFormField): z.ZodTypeAny {
   // The default pattern is part of what a phone field IS, so it belongs to the
   // base rather than to the rule set: it applies when the author supplied none,
   // and the author's own pattern replaces it through the rule below.
-  const base = field.validation?.pattern
+  //
+  // Whether the author CAN replace it is the row's decision, not the stored
+  // value's. Standing the base down because a pattern happens to be stored,
+  // while `applyStringRules` then declines to apply it because the row does not
+  // list `pattern`, would leave the field with no check at all — every string
+  // accepted, on the one type whose whole purpose is a shape.
+  const base = overridesPattern(field)
     ? z.string()
     : z
         .string()
         .regex(
           /^[\d\s\-+()]+$/,
-          field.validation?.errorMessage || "Invalid phone number"
+          customMessage(field) || "Invalid phone number"
         );
 
   const schema = applyStringRules(base, field, "Invalid phone number format");
 
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -312,12 +367,12 @@ function generatePhoneSchema(field: PhoneFormField): z.ZodTypeAny {
  */
 function generateUrlSchema(field: UrlFormField): z.ZodTypeAny {
   const schema = applyStringRules(
-    z.string().url(field.validation?.errorMessage || "Invalid URL"),
+    z.string().url(customMessage(field) || "Invalid URL"),
     field,
     "Invalid URL format"
   );
 
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -325,7 +380,7 @@ function generateUrlSchema(field: UrlFormField): z.ZodTypeAny {
  */
 function generateTextareaSchema(field: TextareaFormField): z.ZodTypeAny {
   const schema = applyStringRules(z.string(), field, "Invalid format");
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -341,7 +396,7 @@ function generateSelectSchema(field: SelectFormField): z.ZodTypeAny {
     if (field.required) {
       return schema.min(
         1,
-        field.validation?.errorMessage || "Please select at least one option"
+        customMessage(field) || "Please select at least one option"
       );
     }
 
@@ -350,8 +405,7 @@ function generateSelectSchema(field: SelectFormField): z.ZodTypeAny {
 
   // Single select
   const schema = z.enum(validValues as [string, ...string[]], {
-    error: () =>
-      field.validation?.errorMessage || "Please select a valid option",
+    error: () => customMessage(field) || "Please select a valid option",
   });
 
   if (field.required) {
@@ -370,7 +424,7 @@ function generateCheckboxSchema(field: CheckboxFormField): z.ZodTypeAny {
   if (field.required) {
     // For required checkbox, value must be true
     return schema.refine(val => val === true, {
-      message: field.validation?.errorMessage || "This field is required",
+      message: customMessage(field) || "This field is required",
     });
   }
 
@@ -384,7 +438,7 @@ function generateRadioSchema(field: RadioFormField): z.ZodTypeAny {
   const validValues = field.options.map(opt => opt.value);
 
   const schema = z.enum(validValues as [string, ...string[]], {
-    error: () => field.validation?.errorMessage || "Please select an option",
+    error: () => customMessage(field) || "Please select an option",
   });
 
   if (field.required) {
@@ -407,7 +461,7 @@ function generateFileSchema(field: FileFormField): z.ZodTypeAny {
     if (field.required) {
       return schema.min(
         1,
-        field.validation?.errorMessage || "Please upload at least one file"
+        customMessage(field) || "Please upload at least one file"
       );
     }
 
@@ -416,7 +470,7 @@ function generateFileSchema(field: FileFormField): z.ZodTypeAny {
 
   // Single file
   const schema = z.string();
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -433,7 +487,7 @@ function generateDateSchema(field: DateFormField): z.ZodTypeAny {
       const date = new Date(val);
       return !isNaN(date.getTime());
     },
-    { message: field.validation?.errorMessage || "Invalid date" }
+    { message: customMessage(field) || "Invalid date" }
   );
 
   // Min/max date validation
@@ -448,7 +502,7 @@ function generateDateSchema(field: DateFormField): z.ZodTypeAny {
       },
       {
         message:
-          field.validation?.errorMessage ||
+          customMessage(field) ||
           `Date must be between ${field.min || "any"} and ${field.max || "any"}`,
       }
     );
@@ -459,7 +513,7 @@ function generateDateSchema(field: DateFormField): z.ZodTypeAny {
     // Add non-empty check for required fields
     return schema.refine(
       (val: unknown) => val !== undefined && val !== null && val !== "",
-      { message: field.validation?.errorMessage || "This field is required" }
+      { message: customMessage(field) || "This field is required" }
     );
   }
 
@@ -474,10 +528,10 @@ function generateTimeSchema(field: TimeFormField): z.ZodTypeAny {
     .string()
     .regex(
       /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/,
-      field.validation?.errorMessage || "Invalid time format (HH:mm)"
+      customMessage(field) || "Invalid time format (HH:mm)"
     );
 
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 /**
@@ -485,7 +539,7 @@ function generateTimeSchema(field: TimeFormField): z.ZodTypeAny {
  */
 function generateHiddenSchema(field: HiddenFormField): z.ZodTypeAny {
   const schema = z.string();
-  return applyRequired(schema, field.required, field.validation?.errorMessage);
+  return applyRequired(schema, field.required, customMessage(field));
 }
 
 // ============================================================
