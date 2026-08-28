@@ -1142,10 +1142,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * Nothing writes it from this side. The shell persists the choice and reports
    * it, including the value restored on load; this holds the last report so the
    * canvas can be scaled by it. Holding it as a second source of truth and
-   * syncing back is what produced an oscillating write of `fit, 2, fit, 2` on
+   * syncing BACK is what produced an oscillating write of `fit, 2, fit, 2` on
    * every open — two owners, each correcting the other.
+   *
+   * Seeded with the same default the shell starts from, so there is no absent
+   * state for the canvas to interpret. That is safe only because this direction
+   * is one-way: with nothing sending a zoom back, a default held here can never
+   * reach the store to overwrite what the author chose.
    */
-  const [zoom, setZoom] = useState<CanvasZoom | undefined>(undefined);
+  const [zoom, setZoom] = useState<CanvasZoom>(DEFAULT_PREFERENCES.zoom);
   const [appliedScale, setAppliedScale] = useState(1);
   const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
     undefined
@@ -1710,7 +1715,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             */
             <BlockContextMenu editor={editor}>
               <Canvas
-                zoom={zoom ?? DEFAULT_PREFERENCES.zoom}
+                zoom={zoom}
                 document={editor.document}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}

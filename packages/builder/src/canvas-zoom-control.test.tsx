@@ -66,6 +66,23 @@ describe("the canvas zoom control", () => {
     );
   });
 
+  it("renders nothing where nothing can act on a choice", () => {
+    /*
+     * The canvas belongs to the host, so a shell whose host has not wired this
+     * has nowhere to apply a choice. Rendered anyway it stores a preference,
+     * reports a percentage the canvas does not honour, and goes on reading
+     * 100% whatever was picked — a control that looks operable and is not,
+     * which is worse than its absence.
+     */
+    render(
+      <PortalProvider container={window.document.body}>
+        <CanvasZoomControl zoom={FIT_ZOOM} appliedScale={1} />
+      </PortalProvider>
+    );
+
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("reports a chosen step rather than applying it itself", () => {
     /*
      * The canvas is the host's to render, so the control cannot scale anything
