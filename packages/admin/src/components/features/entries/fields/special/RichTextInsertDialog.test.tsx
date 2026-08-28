@@ -134,6 +134,40 @@ describe("useInsertDialogState", () => {
     });
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(preventDefault5).not.toHaveBeenCalled();
+
+    // Enter from a non-text input type (a checkbox toggles on Enter) must
+    // activate the control, not submit — this exercises the type-exclusion
+    // branch a <button> target never reaches
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const preventDefault6 = vi.fn();
+    act(() => {
+      result.current.handleKeyDown({
+        key: "Enter",
+        shiftKey: false,
+        target: checkbox,
+        nativeEvent: { isComposing: false },
+        preventDefault: preventDefault6,
+      } as unknown as React.KeyboardEvent);
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(preventDefault6).not.toHaveBeenCalled();
+
+    // Legacy engines report an in-progress composition through keyCode 229
+    // WITHOUT setting isComposing — the fallback must catch that path alone
+    const preventDefault7 = vi.fn();
+    act(() => {
+      result.current.handleKeyDown({
+        key: "Enter",
+        shiftKey: false,
+        keyCode: 229,
+        target: textInput,
+        nativeEvent: { isComposing: false },
+        preventDefault: preventDefault7,
+      } as unknown as React.KeyboardEvent);
+    });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(preventDefault7).not.toHaveBeenCalled();
   });
 });
 

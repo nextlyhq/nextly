@@ -10,8 +10,10 @@ import { TableNode } from "@lexical/table";
 import {
   $getRoot,
   $nodesOfType,
+  type Klass,
   type LexicalCommand,
   type LexicalEditor,
+  type LexicalNode,
   type SerializedEditorState,
 } from "lexical";
 import type { RichTextFieldConfig } from "nextly/config";
@@ -21,6 +23,9 @@ import { describe, it, expect, beforeAll, vi } from "vitest";
 
 import { RichTextInput } from "./RichTextInput";
 import { RICH_TEXT_NODES } from "./rich-text-kit";
+import { VideoNode } from "./VideoNode";
+import { ButtonLinkNode } from "./ButtonLinkNode";
+import { ButtonGroupNode } from "./ButtonGroupNode";
 import {
   RichTextTablePlugin,
   OPEN_TABLE_DIALOG_COMMAND,
@@ -276,13 +281,13 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
 
     // Reading node state through the editor (rather than the DOM) keeps the
     // assertion about what the dialog INSERTED, independent of any renderer.
-    const tableCount = (): number =>
-      editorRef?.getEditorState().read(() => $nodesOfType(TableNode).length) ??
+    const nodeCount = (nodeType: Klass<LexicalNode>): number =>
+      editorRef?.getEditorState().read(() => $nodesOfType(nodeType).length) ??
       0;
 
     return {
       ...view,
-      tableCount,
+      nodeCount,
       openTable: () => dispatch(OPEN_TABLE_DIALOG_COMMAND, undefined),
       openVideo: () => dispatch(OPEN_VIDEO_DIALOG_COMMAND, undefined),
       openButtonLink: () =>
@@ -294,7 +299,7 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
 
   describe("Table dialog", () => {
     it("opens, resets on cancel, reports validation error, and submits with Enter", async () => {
-      const { openTable, tableCount } = renderPluginHarness();
+      const { openTable, nodeCount } = renderPluginHarness();
 
       // Give the insert a selection to anchor to, as a user clicking into the
       // field would; without it a table insert has nowhere to land.
@@ -332,13 +337,13 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
       ).not.toBeInTheDocument();
       // The dialog closing is not enough: Enter must have INSERTED the table
       // into the editor, which a close-only submit would silently skip.
-      await vi.waitFor(() => expect(tableCount()).toBe(1));
+      await vi.waitFor(() => expect(nodeCount(TableNode)).toBe(1));
     });
   });
 
   describe("Video dialog", () => {
     it("opens, disables submit when empty, shows preview, and submits with Enter", async () => {
-      const { openVideo } = renderPluginHarness();
+      const { openVideo, nodeCount } = renderPluginHarness();
 
       openVideo();
       expect(
@@ -366,17 +371,18 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
         screen.getByRole("button", { name: /^embed video$/i })
       ).toBeEnabled();
 
-      // Enter key submits
+      // Enter key submits — and must INSERT the video node, not merely close
       fireEvent.keyDown(urlInput, { key: "Enter", code: "Enter" });
       expect(
         screen.queryByRole("heading", { name: "Embed Video" })
       ).not.toBeInTheDocument();
+      await vi.waitFor(() => expect(nodeCount(VideoNode)).toBe(1));
     });
   });
 
   describe("Button Link dialog", () => {
     it("opens, validates URL on submit, and submits with Enter", async () => {
-      const { openButtonLink } = renderPluginHarness();
+      const { openButtonLink, nodeCount } = renderPluginHarness();
 
       openButtonLink();
       expect(
@@ -401,18 +407,19 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
         await screen.findByText("Please enter a valid URL")
       ).toBeInTheDocument();
 
-      // Valid URL + Enter key submits
+      // Valid URL + Enter key submits — and must INSERT the button node
       fireEvent.change(urlInput, { target: { value: "https://nextlyhq.com" } });
       fireEvent.keyDown(urlInput, { key: "Enter", code: "Enter" });
       expect(
         screen.queryByRole("heading", { name: "Insert Button Link" })
       ).not.toBeInTheDocument();
+      await vi.waitFor(() => expect(nodeCount(ButtonLinkNode)).toBe(1));
     });
   });
 
   describe("Button Group dialog", () => {
     it("gates confirm on filled buttons, validates URLs, and submits with Enter", async () => {
-      const { openButtonGroup } = renderPluginHarness();
+      const { openButtonGroup, nodeCount } = renderPluginHarness();
 
       openButtonGroup();
       expect(
@@ -465,6 +472,8 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
       expect(
         screen.queryByRole("heading", { name: "Insert Button Group" })
       ).not.toBeInTheDocument();
+      // Enter must have INSERTED the button group node, not merely closed
+      await vi.waitFor(() => expect(nodeCount(ButtonGroupNode)).toBe(1));
     });
   });
 });
