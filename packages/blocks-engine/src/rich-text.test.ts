@@ -291,6 +291,53 @@ describe("richTextToPlainText around a block-like leaf", () => {
     ).toBe("Before Buy now After");
   });
 
+  it("reads the labels a button group keeps in a list of its own", () => {
+    /*
+     * `button-group` stores each label under `buttons[].text`, and the renderer
+     * draws every one. A walk reading only `text` and `children` sees neither,
+     * so the words on the page are missing from the description of it.
+     */
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Choose" },
+              {
+                type: "button-group",
+                buttons: [
+                  { type: "button", text: "Basic" },
+                  { type: "button", text: "Pro" },
+                ],
+              },
+              { type: "text", text: "today" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Choose Basic Pro today");
+  });
+
+  it("skips a button group carrying no labels rather than inventing a gap", () => {
+    // The control: a group with nothing readable must not contribute, and must
+    // not throw on shapes storage can hold.
+    expect(
+      richTextToPlainText(
+        value([
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "Only" },
+              { type: "button-group", buttons: [] },
+              { type: "text", text: "this" },
+            ],
+          },
+        ])
+      )
+    ).toBe("Only this");
+  });
+
   it("separates one between root paragraphs too", () => {
     // The shape a stored document can also hold, kept because the two travel
     // different paths through the walk.

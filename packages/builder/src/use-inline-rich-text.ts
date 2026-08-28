@@ -580,6 +580,19 @@ export function useInlineRichText(
           setEditing(null);
           return;
         }
+        /*
+         * Measured BEFORE the handover, and that ordering is the whole point.
+         *
+         * Attaching replaces this subtree and applies the editor's own theme —
+         * a heading's size, a list's indentation, a table's box all change — so
+         * hit-testing afterwards asks where a point falls in a layout the
+         * author never saw. It is measured here rather than before the chunk
+         * was requested, because the passage may have been rewritten while it
+         * was in flight: this is the first moment where what is on screen is
+         * also what is about to be edited.
+         */
+        const caret =
+          point === null ? undefined : caretOffsetAt(element, point);
         const attachment = live.attach(element, target.value);
         if (attachment.status === "refused") {
           /*
@@ -600,11 +613,7 @@ export function useInlineRichText(
         }
         const session = attachment.session;
         element.setAttribute(EDITING_ATTRIBUTE, editing.prop);
-        // Measured against the passage now on screen, which is the one being
-        // attached — see where the point was taken.
-        session.focus(
-          point === null ? undefined : caretOffsetAt(element, point)
-        );
+        session.focus(caret);
         mounted.current = {
           session,
           element,
