@@ -272,6 +272,23 @@ export function ClassSelector({
   const currentQuery = React.useRef(query);
   currentQuery.current = query;
 
+  /*
+   * Cleared, not merely hidden. Hiding leaves the refusal stored, so a node
+   * returning to a class list it held before — an external edit and an undo
+   * would do it — revives an alert about an operation that did not just fail.
+   * This is React's documented adjust-state-during-render: the condition stops
+   * being true once the state is null, so it converges on the next pass.
+   *
+   * Above the library-absence return because a refusal outlives the
+   * library: a render that draws no list still observes the node leaving
+   * the state the refusal was raised against, and skipping that lets a
+   * list which changes and comes back while the library is away arrive
+   * back matching.
+   */
+  if (failure !== null && liveFailure(failure, nodeId, nodeClassIds) === null) {
+    setFailure(null);
+  }
+
   if (library === undefined) {
     return (
       <div className="nx-classes">
@@ -293,16 +310,6 @@ export function ClassSelector({
    * node may have gained room since, through a removal, an undo, or the host
    * selecting a smaller element.
    */
-  /*
-   * Cleared, not merely hidden. Hiding leaves the refusal stored, so a node
-   * returning to a class list it held before — an external edit and an undo
-   * would do it — revives an alert about an operation that did not just fail.
-   * This is React's documented adjust-state-during-render: the condition stops
-   * being true once the state is null, so it converges on the next pass.
-   */
-  if (failure !== null && liveFailure(failure, nodeId, nodeClassIds) === null) {
-    setFailure(null);
-  }
   const shown = liveFailure(failure, nodeId, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps a
   // highlight instead of silently sending Enter back to the first row.
