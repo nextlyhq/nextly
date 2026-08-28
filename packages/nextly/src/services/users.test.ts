@@ -315,7 +315,6 @@ describe("UsersService", () => {
       const result = await service.getUserById(user.id);
 
       // Assert
-      expect(result.data).toBeDefined();
       expect(result.id).toBe(user.id);
       expect(result.email).toBe(user.email);
     });
@@ -340,12 +339,19 @@ describe("UsersService", () => {
     });
 
     it("should return 404 for non-existent user", async () => {
-      // Act
-      const result = await service.getUserById(randomUUID());
-
-      // Assert
-      expectErrorResponse(result, 404);
-      expect(result.message).toBe("User not found");
+      // The public message stays GENERIC on purpose: a message naming the
+      // user would let an unauthenticated caller probe which accounts exist.
+      // The id travels in logContext instead, so that is what is asserted --
+      // the old expectation of "User not found" would today be asserting the
+      // enumeration leak the service was changed to close.
+      const error = await service.getUserById(randomUUID()).then(
+        () => null,
+        (e: unknown) => e
+      );
+      expect(error).toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect((error as { publicMessage: string }).publicMessage).toBe(
+        "Not found."
+      );
     });
 
     // This test expects 400 but getUserById returns 404 for invalid ID
@@ -582,7 +588,11 @@ describe("UsersService", () => {
       });
       await testDb.db.insert(testDb.schema.users).values(user);
 
-      const nextPlain = "NewPassword123";
+      // The update schema reuses PasswordSchema, which requires a special
+      // character alongside the length, case and digit rules. A password
+      // without one is rejected before any hashing happens, so this value
+      // has to satisfy the policy for the test to reach what it is named for.
+      const nextPlain = "NewPassword123!";
 
       // Act
       const result = await service.updateUser(user.id, { password: nextPlain });
@@ -641,12 +651,17 @@ describe("UsersService", () => {
     });
 
     it("should return 404 for non-existent user", async () => {
-      // Act
-      const result = await service.updateUser(randomUUID(), { name: "Test" });
-
-      // Assert
-      expectErrorResponse(result, 404);
-      expect(result.message).toBe("User not found");
+      // Generic public message by design -- see getUserById() above.
+      const error = await service
+        .updateUser(randomUUID(), { name: "Test" })
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      expect(error).toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect((error as { publicMessage: string }).publicMessage).toBe(
+        "Not found."
+      );
     });
 
     it("should return 409 for duplicate email", async () => {
@@ -658,11 +673,18 @@ describe("UsersService", () => {
       const updates = { email: "user2@example.com" };
 
       // Act
-      const result = await service.updateUser(user1.id, updates);
+      const error = await service.updateUser(user1.id, updates).then(
+        () => null,
+        (e: unknown) => e
+      );
 
-      // Assert
-      expectErrorResponse(result, 409);
-      expect(result.message).toContain("already exists");
+      // Assert: DUPLICATE, and the conflicting address must NOT appear in the
+      // public message -- echoing it back would confirm to any caller that
+      // user2@example.com is registered.
+      expect(error).toMatchObject({ code: "DUPLICATE", statusCode: 409 });
+      expect((error as { publicMessage: string }).publicMessage).not.toContain(
+        "user2@example.com"
+      );
     });
 
     it("should return 400 for invalid email format", async () => {
@@ -672,12 +694,11 @@ describe("UsersService", () => {
 
       const updates = { email: "invalid-email" };
 
-      // Act
-      const result = await service.updateUser(user.id, updates);
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message).toContain("Invalid");
+      // Act + Assert: the update schema rejects it before any write.
+      await expect(service.updateUser(user.id, updates)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     it("should return 400 when no changes provided", async () => {
@@ -685,12 +706,13 @@ describe("UsersService", () => {
       const user = userFactory();
       await testDb.db.insert(testDb.schema.users).values(user);
 
-      // Act - no changes
-      const result = await service.updateUser(user.id, {});
-
-      // Assert
-      expectErrorResponse(result, 400);
-      expect(result.message).toContain("No changes");
+      // Act + Assert: documented as VALIDATION_ERROR -- "on schema-validation
+      // failure OR when no actionable changes are provided". An empty change
+      // set is a caller mistake, not a silent no-op write.
+      await expect(service.updateUser(user.id, {})).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
     });
 
     // This test is wrong - service returns success if only email unchanged
@@ -822,14 +844,17 @@ describe("UsersService", () => {
     });
 
     it("should return 404 for non-existent user", async () => {
-      // Act
-      const result = await service.updateCurrentUser(randomUUID(), {
-        name: "Test",
-      });
-
-      // Assert
-      expectErrorResponse(result, 404);
-      expect(result.message).toBe("User not found");
+      // Generic public message by design -- see getUserById() above.
+      const error = await service
+        .updateCurrentUser(randomUUID(), { name: "Test" })
+        .then(
+          () => null,
+          (e: unknown) => e
+        );
+      expect(error).toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect((error as { publicMessage: string }).publicMessage).toBe(
+        "Not found."
+      );
     });
   });
 
