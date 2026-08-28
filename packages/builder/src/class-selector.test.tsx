@@ -222,6 +222,89 @@ describe("what assistive technology is told", () => {
   });
 });
 
+describe("the pointer and the keyboard share one highlight", () => {
+  it("moves the highlight to the row the pointer is over", () => {
+    /*
+     * Styling `:hover` separately would paint a second row while Enter still
+     * committed the first — two rows looking chosen, one of them lying. The
+     * pointer therefore moves the same state the arrows do.
+     */
+    draw();
+    type("a");
+    const rows = screen.getAllByRole("option");
+    fireEvent.mouseEnter(rows[1]!);
+    expect(field().getAttribute("aria-activedescendant")).toBe(
+      rows[1]!.getAttribute("id")
+    );
+  });
+
+  it("commits the hovered row on Enter, not the one arrowing left behind", () => {
+    const { onNodeClassesChange } = draw();
+    type("a");
+    fireEvent.mouseEnter(screen.getAllByRole("option")[1]!);
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-card"]);
+  });
+});
+
+describe("a class whose id collides with the synthetic create row", () => {
+  // A class id is any string the library accepted, `create` included. Keyed by
+  // the bare id, the apply row and the create row would share a React key and
+  // one row's state would be reused for the other.
+  const COLLIDING: NamedClass[] = [cls("create", "cta", 0)];
+
+  it("keeps the two rows distinct and separately committable", () => {
+    const { onNodeClassesChange, onCreateClass } = draw({
+      library: COLLIDING,
+      nodeClassIds: [],
+    });
+    type("c");
+    const rows = screen.getAllByRole("option");
+    expect(rows).toHaveLength(2);
+
+    fireEvent.click(rows[0]!.querySelector("button")!);
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["create"]);
+    expect(onCreateClass).not.toHaveBeenCalled();
+  });
+
+  it("gives each row its own DOM id, so the field can name one of them", () => {
+    draw({ library: COLLIDING, nodeClassIds: [] });
+    type("c");
+    const ids = screen
+      .getAllByRole("option")
+      .map(row => row.getAttribute("id"));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("gives the two rows different REACT keys", () => {
+    /*
+     * The only observable consequence, and it took a passing break to find it:
+     * duplicate keys leave both rows rendered, separately clickable and with
+     * distinct DOM ids, so every assertion about the markup holds either way.
+     * React itself is what notices, and the cost — one row's state reused for
+     * the other across a re-render — is exactly what is invisible in a single
+     * render.
+     */
+    const reported: unknown[] = [];
+    const spy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => {
+        reported.push(args);
+      });
+    try {
+      draw({ library: COLLIDING, nodeClassIds: [] });
+      type("c");
+      // The control: two rows really were drawn, so an empty warning list is
+      // about the keys and not about nothing having rendered.
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+      const text = reported.map(entry => String(entry)).join(" ");
+      expect(text).not.toMatch(/same key/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("the list of options", () => {
   it("offers creation last, after the matches", () => {
     draw();

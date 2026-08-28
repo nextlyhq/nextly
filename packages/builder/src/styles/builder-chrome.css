@@ -1910,12 +1910,13 @@
 }
 
 /*
- * The highlight is drawn on the row, not on :hover, because the keyboard and
- * the pointer must agree on which row Enter would take. A hover-only rule
- * would show one row as chosen while another is the one that commits.
+ * ONE highlighted row, and it is the React state that draws it — never :hover.
+ * The pointer moves that same state as it passes over a row, so hovering and
+ * arrowing cannot disagree. Adding `:hover` to this rule instead would paint a
+ * second row while Enter still committed the first, which is the exact
+ * confusion the shared state exists to prevent.
  */
-.nx-classes__option--active,
-.nx-classes__option:hover {
+.nx-classes__option--active {
   background: var(--nx-accent);
 }
 

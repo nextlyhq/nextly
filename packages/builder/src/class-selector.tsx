@@ -151,6 +151,7 @@ export function ClassSelector({
         options={options}
         highlighted={highlighted}
         onChoose={commit}
+        onHighlight={setActive}
       />
       {refused ? (
         <p className="nx-classes__issue" role="alert">
@@ -245,22 +246,29 @@ function OptionList({
   options,
   highlighted,
   onChoose,
+  onHighlight,
 }: {
   id: string;
   options: readonly ClassOption[];
   highlighted: number;
   onChoose: (option: ClassOption) => void;
+  onHighlight: (index: number) => void;
 }): React.ReactElement | null {
   if (options.length === 0) return null;
   return (
     <ul className="nx-classes__options" id={id} role="listbox">
       {options.map((option, index) => (
         <li
-          key={option.kind === "create" ? "create" : option.choice.id}
+          // Namespaced by KIND. A class id is any string the library accepted,
+          // so a class whose id is literally "create" would otherwise collide
+          // with the synthetic row and React would reuse one row's state for
+          // the other.
+          key={optionKey(option)}
           id={optionDomId(id, index)}
           role="option"
           aria-selected={index === highlighted}
           className={optionClass(index === highlighted)}
+          onMouseEnter={() => onHighlight(index)}
         >
           <button
             type="button"
@@ -273,6 +281,13 @@ function OptionList({
       ))}
     </ul>
   );
+}
+
+/** A key no class id can collide with, whatever the library stored. */
+function optionKey(option: ClassOption): string {
+  return option.kind === "create"
+    ? `create:${option.slug}`
+    : `apply:${option.choice.id}`;
 }
 
 function optionClass(isHighlighted: boolean): string {

@@ -212,7 +212,7 @@ describe("deleting", () => {
     const { onDelete } = draw();
     fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
     expect(onDelete).not.toHaveBeenCalled();
-    expect(screen.getByText(/at least 3 document/i)).toBeTruthy();
+    expect(screen.getByText(/has it on 3 document/i)).toBeTruthy();
   });
 
   it("STILL asks when the index knows of no document", () => {
@@ -228,11 +228,15 @@ describe("deleting", () => {
     expect(screen.getByText(/cannot rule one out/i)).toBeTruthy();
   });
 
-  it("never claims the count is complete", () => {
+  it("claims no bound in EITHER direction, not even a lower one", () => {
+    // The index loses rows to interleaved saves and retains them when a removal
+    // fails, so it errs both ways. "At least N" reads as careful and is false
+    // for a stale over-count.
     draw();
     fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
-    const text = screen.getByText(/at least 3 document/i).textContent ?? "";
-    expect(text).toMatch(/may know of fewer/i);
+    const text = screen.getByText(/has it on 3 document/i).textContent ?? "";
+    expect(text).toMatch(/wrong in either direction/i);
+    expect(text).not.toMatch(/at least/i);
   });
 
   it("deletes only after the confirmation", () => {
@@ -249,7 +253,7 @@ describe("deleting", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onDelete).not.toHaveBeenCalled();
-    expect(screen.queryByText(/at least 3 document/i)).toBeNull();
+    expect(screen.queryByText(/has it on 3 document/i)).toBeNull();
   });
 
   it("asks about the row that was clicked, not the first one", () => {

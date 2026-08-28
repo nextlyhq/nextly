@@ -299,7 +299,12 @@ function UsageNote({ row }: { row: ClassRow }): React.ReactElement {
  * The confirmation, which is asked whatever the count says.
  *
  * Both wordings state what deleting DOES — it removes the class from every
- * document holding it — and neither presents the number as complete.
+ * document holding it — and neither presents the number as a measurement.
+ *
+ * "At least N" is as wrong as a bare N. The index loses rows to interleaved
+ * saves, and it also RETAINS them when a removal fails, so it errs in both
+ * directions — a lower-bound claim would be false for a stale over-count. The
+ * only honest phrasing names what was recorded and says it can be wrong.
  */
 function DeleteConfirm({
   row,
@@ -315,7 +320,7 @@ function DeleteConfirm({
     <div className="nx-classman__confirm" role="group">
       <p className="nx-classman__issue">
         {warning.hasKnownUsage
-          ? `Delete “${row.slug}”? It is on at least ${warning.knownDocuments} document(s), and deleting removes it from every one. The index may know of fewer than there are.`
+          ? `Delete “${row.slug}”? The index has it on ${warning.knownDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
           : `Delete “${row.slug}”? The index knows of no document using it, but it cannot rule one out.`}
       </p>
       <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
