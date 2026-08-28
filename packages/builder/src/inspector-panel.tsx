@@ -82,6 +82,8 @@ export interface InspectorPanelProps {
    * in the shipped editor shows nothing.
    */
   classLibrary?: StyleInspectorPanelProps["classLibrary"];
+  /** Why the library is absent, when it is. Carried, not interpreted. */
+  classLibraryAbsence?: StyleInspectorPanelProps["classLibraryAbsence"];
   /** Create a class and apply it to the selected block. Opts the surface in. */
   onCreateClass?: StyleInspectorPanelProps["onCreateClass"];
   /**
@@ -184,6 +186,7 @@ const INSPECTOR_TABS = [
 export function InspectorPanel({
   editor,
   classLibrary,
+  classLibraryAbsence,
   onCreateClass,
   policy,
   styleState,
@@ -338,6 +341,7 @@ export function InspectorPanel({
             onJumpToBreakpoint={onJumpToBreakpoint}
             tokens={tokens}
             classLibrary={classLibrary}
+            classLibraryAbsence={classLibraryAbsence}
             onCreateClass={onCreateClass}
           />
         </TabsContent>

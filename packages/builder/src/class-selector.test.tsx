@@ -395,6 +395,128 @@ describe("a write the document refuses", () => {
   });
 });
 
+describe("a failure that must not outlive the node it describes", () => {
+  const full = Array.from(
+    { length: MAX_CLASSES_PER_NODE },
+    (_, index) => `id-filler-${index}`
+  );
+
+  it("drops a refused WRITE when the host hands it another node", () => {
+    /*
+     * Every failure carries the ids it was produced against. Without that, a
+     * refusal outlives the element: the alert goes on describing a node that
+     * is no longer selected, and the author reads it as being about the one
+     * in front of them.
+     */
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "refused" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("drops a refused CREATION the same way", async () => {
+    const view = render(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: false as const,
+          reason: "The site style refused this.",
+        }))}
+      />
+    );
+    type("brand-new");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    await screen.findByText(/site style refused/i);
+
+    view.rerender(
+      <ClassSelector
+        library={LIBRARY}
+        nodeClassIds={["id-card"]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps a failure that IS still about the node in hand", () => {
+    // The control: invalidating on identity must not throw away a failure the
+    // author has not yet had a chance to read.
+    drawFor({ nodeClassIds: full });
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toMatch(/as many classes/i);
+  });
+});
+
+describe("why the library is absent", () => {
+  it("says a read is loading when it is still in flight", () => {
+    render(
+      <ClassSelector
+        library={undefined}
+        libraryAbsence="pending"
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.getByText(/loading classes/i)).toBeTruthy();
+  });
+
+  it("says a read FAILED, rather than loading forever", () => {
+    /*
+     * A failed read will not finish. A surface that goes on saying "loading"
+     * describes a state the site is not in and gives the author nothing to do
+     * about it — the distinction the tokens studio already draws.
+     */
+    render(
+      <ClassSelector
+        library={undefined}
+        libraryAbsence="failed"
+        nodeClassIds={[]}
+        onNodeClassesChange={vi.fn(() => "applied" as const)}
+        onCreateClass={vi.fn(async () => ({
+          ok: true as const,
+          classId: "id-new",
+        }))}
+      />
+    );
+    expect(screen.getByText(/could not be read/i)).toBeTruthy();
+    expect(screen.queryByText(/loading classes/i)).toBeNull();
+  });
+});
+
 describe("who owns the tab sequence", () => {
   it("keeps option rows out of it, so Tab leaves the field once", () => {
     /*

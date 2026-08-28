@@ -563,7 +563,8 @@ function TokensStudio({
  */
 function useClassSurface(
   siteStyle: { classes?: readonly NamedClass[] } | undefined,
-  pending: boolean
+  pending: boolean,
+  error: unknown
 ) {
   /*
    * `undefined` while the read is in flight, and the resolved list once it is
@@ -573,8 +574,18 @@ function useClassSurface(
    * not come back" by looking at the value. Decided here rather than in the
    * markup, so the component that renders the inspector holds no branch.
    */
-  const library = pending ? undefined : (siteStyle?.classes ?? []);
-  return { library, create: useCreateClass(siteStyle?.classes) };
+  const failed = !pending && error !== null && error !== undefined;
+  const library = pending || failed ? undefined : (siteStyle?.classes ?? []);
+  return {
+    library,
+    /*
+     * Which absence, so the selector can say so. A read that FAILED will not
+     * finish, and a surface that goes on saying "loading" describes a state
+     * the site is not in — the distinction the tokens studio already draws.
+     */
+    absence: failed ? ("failed" as const) : ("pending" as const),
+    create: useCreateClass(siteStyle?.classes),
+  };
 }
 
 function useCreateClass(library: readonly NamedClass[] | undefined) {
@@ -920,7 +931,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
 
   // The site-style half of the class surface. The node half stays with the
   // inspector, which already writes nodes — see `useClassSurface`.
-  const classes = useClassSurface(canvasSiteStyle, siteStylePending);
+  const classes = useClassSurface(
+    canvasSiteStyle,
+    siteStylePending,
+    siteStyleError
+  );
 
   /*
    * The hosts this site loads media from, read back from the same client
@@ -1484,6 +1499,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           <InspectorPanel
             editor={editor}
             classLibrary={classes.library}
+            classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
             policy={stylePolicy}
             cascade={styleCascade}

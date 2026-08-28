@@ -272,6 +272,8 @@ export interface StyleInspectorPanelProps {
    * should see a field that is about to fill.
    */
   classLibrary?: readonly NamedClass[];
+  /** Why the library is absent, when it is. Forwarded to the selector. */
+  classLibraryAbsence?: ClassSelectorProps["libraryAbsence"];
   /**
    * Create a class under this slug and put it on the selected block.
    *
@@ -409,11 +411,13 @@ function SelectedNodeClasses({
   editor,
   nodeId,
   library,
+  libraryAbsence,
   onCreateClass,
 }: {
   editor: EditorState;
   nodeId: string;
   library: readonly NamedClass[] | undefined;
+  libraryAbsence: ClassSelectorProps["libraryAbsence"];
   onCreateClass: ClassSelectorProps["onCreateClass"] | undefined;
 }): React.JSX.Element | null {
   if (onCreateClass === undefined) return null;
@@ -427,6 +431,7 @@ function SelectedNodeClasses({
        */
       key={nodeId}
       library={library}
+      libraryAbsence={libraryAbsence}
       nodeClassIds={findNode(editor.document.nodes, nodeId)?.classes ?? []}
       onNodeClassesChange={classIds =>
         // `applyAll` answers null when the store refuses — a document at its
@@ -454,6 +459,7 @@ export function StyleInspectorPanel({
   liveBreakpoints,
   onJumpToBreakpoint,
   classLibrary,
+  classLibraryAbsence,
   onCreateClass,
 }: StyleInspectorPanelProps): React.JSX.Element {
   // `null` is "the author has not chosen yet", which is NOT the same as the
@@ -581,6 +587,7 @@ export function StyleInspectorPanel({
         editor={editor}
         nodeId={inspected.nodeId}
         library={classLibrary}
+        libraryAbsence={classLibraryAbsence}
         onCreateClass={onCreateClass}
       />
       {inspected.sections.length === 0 ? (
