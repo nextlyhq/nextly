@@ -53,6 +53,31 @@ function draw(overrides: Partial<ClassSelectorProps> = {}): {
   return { onNodeClassesChange, onCreateClass };
 }
 
+/** The selector with a host that can hand it a different node. */
+function drawFor(initial: { nodeClassIds: readonly string[] }): {
+  rerender: (nodeClassIds: readonly string[]) => void;
+} {
+  const view = render(
+    <ClassSelector
+      library={LIBRARY}
+      nodeClassIds={initial.nodeClassIds}
+      onNodeClassesChange={vi.fn()}
+      onCreateClass={vi.fn()}
+    />
+  );
+  return {
+    rerender: nodeClassIds =>
+      view.rerender(
+        <ClassSelector
+          library={LIBRARY}
+          nodeClassIds={nodeClassIds}
+          onNodeClassesChange={vi.fn()}
+          onCreateClass={vi.fn()}
+        />
+      ),
+  };
+}
+
 const field = (): HTMLElement => screen.getByRole("combobox");
 
 const type = (value: string): void => {
@@ -243,6 +268,76 @@ describe("what assistive technology is told", () => {
   });
 });
 
+describe("a refusal that must not outlive the node it described", () => {
+  const full = Array.from(
+    { length: MAX_CLASSES_PER_NODE },
+    (_, index) => `id-filler-${index}`
+  );
+
+  it("stops claiming the element is full once it has room", () => {
+    /*
+     * The refusal was stored and cleared only by a later successful commit, so
+     * removing a chip, an undo, or the host selecting a smaller node all left
+     * an alert describing an element that no longer existed. Deriving it from
+     * the CURRENT node is what makes that impossible rather than unlikely.
+     */
+    const { rerender } = drawFor({ nodeClassIds: full });
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toMatch(/as many classes/i);
+
+    rerender(full.slice(0, MAX_CLASSES_PER_NODE - 1));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("a node the page cannot fully apply", () => {
+  it("says how many stored classes style nothing", () => {
+    // Otherwise an author has no way to discover the state from the canvas,
+    // and a removal looks as though it applied a class it never touched.
+    const over = [
+      ...Array.from({ length: MAX_CLASSES_PER_NODE }, () => "id-badge"),
+      "id-hero",
+      "id-card",
+    ];
+    draw({ nodeClassIds: over });
+    expect(screen.getByText(/lists 2 more class/i)).toBeTruthy();
+  });
+
+  it("says nothing for a node within the limit", () => {
+    draw({ nodeClassIds: ["id-hero"] });
+    expect(screen.queryByText(/lists .* more class/i)).toBeNull();
+  });
+});
+
+describe("who owns the tab sequence", () => {
+  it("keeps option rows out of it, so Tab leaves the field once", () => {
+    /*
+     * The APG is explicit: with `aria-activedescendant`, only the composite
+     * container is tabbable. A focusable child in each row put the whole list
+     * into the tab order — an empty query offers up to `MAX_SELECTOR_OPTIONS`
+     * rows — and once focus left the input the arrow handler stopped running,
+     * so the keyboard lost the widget entirely.
+     */
+    draw();
+    type("");
+    const rows = screen.getAllByRole("option");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.getAttribute("tabindex")).toBe("-1");
+      expect(row.querySelector("button, a, input, [tabindex='0']")).toBeNull();
+    }
+  });
+
+  it("still commits the row a pointer clicks", () => {
+    // The control: removing the button must not remove the pointer target.
+    const { onNodeClassesChange } = draw();
+    type("badge");
+    fireEvent.click(screen.getByRole("option"));
+    expect(onNodeClassesChange).toHaveBeenCalledWith(["id-badge"]);
+  });
+});
+
 describe("the pointer and the keyboard share one highlight", () => {
   it("moves the highlight to the row the pointer is over", () => {
     /*
@@ -283,7 +378,7 @@ describe("a class whose id collides with the synthetic create row", () => {
     const rows = screen.getAllByRole("option");
     expect(rows).toHaveLength(2);
 
-    fireEvent.click(rows[0]!.querySelector("button")!);
+    fireEvent.click(rows[0]!);
     expect(onNodeClassesChange).toHaveBeenCalledWith(["create"]);
     expect(onCreateClass).not.toHaveBeenCalled();
   });
@@ -380,7 +475,7 @@ describe("the list of options", () => {
   it("applies the row that was clicked", () => {
     const { onNodeClassesChange } = draw();
     type("badge");
-    fireEvent.click(screen.getByRole("option").querySelector("button")!);
+    fireEvent.click(screen.getByRole("option"));
     expect(onNodeClassesChange).toHaveBeenCalledWith(["id-badge"]);
   });
 });

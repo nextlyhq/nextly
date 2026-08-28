@@ -31,8 +31,10 @@ import {
   classRows,
   deletionWarning,
   filterClassRows,
+  MAX_SELECTOR_OPTIONS,
   newClassName,
   renamedClassName,
+  unappliedNodeClassCount,
   selectorOptions,
   siteClasses,
   withClassApplied,
@@ -287,7 +289,7 @@ describe("what one keystroke resolves to", () => {
     // Enter has to resolve to exactly one action. Create sitting last is what
     // makes a partially typed name apply the match rather than create a
     // near-duplicate beside it.
-    const options = selectorOptions(LIBRARY, [], "ca");
+    const { options } = selectorOptions(LIBRARY, [], "ca");
     expect(options.map(o => o.kind)).toEqual(["apply", "create"]);
     expect(options[0]).toEqual({
       kind: "apply",
@@ -299,32 +301,77 @@ describe("what one keystroke resolves to", () => {
   it("does not offer to create a name the library already holds", () => {
     // A second class under one slug is dropped by the compiler, so offering it
     // would be offering an entry that styles nothing.
-    const options = selectorOptions(LIBRARY, [], "hero");
+    const { options } = selectorOptions(LIBRARY, [], "hero");
     expect(options.map(o => o.kind)).toEqual(["apply"]);
   });
 
   it("offers nothing for a class the node already carries", () => {
     // Neither action is available: applying is a no-op and creating collides.
-    expect(selectorOptions(LIBRARY, ["id-hero"], "hero")).toEqual([]);
+    expect(selectorOptions(LIBRARY, ["id-hero"], "hero").options).toEqual([]);
   });
 
   it("offers no creation for a name the engine's grammar rejects", () => {
-    const options = selectorOptions(LIBRARY, [], "Not A Slug");
+    const { options } = selectorOptions(LIBRARY, [], "Not A Slug");
     expect(options.every(o => o.kind === "apply")).toBe(true);
   });
 
   it("offers every applicable class and no creation for an empty query", () => {
     // The opened-but-untyped state. An empty name cannot be created, so the
     // list is exactly what the node could still be given.
-    const options = selectorOptions(LIBRARY, ["id-hero"], "");
+    const { options } = selectorOptions(LIBRARY, ["id-hero"], "");
     expect(options.map(o => o.kind)).toEqual(["apply", "apply"]);
   });
 
   it("carries the CREATE slug normalized, not as typed", () => {
-    expect(selectorOptions(LIBRARY, [], "  new-thing ")).toContainEqual({
-      kind: "create",
-      slug: "new-thing",
-    });
+    expect(selectorOptions(LIBRARY, [], "  new-thing ").options).toContainEqual(
+      {
+        kind: "create",
+        slug: "new-thing",
+      }
+    );
+  });
+});
+
+describe("a library too long to put in front of an author", () => {
+  const many = Array.from({ length: MAX_SELECTOR_OPTIONS + 20 }, (_, index) =>
+    cls(`id-many-${index}`, `many-${String(index).padStart(3, "0")}`, index)
+  );
+
+  it("offers at most the cap, and REPORTS what it withheld", () => {
+    // A truncated list that says nothing reads as "these are all of them",
+    // which is the one thing it is not.
+    const { options, hidden } = selectorOptions(many, [], "many");
+    expect(options.filter(o => o.kind === "apply")).toHaveLength(
+      MAX_SELECTOR_OPTIONS
+    );
+    expect(hidden).toBe(20);
+  });
+
+  it("reports nothing hidden when everything fits", () => {
+    // The control: `hidden` must distinguish a capped list from a short one,
+    // or the surface would warn about a list it showed in full.
+    expect(selectorOptions(LIBRARY, [], "").hidden).toBe(0);
+  });
+
+  it("keeps the CREATE row even when the matches are capped", () => {
+    // It is the one row the author's own typing produced; dropping it would
+    // make a full library unable to gain a class through this surface.
+    const { options } = selectorOptions(many, [], "brand-new");
+    expect(options.at(-1)).toEqual({ kind: "create", slug: "brand-new" });
+  });
+});
+
+describe("a node storing more references than the page applies", () => {
+  it("counts the ones that style nothing", () => {
+    const over = Array.from(
+      { length: MAX_CLASSES_PER_NODE + 3 },
+      (_, index) => `id-${index}`
+    );
+    expect(unappliedNodeClassCount(over)).toBe(3);
+  });
+
+  it("counts none for a node within the limit", () => {
+    expect(unappliedNodeClassCount(["a", "b"])).toBe(0);
   });
 });
 

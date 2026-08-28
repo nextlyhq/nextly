@@ -80,6 +80,17 @@ export function usageSummary(row: Pick<ClassRow, "indexedDocuments">): string {
     : `${row.indexedDocuments} in index`;
 }
 
+/**
+ * How many classes the selector offers at once.
+ *
+ * A library may hold `MAX_NAMED_CLASSES`, and an empty query matches all of
+ * them. Rendering that is neither usable — nobody reads two thousand rows —
+ * nor cheap, and it puts every one of them in front of an author who is
+ * typing to narrow. The remainder is REPORTED rather than dropped quietly:
+ * a list that silently stops is a list an author believes is complete.
+ */
+export const MAX_SELECTOR_OPTIONS = 50;
+
 /** Which classes the manager lists. */
 export type ClassFilter = "all" | "not-in-index" | "on-this-page";
 
@@ -205,7 +216,9 @@ export function filterClassRows(
  * so a node holding more is a node whose tail styles nothing. `styleSubjectFor`
  * bounds its own read the same way; this is the same bound, not a second one.
  */
-function readableNodeClassIds(nodeClassIds: readonly string[]): string[] {
+export function readableNodeClassIds(
+  nodeClassIds: readonly string[]
+): string[] {
   return nodeClassIds.slice(0, MAX_CLASSES_PER_NODE);
 }
 
@@ -267,6 +280,18 @@ export type ClassOption =
   | { readonly kind: "apply"; readonly choice: ClassChoice }
   | { readonly kind: "create"; readonly slug: string };
 
+export interface SelectorOptions {
+  /** The rows to draw, in the order Enter would take them. */
+  readonly options: ClassOption[];
+  /**
+   * Applicable classes NOT offered, because the list is capped.
+   *
+   * Reported so the surface can say so. A truncated list that says nothing
+   * reads as "these are all of them", which is the one thing it is not.
+   */
+  readonly hidden: number;
+}
+
 /**
  * What the selector offers for a query, applying first and creating last.
  *
@@ -279,21 +304,23 @@ export type ClassOption =
  * Create sits LAST so that Enter on a partially typed name applies the match
  * rather than creating a near-duplicate. An author who means to create keeps
  * typing until nothing matches, which is the same gesture that makes the name
- * unambiguous.
+ * unambiguous. It is never dropped by the cap, for the same reason: it is the
+ * one row the author's own typing produced.
  */
 export function selectorOptions(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[],
   query: string
-): ClassOption[] {
-  const options: ClassOption[] = applicableClasses(
-    library,
-    nodeClassIds,
-    query
-  ).map(choice => ({ kind: "apply", choice }));
+): SelectorOptions {
+  const applicable = applicableClasses(library, nodeClassIds, query);
+  const shown = applicable.slice(0, MAX_SELECTOR_OPTIONS);
+  const options: ClassOption[] = shown.map(choice => ({
+    kind: "apply",
+    choice,
+  }));
   const outcome = newClassName(query, library);
   if (outcome.ok) options.push({ kind: "create", slug: outcome.slug });
-  return options;
+  return { options, hidden: applicable.length - shown.length };
 }
 
 /** Why a name cannot become a class. */
@@ -388,6 +415,20 @@ export type ApplyRefusal = "node-full";
  */
 export function nodeHasRoom(nodeClassIds: readonly string[]): boolean {
   return nodeClassIds.length < MAX_CLASSES_PER_NODE;
+}
+
+/**
+ * How many stored references the page does not apply.
+ *
+ * Zero for every node in a valid document. A legacy or hand-edited one can
+ * store more, and those references style nothing while still being on the
+ * node — a state the author has no way to discover from the canvas, and one
+ * that makes a removal look as though it applied a class it never touched.
+ */
+export function unappliedNodeClassCount(
+  nodeClassIds: readonly string[]
+): number {
+  return Math.max(nodeClassIds.length - MAX_CLASSES_PER_NODE, 0);
 }
 
 /** A node's new class ids, or why the class cannot go on it. */

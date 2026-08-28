@@ -1897,15 +1897,15 @@
   overflow: hidden;
 }
 
-.nx-classes__option-button {
-  display: block;
-  width: 100%;
+/*
+ * The row IS the target. It carries no nested button, because with
+ * `aria-activedescendant` the input owns the tab sequence and a focusable
+ * child would take rows into it.
+ */
+.nx-classes__option {
   padding: 0.25rem 0.5rem;
-  text-align: start;
   font-size: var(--text-xs);
   font-family: var(--font-mono, monospace);
-  background: none;
-  border: 0;
   cursor: pointer;
 }
 
