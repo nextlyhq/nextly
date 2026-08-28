@@ -37,6 +37,18 @@ describe("a binding spelled for a person", () => {
     expect(keyHint("Enter", false)).toBe("Enter");
   });
 
+  it("names the space bar rather than printing one", () => {
+    /*
+     * The parser canonicalises `Space` to the character the browser reports,
+     * `" "`, because a spec split on whitespace cannot carry it any other way.
+     * Passing that straight through prints a hint with a gap where the key
+     * should be — the one key whose name disappears precisely because its value
+     * is what a keyboard event carries.
+     */
+    expect(keyHint("Space", false)).toBe("Space");
+    expect(keyHint("mod+Space", false)).toBe("Ctrl+Space");
+  });
+
   it("shows nothing for a spec it cannot read", () => {
     /*
      * A hint is a promise that pressing something does something. A spec this

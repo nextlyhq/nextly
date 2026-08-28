@@ -42,6 +42,13 @@ const KEY_GLYPHS: Readonly<Record<string, string>> = {
   arrowdown: "↓",
   arrowleft: "←",
   arrowright: "→",
+  /*
+   * The space bar, which the parser canonicalises to the character it produces
+   * rather than to the word a spec spells it with. Passing that through would
+   * print a hint with a blank where the key should be — the one key whose name
+   * is unreadable precisely because the value IS readable to the browser.
+   */
+  " ": "Space",
 };
 
 /** The modifier labels, in the order a keyboard shortcut is conventionally written. */
