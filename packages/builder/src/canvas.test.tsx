@@ -892,10 +892,9 @@ describe("what the canvas reports about the box it got", () => {
       /*
        * The widest tier requests nothing — the box IS the region — and that is
        * the state the editor opens in, so it is where a zoom control is used
-       * most. There is nothing to fit there, and an early return for that case
-       * left the control reporting a number that changed nothing: verified in
-       * a browser, where choosing 150% moved the label and left the canvas at
-       * `zoom: 1`.
+       * most. Nothing has to be fitted there, and a chosen scale still has to
+       * reach the box: the alternative is a control whose label moves while
+       * the canvas stays at `zoom: 1`.
        */
       const { container } = render(
         <Canvas
@@ -1820,5 +1819,109 @@ describe("what the canvas reports about the box it got", () => {
     );
 
     expect(FakeResizeObserver.last).toBeUndefined();
+  });
+});
+
+describe("reporting the scale to a host that keeps changing its mind", () => {
+  /**
+   * The document every case here draws, which is beside the point in all of
+   * them: what varies is the reporter, not what is under it.
+   */
+  const DOCUMENT = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+  } as never;
+
+  it("does not report again when only the reporter's IDENTITY changed", () => {
+    /*
+     * The conventional host writes the reporter inline, so every render of it
+     * hands the canvas a new function. Depended on directly, each report would
+     * update the host, the update would produce a new identity, and the new
+     * identity would report again — a render loop on a host that did nothing
+     * wrong. Two renders with the same scale must produce ONE report.
+     */
+    const reports: number[] = [];
+    const view = render(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={scale => reports.push(scale)}
+      />
+    );
+
+    expect(reports).toEqual([1.5]);
+
+    view.rerender(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={scale => reports.push(scale)}
+      />
+    );
+
+    expect(reports).toEqual([1.5]);
+  });
+
+  it("reports the CURRENT scale to a reporter that arrives late", () => {
+    /*
+     * A host can resolve its reporter from its own state, so the prop moves
+     * from `undefined` to a function after the canvas has already settled on a
+     * scale. Keyed on the scale alone the effect would not re-run at that
+     * moment, and the host would hold its initial guess until the author
+     * happened to pick a different zoom.
+     *
+     * The scale is deliberately NOT 1 here: a reporter told `1` cannot be
+     * distinguished from one told the default, so the case would pass against
+     * an implementation that reports nothing and a host that assumed.
+     */
+    const reports: number[] = [];
+    const view = render(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+      />
+    );
+
+    view.rerender(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={scale => reports.push(scale)}
+      />
+    );
+
+    expect(reports).toEqual([1.5]);
+  });
+
+  it("reports each scale the canvas actually takes", () => {
+    // The control for both cases above: an implementation that never reported
+    // after the first render would satisfy the identity case, and one that
+    // reported on every render would satisfy the arrival case.
+    const reports: number[] = [];
+    const onScale = (scale: number) => reports.push(scale);
+    const view = render(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={onScale}
+      />
+    );
+
+    view.rerender(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 0.75 }}
+        onScale={onScale}
+      />
+    );
+
+    expect(reports).toEqual([1.5, 0.75]);
   });
 });
