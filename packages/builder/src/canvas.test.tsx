@@ -888,6 +888,71 @@ describe("what the canvas reports about the box it got", () => {
       expect(root.style.transform).toBe("");
     });
 
+    it("draws a chosen scale at the tier that asks for no width", () => {
+      /*
+       * The widest tier requests nothing — the box IS the region — and that is
+       * the state the editor opens in, so it is where a zoom control is used
+       * most. There is nothing to fit there, and an early return for that case
+       * left the control reporting a number that changed nothing: verified in
+       * a browser, where choosing 150% moved the label and left the canvas at
+       * `zoom: 1`.
+       */
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+          zoom={{ kind: "fixed", scale: 1.5 }}
+        />
+      );
+
+      const root = rootOf(container);
+      expect(zoomOf(root)).toBe("1.5");
+      /*
+       * And the width is COMPENSATED, which is the point rather than an
+       * incidental. `zoom` participates in layout and divides the logical width
+       * the container queries resolve against, so a plain full width came out
+       * at region/scale: at 200% a 911px region became 455px and the canvas
+       * started previewing the MOBILE tier. Magnifying showed a different
+       * layout instead of a larger one.
+       *
+       * Multiplying the percentage back restores the width the box had. No
+       * measurement is involved, so nothing here has to observe a region that
+       * the zoom is itself changing.
+       */
+      // Matched on the RATIO rather than the spelling: engines normalise the
+      // expression differently — jsdom reports `calc(150%)` for what is
+      // authored as `calc(100% * 1.5)` — and the ratio is the behaviour.
+      expect(root.style.width.replace(/\s+/g, "")).toMatch(/(100%\*1\.5|150%)/);
+    });
+
+    it("leaves that tier alone while FITTING", () => {
+      // The control on the other side. A rule that zoomed whenever there was no
+      // requested width would scale the default view by whatever the fit
+      // produced, which is the behaviour this replaces rather than repeats.
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+        />
+      );
+
+      expect(zoomOf(rootOf(container))).toBe("");
+    });
+
     it("draws a CHOSEN scale where fitting would not have", () => {
       /*
        * The case the old shape could not express. A fit that needs no shrinking

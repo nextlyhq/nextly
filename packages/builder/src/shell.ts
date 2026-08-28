@@ -156,6 +156,9 @@ export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
  */
 export { CanvasZoomControl } from "./canvas-zoom-control";
 export type { CanvasZoomControlProps } from "./canvas-zoom-control";
+// The type alone: a host threading a zoom through this entry should not have
+// to import the model from a second one.
+export type { CanvasZoom } from "./canvas-zoom";
 export {
   breakpointsAtWidth,
   editedBreakpointAtWidth,

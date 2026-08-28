@@ -465,7 +465,43 @@ function previewBoxStyle(
 ): React.CSSProperties {
   if (preview === undefined) return {};
   const container = previewContainerStyle(preview.container);
-  if (preview.width === undefined) return container;
+  /*
+   * No requested width means the box fills the region, which is the widest
+   * tier and the state the editor opens in. There is nothing to FIT there —
+   * the box is already the region — but a chosen scale still applies: it
+   * magnifies or shrinks what is drawn and the region scrolls, which is the
+   * whole of what an author asked for. Returning early here left the control
+   * reporting a number that changed nothing at the tier it is used at most.
+   */
+  if (preview.width === undefined) {
+    if (!chosen) return container;
+    /*
+     * The width is PINNED before zooming, and that is the whole of this branch.
+     *
+     * `zoom` participates in layout, so it divides the logical width the
+     * container queries resolve against: at 200% a 911px region became 455px
+     * and the canvas silently started previewing the MOBILE tier. An author
+     * magnifying to look closely at something was shown a different layout
+     * instead — measured on screen, where the tier readout changed with the
+     * zoom.
+     *
+     * Fixing the box at the width it had leaves the queries resolving against
+     * that same width whatever the scale, so magnifying magnifies and nothing
+     * else moves. Without a measured region there is nothing to pin, and the
+     * scale is left off rather than applied against a width that would shift.
+     */
+    return {
+      ...container,
+      // `100%` resolves against the containing block in this element's OWN
+      // coordinates, which `zoom` has already divided by the scale — so a
+      // plain full width comes out at `region / scale` logically. Multiplying
+      // it back restores the width the box had, and the scale then paints it
+      // larger without moving what the queries resolve against. No measurement
+      // is involved, so there is no observer to disagree with the layout.
+      width: `calc(100% * ${scale})`,
+      zoom: scale,
+    };
+  }
   /*
    * A FIT that needs no shrinking is left unzoomed and centred, which is the
    * shape a canvas showing a page at its own size has always had.
