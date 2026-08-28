@@ -12,7 +12,7 @@
  *
  * @module class-selector.test
  */
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import { MAX_CLASSES_PER_NODE, type NamedClass } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -153,6 +153,72 @@ describe("what Enter does", () => {
     fireEvent.keyDown(field(), { key: "Enter" });
     expect(onCreateClass).not.toHaveBeenCalled();
     expect(onNodeClassesChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("a node that already holds as many classes as the page applies", () => {
+  // The compiler reads the first `MAX_CLASSES_PER_NODE` and strict validation
+  // rejects a document holding more, so an application here would be recorded
+  // as done while rendering nothing and blocking publication.
+  const full = Array.from(
+    { length: MAX_CLASSES_PER_NODE },
+    (_, index) => `id-filler-${index}`
+  );
+
+  it("refuses the application rather than appending a reference", () => {
+    const { onNodeClassesChange } = draw({ nodeClassIds: full });
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onNodeClassesChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/as many classes/i);
+  });
+
+  it("keeps the query so the author is not left guessing what failed", () => {
+    draw({ nodeClassIds: full });
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(
+      field().getAttribute("value") ?? (field() as HTMLInputElement).value
+    ).toBe("hero");
+  });
+
+  it("still applies normally one below the limit", () => {
+    // The control: the refusal above is about the boundary, not about the
+    // component having stopped applying anything at all.
+    const nearly = full.slice(0, MAX_CLASSES_PER_NODE - 1);
+    const { onNodeClassesChange } = draw({ nodeClassIds: nearly });
+    type("hero");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(onNodeClassesChange).toHaveBeenCalledWith([...nearly, "id-hero"]);
+  });
+});
+
+describe("what assistive technology is told", () => {
+  it("names the highlighted row from the field, and moves it", () => {
+    /*
+     * Focus stays in the input while the arrows change the highlight, so
+     * `aria-selected` on the rows is invisible to a screen reader following
+     * focus. `aria-activedescendant` is what names the row Enter would take.
+     */
+    draw();
+    type("a");
+    const active = (): string | null =>
+      field().getAttribute("aria-activedescendant");
+    const rowId = (index: number): string | null =>
+      screen.getAllByRole("option")[index]?.getAttribute("id") ?? null;
+
+    expect(active()).not.toBeNull();
+    expect(active()).toBe(rowId(0));
+    fireEvent.keyDown(field(), { key: "ArrowDown" });
+    expect(active()).toBe(rowId(1));
+  });
+
+  it("names no row when there is nothing to choose", () => {
+    // A stale id pointing at a row that is gone is worse than none: the reader
+    // announces a class the keystroke would not apply.
+    draw();
+    type("Not A Slug");
+    expect(field().getAttribute("aria-activedescendant")).toBeNull();
   });
 });
 

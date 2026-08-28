@@ -15,6 +15,7 @@
  * @module class-library.test
  */
 import {
+  MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   compilePageCss,
   type BlockDocument,
@@ -139,6 +140,17 @@ describe("a count keyed by a name Object.prototype already answers", () => {
     expect(rows.find(r => r.slug === "hero")?.knownDocuments).toBe(0);
     // The control: an own count on the same record is still read.
     expect(rows.find(r => r.slug === "card")?.knownDocuments).toBe(2);
+  });
+
+  it("refuses a fractional count, which cannot describe documents", () => {
+    // A finite, non-negative fraction passed every earlier check and would have
+    // put "0.5 known" on screen — a number no count of documents can produce.
+    const rows = classRows(
+      LIBRARY,
+      { "id-hero": 0.5 } as unknown as Record<string, number>,
+      []
+    );
+    expect(rows.find(r => r.slug === "hero")?.knownDocuments).toBe(0);
   });
 
   it("refuses a stored value that is not a usable count", () => {
@@ -361,6 +373,45 @@ describe("whether a name can become a class", () => {
     });
   });
 
+  it("refuses a new name once the library is full", () => {
+    /*
+     * A class added past `MAX_NAMED_CLASSES` becomes the first entry outside
+     * the compiler's stored-order prefix, so it emits no rule — and
+     * `checkStoredClasses` refuses the save rather than storing it quietly.
+     * Reporting the name as acceptable would offer something that can neither
+     * be saved nor rendered.
+     */
+    const full = Array.from({ length: MAX_NAMED_CLASSES }, (_, index) =>
+      cls(`id-fill-${index}`, `fill-${index}`, index)
+    );
+    expect(newClassName("call-to-action", full)).toEqual({
+      ok: false,
+      refusal: "library-full",
+    });
+  });
+
+  it("reports the fixable problem first when a name is BOTH bad and late", () => {
+    // Capacity is about the library; a malformed name is about the input the
+    // author just typed, and that is the one they can act on.
+    const full = Array.from({ length: MAX_NAMED_CLASSES }, (_, index) =>
+      cls(`id-fill-${index}`, `fill-${index}`, index)
+    );
+    expect(newClassName("Not A Slug", full)).toEqual({
+      ok: false,
+      refusal: "not-a-slug",
+    });
+  });
+
+  it("still accepts one BELOW the cap, which is where the boundary is", () => {
+    const nearly = Array.from({ length: MAX_NAMED_CLASSES - 1 }, (_, index) =>
+      cls(`id-fill-${index}`, `fill-${index}`, index)
+    );
+    expect(newClassName("call-to-action", nearly)).toEqual({
+      ok: true,
+      slug: "call-to-action",
+    });
+  });
+
   it("lets a rename keep its own name, which is not a collision", () => {
     expect(renamedClassName("hero", "id-hero", LIBRARY)).toEqual({
       ok: true,
@@ -377,14 +428,17 @@ describe("applying and removing on a node", () => {
   it("appends rather than reordering to library position", () => {
     // Stored order does not decide precedence, so rewriting it would produce a
     // document change that renders identically — a diff nobody can explain.
-    expect(withClassApplied(["id-card"], "id-hero")).toEqual([
-      "id-card",
-      "id-hero",
-    ]);
+    expect(withClassApplied(["id-card"], "id-hero")).toEqual({
+      ok: true,
+      classIds: ["id-card", "id-hero"],
+    });
   });
 
   it("is a no-op when the node already carries it", () => {
-    expect(withClassApplied(["id-hero"], "id-hero")).toEqual(["id-hero"]);
+    expect(withClassApplied(["id-hero"], "id-hero")).toEqual({
+      ok: true,
+      classIds: ["id-hero"],
+    });
   });
 
   it("removes without touching the rest", () => {
@@ -397,8 +451,79 @@ describe("applying and removing on a node", () => {
     // The caller lifts this to whoever owns the document; mutating in place
     // would change a value the host may still be comparing against.
     const stored = ["id-hero"];
-    expect(withClassApplied(stored, "id-card")).not.toBe(stored);
+    const outcome = withClassApplied(stored, "id-card");
+    expect(outcome.ok && outcome.classIds).not.toBe(stored);
     expect(stored).toEqual(["id-hero"]);
+  });
+
+  it("REFUSES once the node holds as many as the compiler reads", () => {
+    /*
+     * The compiler applies the first `MAX_CLASSES_PER_NODE` and strict
+     * validation rejects a document holding more, so appending here would
+     * record an application that neither renders nor can be published — and
+     * the editor would draw it as done.
+     */
+    const full = Array.from(
+      { length: MAX_CLASSES_PER_NODE },
+      (_, index) => `id-${index}`
+    );
+    expect(withClassApplied(full, "id-hero")).toEqual({
+      ok: false,
+      refusal: "node-full",
+    });
+  });
+
+  it("still accepts one BELOW the limit, which is where the boundary is", () => {
+    const nearly = Array.from(
+      { length: MAX_CLASSES_PER_NODE - 1 },
+      (_, index) => `id-${index}`
+    );
+    const outcome = withClassApplied(nearly, "id-hero");
+    expect(outcome.ok).toBe(true);
+    expect(outcome.ok && outcome.classIds).toHaveLength(MAX_CLASSES_PER_NODE);
+  });
+
+  it("does not refuse a class an over-full node already carries", () => {
+    // Nothing is being added, so there is nothing to refuse — and reporting a
+    // refusal would make a no-op look like a failure the author must resolve.
+    const over = Array.from(
+      { length: MAX_CLASSES_PER_NODE + 2 },
+      (_, index) => `id-${index}`
+    );
+    expect(withClassApplied(over, "id-0")).toEqual({
+      ok: true,
+      classIds: over,
+    });
+  });
+});
+
+describe("a node holding more classes than the page applies", () => {
+  // The compiler reads the first `MAX_CLASSES_PER_NODE` and warns about the
+  // rest, so a stored tail styles nothing. Both surfaces have to agree with
+  // that rather than with the array.
+  const overFull = [
+    ...Array.from({ length: MAX_CLASSES_PER_NODE }, () => "id-badge"),
+    "id-hero",
+  ];
+
+  it("shows only the classes the page actually applies", () => {
+    // `id-hero` is stored past the cap, so the element does not carry it and a
+    // chip for it would disagree with what the browser renders.
+    expect(appliedClasses(LIBRARY, overFull).map(r => r.slug)).toEqual([
+      "badge",
+    ]);
+  });
+
+  it("still refuses to OFFER a class stored past the cap", () => {
+    /*
+     * Deliberately not symmetric with the rule above, and the asymmetry is the
+     * point: that one asks what the page renders, this one asks what applying
+     * would ADD. `id-hero` renders nothing and is still on the node, so
+     * offering it would append a second copy of an id already stored.
+     */
+    expect(
+      applicableClasses(LIBRARY, overFull, "").map(r => r.slug)
+    ).not.toContain("hero");
   });
 });
 

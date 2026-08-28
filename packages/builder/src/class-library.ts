@@ -49,6 +49,7 @@
  * @module class-library
  */
 import {
+  MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
@@ -133,9 +134,10 @@ export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
 function knownUsage(usage: ClassUsageCounts, classId: string): number {
   if (!Object.hasOwn(usage, classId)) return 0;
   const count = usage[classId];
-  if (typeof count !== "number" || !Number.isFinite(count) || count < 0) {
-    return 0;
-  }
+  // A document count is a whole number of documents. A fraction is as much a
+  // sign of a corrupted row as a negative one, and admitting it would put a
+  // number on screen that cannot describe anything the index counted.
+  if (!Number.isInteger(count) || count < 0) return 0;
   return count;
 }
 
@@ -181,6 +183,17 @@ export function filterClassRows(
 }
 
 /**
+ * The class ids on a node that the compiler will actually read.
+ *
+ * The engine applies the first `MAX_CLASSES_PER_NODE` and warns about the rest,
+ * so a node holding more is a node whose tail styles nothing. `styleSubjectFor`
+ * bounds its own read the same way; this is the same bound, not a second one.
+ */
+function readableNodeClassIds(nodeClassIds: readonly string[]): string[] {
+  return nodeClassIds.slice(0, MAX_CLASSES_PER_NODE);
+}
+
+/**
  * The classes a node carries, in library order.
  *
  * Ordered by the library and not by the node's own array, because two nodes
@@ -196,7 +209,7 @@ export function appliedClasses(
   library: readonly NamedClass[],
   nodeClassIds: readonly string[]
 ): ClassChoice[] {
-  const applied = new Set(nodeClassIds);
+  const applied = new Set(readableNodeClassIds(nodeClassIds));
   return siteClasses(library).filter(choice => applied.has(choice.id));
 }
 
@@ -212,6 +225,13 @@ export function applicableClasses(
   nodeClassIds: readonly string[],
   query: string
 ): ClassChoice[] {
+  /*
+   * The WHOLE stored array, deliberately not the readable prefix that
+   * {@link appliedClasses} uses. The two answer different questions: that one
+   * asks what the page renders, this one asks what applying would ADD. A class
+   * stored past the cap renders nothing and yet is already on the node, so
+   * offering it would append a second copy of an id the node already holds.
+   */
   const applied = new Set(nodeClassIds);
   const needle = query.trim().toLowerCase();
   return siteClasses(library)
@@ -261,7 +281,12 @@ export function selectorOptions(
 }
 
 /** Why a name cannot become a class. */
-export type NameRefusal = "empty" | "too-long" | "not-a-slug" | "already-taken";
+export type NameRefusal =
+  | "empty"
+  | "too-long"
+  | "not-a-slug"
+  | "already-taken"
+  | "library-full";
 
 /**
  * A name's verdict, carrying the slug to store when there is one.
@@ -302,6 +327,18 @@ export function newClassName(
   if (library.some(entry => entry.slug === slug)) {
     return { ok: false, refusal: "already-taken" };
   }
+  /*
+   * Capacity last, so a name that is ALSO malformed or taken reports the
+   * problem the author can act on rather than one about the library.
+   *
+   * A class added to a full library becomes the first entry outside the
+   * compiler's prefix, so it emits no rule — and `checkStoredClasses` refuses
+   * the save outright rather than storing it quietly. Accepting the name here
+   * would offer an author a class that cannot be saved OR rendered.
+   */
+  if (library.length >= MAX_NAMED_CLASSES) {
+    return { ok: false, refusal: "library-full" };
+  }
   return { ok: true, slug };
 }
 
@@ -321,20 +358,42 @@ export function renamedClassName(
   return newClassName(name, others);
 }
 
+/** Why a class cannot go on a node. */
+export type ApplyRefusal = "node-full";
+
+/** A node's new class ids, or why the class cannot go on it. */
+export type ClassApplyOutcome =
+  | { readonly ok: true; readonly classIds: string[] }
+  | { readonly ok: false; readonly refusal: ApplyRefusal };
+
 /**
- * A node's class ids with one added, or unchanged if it already carries it.
+ * A node's class ids with one added, or a refusal.
  *
  * Appended rather than inserted in library order. The stored order does not
  * decide precedence, so rewriting it would produce a document change that
  * renders identically — a diff an author cannot explain and a version history
  * entry that means nothing.
+ *
+ * A node already holding `MAX_CLASSES_PER_NODE` classes REFUSES rather than
+ * appending. The compiler reads only that many and strict validation rejects
+ * the document outright, so an appended reference would be recorded as an
+ * application that neither renders nor can be published — the worst of the
+ * three outcomes, because the editor would show it as done.
+ *
+ * A class the node already carries is not a refusal: nothing is wrong, and the
+ * answer is simply the ids unchanged.
  */
 export function withClassApplied(
   nodeClassIds: readonly string[],
   classId: string
-): string[] {
-  if (nodeClassIds.includes(classId)) return [...nodeClassIds];
-  return [...nodeClassIds, classId];
+): ClassApplyOutcome {
+  if (nodeClassIds.includes(classId)) {
+    return { ok: true, classIds: [...nodeClassIds] };
+  }
+  if (nodeClassIds.length >= MAX_CLASSES_PER_NODE) {
+    return { ok: false, refusal: "node-full" };
+  }
+  return { ok: true, classIds: [...nodeClassIds, classId] };
 }
 
 /** A node's class ids with one removed. */

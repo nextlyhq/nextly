@@ -1867,10 +1867,10 @@
   display: inline-flex;
   align-items: center;
   gap: 0.125rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--nx-border);
   border-radius: 0.375rem;
   padding-inline-start: 0.5rem;
-  background: var(--muted);
+  background: var(--nx-muted);
   font-size: var(--text-xs);
   line-height: 1.5rem;
 }
@@ -1892,7 +1892,7 @@
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--border);
+  border: 1px solid var(--nx-border);
   border-radius: 0.375rem;
   overflow: hidden;
 }
@@ -1916,7 +1916,7 @@
  */
 .nx-classes__option--active,
 .nx-classes__option:hover {
-  background: var(--accent);
+  background: var(--nx-accent);
 }
 
 /*
@@ -1964,14 +1964,14 @@
 .nx-classman__usage {
   flex: 0 0 auto;
   font-size: var(--text-xs);
-  color: var(--muted-foreground);
+  color: var(--nx-muted-foreground);
   white-space: nowrap;
 }
 
 .nx-classman__issue {
   margin: 0.25rem 0 0;
   font-size: var(--text-xs);
-  color: var(--destructive);
+  color: var(--nx-destructive);
 }
 
 /*
@@ -1985,6 +1985,6 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0.5rem;
-  border: 1px solid var(--destructive);
+  border: 1px solid var(--nx-destructive);
   border-radius: 0.375rem;
 }

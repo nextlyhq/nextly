@@ -277,6 +277,7 @@ const REFUSALS = {
   "too-long": "That name is too long.",
   "not-a-slug": "Use lowercase letters, numbers and hyphens.",
   "already-taken": "Another class already has that name.",
+  "library-full": "This site already has as many classes as the page can use.",
 } as const;
 
 /**

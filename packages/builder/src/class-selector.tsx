@@ -42,6 +42,7 @@ import * as React from "react";
 import {
   appliedClasses,
   selectorOptions,
+  withClassApplied,
   withClassRemoved,
   type ClassChoice,
   type ClassOption,
@@ -78,6 +79,7 @@ export function ClassSelector({
 }: ClassSelectorProps): React.ReactElement {
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState(0);
+  const [refused, setRefused] = React.useState(false);
   const listId = React.useId();
 
   if (library === undefined) {
@@ -96,8 +98,20 @@ export function ClassSelector({
 
   const commit = (option: ClassOption | undefined): void => {
     if (option === undefined) return;
-    if (option.kind === "create") onCreateClass(option.slug);
-    else onNodeClassesChange([...nodeClassIds, option.choice.id]);
+    if (option.kind === "create") {
+      onCreateClass(option.slug);
+    } else {
+      // Through the shared helper rather than an append written here. The
+      // bound on how many classes a node may carry belongs to one place, and a
+      // second append would keep working after that place learned to refuse.
+      const outcome = withClassApplied(nodeClassIds, option.choice.id);
+      if (!outcome.ok) {
+        setRefused(true);
+        return;
+      }
+      onNodeClassesChange(outcome.classIds);
+    }
+    setRefused(false);
     setQuery("");
     setActive(0);
   };
@@ -114,6 +128,9 @@ export function ClassSelector({
         role="combobox"
         aria-expanded={options.length > 0}
         aria-controls={listId}
+        aria-activedescendant={
+          options.length > 0 ? optionDomId(listId, highlighted) : undefined
+        }
         aria-label="Add a class"
         placeholder="Add a class…"
         onChange={event => {
@@ -135,8 +152,23 @@ export function ClassSelector({
         highlighted={highlighted}
         onChoose={commit}
       />
+      {refused ? (
+        <p className="nx-classes__issue" role="alert">
+          This element already has as many classes as the page can apply.
+        </p>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The DOM id of one option row.
+ *
+ * `aria-activedescendant` names a row by id while focus stays in the field, so
+ * the rows need ids that the field can compute without reaching into them.
+ */
+function optionDomId(listId: string, index: number): string {
+  return `${listId}-option-${index}`;
 }
 
 /**
@@ -225,6 +257,7 @@ function OptionList({
       {options.map((option, index) => (
         <li
           key={option.kind === "create" ? "create" : option.choice.id}
+          id={optionDomId(id, index)}
           role="option"
           aria-selected={index === highlighted}
           className={optionClass(index === highlighted)}
