@@ -19,12 +19,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { getCollectionFields } from "@admin/components/features/entries/EntryForm/useEntryForm";
 
+import { useTakeoverLayout } from "../useTakeoverLayout";
+
+/*
+ * Reached through an arrow rather than passed directly, so the factory resolves
+ * the spy when the mocked module is CALLED rather than when vitest hoists the
+ * mock above these imports. Same shape as the editor-locale suite.
+ */
 const useBranding = vi.fn();
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => useBranding(),
 }));
-
-import { useTakeoverLayout } from "../useTakeoverLayout";
 
 /**
  * A plugin that registers a takeover-capable field type.
@@ -88,14 +93,19 @@ const VISIBLE_CONTROLLER_FIELDS = FIELDS.map(f =>
     : f
 );
 
+function useTakeoverHarness(
+  fields: FieldConfig[],
+  defaultValues: Record<string, unknown>
+) {
+  const form = useForm<Record<string, unknown>>({ defaultValues });
+  return { form, layout: useTakeoverLayout(fields, form) };
+}
+
 function renderTakeover(
   fields: FieldConfig[],
   defaultValues: Record<string, unknown>
 ) {
-  return renderHook(() => {
-    const form = useForm<Record<string, unknown>>({ defaultValues });
-    return { form, layout: useTakeoverLayout(fields, form) };
-  });
+  return renderHook(() => useTakeoverHarness(fields, defaultValues));
 }
 
 const namesOf = (fields: Array<{ name?: string }>) => fields.map(f => f.name);

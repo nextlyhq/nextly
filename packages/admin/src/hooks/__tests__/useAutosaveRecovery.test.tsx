@@ -43,16 +43,23 @@ function wrapper({ children }: { children: ReactNode }) {
  * through one: a stubbed `reset` would let a test pass while the values never
  * reached the form, and `isDirty` is exactly the thing being asserted.
  */
+function useRecoveryHarness(scope: VersionScope | null) {
+  const form = useForm<Record<string, unknown>>({ defaultValues: STORED });
+  const recovery = useAutosaveRecovery({ scope, form });
+  /*
+   * `isDirty` is READ DURING RENDER and returned, deliberately.
+   *
+   * react-hook-form tracks formState by which keys a render reads, so a test
+   * that reaches for `form.formState.isDirty` after the fact can observe an
+   * unsubscribed proxy and read false however dirty the form is — which would
+   * let a restore that cleared the flag pass this suite. The same trap is
+   * documented in `useDocumentAutosave.test.tsx`.
+   */
+  return { form, recovery, isDirty: form.formState.isDirty };
+}
+
 function renderRecovery(scope: VersionScope | null) {
-  return renderHook(
-    () => {
-      const form = useForm<Record<string, unknown>>({
-        defaultValues: STORED,
-      });
-      return { form, recovery: useAutosaveRecovery({ scope, form }) };
-    },
-    { wrapper }
-  );
+  return renderHook(() => useRecoveryHarness(scope), { wrapper });
 }
 
 beforeEach(() => {
@@ -157,7 +164,7 @@ describe("useAutosaveRecovery", () => {
     await waitFor(() =>
       expect(result.current.form.getValues()).toEqual({ title: "recovered" })
     );
-    expect(result.current.form.formState.isDirty).toBe(true);
+    expect(result.current.isDirty).toBe(true);
     // Accepting also closes the offer: the banner has done its job and must not
     // keep asking about work the author has already taken back.
     expect(result.current.recovery.offer).toBeNull();
@@ -176,6 +183,6 @@ describe("useAutosaveRecovery", () => {
     act(() => result.current.recovery.restore());
 
     expect(result.current.form.getValues()).toEqual(STORED);
-    expect(result.current.form.formState.isDirty).toBe(false);
+    expect(result.current.isDirty).toBe(false);
   });
 });
