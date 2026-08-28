@@ -48,8 +48,19 @@ export function entryTitleField(
   return COMMON_TITLE_FIELDS.find(name => fieldNames.includes(name));
 }
 
-/** A value counts as a title only if it is text with something in it. */
+/**
+ * A value counts as a title if it is a scalar with something in it.
+ *
+ * Numbers included, because an author who nominates an invoice or issue number
+ * as the title means it — and the entry table already shows that column, the
+ * translation worklist already converts it, so rejecting it here would name one
+ * entry three ways. Objects and arrays are refused: they stringify to something
+ * no reader recognises as a name.
+ */
 function readableText(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;

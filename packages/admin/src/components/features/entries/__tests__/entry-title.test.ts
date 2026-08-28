@@ -80,11 +80,23 @@ describe("entryTitleValue — what to call this entry", () => {
     expect(entryTitleValue({ subject: "Re: hello", name: "Ada" })).toBe("Ada");
   });
 
-  it("ignores values that are not readable text", () => {
-    // A number or an object stringifies to something no reader recognises as a
-    // name, so it is not one.
-    expect(entryTitleValue({ title: 42, name: "Ada" })).toBe("Ada");
+  /**
+   * A number IS a name where an author chose one. An invoice or issue number
+   * is what such an entry is called, the entry table already shows that
+   * column, and the translation worklist already converts it — so refusing it
+   * here would name one entry three different ways.
+   */
+  it("keeps a numeric title", () => {
+    expect(entryTitleValue({ invoiceNo: 42 }, "invoiceNo")).toBe("42");
+    expect(entryTitleValue({ title: 0, name: "Ada" })).toBe("0");
+  });
+
+  it("refuses values a reader would not recognise as a name", () => {
+    // Objects and arrays stringify to `[object Object]` and to their contents;
+    // neither is a name. `NaN` and `Infinity` are numbers that are not.
     expect(entryTitleValue({ title: {}, name: "Ada" })).toBe("Ada");
+    expect(entryTitleValue({ title: [1, 2], name: "Ada" })).toBe("Ada");
+    expect(entryTitleValue({ title: NaN, name: "Ada" })).toBe("Ada");
     expect(entryTitleValue({ title: "" })).toBeUndefined();
   });
 

@@ -50,6 +50,11 @@ export function useVersionDocumentTitle(scope: TitleScope): string | undefined {
     collectionSlug: scope.slug,
     entryId: isCollection ? scope.entryId : "",
     enabled: isCollection,
+    // The working draft, where the collection has one. The editor overlays it,
+    // so without this a comparison opened from an editor showing an unpublished
+    // title change is headed by the OLD published title — two surfaces naming
+    // one document by different states of it.
+    draft: collection.data?.draftsEnabled === true,
   });
   const single = useSingleSchema(isCollection ? undefined : scope.slug);
 

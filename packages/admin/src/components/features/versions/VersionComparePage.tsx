@@ -65,6 +65,13 @@ const NO_PAIR_MESSAGE: Record<
   "no-history": "There is nothing to compare yet.",
   "only-version":
     "There is only one version so far, so there is nothing to compare it with.",
+  // Deliberately different from the line above. Saying "there is only one
+  // version" beside a rail listing several would leave a reader unable to tell
+  // which surface to believe; this says which language is meant, and that
+  // there is somewhere else to look.
+  "only-in-locale":
+    "This is the only version in this language, so there is nothing to compare " +
+    "it with. Versions in other languages have their own history.",
   "not-loaded":
     "The version before this one has not been loaded yet. Choose Load more in the list to fetch it.",
 };
