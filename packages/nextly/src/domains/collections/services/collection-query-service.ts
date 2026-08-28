@@ -463,8 +463,8 @@ export class CollectionQueryService extends BaseService {
       // localized read, whose bare select would otherwise name a column those tables lack.
       // Omitting this reports every locale's staleness as UNKNOWN rather than as current.
       staleness: {
-        reader: this.adapter,
         companionTableName: companion.companionTableName,
+        dialect: this.dialect,
       },
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValue:

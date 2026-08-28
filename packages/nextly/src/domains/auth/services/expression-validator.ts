@@ -156,8 +156,8 @@ export class ExpressionValidator {
         // NO function call of any kind is allowed in an RLS expression —
         // neither `someGlobal()` nor `array.includes()`. `CallExpression` is
         // absent from ALLOWED_NODE_TYPES, so the check below rejects every one
-        // of them, and that is the rule rather than an oversight (founder
-        // decision, 2026-08-28): these expressions are evaluated against user
+        // of them, and that is the rule rather than an oversight: these
+        // expressions are evaluated against user
         // data to decide access, and a narrow surface is the point.
         //
         // This visitor previously carried a branch below the check that tried

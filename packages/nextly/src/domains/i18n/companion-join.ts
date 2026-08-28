@@ -12,10 +12,12 @@
  * @module domains/i18n/companion-join
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
+import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
 
 /**
  * A quoted table or alias reference, as `sql.identifier` produces one.
@@ -64,17 +66,6 @@ interface SelectableDb {
       where: (cond: unknown) => Promise<Record<string, unknown>[]>;
     };
   };
-}
-
-/**
- * The raw-SQL surface the stamp reader needs, which the Drizzle table cannot provide.
- *
- * Narrower than the full adapter on purpose: this reads one column that a given database may not
- * have, so it is the one place allowed to name it, and nothing else about the adapter is in scope.
- */
-interface CompanionStampReader {
-  dialect: string;
-  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
 /** A Drizzle table object exposing its columns as properties (`_parent`, `_locale`, fields). */
@@ -718,16 +709,16 @@ export interface TranslationStatusArgs {
   /** Whether the companion carries a per-locale `_status` column (i18n M6). */
   hasStatus: boolean;
   /**
-   * What is needed to read `_updated_at` (i18n B2): a raw-SQL surface and the physical companion
-   * name. The column is deliberately not declared on the companion's Drizzle table — see
-   * {@link readCompanionStamps} — so it cannot be read through `companionTable`.
+   * What is needed to read `_updated_at` (i18n B2): the physical companion name and its dialect.
+   * The column is deliberately not declared on the companion's runtime table — see
+   * {@link readCompanionStamps} — so it is read through its own narrow handle instead.
    *
    * ONE optional object rather than two optional fields, because neither is usable without the
    * other and a caller that supplied only one would silently report every locale as UNKNOWN.
    * Omitting it entirely is legitimate and means exactly that: this caller cannot ask, so nothing
    * is known — never that everything is current.
    */
-  staleness?: { reader: CompanionStampReader; companionTableName: string };
+  staleness?: { companionTableName: string; dialect: SupportedDialect };
   idKey?: string;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
@@ -790,13 +781,12 @@ function markPendingChanges(
 /**
  * Per-locale `_updated_at` for a page of documents, or nothing when the companion cannot answer.
  *
- * 🔴 Read HERE rather than through the companion's Drizzle table, and that is an upgrade-path
- * decision. The runtime table is registered for every localized entity, including Schema Builder
- * collections held in the registry — and `reconcileCompanionColumns`, the only thing that adds
- * this column to a companion that predates it, runs solely over entities declared in
- * `nextly.config`. Declaring the column on the runtime table would therefore make the ordinary
- * localized read's bare `select()` name a column those tables do not have, and every localized
- * read on them would fail after an upgrade. A staleness badge is not worth that.
+ * 🔴 Read through its OWN narrow Drizzle handle rather than through the companion's main runtime
+ * table, and that is an upgrade-path decision. The main table is registered for every localized
+ * entity, including Schema Builder collections held in the registry — and the reconcile that adds
+ * this column runs only over entities declared in configuration. Declaring the column there would
+ * make the ordinary localized read's bare `select()` name a column those tables do not have, and
+ * every localized read on them would fail after an upgrade. A staleness badge is not worth that.
  *
  * So the column is named in ONE place that is allowed to fail, and a companion that has not been
  * reconciled yields no stamps at all — which the caller reports as UNKNOWN, never as up to date.
@@ -807,30 +797,31 @@ function markPendingChanges(
  * reported as "this site has no staleness information".
  */
 async function readCompanionStamps(
-  adapter: CompanionStampReader,
+  db: SelectableDb,
   companionTableName: string,
+  dialect: SupportedDialect,
   ids: (string | number)[],
   locales: string[]
 ): Promise<Map<string, Date>> {
   const out = new Map<string, Date>();
   if (ids.length === 0 || locales.length === 0) return out;
 
-  const isMysql = adapter.dialect === "mysql";
-  const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-  const params: unknown[] = [...ids, ...locales];
-  let n = 0;
-  const ph = () => (adapter.dialect === "postgresql" ? `$${++n}` : "?");
-  const idHoles = ids.map(() => ph()).join(", ");
-  const localeHoles = locales.map(() => ph()).join(", ");
-
+  const stamp = buildCompanionStampTable(companionTableName, dialect);
   let rows: Record<string, unknown>[];
   try {
-    rows = await adapter.executeQuery<Record<string, unknown>>(
-      `SELECT ${q("_parent")}, ${q("_locale")}, ${q(COMPANION_UPDATED_AT_COLUMN)} ` +
-        `FROM ${q(companionTableName)} ` +
-        `WHERE ${q("_parent")} IN (${idHoles}) AND ${q("_locale")} IN (${localeHoles})`,
-      params
-    );
+    rows = await db
+      .select({
+        _parent: stamp.parent,
+        _locale: stamp.locale,
+        [COMPANION_UPDATED_AT_COLUMN]: stamp.updatedAt,
+      })
+      .from(stamp.table)
+      .where(
+        and(
+          inArray(stamp.parent as never, ids),
+          inArray(stamp.locale as never, locales)
+        )
+      );
   } catch (error) {
     if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return out;
     throw error;
@@ -848,14 +839,12 @@ async function readCompanionStamps(
 /**
  * One raw `_updated_at` value as a `Date`, or `null` when it cannot be one.
  *
- * The drivers do not agree on what comes back, and this read bypasses Drizzle's column mapping by
- * design, so the coercion is explicit here rather than assumed. `node-postgres` and `mysql2`
- * return a `Date`; better-sqlite3 returns the raw INTEGER, which the column stores as epoch
- * SECONDS — the same unit `sanitizeSqliteValue` writes.
+ * Drizzle decodes the column for every dialect it declares, so a `Date` is the expected shape.
+ * A raw epoch is still accepted because a driver that returns one unmapped would otherwise be
+ * read as "no stamp", which is silently wrong rather than loudly wrong.
  *
- * Anything else, including a NULL for a row the back-fill could not seed, answers `null` and the
- * caller reports UNKNOWN. Guessing at an unrecognised shape is what would turn a driver change
- * into wrong staleness answers rather than absent ones.
+ * Anything else answers `null` and the caller reports UNKNOWN. Guessing at an unrecognised shape
+ * is what would turn a driver change into wrong staleness answers rather than absent ones.
  */
 function toStampDate(raw: unknown): Date | null {
   if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
@@ -951,8 +940,9 @@ export async function populateTranslationStatus(
   // caller supplies no reader.
   const stamps = args.staleness
     ? await readCompanionStamps(
-        args.staleness.reader,
+        db,
         args.staleness.companionTableName,
+        args.staleness.dialect,
         ids,
         locales
       )

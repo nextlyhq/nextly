@@ -110,11 +110,15 @@ describe("companionWriteVia", () => {
     expect(sql).toContain('"_updated_at" = excluded."_updated_at"');
 
     expect(params.slice(0, 4)).toEqual(["entry-1", "fr", "Bonjour", "Salut"]);
-    // Bound as a Date rather than a string or a number. Every dialect's driver
-    // takes a Date -- the SQLite adapter converts it to epoch seconds in
-    // `sanitizeSqliteValue` -- and a pre-formatted string would be correct on
-    // exactly one of the three.
-    expect(params[4]).toBeInstanceOf(Date);
+    // 🔴 ENCODED the way Drizzle would encode it, not handed to the driver raw.
+    // A `Date` bound straight to a driver writes the LOCAL wall clock into a
+    // column that records no time zone, while everything Drizzle writes is UTC
+    // -- and this comparison reads both bases, because the back-fill seeds from
+    // Drizzle-written version rows. On PostgreSQL that encoding is an ISO
+    // string, so asserting `instanceof Date` would pass on exactly the value
+    // this must not bind.
+    expect(typeof params[4]).toBe("string");
+    expect(new Date(params[4] as string).getTime()).toBeGreaterThan(0);
   });
 
   it("stamps `_updated_at` on the transaction path, not only the adapter one", async () => {
@@ -138,7 +142,10 @@ describe("companionWriteVia", () => {
 
     const [sql, params] = execute.mock.calls[0];
     expect(sql).toContain('"_updated_at"');
-    expect(params.at(-1)).toBeInstanceOf(Date);
+    // SQLite's encoding is epoch SECONDS, which is what its INTEGER column
+    // stores. A different unit here orders correctly against itself and wrongly
+    // against anything the back-fill seeded.
+    expect(typeof params.at(-1)).toBe("number");
   });
 
   it("uses the injected clock, so the stamp is a value and not a coincidence", async () => {
@@ -155,10 +162,11 @@ describe("companionWriteVia", () => {
       { now }
     );
 
-    // Asserting the VALUE, not merely that something Date-shaped arrived. An
-    // implementation that stamped a fixed epoch, or the wrong one of two clocks
-    // in scope, satisfies `toBeInstanceOf(Date)` perfectly.
-    expect(execute.mock.calls[0][1].at(-1)).toEqual(now);
+    // Asserting the VALUE, not merely that something arrived. An implementation
+    // that stamped a fixed instant, or the wrong one of two clocks in scope,
+    // satisfies a shape assertion perfectly. Compared through the encoded form,
+    // since that is what actually reaches the column.
+    expect(execute.mock.calls[0][1].at(-1)).toBe(now.toISOString());
   });
 
   it("omits the stamp for a companion that physically predates the column", async () => {
