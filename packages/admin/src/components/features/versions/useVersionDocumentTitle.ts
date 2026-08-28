@@ -42,7 +42,10 @@ function readableText(value: unknown): string | undefined {
  * cannot be called on one branch and skipped on the other. The disabled one
  * fetches nothing.
  */
-export function useVersionDocumentTitle(scope: TitleScope): string | undefined {
+export function useVersionDocumentTitle(
+  scope: TitleScope,
+  locale?: string
+): string | undefined {
   const isCollection = scope.kind === "collection";
 
   const collection = useCollection(isCollection ? scope.slug : undefined);
@@ -55,6 +58,11 @@ export function useVersionDocumentTitle(scope: TitleScope): string | undefined {
     // title change is headed by the OLD published title — two surfaces naming
     // one document by different states of it.
     draft: collection.data?.draftsEnabled === true,
+    // The language the comparison is about. A localized entry holds a title
+    // per language, so reading without one names a French comparison by its
+    // English title — the editor's own read passes its active locale, and the
+    // two must agree about which state of the document they describe.
+    locale,
   });
   const single = useSingleSchema(isCollection ? undefined : scope.slug);
 

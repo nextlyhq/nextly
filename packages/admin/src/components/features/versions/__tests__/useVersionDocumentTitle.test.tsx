@@ -135,3 +135,49 @@ describe("useVersionDocumentTitle — a single", () => {
     expect(forEntry().result.current).toBe("An entry");
   });
 });
+
+describe("useVersionDocumentTitle — the language it reads in", () => {
+  /**
+   * A localized entry holds a title per language. Read without one, a French
+   * comparison is headed by the English title — while the editor it was opened
+   * from passes its own active locale, so the two surfaces name one document
+   * by different states of it.
+   */
+  it("reads the entry in the language it was given", () => {
+    collectionMock.mockReturnValue({ data: { fields: [field("title")] } });
+    entryMock.mockReturnValue({ data: { title: "Bonjour" } });
+
+    renderHook(() =>
+      useVersionDocumentTitle(
+        { kind: "collection", slug: "posts", entryId: "e1" },
+        "fr"
+      )
+    );
+
+    expect(entryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "fr" })
+    );
+  });
+
+  /**
+   * The control. Without a locale the query must ask for none rather than
+   * inventing one — the server resolves the default, which is what a
+   * non-localized document needs.
+   */
+  it("asks for no locale when the address names none", () => {
+    collectionMock.mockReturnValue({ data: { fields: [field("title")] } });
+    entryMock.mockReturnValue({ data: { title: "Hello" } });
+
+    renderHook(() =>
+      useVersionDocumentTitle({
+        kind: "collection",
+        slug: "posts",
+        entryId: "e1",
+      })
+    );
+
+    expect(entryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: undefined })
+    );
+  });
+});

@@ -201,6 +201,7 @@ export {
 } from "./drop-targets";
 export {
   blockAllowedAt,
+  registryBlockSource,
   registrySlotSource,
   type InsertTarget,
   type SlotSource,
@@ -330,6 +331,7 @@ export {
   BLOCK_GROUP,
   EDITOR_GROUP,
   HISTORY_GROUP,
+  blockActionRunners,
   builderCommands,
   type BuilderCommandsInput,
   type CommandVerbs,

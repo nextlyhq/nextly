@@ -89,6 +89,65 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
 export const CHROME_ATTRIBUTE = "data-nx-chrome";
 
 /** Whether an event started inside editor chrome rather than inside the page. */
+/**
+ * The block a context gesture is aimed at, or `null` when it is aimed at
+ * nothing a block menu could act on.
+ *
+ * Published because a context menu can be opened TWO ways and they arrive by
+ * different events. A secondary click arrives as `contextmenu`, which the
+ * canvas sees; a touch or pen long-press is opened by Radix from its own timer
+ * on `pointerdown`, and never produces a `contextmenu` event at all. A menu
+ * that filtered one path and not the other would offer a block's verbs for a
+ * press aimed at chrome, or — worse — offer the PREVIOUS selection's verbs,
+ * with Delete among them, for a press on a block that was never selected.
+ *
+ * So the decision lives here once and both callers ask it, rather than each
+ * spelling out three rejections and drifting.
+ */
+export function contextMenuTargetOf(
+  target: EventTarget | null,
+  root: Element
+): string | null {
+  if (isEditableTarget(target) || isChrome(target)) return null;
+  if (!(target instanceof Element)) return null;
+  const owner = target.closest(`[${NODE_ID_ATTRIBUTE}]`);
+  if (owner === null) return null;
+  /*
+   * Owned by THIS canvas, not merely by A canvas.
+   *
+   * `nodeIdFromEvent` asks the weaker question — its own comment claims this
+   * one, and it checks only that some canvas is an ancestor. That is enough
+   * for selection, where a foreign id is ignored and nothing happens. It is
+   * not enough here: a canvas rendered inside a block of another canvas sends
+   * its events up through the outer one, which would then let a menu open
+   * while the outer selection stayed where it was — and its verbs would act on
+   * a block nobody was pointing at.
+   */
+  if (owner.closest(`.${CANVAS_ROOT_CLASS}`) !== root) return null;
+  return owner.getAttribute(NODE_ID_ATTRIBUTE);
+}
+
+/**
+ * Whether the gesture landed in text the author is editing.
+ *
+ * Asked apart from {@link isChrome} because the answer is the same and the
+ * reason is not: chrome is not the page, while this IS the page and is being
+ * typed into. The browser's own menu carries spelling, selection and clipboard
+ * for a caret, and none of that has a replacement here — taking it away mid
+ * sentence to offer "Move up" is a straight loss.
+ *
+ * `contenteditable="false"` is excluded explicitly: it marks a region the
+ * editor has deliberately made uneditable INSIDE an editable one, which is a
+ * block again rather than text.
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  const editable = target.closest("[contenteditable]");
+  return (
+    editable !== null && editable.getAttribute("contenteditable") !== "false"
+  );
+}
+
 function isChrome(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
@@ -507,10 +566,15 @@ function markedIds(
  */
 function useCanvasPointer(
   onSelect: ((id: string | null, mode: SelectionMode) => void) | undefined,
-  onDoubleClick: ((event: React.MouseEvent<HTMLDivElement>) => void) | undefined
+  onDoubleClick:
+    | ((event: React.MouseEvent<HTMLDivElement>) => void)
+    | undefined,
+  marked: readonly string[]
 ): {
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void;
   onDoubleClick: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 } {
   const click = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -529,7 +593,76 @@ function useCanvasPointer(
     },
     [onDoubleClick]
   );
-  return { onClick: click, onDoubleClick: doubleClick };
+  /*
+   * The secondary button selects, and says whether anything above this has a
+   * block to act on.
+   *
+   * Selecting FIRST is the whole point. A menu opened over one block while the
+   * selection sits on another acts on the other one, and the author is looking
+   * at the block they aimed at — so the destructive verbs on it would be aimed
+   * somewhere they cannot see.
+   *
+   * A block already in the selection is left alone rather than replacing it.
+   * Right-clicking one of several chosen blocks to act on all of them is what
+   * every comparable editor does, and re-selecting would silently drop the rest
+   * of the author's selection at the moment they went looking for a verb.
+   *
+   * Over the canvas BACKGROUND the event is stopped instead. There is no node,
+   * so a menu of block verbs would have no subject; stopping it here rather
+   * than opening an empty one keeps that decision next to the hit test that
+   * establishes it.
+   */
+  const contextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      /*
+       * Three ways to have no block to act on, stopped the same way and for
+       * separate reasons — see each predicate. Stopping rather than merely
+       * returning is what matters: a menu mounted ABOVE the canvas sees
+       * whatever this lets past, and the chrome and the appenders are drawn
+       * INSIDE the canvas root, so a bare return offers the selected block's
+       * verbs for a gesture aimed at a button that is not a block.
+       *
+       * `preventDefault` is deliberately not called, so the browser's own menu
+       * still appears wherever this one does not.
+       */
+      const id = contextMenuTargetOf(event.target, event.currentTarget);
+      if (id === null) {
+        event.stopPropagation();
+        return;
+      }
+      if (onSelect === undefined || marked.includes(id)) return;
+      onSelect(id, "replace");
+    },
+    [marked, onSelect]
+  );
+  /*
+   * The same withholding, for the gesture that carries no context event.
+   *
+   * A menu mounted above the canvas can open a touch or pen LONG PRESS from a
+   * timer of its own, started on this event — no `contextmenu` is ever
+   * dispatched, so the rule above never runs and every rejection it makes is
+   * skipped. Withholding the press from anything above keeps one decision
+   * governing both ways in.
+   *
+   * `stopPropagation` and NOT `preventDefault`, which is the whole point of
+   * doing it here. This fires at the start of every contact, long before
+   * anything knows whether it will become a long press, and cancelling the
+   * default that early takes caret placement and text selection away from an
+   * author who was only tapping into a sentence.
+   */
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      if (contextMenuTargetOf(event.target, event.currentTarget) === null)
+        event.stopPropagation();
+    },
+    []
+  );
+  return {
+    onClick: click,
+    onDoubleClick: doubleClick,
+    onContextMenu: contextMenu,
+    onPointerDown: pointerDown,
+  };
 }
 
 /**
@@ -896,7 +1029,16 @@ export function Canvas({
     () => markedIds(selectedIds, selectedId),
     [selectedIds, selectedId]
   );
-  const pointer = useCanvasPointer(onSelect, onDoubleClick);
+  const pointer = useCanvasPointer(onSelect, onDoubleClick, marked);
+  const dragPointerDown = dragHandlers?.onPointerDown;
+  const canvasPointerDown = pointer.onPointerDown;
+  const pointerDown = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>) => {
+      dragPointerDown?.(event);
+      canvasPointerDown(event);
+    },
+    [canvasPointerDown, dragPointerDown]
+  );
 
   // Keyed on the document identity so a re-render for an unrelated reason —
   // a selection change, a hover — does not rebuild the rendered tree.
@@ -945,11 +1087,12 @@ export function Canvas({
       data-nx-selected-id={selectedId ?? undefined}
       onClick={pointer.onClick}
       onDoubleClick={pointer.onDoubleClick}
-      // Spread rather than merged with a handler of this component's own: the
-      // canvas has no pointer behaviour of its own apart from the drag, so
-      // there is nothing to combine, and merging would create a second place
-      // where the two could be ordered wrongly.
+      onContextMenu={pointer.onContextMenu}
+      // Spread whole, because the set cannot be partially applied — then the
+      // one member this component also has something to say about is composed
+      // over the top, drag first so its behaviour is exactly what it was.
       {...dragHandlers}
+      onPointerDown={pointerDown}
     >
       {page}
       {overlay}

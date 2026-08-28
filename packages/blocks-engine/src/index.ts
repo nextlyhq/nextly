@@ -81,6 +81,7 @@ export type { DocumentSurvey, SurveyLimits } from "./measure-bytes";
 export {
   newId,
   makeNode,
+  expandSlotDefaults,
   walkNodes,
   findNode,
   locateNode,
@@ -91,7 +92,7 @@ export {
   duplicateNode,
   updateNode,
 } from "./tree";
-export type { NodeLocation, TreePosition } from "./tree";
+export type { NodeLocation, SlotDefaultSource, TreePosition } from "./tree";
 
 // The node selection every reader of a stored document shares. Public because
 // the page-builder plugin's class-usage record has to stop exactly where the
@@ -197,6 +198,7 @@ export {
   registerSupport,
   getBlock,
   isBlockName,
+  isUsableSlotName,
   hasBlock,
   allBlocks,
   getBlockSource,

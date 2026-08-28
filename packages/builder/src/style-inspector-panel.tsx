@@ -263,13 +263,15 @@ export interface StyleInspectorPanelProps {
    */
   onJumpToBreakpoint?: (breakpoint: BreakpointId) => void;
   /**
-   * The site's class library, when the host has read it.
+   * The site's class library, when the host has one to give.
    *
-   * `undefined` here means the read is still in flight, NOT that the question
-   * was never asked — {@link StyleInspectorPanelProps.onCreateClass} carries
-   * that. Two meanings on one value is how a host mid-load and a host with no
-   * class surface at all came to be drawn the same way, and only one of them
-   * should see a field that is about to fill.
+   * Two signals, not one. {@link StyleInspectorPanelProps.onCreateClass} says
+   * whether the host has a class surface at all; this says what it holds. So
+   * `undefined` here means the library is absent rather than unasked-for, and
+   * it covers BOTH a read in flight and a read that failed —
+   * {@link StyleInspectorPanelProps.classLibraryAbsence} says which. They need
+   * different words: one will finish and the other will not, and only the
+   * first has a field about to fill.
    */
   classLibrary?: readonly NamedClass[];
   /** Why the library is absent, when it is. Forwarded to the selector. */
@@ -423,6 +425,7 @@ function SelectedNodeClasses({
   if (onCreateClass === undefined) return null;
   return (
     <ClassSelector
+      nodeId={nodeId}
       /*
        * Keyed by NODE, for the reason the style sections are. The typed query
        * and the highlighted row are state about the node in hand; unkeyed,

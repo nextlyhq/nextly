@@ -195,6 +195,16 @@ export type {
 export { EditorCommandPalette } from "./editor-command-palette";
 export type { EditorCommandPaletteProps } from "./editor-command-palette";
 
+/**
+ * The right-click menu over the canvas.
+ *
+ * Beside the palette because the two are the same kind of thing: a surface the
+ * editor assembles from the verbs context so a host does not have to know the
+ * three separate facts that mounting one correctly requires.
+ */
+export { BlockContextMenu } from "./block-context-menu";
+export type { BlockContextMenuProps } from "./block-context-menu";
+
 export { BlockToolbar } from "./block-toolbar";
 export type { BlockToolbarProps } from "./block-toolbar";
 

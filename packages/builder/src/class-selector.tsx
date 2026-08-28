@@ -71,14 +71,37 @@ type SelectorFailure =
  * full would then be describing a state it is no longer in.
  */
 function liveFailure(
-  failure: { about: readonly string[]; issue: SelectorFailure } | null,
+  failure: {
+    about: string;
+    whenIds: readonly string[];
+    issue: SelectorFailure;
+  } | null,
+  nodeId: string,
   nodeClassIds: readonly string[]
 ): SelectorFailure | null {
-  if (failure === null || failure.about !== nodeClassIds) return null;
+  if (failure === null) return null;
+  // BOTH, because neither settles it alone. Identity catches the case content
+  // cannot see — two blocks with no classes present the same empty list, so a
+  // refusal raised against one would go on being shown against the other.
+  // Content catches the case identity cannot — the same block whose classes
+  // have since changed, where the refusal describes a state it has left.
+  if (failure.about !== nodeId) return null;
+  if (!sameClassIds(failure.whenIds, nodeClassIds)) return null;
   if (failure.issue.kind === "node-full" && nodeHasRoom(nodeClassIds)) {
     return null;
   }
   return failure.issue;
+}
+
+/**
+ * Whether two class lists are the same list, by CONTENT.
+ *
+ * A caller with no stored classes hands over a fresh `[]` on every render —
+ * `?? []` in the style inspector does exactly that — so comparing by reference
+ * would discard a failure on the next render, which is every render.
+ */
+function sameClassIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
 /** What the author is told, per cause. */
@@ -113,13 +136,28 @@ export type ClassCreation =
 
 export interface ClassSelectorProps {
   /**
-   * The site's class library, or `undefined` while the host has not read it.
+   * The site's class library, or `undefined` when there is none to show.
    *
    * A real third state rather than an empty library: a site that has stored
    * nothing legitimately has no classes, and drawing the two the same way would
    * invite an author to create a class into a library about to be replaced by
    * the one still loading.
+   *
+   * `undefined` covers two causes — a read in flight and a read that failed —
+   * and {@link ClassSelectorProps.libraryAbsence} says which. They need
+   * different words: one will finish and the other will not.
    */
+  /**
+   * Which block this is editing.
+   *
+   * Required, and used only to scope a failure to the element it is about.
+   * Comparing the class ids instead was a proxy for identity and it fails on
+   * the commonest case: two blocks with no classes both present an empty list,
+   * so a refusal raised against one goes on being shown against the other.
+   * Keyed mounting protects a caller that remembers to key; a prop cannot be
+   * forgotten.
+   */
+  nodeId: string;
   library: readonly NamedClass[] | undefined;
   /**
    * Why there is no library, when there is none.
@@ -164,6 +202,7 @@ export interface ClassSelectorProps {
 
 /** The classes on the selected node, with a field for adding another. */
 export function ClassSelector({
+  nodeId,
   library,
   libraryAbsence,
   nodeClassIds,
@@ -183,7 +222,8 @@ export function ClassSelector({
    * remembered.
    */
   const [failure, setFailure] = React.useState<{
-    readonly about: readonly string[];
+    readonly about: string;
+    readonly whenIds: readonly string[];
     readonly issue: SelectorFailure;
   } | null>(null);
   // In flight, so a second Enter cannot queue a duplicate class while the
@@ -201,6 +241,14 @@ export function ClassSelector({
    */
   const currentIds = React.useRef(nodeClassIds);
   currentIds.current = nodeClassIds;
+  /*
+   * What is typed RIGHT NOW, for the same reason. The field stays editable
+   * while a creation is in flight, so an author can begin the next class name
+   * before the first one lands — and clearing on success would take away what
+   * they had typed since.
+   */
+  const currentQuery = React.useRef(query);
+  currentQuery.current = query;
 
   if (library === undefined) {
     return (
@@ -223,7 +271,7 @@ export function ClassSelector({
    * node may have gained room since, through a removal, an undo, or the host
    * selecting a smaller element.
    */
-  const shown = liveFailure(failure, nodeClassIds);
+  const shown = liveFailure(failure, nodeId, nodeClassIds);
   // Clamped rather than reset on every keystroke, so narrowing the list keeps a
   // highlight instead of silently sending Enter back to the first row.
   const highlighted = Math.min(active, Math.max(options.length - 1, 0));
@@ -238,7 +286,11 @@ export function ClassSelector({
        * is checked directly rather than left for the host to rediscover.
        */
       if (!nodeHasRoom(nodeClassIds)) {
-        setFailure({ about: nodeClassIds, issue: { kind: "node-full" } });
+        setFailure({
+          about: nodeId,
+          whenIds: nodeClassIds,
+          issue: { kind: "node-full" },
+        });
         return;
       }
       /*
@@ -247,25 +299,52 @@ export function ClassSelector({
        * the typed name the moment the author pressed Enter, before anything
        * knew whether it had landed.
        */
+      const submitted = query;
       setSaving(true);
-      void onCreateClass(option.slug).then(created => {
-        setSaving(false);
-        if (!created.ok) {
+      void onCreateClass(option.slug)
+        .then(created => {
+          if (!created.ok) {
+            setFailure({
+              about: nodeId,
+              whenIds: nodeClassIds,
+              issue: { kind: "not-created", reason: created.reason },
+            });
+            return;
+          }
+          // Applied through the ordinary path, so a node already at its limit
+          // refuses here exactly as it would for an existing class rather than
+          // being special-cased into a second rule — and against the node as
+          // it is NOW, not as it was when the request left.
+          applyExisting(
+            created.classId,
+            currentIds.current,
+            currentQuery.current === submitted
+          );
+        })
+        /*
+         * A REJECTED request is a refusal too. The contract is to answer, but a
+         * thrown error or a rejected promise arrives here all the same — and
+         * without this the in-flight flag never clears, so `commit` returns
+         * early on every later keystroke and the surface is inert for as long
+         * as the editor stays open. Silent, and unrecoverable without a reload.
+         */
+        .catch(() => {
           setFailure({
-            about: nodeClassIds,
-            issue: { kind: "not-created", reason: created.reason },
+            about: nodeId,
+            whenIds: nodeClassIds,
+            issue: {
+              kind: "not-created",
+              reason: "This class could not be created.",
+            },
           });
-          return;
-        }
-        // Applied through the ordinary path, so a node already at its limit
-        // refuses here exactly as it would for an existing class rather than
-        // being special-cased into a second rule — and against the node as it
-        // is NOW, not as it was when the request left.
-        applyExisting(created.classId, currentIds.current);
-      });
+        })
+        // In `finally`, so neither path can leave the field guarded.
+        .finally(() => {
+          setSaving(false);
+        });
       return;
     }
-    applyExisting(option.choice.id, nodeClassIds);
+    applyExisting(option.choice.id, nodeClassIds, true);
   };
 
   /**
@@ -275,23 +354,43 @@ export function ClassSelector({
    * the id the host just minted, so the per-node bound and the store's refusal
    * are enforced in one place rather than once per caller.
    */
-  function applyExisting(classId: string, against: readonly string[]): void {
+  function applyExisting(
+    classId: string,
+    against: readonly string[],
+    clearQuery: boolean
+  ): void {
+    /*
+     * Every failure raised here is scoped to `against`, not to the ids this
+     * closure was created with. On the asynchronous path those differ — a chip
+     * removed while a creation was in flight — and scoping to the stale list
+     * makes `liveFailure` discard the alert the moment it is set, so a refused
+     * apply reports nothing at all.
+     */
     // Through the shared helper rather than an append written here. The bound
     // on how many classes a node may carry belongs to one place, and a second
     // append would keep working after that place learned to refuse.
     const outcome = withClassApplied(against, classId);
     if (!outcome.ok) {
-      setFailure({ about: against, issue: { kind: "node-full" } });
+      setFailure({
+        about: nodeId,
+        whenIds: against,
+        issue: { kind: "node-full" },
+      });
       return;
     }
     if (onNodeClassesChange(outcome.classIds) === "refused") {
       // The draft survives, deliberately. An author whose write was refused
       // has lost nothing they typed, and the next thing they do is likely to
       // be trying it again.
-      setFailure({ about: against, issue: { kind: "not-written" } });
+      setFailure({
+        about: nodeId,
+        whenIds: against,
+        issue: { kind: "not-written" },
+      });
       return;
     }
     setFailure(null);
+    if (!clearQuery) return;
     setQuery("");
     setActive(0);
   }
@@ -306,7 +405,11 @@ export function ClassSelector({
           );
           setFailure(
             landed === "refused"
-              ? { about: nodeClassIds, issue: { kind: "not-written" } }
+              ? {
+                  about: nodeId,
+                  whenIds: nodeClassIds,
+                  issue: { kind: "not-written" as const },
+                }
               : null
           );
         }}

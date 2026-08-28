@@ -38,6 +38,38 @@ describe("the accordion pair", () => {
     expect(accordionItem.parent).toEqual([ACCORDION_BLOCK]);
   });
 
+  describe("what a fresh accordion starts with", () => {
+    it("declares ONE section, by type rather than as a stored node", () => {
+      // The same rule the columns pair follows: this slot admits only
+      // `core/accordion-item`, and that block names this one as its only
+      // parent, so an empty accordion is a container whose single legal child
+      // can be placed nowhere else on the page.
+      //
+      // The declaration names a TYPE and carries no id, which is what lets two
+      // accordions on one page expand from it without colliding.
+      expect(accordion.slots?.children?.defaultBlock).toEqual([
+        { type: ACCORDION_ITEM_BLOCK },
+      ]);
+    });
+
+    it("starts with one where a row starts with two", () => {
+      // A row of one is a box and `core/box` exists, so one column would be a
+      // degenerate spelling of a block already available. An accordion of one
+      // is not a spelling of anything: a lone section cannot stand on a page,
+      // which the parent rule above states, so one section is a finished
+      // document rather than half of one.
+      expect(accordion.slots?.children?.defaultBlock).toHaveLength(1);
+      expect(accordionItem.parent).toEqual([ACCORDION_BLOCK]);
+    });
+
+    it("gives the SECTION no default of its own", () => {
+      // The child half is unrestricted — a section holds whatever a section
+      // holds — so nothing about it says what it should start with.
+      expect(accordionItem.slots?.children?.defaultBlock).toBeUndefined();
+      expect(accordionItem.slots?.children?.allow).toBeUndefined();
+    });
+  });
+
   it("is registered, parent before child", () => {
     // A resolver built by iterating `coreBlocks` should meet the group first,
     // which is the ordering the columns pair records and this one follows.

@@ -23,8 +23,10 @@
  * and not the accordion's. Three ways to supply it were considered and each
  * costs more than the behaviour is worth:
  *
- * - seeding a group id through `SlotSpec.template` — the templates are empty by
- *   a ratchet test, because literal ids collide across instances;
+ * - seeding a group id through the accordion's `SlotSpec.defaultBlock` — that
+ *   declares each starting child by TYPE and props, and the group's name would
+ *   have to be the PARENT's id, which no declaration written before the parent
+ *   exists can name;
  * - passing it through the slot context — `renderSlot(name, ctx)` REPLACES the
  *   subtree's context, and `PageContext` says in as many words that widening it
  *   is "a deliberate act rather than a side effect of a new block";
@@ -147,10 +149,11 @@ export const accordionItem = defineBlock<AccordionItemProps, PageContext>({
   // `accordion.tsx`; `block.ts` is explicit that neither implies the other.
   parent: [ACCORDION_BLOCK],
   slots: {
-    // Empty for the same reason every slot template in this library is: a
-    // literal template carries literal ids, and two sections expanded from one
-    // template collide on `duplicate-node-id`. Nothing reads templates yet.
-    children: { template: [] },
+    // No declared starting children. Unlike the accordion that holds it, this
+    // slot carries no allow-list: a section holds whatever a section holds, so
+    // there is no child type it exists to hold and no starting block righter
+    // than none.
+    children: {},
   },
   supports: ACCORDION_ITEM_SUPPORTS,
   render: renderAccordionItem,

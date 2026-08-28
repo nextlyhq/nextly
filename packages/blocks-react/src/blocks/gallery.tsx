@@ -123,10 +123,17 @@ export const gallery = defineBlock<ContainerProps, PageContext>({
   slots: {
     children: {
       allow: [GALLERY_ITEM_BLOCK],
-      // Empty, as everywhere in this library: a literal template carries
-      // literal ids, and two galleries expanded from one collide on
-      // `duplicate-node-id`. Nothing reads `SlotSpec.template` yet.
-      template: [],
+      // No `defaultBlock`, and the asymmetry noted above is why. A row and an
+      // accordion declare one because their allowed child names them back as
+      // its only parent, so the container is unusable until it holds one. A
+      // gallery's child is `core/image`, which deliberately declares no parent
+      // and is placeable anywhere — so nothing about a gallery makes an image
+      // hard to reach.
+      //
+      // A default would also have to guess a count that nothing here knows: a
+      // gallery holds as many images as the author has. And an image with no
+      // source is a placeholder awaiting an upload, so seeding two would put
+      // two things on the page that must be replaced rather than filled.
     },
   },
   baseStyles: GALLERY_BASE_STYLES,
