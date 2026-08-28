@@ -461,12 +461,11 @@ describe("a class whose id collides with the synthetic create row", () => {
 
   it("gives the two rows different REACT keys", () => {
     /*
-     * The only observable consequence, and it took a passing break to find it:
-     * duplicate keys leave both rows rendered, separately clickable and with
-     * distinct DOM ids, so every assertion about the markup holds either way.
-     * React itself is what notices, and the cost — one row's state reused for
-     * the other across a re-render — is exactly what is invisible in a single
-     * render.
+     * React's warning is the only observable consequence. Duplicate keys leave
+     * both rows rendered, separately clickable and with distinct DOM ids —
+     * those are derived from the index — so every assertion about the markup
+     * holds either way. The cost is one row's state being reused for the other
+     * across a re-render, which a single render cannot show.
      */
     const reported: unknown[] = [];
     const spy = vi
