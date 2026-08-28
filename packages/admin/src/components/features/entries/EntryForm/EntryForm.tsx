@@ -28,7 +28,6 @@ import { snapshotToFormValues } from "@admin/components/features/versions/snapsh
 import { VersionSnapshotForm } from "@admin/components/features/versions/VersionSnapshotForm";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { Alert, AlertDescription, Skeleton, toast } from "@admin/components/ui";
-import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -40,11 +39,10 @@ import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
+import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import {
   computeMainFields,
-  takeoverControllerNames,
   computeFieldsBeside,
-  takeoverTypesFromBranding,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
@@ -381,14 +379,11 @@ export function EntryForm({
   // active (its condition passes), show only that field + its condition controller;
   // otherwise the full body. Generic — driven by field-type metadata, not by any
   // specific plugin. (title/slug/status are separate system components, always kept.)
-  const branding = useBranding();
-  const takeoverTypes = takeoverTypesFromBranding(branding.plugins);
-  const controllerNames = takeoverControllerNames(allFields, takeoverTypes);
-  const watched = controllerNames.length ? form.watch(controllerNames) : [];
-  const values = Object.fromEntries(
-    controllerNames.map((n, i) => [n, watched[i]])
+  // Asked of the shared hook so the Single editor cannot answer it differently.
+  const { mainFields, controllerNames, takeoverTypes } = useTakeoverLayout(
+    allFields,
+    form
   );
-  const mainFields = computeMainFields(allFields, { takeoverTypes, values });
 
   /*
    * A renderer for the entry's OTHER fields, handed to whatever surface takes
@@ -548,20 +543,12 @@ export function EntryForm({
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
-  // The other half of recording: offer the work back when the editor opens.
+  // The other half of recording: offer the work back when the editor opens, and
+  // write it into this form when the author accepts.
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
+    form,
   });
-  const restoreRecovery = useCallback(() => {
-    if (!recovery.offer) return;
-    // `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
-    // values are not what the server holds, and treating them as the new
-    // baseline would let the reader navigate away believing they were stored.
-    form.reset(recovery.offer.snapshot as Record<string, unknown>, {
-      keepDefaultValues: true,
-    });
-    recovery.dismiss();
-  }, [recovery, form]);
 
   /*
    * Work a FIELD holds that the form's values do not contain. The page builder
@@ -907,7 +894,7 @@ export function EntryForm({
                             {recovery.offer ? (
                               <AutosaveRecoveryBanner
                                 savedAt={recovery.offer.savedAt}
-                                onRestore={restoreRecovery}
+                                onRestore={recovery.restore}
                                 onDismiss={recovery.dismiss}
                               />
                             ) : null}

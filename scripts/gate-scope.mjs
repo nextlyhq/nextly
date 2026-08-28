@@ -38,6 +38,8 @@ import { realpathSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { pnpmInvocation } from "./pnpm-invocation.mjs";
+
 /**
  * Every workspace this repository declares, as `{ name, dir }`.
  *
@@ -330,10 +332,25 @@ function unreadableSection(unreadable) {
  * with the runner the derived filters are handed to.
  */
 function pnpmWorkspaces(cwd) {
-  const out = execFileSync("pnpm", ["list", "-r", "--depth", "-1", "--json"], {
+  /*
+   * Through the shared invocation, because `pnpm` on Windows is a `.cmd`
+   * shim and `execFileSync` cannot spawn one without `shell: true` — it
+   * fails with ENOENT, which this script reports as an underivable scope
+   * and the hook turns into a refused push. The `git` call below needs no
+   * such care: it is a real executable.
+   */
+  const { command, args, shell } = pnpmInvocation([
+    "list",
+    "-r",
+    "--depth",
+    "-1",
+    "--json",
+  ]);
+  const out = execFileSync(command, args, {
     cwd,
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 32,
+    shell,
   });
   return JSON.parse(out);
 }

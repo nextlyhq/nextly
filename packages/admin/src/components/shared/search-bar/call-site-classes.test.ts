@@ -29,13 +29,22 @@
  * silence is a documented division of labour rather than a gap.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import { inertClassesFor } from "./inert-classes";
+
+/**
+ * A repo-relative path spelled with `/` on every platform.
+ *
+ * The comparisons below are written with forward slashes, and `relative`
+ * answers with the platform separator — so on Windows every one of them fails
+ * against a path that is otherwise correct.
+ */
+const toPosix = (p: string): string => p.split(sep).join("/");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const adminSrc = resolve(here, "../../..");
@@ -102,7 +111,7 @@ function resolveSpecifier(specifier: string, fromFile: string): string | null {
     return null;
   }
   // A directory and its `index` are the same module, and both spellings occur.
-  return relative(repo, absolute).replace(/\/index$/, "");
+  return toPosix(relative(repo, absolute)).replace(/\/index$/, "");
 }
 
 function fromExportingModule(
@@ -252,7 +261,9 @@ describe("SearchBar call sites", () => {
      * place a list renders the field, and the media picker, which renders it
      * with no list at all.
      */
-    const scanned = sources.map(path => path.replace(/^.*\/src\//, "src/"));
+    const scanned = sources.map(path =>
+      toPosix(path).replace(/^.*\/src\//, "src/")
+    );
     expect(scanned).toContain(
       "src/components/ui/table/list-view/ListToolbar.tsx"
     );

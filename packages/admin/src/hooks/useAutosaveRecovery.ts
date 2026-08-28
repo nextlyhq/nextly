@@ -11,13 +11,22 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import type { UseFormReturn } from "react-hook-form";
 
 import { versionApi, type VersionScope } from "@admin/services/versionApi";
 
 export interface UseAutosaveRecoveryOptions {
   /** The document to read a recovery point for, or `null` when there is none. */
   scope: VersionScope | null;
+  /**
+   * The form an accepted offer is written back into.
+   *
+   * Taken by the hook rather than left to each editor, because HOW a recovery
+   * point is applied is part of the same rule as whether to offer it — and the
+   * entry and Single editors must not be able to answer it differently.
+   */
+  form: UseFormReturn<Record<string, unknown>>;
 }
 
 export interface AutosaveRecoveryOffer {
@@ -50,14 +59,21 @@ export interface UseAutosaveRecoveryResult {
    * gone because they closed a banner.
    */
   dismiss: () => void;
+  /**
+   * Accept the offer: write the recovered values into the form and stop
+   * offering. A no-op when there is nothing on offer, so a caller may wire it
+   * to a control it renders before the read has come back.
+   */
+  restore: () => void;
 }
 
 /**
- * @param options - the document and when it was last saved
- * @returns the offer to present, and a way to stop presenting it
+ * @param options - the document to read for, and the form an offer restores into
+ * @returns the offer to present, and ways to accept it or stop presenting it
  */
 export function useAutosaveRecovery({
   scope,
+  form,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
   const [dismissed, setDismissed] = useState(false);
 
@@ -85,12 +101,6 @@ export function useAutosaveRecovery({
   // read, and that is a final answer rather than a pending one.
   const isResolved = scope === null || isError || !isPending;
 
-  if (dismissed || !data) return { offer: null, isResolved, dismiss };
-
-  const savedAt = new Date(data.updatedAt);
-  if (Number.isNaN(savedAt.getTime()))
-    return { offer: null, isResolved, dismiss };
-
   // No comparison against the document's own timestamp, deliberately.
   //
   // A real save now DELETES this author's recovery point, so a row existing at
@@ -101,6 +111,29 @@ export function useAutosaveRecovery({
   // different tables and do not share a clock: one records UTC and the other
   // local time carrying a `Z`, so the comparison was wrong by the server's
   // offset and silently withheld every offer on a Single.
+  //
+  // Computed rather than returned from an early exit so the accept action below
+  // can close over it: hooks run unconditionally, and a `useCallback` cannot sit
+  // after a `return`.
+  const offer = useMemo<AutosaveRecoveryOffer | null>(() => {
+    if (dismissed || !data) return null;
+    const savedAt = new Date(data.updatedAt);
+    if (Number.isNaN(savedAt.getTime())) return null;
+    return { savedAt, snapshot: data.snapshot };
+  }, [dismissed, data]);
 
-  return { offer: { savedAt, snapshot: data.snapshot }, isResolved, dismiss };
+  const restore = useCallback(() => {
+    if (!offer) return;
+    /*
+     * `reset` with `keepDefaultValues` so the form goes DIRTY: the recovered
+     * values are not what the server holds, and treating them as the new
+     * baseline would let the reader navigate away believing they were stored.
+     */
+    form.reset(offer.snapshot as Record<string, unknown>, {
+      keepDefaultValues: true,
+    });
+    dismiss();
+  }, [offer, form, dismiss]);
+
+  return { offer, isResolved, dismiss, restore };
 }
