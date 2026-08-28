@@ -241,32 +241,45 @@ export function useSingle(
  * ```
  */
 /**
- * Forget which document each slug named.
+ * Forget everything a slug meant, because it now means something else.
  *
  * Creating or deleting a Single does not change a document, but it changes
- * WHICH document a slug names — and `singleKeys` and `singleDocumentKeys` are
- * separate trees, so clearing the first cannot reach the second. A slug reused
- * by a recreated Single otherwise goes on serving its predecessor's document,
- * id and all. That id is a cache scope elsewhere: the version history and its
+ * WHICH document — and which schema — a slug names. A slug reused by a
+ * recreated Single otherwise goes on serving its predecessor's, id and fields
+ * and all. That id is a cache scope elsewhere: the version history and its
  * diffs are keyed on it, so a comparison mounted meanwhile belongs to an
- * incarnation that no longer exists.
+ * incarnation that no longer exists, and the builder reading a stale schema can
+ * apply the old fields to the new Single with one save.
  *
- * The document cache is REMOVED, not invalidated. Invalidation marks a query
- * stale and KEEPS its data, so the next mount synchronously hands out the
- * predecessor's document while the refetch runs — and a refetch that fails
- * leaves it on screen indefinitely. Removal has no such window.
+ * Slug-scoped entries are RESET rather than invalidated or removed, and the
+ * three differ in ways that matter here. Invalidation marks a query stale and
+ * KEEPS its data, so the next read is handed the predecessor while a refetch
+ * runs — and a refetch that fails leaves it indefinitely. Removal drops the
+ * data but does not notify an observer already mounted against that key, which
+ * goes on presenting the result it last saw. Reset does both: the data goes and
+ * anything watching is told to fetch again.
  *
- * The schema tree is invalidated rather than removed, because showing a
- * slightly stale LIST while it refetches costs a reader nothing; it is the
- * identity that must not survive.
+ * The LIST is only invalidated. It carries no identity, and a briefly stale
+ * list refetches behind the reader at no cost.
  *
- * One helper for all three mutations: three copies of an invariant is three
- * places a later correction has to reach, and the one that gets missed
- * restores exactly the stale document this exists to prevent.
+ * Nothing at all happens for an empty slug list, which is what a wholly failed
+ * bulk delete produces: those Singles still exist, and discarding their caches
+ * would lose valid content during the failure that already inconvenienced the
+ * reader.
  */
-function clearSingleIdentityCaches(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-  queryClient.removeQueries({ queryKey: singleDocumentKeys.all() });
+function clearSingleIdentityCaches(
+  queryClient: QueryClient,
+  slugs: readonly string[]
+): void {
+  if (slugs.length === 0) return;
+  void queryClient.invalidateQueries({ queryKey: singleKeys.lists() });
+  for (const slug of slugs) {
+    void queryClient.resetQueries({ queryKey: singleKeys.detail(slug) });
+    void queryClient.resetQueries({ queryKey: singleKeys.schema(slug) });
+    void queryClient.resetQueries({
+      queryKey: singleDocumentKeys.detail(slug),
+    });
+  }
 }
 
 export function useCreateSingle() {
@@ -280,8 +293,12 @@ export function useCreateSingle() {
     mutationFn: async (singleData: UpdateSinglePayload) => {
       return await singleApi.create(singleData);
     },
-    onSuccess: () => {
-      clearSingleIdentityCaches(queryClient);
+    onSuccess: (created, submitted) => {
+      // The slug the server assigned where it reports one, and the submitted
+      // slug otherwise: a create that adjusted the slug must clear the name it
+      // actually took, not the one that was asked for.
+      const slug = created?.data?.slug ?? submitted.slug;
+      clearSingleIdentityCaches(queryClient, slug ? [slug] : []);
     },
   });
 }
@@ -372,8 +389,8 @@ export function useDeleteSingle() {
       }
       return result;
     },
-    onSuccess: () => {
-      clearSingleIdentityCaches(queryClient);
+    onSuccess: (_, slug) => {
+      clearSingleIdentityCaches(queryClient, [slug]);
     },
     // Disable retry for delete operations - if deletion succeeds on first attempt,
     // a retry would fail with 404 (already deleted) and incorrectly show an error
@@ -411,8 +428,11 @@ export function useBulkDeleteSingles() {
       await singleApi.deleteSingle(slug);
     },
     defaultOptions: {
-      onComplete: () => {
-        clearSingleIdentityCaches(queryClient);
+      // `onComplete` runs after every item settles, including when all of them
+      // failed. Clearing then would discard caches for Singles that still
+      // exist, during the very failure that already cost the reader something.
+      onComplete: result => {
+        clearSingleIdentityCaches(queryClient, result.succeededIds);
       },
     },
   });

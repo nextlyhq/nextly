@@ -21,15 +21,21 @@ import { renderHook, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { createMock, deleteMock } = vi.hoisted(() => ({
-  createMock: vi.fn(),
-  deleteMock: vi.fn(),
-}));
+const { createMock, deleteMock, getDocumentMock, getSchemaMock } = vi.hoisted(
+  () => ({
+    createMock: vi.fn(),
+    deleteMock: vi.fn(),
+    getDocumentMock: vi.fn(),
+    getSchemaMock: vi.fn(),
+  })
+);
 
 vi.mock("@admin/services/singleApi", () => ({
   singleApi: {
     create: (...a: unknown[]) => createMock(...a),
     deleteSingle: (...a: unknown[]) => deleteMock(...a),
+    getDocument: (...a: unknown[]) => getDocumentMock(...a),
+    getSchema: (...a: unknown[]) => getSchemaMock(...a),
   },
 }));
 
@@ -49,28 +55,58 @@ import {
   useBulkDeleteSingles,
   useCreateSingle,
   useDeleteSingle,
+  useSingleDocument,
 } from "../useSingles";
 
 /** The document a slug pointed at before the Single was replaced. */
 const PREDECESSOR = { id: "old-incarnation", title: "Homepage" };
+/** The fields the builder would apply on a save if it read them. */
+const PREDECESSOR_SCHEMA = { slug: "homepage", fields: [{ name: "oldField" }] };
 
 function harness() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      // The provider's stale window, which is the condition this whole module
+      // is about: without it a seeded entry refetches on mount and no reader
+      // ever holds the predecessor long enough for the defect to appear.
+      queries: { retry: false, staleTime: 5 * 60 * 1000 },
+      mutations: { retry: false },
+    },
   });
   // The cache as it is when an editor has already read the Single: this is the
   // payload that must not survive the slug being reused.
-  client.setQueryData(singleDocumentKeys.detail("homepage"), PREDECESSOR);
+  client.setQueryData(documentKey("homepage"), PREDECESSOR);
   client.setQueryData(singleKeys.detail("homepage"), { slug: "homepage" });
+  client.setQueryData(singleKeys.schema("homepage"), PREDECESSOR_SCHEMA);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
   return { client, wrapper };
 }
 
+/**
+ * The key `useSingleDocument` actually reads.
+ *
+ * `singleDocumentKeys.detail(slug)` is only its PREFIX — the hook appends the
+ * locale, fallback, translation-status and draft options, because each changes
+ * what the document contains. Seeding or reading the bare prefix would address
+ * an entry no consumer ever looks at, so a test written against it would pass
+ * whatever production did. The clearing helper matches by prefix, which is why
+ * it reaches this key while the assertion has to name it in full.
+ */
+const documentKey = (slug: string) => [
+  ...singleDocumentKeys.detail(slug),
+  {
+    locale: null,
+    fallbackLocale: null,
+    translationStatus: false,
+    draft: false,
+  },
+];
+
 /** What a consumer mounting now would be handed, synchronously. */
 const documentInCache = (client: QueryClient) =>
-  client.getQueryData(singleDocumentKeys.detail("homepage"));
+  client.getQueryData(documentKey("homepage"));
 
 describe("a Single's identity leaves the document cache", () => {
   beforeEach(() => {
@@ -120,23 +156,69 @@ describe("a Single's identity leaves the document cache", () => {
   });
 
   /**
-   * The schema tree is INVALIDATED rather than removed, and that difference is
-   * deliberate: a slightly stale list costs a reader nothing while it
-   * refetches, and it is the identity that must not survive. Asserting it here
-   * keeps the two from being collapsed into one behaviour later.
+   * The SCHEMA goes too, and it is not a lesser case than the document. The
+   * builder reads `useSingleSchema(slug)`; handed the predecessor's fields it
+   * can apply them to the new Single with one save. `singleKeys.all()` is the
+   * prefix of this key, so clearing the tree as a whole marked it stale and
+   * kept the fields available — which is the shape of the original defect.
    */
-  it("keeps the schema entry, marking it stale rather than evicting it", async () => {
+  it("clears the slug's schema and detail, not only its document", async () => {
     const { client, wrapper } = harness();
+    expect(client.getQueryData(singleKeys.schema("homepage"))).toEqual(
+      PREDECESSOR_SCHEMA
+    );
+
     const { result } = renderHook(() => useDeleteSingle(), { wrapper });
     result.current.mutate("homepage");
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(client.getQueryData(singleKeys.detail("homepage"))).toEqual({
-      slug: "homepage",
+    expect(client.getQueryData(singleKeys.schema("homepage"))).toBeUndefined();
+    expect(client.getQueryData(singleKeys.detail("homepage"))).toBeUndefined();
+  });
+
+  /**
+   * A consumer already MOUNTED against the document, which is the case a cache
+   * lookup cannot see. Removal drops the data without telling an existing
+   * observer, so the page goes on presenting the result it last saw — the old
+   * id, and the history keyed on it — until something else makes it render.
+   */
+  it("tells a mounted reader to stop showing the old document", async () => {
+    const { client, wrapper } = harness();
+    getDocumentMock.mockResolvedValue({ id: "new-incarnation" });
+
+    const reader = renderHook(() => useSingleDocument("homepage"), { wrapper });
+    // The premise: the mounted reader really is showing the predecessor.
+    await waitFor(() =>
+      expect(reader.result.current.data).toEqual(PREDECESSOR)
+    );
+
+    const { result } = renderHook(() => useDeleteSingle(), { wrapper });
+    result.current.mutate("homepage");
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    await waitFor(() =>
+      expect(reader.result.current.data).not.toEqual(PREDECESSOR)
+    );
+  });
+
+  /**
+   * A bulk delete in which nothing succeeded must leave every cache alone:
+   * those Singles still exist, and discarding their content during the failure
+   * that already cost the reader something makes it worse.
+   */
+  it("leaves the caches alone when every deletion failed", async () => {
+    const { client, wrapper } = harness();
+    deleteMock.mockRejectedValue(new Error("offline"));
+
+    const { result } = renderHook(() => useBulkDeleteSingles(), { wrapper });
+    await act(async () => {
+      await result.current.mutate(["homepage"], undefined);
     });
-    expect(
-      client.getQueryState(singleKeys.detail("homepage"))?.isInvalidated
-    ).toBe(true);
+
+    expect(documentInCache(client)).toEqual(PREDECESSOR);
+    expect(client.getQueryData(singleKeys.schema("homepage"))).toEqual(
+      PREDECESSOR_SCHEMA
+    );
   });
 
   /**
