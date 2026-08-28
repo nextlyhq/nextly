@@ -171,7 +171,7 @@ describe("companionWriteVia", () => {
       "fr",
       { title: "Bonjour" },
       undefined,
-      { stampUpdatedAt: false }
+      { updatedAt: "omit" }
     );
 
     // Naming a column the table does not have fails the whole statement, so the

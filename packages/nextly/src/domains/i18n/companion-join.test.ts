@@ -139,8 +139,24 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     };
   }
 
+  /**
+   * A raw-SQL surface returning the same rows.
+   *
+   * `_updated_at` is read through its own explicitly-projected query rather than off the
+   * companion's Drizzle table, because the column is deliberately NOT declared there: a companion
+   * that predates it would otherwise break the ORDINARY localized read, whose bare `select()`
+   * would name a column those tables do not have.
+   */
+  function stampReaderFor(rows: Record<string, unknown>[]) {
+    return {
+      dialect: "sqlite",
+      executeQuery: <T>(): Promise<T[]> => Promise.resolve(rows as T[]),
+    };
+  }
+
   async function metaFor(
-    rows: Record<string, unknown>[]
+    rows: Record<string, unknown>[],
+    options: { canReadStamps?: boolean } = {}
   ): Promise<
     Record<string, { translated: boolean; status?: string; stale?: boolean }>
   > {
@@ -154,6 +170,14 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
       defaultLocale: SOURCE,
       hasStatus: true,
       readiness: "ready",
+      ...(options.canReadStamps === false
+        ? {}
+        : {
+            staleness: {
+              reader: stampReaderFor(rows),
+              companionTableName: "dc_posts_locales",
+            },
+          }),
     });
     return row._translations as never;
   }
@@ -212,6 +236,88 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     // put one document under two contradictory calls to action.
     expect(meta[TARGET].translated).toBe(false);
     expect(meta[TARGET].stale).toBeUndefined();
+  });
+
+  it("reports UNKNOWN when the caller cannot read the stamps at all", async () => {
+    const meta = await metaFor(
+      [
+        companionRow(SOURCE, "Hello again", new Date(2000)),
+        companionRow(TARGET, "Bonjour", new Date(1000)),
+      ],
+      { canReadStamps: false }
+    );
+
+    // 🔴 The same rows DO report stale when a reader is supplied (the first test in this block),
+    // so this absence is the missing reader and not the fixture. A caller that cannot ask must
+    // report nothing known -- never that the translation is current.
+    expect(meta[TARGET].stale).toBeUndefined();
+    // And the language is still reported as translated and published, so an unreadable stamp
+    // costs one qualifier rather than the whole overview.
+    expect(meta[TARGET].translated).toBe(true);
+    expect(meta[TARGET].status).toBe("published");
+  });
+
+  it("reports UNKNOWN, not an error, when the companion has no `_updated_at` column", async () => {
+    // 🔴 This is the upgrade path, and it is why the column is not declared on the companion's
+    // Drizzle table. A Schema Builder collection held in the registry has no reconcile that adds
+    // the column -- `reconcileCompanionColumns` runs only over `nextly.config` entities -- so its
+    // companion predates it indefinitely. Naming the column has to be survivable there, or every
+    // localized read on those collections fails after an upgrade.
+    const rows = [
+      companionRow(SOURCE, "Hello again", new Date(2000)),
+      companionRow(TARGET, "Bonjour", new Date(1000)),
+    ];
+    const row: Record<string, unknown> = { id: "doc1" };
+    await expect(
+      populateTranslationStatus({
+        db: dbReturning(rows),
+        companionTable: { _parent: "p", _locale: "l" },
+        localizedFields: [{ name: "title", column: "title" }],
+        rows: [row],
+        locales: [SOURCE, TARGET],
+        defaultLocale: SOURCE,
+        hasStatus: true,
+        readiness: "ready",
+        staleness: {
+          reader: {
+            dialect: "sqlite",
+            executeQuery: () =>
+              Promise.reject(
+                new Error("SqliteError: no such column: _updated_at")
+              ),
+          },
+          companionTableName: "dc_posts_locales",
+        },
+      })
+    ).resolves.toBeUndefined();
+
+    const meta = row._translations as Record<string, { stale?: boolean }>;
+    expect(meta[TARGET].stale).toBeUndefined();
+  });
+
+  it("still surfaces a read failure that is NOT a missing column", async () => {
+    // The control that stops the clause above from swallowing everything. A permission fault or a
+    // dropped connection must not be reported as "this site has no staleness information".
+    await expect(
+      populateTranslationStatus({
+        db: dbReturning([companionRow(TARGET, "Bonjour", new Date(1000))]),
+        companionTable: { _parent: "p", _locale: "l" },
+        localizedFields: [{ name: "title", column: "title" }],
+        rows: [{ id: "doc1" } as Record<string, unknown>],
+        locales: [SOURCE, TARGET],
+        defaultLocale: SOURCE,
+        hasStatus: true,
+        readiness: "ready",
+        staleness: {
+          reader: {
+            dialect: "sqlite",
+            executeQuery: () =>
+              Promise.reject(new Error("permission denied for relation")),
+          },
+          companionTableName: "dc_posts_locales",
+        },
+      })
+    ).rejects.toThrow("permission denied");
   });
 
   it("never flags the source language against itself", async () => {

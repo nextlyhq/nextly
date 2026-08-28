@@ -66,6 +66,17 @@ interface SelectableDb {
   };
 }
 
+/**
+ * The raw-SQL surface the stamp reader needs, which the Drizzle table cannot provide.
+ *
+ * Narrower than the full adapter on purpose: this reads one column that a given database may not
+ * have, so it is the one place allowed to name it, and nothing else about the adapter is in scope.
+ */
+interface CompanionStampReader {
+  dialect: string;
+  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
+}
+
 /** A Drizzle table object exposing its columns as properties (`_parent`, `_locale`, fields). */
 type CompanionTable = Record<string, unknown>;
 
@@ -706,6 +717,17 @@ export interface TranslationStatusArgs {
   defaultLocale: string;
   /** Whether the companion carries a per-locale `_status` column (i18n M6). */
   hasStatus: boolean;
+  /**
+   * What is needed to read `_updated_at` (i18n B2): a raw-SQL surface and the physical companion
+   * name. The column is deliberately not declared on the companion's Drizzle table — see
+   * {@link readCompanionStamps} — so it cannot be read through `companionTable`.
+   *
+   * ONE optional object rather than two optional fields, because neither is usable without the
+   * other and a caller that supplied only one would silently report every locale as UNKNOWN.
+   * Omitting it entirely is legitimate and means exactly that: this caller cannot ask, so nothing
+   * is known — never that everything is current.
+   */
+  staleness?: { reader: CompanionStampReader; companionTableName: string };
   idKey?: string;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
@@ -766,6 +788,100 @@ function markPendingChanges(
  * `{ en: { translated: true, status: "published" }, de: { translated: false } }`
  */
 /**
+ * Per-locale `_updated_at` for a page of documents, or nothing when the companion cannot answer.
+ *
+ * 🔴 Read HERE rather than through the companion's Drizzle table, and that is an upgrade-path
+ * decision. The runtime table is registered for every localized entity, including Schema Builder
+ * collections held in the registry — and `reconcileCompanionColumns`, the only thing that adds
+ * this column to a companion that predates it, runs solely over entities declared in
+ * `nextly.config`. Declaring the column on the runtime table would therefore make the ordinary
+ * localized read's bare `select()` name a column those tables do not have, and every localized
+ * read on them would fail after an upgrade. A staleness badge is not worth that.
+ *
+ * So the column is named in ONE place that is allowed to fail, and a companion that has not been
+ * reconciled yields no stamps at all — which the caller reports as UNKNOWN, never as up to date.
+ * That is the answer the whole feature already gives for a NULL.
+ *
+ * The catch is narrow on purpose: it swallows the case where the column is absent and rethrows
+ * anything else, so a permission fault or a dropped connection still surfaces instead of being
+ * reported as "this site has no staleness information".
+ */
+async function readCompanionStamps(
+  adapter: CompanionStampReader,
+  companionTableName: string,
+  ids: (string | number)[],
+  locales: string[]
+): Promise<Map<string, Date>> {
+  const out = new Map<string, Date>();
+  if (ids.length === 0 || locales.length === 0) return out;
+
+  const isMysql = adapter.dialect === "mysql";
+  const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
+  const params: unknown[] = [...ids, ...locales];
+  let n = 0;
+  const ph = () => (adapter.dialect === "postgresql" ? `$${++n}` : "?");
+  const idHoles = ids.map(() => ph()).join(", ");
+  const localeHoles = locales.map(() => ph()).join(", ");
+
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await adapter.executeQuery<Record<string, unknown>>(
+      `SELECT ${q("_parent")}, ${q("_locale")}, ${q(COMPANION_UPDATED_AT_COLUMN)} ` +
+        `FROM ${q(companionTableName)} ` +
+        `WHERE ${q("_parent")} IN (${idHoles}) AND ${q("_locale")} IN (${localeHoles})`,
+      params
+    );
+  } catch (error) {
+    if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return out;
+    throw error;
+  }
+
+  for (const row of rows) {
+    const at = toStampDate(row[COMPANION_UPDATED_AT_COLUMN]);
+    if (at !== null) {
+      out.set(`${String(row._parent)}::${String(row._locale)}`, at);
+    }
+  }
+  return out;
+}
+
+/**
+ * One raw `_updated_at` value as a `Date`, or `null` when it cannot be one.
+ *
+ * The drivers do not agree on what comes back, and this read bypasses Drizzle's column mapping by
+ * design, so the coercion is explicit here rather than assumed. `node-postgres` and `mysql2`
+ * return a `Date`; better-sqlite3 returns the raw INTEGER, which the column stores as epoch
+ * SECONDS — the same unit `sanitizeSqliteValue` writes.
+ *
+ * Anything else, including a NULL for a row the back-fill could not seed, answers `null` and the
+ * caller reports UNKNOWN. Guessing at an unrecognised shape is what would turn a driver change
+ * into wrong staleness answers rather than absent ones.
+ */
+function toStampDate(raw: unknown): Date | null {
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
+  if (typeof raw === "number") {
+    const at = new Date(raw * 1000);
+    return Number.isNaN(at.getTime()) ? null : at;
+  }
+  return null;
+}
+
+/**
+ * Does this driver error say the companion has no `_updated_at` column?
+ *
+ * Matched on the COLUMN NAME appearing in a message that also reads as a missing-column error,
+ * because the three dialects word it differently and none of them exposes a portable code for it
+ * that this layer can see: SQLite says `no such column`, PostgreSQL `column ... does not exist`,
+ * MySQL `Unknown column`. Requiring the column name as well as the shape keeps this from
+ * swallowing an unrelated missing column and reporting the site as having no staleness data.
+ */
+function isMissingColumnError(error: unknown, column: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message.includes(column)) return false;
+  return /no such column|does not exist|unknown column/i.test(message);
+}
+
+/**
  * Was the SOURCE row written after the TARGET row was? (i18n B2.)
  *
  * The JS twin of the `stale` SQL arm, and deliberately the same rule: content is checked by the
@@ -779,12 +895,10 @@ function markPendingChanges(
  * comparison here reports a translation nobody touched as needing review.
  */
 function isStaleAgainstSource(
-  target: Record<string, unknown> | undefined,
-  source: Record<string, unknown> | undefined
+  targetAt: Date | undefined,
+  sourceAt: Date | undefined
 ): boolean {
-  const targetAt = target?.[COMPANION_UPDATED_AT_COLUMN];
-  const sourceAt = source?.[COMPANION_UPDATED_AT_COLUMN];
-  if (!(targetAt instanceof Date) || !(sourceAt instanceof Date)) return false;
+  if (targetAt === undefined || sourceAt === undefined) return false;
   // Strict, matching the SQL. Equal stamps are a translation saved alongside its source — and on
   // SQLite they are also two writes inside one second, since the column stores whole seconds.
   return sourceAt.getTime() > targetAt.getTime();
@@ -833,6 +947,17 @@ export async function populateTranslationStatus(
     perLocale[String(cr._locale)] = cr;
   }
 
+  // One extra query for the whole page rather than one per row, and skipped entirely when the
+  // caller supplies no reader.
+  const stamps = args.staleness
+    ? await readCompanionStamps(
+        args.staleness.reader,
+        args.staleness.companionTableName,
+        ids,
+        locales
+      )
+    : new Map<string, Date>();
+
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
     const meta: Record<string, LocaleTranslationMeta> = {};
@@ -844,6 +969,8 @@ export async function populateTranslationStatus(
         defaultLocale,
         hasStatus,
         statusValue: args.statusValue,
+        stampFor: (locale: string) =>
+          stamps.get(`${String(row[idKey])}::${locale}`),
       });
     }
     markPendingChanges(
@@ -887,6 +1014,8 @@ function buildLocaleMeta(args: {
   defaultLocale: string;
   hasStatus: boolean;
   statusValue: string | undefined;
+  /** When this locale was last written, or `undefined` when nothing is known. */
+  stampFor: (locale: string) => Date | undefined;
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
@@ -915,7 +1044,7 @@ function buildLocaleMeta(args: {
   if (
     code !== defaultLocale &&
     hasContent &&
-    isStaleAgainstSource(companionRow, perLocaleRows[defaultLocale])
+    isStaleAgainstSource(args.stampFor(code), args.stampFor(defaultLocale))
   ) {
     entry.stale = true;
   }

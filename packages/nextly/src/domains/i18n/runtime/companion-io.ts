@@ -177,6 +177,21 @@ interface CompanionWriteAdapter {
  * `companionData` is empty. Optionally stamps a per-locale `_status` (entities with Draft/Published).
  */
 /**
+ * How a companion write treats `_updated_at` (i18n B2).
+ *
+ * - `"stamp"` (default) — write the current time when the write carries translated content.
+ * - `"omit"` — leave the column out of the statement entirely, for a companion that physically
+ *   predates it. On an existing row this PRESERVES whatever stamp is there.
+ * - `"clear"` — write NULL, for an archive replay, where the content being written is older than
+ *   whatever the row currently holds and its true chronology is unknown.
+ *
+ * `"omit"` and `"clear"` are distinct because the conflict clause updates only the columns named:
+ * omitting leaves an existing stamp standing, which is exactly wrong when the content beside it
+ * is being replaced with something older.
+ */
+export type CompanionStampMode = "stamp" | "omit" | "clear";
+
+/**
  * The `_updated_at` a companion write should carry, or nothing at all (i18n B2).
  *
  * Exported because TWO write paths reach the companion and both must answer this the same way.
@@ -220,7 +235,7 @@ export async function upsertCompanionRow(
   locale: string,
   companionData: Record<string, unknown>,
   status?: string,
-  options: { now?: Date; stampUpdatedAt?: boolean } = {}
+  options: { now?: Date; updatedAt?: CompanionStampMode } = {}
 ): Promise<void> {
   const withStatus =
     status !== undefined
@@ -245,10 +260,18 @@ export async function upsertCompanionRow(
   // never reported stale — the warning simply never fires for it, and nobody notices a warning
   // that does not appear.
   //
-  // `stampUpdatedAt: false` has two callers and they want the same thing for different reasons: a
-  // companion that physically predates the column, where naming it would fail the statement
-  // outright; and an archive REPLAY, where stamping would date an old translation to the moment
-  // it was restored. Both prefer UNKNOWN to a value that is not true.
+  // The two non-default modes look alike and are NOT interchangeable, which is why they are named
+  // rather than expressed as one boolean.
+  //
+  // `"omit"` leaves the column out of the statement, for a companion that physically predates it
+  // where naming it would fail outright. On an existing row that PRESERVES whatever stamp is
+  // there.
+  //
+  // `"clear"` writes NULL, for an archive replay. Preserving would be wrong there: this upsert
+  // replaces a row's content with OLDER archived text, so a locale translated after localization
+  // was re-enabled but before `i18n:restore` ran would keep its recent stamp on restored content
+  // and read as current. Omitting the column looks like the same thing and is not, because the
+  // conflict clause updates only the columns named — the untouched stamp survives.
   //
   // 🔴 CONTENT decides the stamp, not the write. `_updated_at` answers "when was this language
   // last WRITTEN", and a lifecycle transition writes no language. Publishing the source locale is
@@ -266,9 +289,14 @@ export async function upsertCompanionRow(
   // raw UPDATE that never reaches this function, so a publish through that path could not stamp
   // anyway. Two lifecycle transitions now behave the same way whichever endpoint performs them.
   const withStamp =
-    options.stampUpdatedAt === false
+    options.updatedAt === "omit"
       ? withStatus
-      : { ...withStatus, ...companionContentStamp(companionData, options.now) };
+      : options.updatedAt === "clear"
+        ? { ...withStatus, [COMPANION_UPDATED_AT_COLUMN]: null }
+        : {
+            ...withStatus,
+            ...companionContentStamp(companionData, options.now),
+          };
   const cols = Object.keys(withStamp);
 
   const isMysql = adapter.dialect === "mysql";

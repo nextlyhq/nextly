@@ -328,13 +328,56 @@ describe("companion `_updated_at`", () => {
       "fr",
       { title: "Bonjour" },
       undefined,
-      { stampUpdatedAt: false }
+      { updatedAt: "clear" }
     );
 
     // 🔴 NULL, not the replay time. Stamping would fabricate a chronology in the dangerous
     // direction: source content edited after re-enabling but before the replay would look OLDER
     // than the archived translation, so a genuinely stale target would be reported current.
     expect(await readStamp(adapter, "p1", "fr")).toBeNull();
+  });
+
+  it("CLEARS an existing stamp on replay, rather than leaving it standing", async () => {
+    await createCompanion();
+    const translated = new Date("2026-08-28T12:00:00.000Z");
+
+    // Someone translates this locale after localization is re-enabled...
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { title: "Bonjour (new)" },
+      undefined,
+      { now: translated }
+    );
+    expect(await readStamp(adapter, "p1", "fr")).toBe(
+      Math.floor(translated.getTime() / 1000)
+    );
+
+    // ...and `i18n:restore` then replays the OLDER archived text over it.
+    await upsertCompanionRow(
+      adapter,
+      COMPANION,
+      "p1",
+      "fr",
+      { title: "Bonjour (archived)" },
+      undefined,
+      { updatedAt: "clear" }
+    );
+
+    // 🔴 "omit" and "clear" look interchangeable and are not. The conflict clause updates only the
+    // columns NAMED, so omitting would leave the recent stamp standing over content that has just
+    // been replaced with something older -- and the restored translation would read as current.
+    // Writing NULL says what is true: this row's chronology is unknown.
+    expect(await readStamp(adapter, "p1", "fr")).toBeNull();
+    const rows = await adapter.executeQuery<{ title: string }>(
+      `SELECT "title" FROM "${COMPANION}" WHERE "_parent" = ? AND "_locale" = ?`,
+      ["p1", "fr"]
+    );
+    // The content really was replaced, so the NULL above is the replay's doing and not a write
+    // that silently did nothing.
+    expect(rows[0]?.title).toBe("Bonjour (archived)");
   });
 
   it("leaves the column NULL for a row written before it existed", async () => {
@@ -349,7 +392,7 @@ describe("companion `_updated_at`", () => {
       "es",
       { title: "Hola" },
       undefined,
-      { stampUpdatedAt: false }
+      { updatedAt: "omit" }
     );
 
     // 🔴 NULL, never a default. This is the assertion the whole design turns on: a seeded
