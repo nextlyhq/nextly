@@ -305,3 +305,123 @@ describe("VersionComparePage — a failed history is not an empty one", () => {
     expect(screen.getByText("No versions yet")).toBeInTheDocument();
   });
 });
+
+describe("VersionComparePage — choosing a row", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canMock.mockReturnValue(true);
+    useVersionsMock.mockReturnValue(listing([row(9), row(8)]));
+  });
+
+  /**
+   * `navigateTo` skips a push only when its argument equals
+   * `window.location.pathname`, and a target carrying `?from=&to=` never does.
+   * So choosing the row already on screen pushed another identical entry, and
+   * Back then walked through indistinguishable copies of one comparison
+   * before leaving the page — which reads as a stuck Back button.
+   */
+  it("does not push a second entry for the comparison already shown", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/collections/posts/e1/versions?from=8&to=9"
+    );
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={8}
+        to={9}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Version 9/ }));
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The control, and it has to be capable of the other answer: a row naming a
+   * DIFFERENT pair still navigates. Without it the assertion above would pass
+   * on a page whose rows no longer do anything at all.
+   */
+  it("still navigates when a different pair is chosen", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/collections/posts/e1/versions?from=8&to=9"
+    );
+    useVersionsMock.mockReturnValue(listing([row(9), row(8), row(7)]));
+
+    const user = (await import("@testing-library/user-event")).default.setup();
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        from={8}
+        to={9}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: /Version 8/ }));
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("VersionComparePage — a failed next page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    canMock.mockReturnValue(true);
+  });
+
+  /**
+   * An infinite query flips to `isError` when a LATER page fails, while
+   * keeping the pages it already has. Passing that aggregate state to the rail
+   * discarded every row the reader already had — and the Load more control
+   * that would have retried it — for a failure that lost nothing.
+   */
+  it("keeps the rows it already has when another page fails to load", () => {
+    useVersionsMock.mockReturnValue(
+      listing([row(9), row(8)], { isError: true, hasNextPage: true })
+    );
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /Version 9/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 8/ })
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The control. A failure with NOTHING loaded is a genuine load failure and
+   * must still replace the rail — otherwise the assertion above would be
+   * satisfied by a rail that ignores errors entirely.
+   */
+  it("still reports a failure that left nothing on screen", () => {
+    useVersionsMock.mockReturnValue(listing([], { isError: true }));
+
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /Version/ })
+    ).not.toBeInTheDocument();
+  });
+});

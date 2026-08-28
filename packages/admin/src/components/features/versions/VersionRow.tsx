@@ -11,10 +11,11 @@ import { Pencil } from "lucide-react";
 
 import { formatRelativeTime } from "@admin/components/features/notifications/relative-time";
 import { Badge } from "@admin/components/ui";
-import { useLocalization } from "@admin/hooks/useLocalization";
 import { formatDateTime } from "@admin/lib/dates/format";
 import { cn } from "@admin/lib/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
+
+import { VersionLocaleBadge, useVersionLocale } from "./VersionLocaleBadge";
 
 export interface VersionRowProps {
   version: VersionMeta;
@@ -23,6 +24,40 @@ export interface VersionRowProps {
   onSelect: (versionNo: number) => void;
   /** Omitted when the caller cannot rename, which hides the affordance. */
   onRename?: (versionNo: number) => void;
+}
+
+/**
+ * What a screen reader announces for a row.
+ *
+ * Mirrors what the row SHOWS, in the order it shows it: name and ordinal,
+ * status, the language, the restore lineage when there is one, then the author.
+ * Built here rather than inline so the row's own body stays about layout, and
+ * so the order can be read in one place against the markup it describes.
+ */
+function rowAriaLabel({
+  title,
+  ordinal,
+  named,
+  status,
+  locale,
+  restoredFrom,
+  author,
+}: {
+  title: string;
+  ordinal: string;
+  named: boolean;
+  status: string;
+  locale: string | null;
+  restoredFrom: number | null;
+  author: string;
+}): string {
+  const opening = named
+    ? `${title}, ${ordinal}, ${status}`
+    : `${title}, ${status}`;
+  const language = locale !== null ? `, ${locale}` : "";
+  const lineage =
+    restoredFrom !== null ? `, restored from version ${restoredFrom}` : "";
+  return `${opening}${language}${lineage}, by ${author}`;
 }
 
 export function VersionRow({
@@ -38,11 +73,9 @@ export function VersionRow({
   // A localized document captures a version per locale, so each row names the
   // language it holds. Only shown when the app is localized and this version
   // carries a locale; its human label (falling back to the code) is the title.
-  const { enabled: localized, getLocale } = useLocalization();
-  const localeCode = version.locale;
-  const localeLabel =
-    localeCode !== null ? (getLocale(localeCode)?.label ?? localeCode) : null;
-  const showLocale = localized && localeCode !== null;
+  const { show: showLocale, label: localeLabel } = useVersionLocale(
+    version.locale
+  );
 
   // What the row is called. `version.label` is the editor's own name for it;
   // the number is the fallback, and stays visible either way so two versions
@@ -59,15 +92,15 @@ export function VersionRow({
   // lineage. Absent (null) for an ordinary edit, in which case nothing shows.
   const restoredFrom = version.sourceVersionNo;
 
-  // The accessible name mirrors what the row shows: name/ordinal, status, the
-  // language, the restore lineage when present, then the author.
-  const ariaLabel =
-    (named
-      ? `${title}, ${ordinal}, ${version.status}`
-      : `${title}, ${version.status}`) +
-    (showLocale ? `, ${localeLabel}` : "") +
-    (restoredFrom !== null ? `, restored from version ${restoredFrom}` : "") +
-    `, by ${author}`;
+  const ariaLabel = rowAriaLabel({
+    title,
+    ordinal,
+    named,
+    status: version.status,
+    locale: showLocale ? localeLabel : null,
+    restoredFrom,
+    author,
+  });
 
   const canRename = selectable && onRename !== undefined;
 
@@ -113,15 +146,7 @@ export function VersionRow({
           </Badge>
           {/* Language: names which translation this version holds, so an editor
               scanning a mixed-locale history can tell them apart. */}
-          {showLocale && (
-            <Badge
-              variant="outline"
-              className="shrink-0 uppercase"
-              title={localeLabel ?? undefined}
-            >
-              {localeCode}
-            </Badge>
-          )}
+          <VersionLocaleBadge locale={version.locale} />
           {/* Lineage: a restored version names the one it was made from, so an
               editor can see at a glance that this entry came from a rollback. */}
           {restoredFrom !== null && (

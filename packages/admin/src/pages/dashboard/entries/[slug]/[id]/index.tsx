@@ -15,6 +15,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 import { useMemo } from "react";
 
+import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import {
   EntryForm,
   type EntryFormCollection,
@@ -196,28 +197,11 @@ function getEntryTitle(
   id: string,
   useAsTitle?: string
 ): string {
-  // 1. Try designated title field
-  if (useAsTitle && useAsTitle !== "id") {
-    const value = entry[useAsTitle];
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string
-    if (value !== undefined && value !== null && String(value).trim()) {
-      // eslint-disable-next-line @typescript-eslint/no-base-to-string
-      return String(value);
-    }
-  }
-
-  // 2. Try common title fields
-  const titleFields = ["title", "name", "label", "subject", "heading"];
-
-  for (const field of titleFields) {
-    const value = entry[field];
-    if (typeof value === "string" && value.trim()) {
-      return value;
-    }
-  }
-
-  // 3. Fallback to shortened ID
-  return `Entry ${id.substring(0, 8)}...`;
+  // The shared order, so this heading and the version comparison's name the
+  // same document the same way. Only the last resort is decided here: a
+  // heading must produce text, and a shortened id is what identifies an entry
+  // that says nothing about itself.
+  return entryTitleValue(entry, useAsTitle) ?? `Entry ${id.substring(0, 8)}...`;
 }
 
 // ============================================================================

@@ -13,6 +13,7 @@
  * @module pages/dashboard/singles/[slug]/versions
  */
 
+import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
 import { readVersionParam } from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -26,6 +27,9 @@ export default function SingleVersionsPage({
   const slug = typeof params?.slug === "string" ? params.slug : "";
   const document = useSingleDocument(slug);
   const documentId = document.data?.id;
+  // Read BEFORE the guard below, because a hook cannot be called after an early
+  // return. It needs only the slug, which is why it asks for less than a scope.
+  const documentTitle = useVersionDocumentTitle({ kind: "single", slug });
 
   // Nothing is rendered until the document's identity is known: a scope built
   // with a placeholder id would key the cache to a document that does not
@@ -46,6 +50,7 @@ export default function SingleVersionsPage({
     <VersionComparePage
       scope={{ kind: "single", slug, documentId: String(documentId) }}
       documentHref={buildRoute(ROUTES.SINGLE_EDIT, { slug })}
+      documentTitle={documentTitle}
       // Reaching this page needs `read-${slug}`; the single's own editor needs
       // `update-${slug}`. `/admin/singles` is NOT the readable alternative it
       // looks like: it redirects straight to the first single the viewer can
