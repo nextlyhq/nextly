@@ -25,6 +25,7 @@
  */
 
 import {
+  allBlocks,
   canBeRoot,
   canNest,
   canNestInSlot,
@@ -567,11 +568,18 @@ export function registryBlockSource(): SlotDefaultSource {
 export function blockSourceFor(
   definitions: readonly AnyBlockDefinition[] | undefined
 ): SlotDefaultSource {
-  if (definitions === undefined) return registryBlockSource();
-  const supplied = new Map(
-    definitions.map(definition => [definition.name, definition])
-  );
-  return { get: type => supplied.get(type) ?? getBlock(type) };
+  // Both readings are taken ONCE, here, rather than on each lookup. A source
+  // that consulted the live registry per call would answer from a different
+  // set of definitions than the catalog its caller built alongside it, so a
+  // row offered from one reading could be inserted with children from another.
+  const byName = new Map<string, AnyBlockDefinition>();
+  for (const definition of allBlocks()) byName.set(definition.name, definition);
+  // Supplied definitions are written second, so they WIN for a name in both:
+  // the palette offered that definition, so the insert must build that block.
+  for (const definition of definitions ?? []) {
+    byName.set(definition.name, definition);
+  }
+  return { get: type => byName.get(type) };
 }
 
 /**

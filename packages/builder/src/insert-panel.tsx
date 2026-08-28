@@ -116,10 +116,17 @@ export function InsertPanel({
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
 
-  const catalog = React.useMemo(
-    () => catalogFrom(definitions ?? allBlocks()),
+  // ONE snapshot, taken per mount, that both the catalog and the default
+  // expansion below read. The panel documents its palette as read once per
+  // mount rather than subscribed to, and a second reading of the registry
+  // taken later is a different list: a plugin registering while the panel is
+  // open would leave a row offering one definition's version and props while
+  // its children came from another.
+  const palette = React.useMemo(
+    () => definitions ?? allBlocks(),
     [definitions]
   );
+  const catalog = React.useMemo(() => catalogFrom(palette), [palette]);
   const source = React.useMemo(
     () => nesting ?? registryNestingSource(),
     [nesting]
@@ -132,18 +139,13 @@ export function InsertPanel({
   // index no longer names the same place.
   const slotSource = React.useMemo(registrySlotSource, []);
 
-  // The definitions an inserted node's declared starting children are expanded
-  // from: the palette's own catalog first, then everything registered. The
-  // catalog above may be a caller-supplied subset holding a definition the
+  // Derived from the SAME snapshot the catalog is, so the row an author sees
+  // and the subtree an insert builds cannot come from two different readings.
+  // The palette may be a caller-supplied subset holding a definition the
   // registry does not, and the block being inserted is the one whose
-  // declaration is being read — so resolving only against the registry would
-  // offer that block and then insert it without the children it declares.
-  // Referenced child TYPES still resolve against the registry through the
-  // fallback, which is where a supplied list has no reason to hold them.
-  const blockSource = React.useMemo(
-    () => blockSourceFor(definitions),
-    [definitions]
-  );
+  // declaration is read — so resolving only against the registry would offer
+  // that block and then insert it without the children it declares.
+  const blockSource = React.useMemo(() => blockSourceFor(palette), [palette]);
   const point = insertionPointFor(
     editor.document,
     editor.selectedId,

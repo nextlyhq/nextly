@@ -93,6 +93,26 @@ export function isBlockName(value: unknown): value is string {
 }
 
 /**
+ * Whether a slot name can be stored and read back as its own key.
+ *
+ * The rejected names are the ones `Object.prototype` OWNS. Reading
+ * `slots[name]` for one of those answers with an inherited member instead of
+ * `undefined`, and assigning it — which a slot-map rebuild does — sets the
+ * prototype rather than creating an own property, dropping that whole child
+ * list. Asked of `Object.prototype` rather than matched against a written
+ * list, because the list everyone writes is `__proto__` and `constructor`
+ * while `toString` behaves identically.
+ *
+ * Exported for the same reason {@link isBlockName} is: a slot name is judged
+ * at a block's DECLARATION and again on every op that carries one, and those
+ * two gates answering differently is how a name a position could not use gets
+ * in through a subtree.
+ */
+export function isUsableSlotName(name: string): boolean {
+  return !Object.prototype.hasOwnProperty.call(Object.prototype, name);
+}
+
+/**
  * The highest version a block may declare. Migration chains a bounded number of
  * steps, so a version above this could never carry its oldest stored nodes
  * forward — registration refuses it rather than promise an upgrade path that
@@ -204,6 +224,17 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
         fail(
           "NEXTLY_BLOCK_INVALID",
           `block "${def.name}" slot "${slotName}" must be a plain object.`
+        );
+      }
+      // A slot whose NAME cannot hold children is not a slot. The op layer
+      // refuses any node carrying one, so a block declaring it offers a
+      // palette row whose insert is always refused — and, where the slot
+      // declares starting children, that refusal is silent: the row is
+      // clicked and nothing appears.
+      if (!isUsableSlotName(slotName)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" is a name Object.prototype owns, so it cannot be stored and read back. Rename the slot.`
         );
       }
       const allow = (spec as { allow?: unknown }).allow;

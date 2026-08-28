@@ -121,6 +121,40 @@ describe("slot allow-list validation at registration", () => {
     ).toThrow(/must be a plain object/);
   });
 
+  it("refuses a slot named for a member Object.prototype owns", () => {
+    // The op layer refuses any node carrying such a slot, so a block declaring
+    // one offers a palette row whose insert is always refused. With declared
+    // starting children that refusal is SILENT — the row is clicked and
+    // nothing appears — which is why this is caught at the declaration.
+    expect(() =>
+      registerBlocks([withSlots({ constructor: {} })] as never, {
+        source: "acme",
+      })
+    ).toThrow(/Object\.prototype owns/);
+  });
+
+  it("refuses a __proto__ slot, which fails on the write rather than the read", () => {
+    // Built through `JSON.parse` rather than an object literal. A literal
+    // `{ __proto__: {} }` invokes the legacy prototype SETTER and creates no
+    // own key, so the fixture would carry no slot at all and the assertion
+    // would pass without the check ever running — the shape this refuses
+    // reaches the engine from stored JSON, where it IS an own key.
+    const slots: unknown = JSON.parse('{"__proto__":{}}');
+    expect(Object.keys(slots as object)).toEqual(["__proto__"]);
+
+    expect(() =>
+      registerBlocks([withSlots(slots as never)] as never, { source: "acme" })
+    ).toThrow(/Object\.prototype owns/);
+  });
+
+  it("accepts an ordinary slot name", () => {
+    // The control. A predicate that refused every name would satisfy both
+    // assertions above while making the engine unusable.
+    expect(() =>
+      registerBlocks([withSlots({ children: {} })] as never, { source: "acme" })
+    ).not.toThrow();
+  });
+
   it("refuses a defaultBlock that is not an array", () => {
     // The shape that reaches the expansion's `for...of` as
     // `TypeError: declared is not iterable` — at the author's CLICK on the
