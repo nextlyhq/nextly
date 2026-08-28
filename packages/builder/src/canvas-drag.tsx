@@ -453,6 +453,16 @@ export function useCanvasDrag({
       // middle-click scrolls, and starting a drag from either takes a gesture
       // the browser has already given a meaning.
       if (event.button !== 0) return;
+      // ONE gesture at a time. A second finger pressing while another owns the
+      // drag must not take it over: the first gesture would be replaced with
+      // no ending of its own, so its release goes unheard, its click is never
+      // suppressed, and the row it started from inserts through the ordinary
+      // click path — a block the author never dropped.
+      //
+      // Ignored rather than cancelled, so the drag already in flight survives
+      // the stray touch. The pressed row keeps its own click, because nothing
+      // here consumed the press.
+      if (gesture.current !== null) return;
 
       const root = event.currentTarget;
       const nodeId = nodeIdFromEvent(event.target);
@@ -935,6 +945,16 @@ export function useCanvasDrag({
     (event: React.PointerEvent<HTMLElement>, entry: InsertDragEntry) => {
       // The primary button only, for the reason `onPointerDown` gives.
       if (event.button !== 0) return;
+      // ONE gesture at a time. A second finger pressing while another owns the
+      // drag must not take it over: the first gesture would be replaced with
+      // no ending of its own, so its release goes unheard, its click is never
+      // suppressed, and the row it started from inserts through the ordinary
+      // click path — a block the author never dropped.
+      //
+      // Ignored rather than cancelled, so the drag already in flight survives
+      // the stray touch. The pressed row keeps its own click, because nothing
+      // here consumed the press.
+      if (gesture.current !== null) return;
       const root = canvasRoot?.current ?? null;
       // Nothing to drop onto. The press is left entirely alone rather than
       // half-started, so the row's click still inserts by the ordinary path.
@@ -1009,15 +1029,6 @@ export function useCanvasDrag({
         if (native.pointerId !== owner) return;
         reset();
       };
-      // Before registering, never after: overwriting the detach closure below
-      // while an earlier palette gesture is still live would strand its three
-      // listeners with nothing able to remove them, and they would go on
-      // calling into a gesture they no longer own for the life of the page.
-      //
-      // The ordinary sequence cannot reach that — a release arrives first and
-      // resets — so this holds the invariant locally instead of resting it on
-      // an ordering that a lost release or a second pointer breaks.
-      stopTrackingDocument();
       document.addEventListener("pointermove", move, true);
       document.addEventListener("pointerup", up, true);
       document.addEventListener("pointercancel", cancel, true);
@@ -1027,7 +1038,7 @@ export function useCanvasDrag({
         document.removeEventListener("pointercancel", cancel, true);
       };
     },
-    [canvasRoot, endGesture, reset, stopTrackingDocument, trackMove]
+    [canvasRoot, endGesture, reset, trackMove]
   );
 
   // Every ordinary ending funnels through `reset`. This covers the one that
