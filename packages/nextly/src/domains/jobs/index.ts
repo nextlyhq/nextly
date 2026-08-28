@@ -34,7 +34,7 @@ export {
   type RunAsRefusal,
   type RunAsResult,
   type RunAsUser,
-} from "./resolve-run-as";
+} from "../../shared/lib/resolve-run-as";
 export {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MAX_DURATION_MS,

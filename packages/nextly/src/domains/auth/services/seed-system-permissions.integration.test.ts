@@ -81,6 +81,51 @@ describe("system permission slugs", () => {
     expect(Array.from(new Set(undeclared))).toEqual([]);
   });
 
+  it("seeds the three release authorities, and keeps scheduling separate", () => {
+    // A release is ASSEMBLED and then COMMITTED, and those are different
+    // powers. Creating one and choosing its members changes nothing a reader
+    // can see; scheduling it is the act that puts content live later. Folding
+    // them into a single permission would mean anyone who may draft a release
+    // may also publish the site's content at a time of their choosing.
+    const releaseSlugs = SYSTEM_PERMISSIONS.filter(
+      p => p.resource === "content-releases"
+    ).map(p => p.slug);
+
+    expect(releaseSlugs.sort()).toEqual([
+      "create-content-releases",
+      "publish-content-releases",
+      "read-content-releases",
+    ]);
+  });
+
+  it("does not seed a release permission nothing enforces yet", () => {
+    // The control for the case above, and the reason it is exactly three.
+    // Seeding `update-releases` or `delete-releases` now would teach the admin
+    // a vocabulary the server ignores: the surfaces that would check them do
+    // not exist. They arrive with those surfaces.
+    const releaseActions = SYSTEM_PERMISSIONS.filter(
+      p => p.resource === "content-releases"
+    ).map(p => p.action);
+
+    expect(releaseActions).not.toContain("update");
+    expect(releaseActions).not.toContain("delete");
+  });
+
+  it("does NOT reserve the word a site would use for press releases", () => {
+    // Registering a system resource reserves its name for collections and
+    // Singles. `releases` is a word real sites use for CONTENT — "press
+    // releases" is among the most common collections on a corporate site — so
+    // reserving it would fail an existing install at boot, and reclassify a
+    // Schema-Builder collection's permissions as system ones, silently costing
+    // preset roles their access.
+    //
+    // The other reserved names (`media`, `settings`, `users`) read as system
+    // concepts. This one reads as content, which is exactly why it needed a
+    // different word.
+    expect(SYSTEM_RESOURCES as readonly string[]).not.toContain("releases");
+    expect(SYSTEM_RESOURCES as readonly string[]).toContain("content-releases");
+  });
+
   it("reserves the webhooks slug so a collection cannot share its permissions", () => {
     // Permission identity is action + resource. A collection slugged `webhooks`
     // would produce the same `read-webhooks` / `update-webhooks` rows these
