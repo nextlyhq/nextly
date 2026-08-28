@@ -28,6 +28,7 @@ import * as React from "react";
 import {
   clearBlocks,
   registerBlocks,
+  type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -65,7 +66,7 @@ beforeAll(() => {
   element.scrollIntoView = function scrollIntoView(): void {};
 });
 
-const BLOCKS = [
+const BLOCKS: AnyBlockDefinition[] = [
   {
     name: "test/heading",
     version: 1,
@@ -77,11 +78,11 @@ const BLOCKS = [
 ];
 
 function node(id: string, type: string): BlockNode {
-  return { id, type, version: 1, props: {} } as BlockNode;
+  return { id, type, version: 1, props: {} };
 }
 
 function documentOf(nodes: BlockNode[]): BlockDocument {
-  return { formatVersion: 1, kind: "page", nodes } as BlockDocument;
+  return { formatVersion: 1, kind: "page", nodes };
 }
 
 let editorRef: EditorState | null = null;
@@ -146,7 +147,11 @@ function Host({ document: doc }: { document: BlockDocument }) {
       </button>
       <Canvas
         document={editor.document}
-        siteStyles={{ css: "" } as never}
+        // `false` is the documented way to say a render wants NO site styles.
+        // An invented object would be a fixture that does not satisfy the
+        // contract it is passed under, which is the shape this file exists to
+        // avoid asserting through.
+        siteStyles={false}
         selectedId={editor.selectedId}
         onSelect={editor.select}
         dragHandlers={drag.handlers}
@@ -176,7 +181,7 @@ function layout(container: HTMLElement, heights: Record<string, number>): void {
 
 /** Two stacked blocks: 0-100 and 100-200. */
 function renderTwo() {
-  registerBlocks(BLOCKS as never, { source: "insert-drag-test" });
+  registerBlocks(BLOCKS, { source: "insert-drag-test" });
   const result = render(
     <Host
       document={documentOf([
@@ -353,10 +358,63 @@ describe("dragging a block from the palette onto the canvas", () => {
     release(200, 90);
   });
 
+  it("detaches a previous palette gesture before starting another", () => {
+    // A palette drag is followed on the document, so its three listeners are
+    // the gesture's only handle on the pointer. Starting a second gesture
+    // overwrites the closure that removes them, and if the first set was not
+    // detached first it survives with nothing able to reach it — calling into
+    // a gesture it no longer owns for the life of the page.
+    //
+    // The ordinary sequence always releases first, so this needs a press with
+    // no release between. Counted rather than observed behaviourally: a leaked
+    // listener does nothing visible once its gesture is gone, which is exactly
+    // why it would go unnoticed.
+    const { container } = renderTwo();
+    const row = container.ownerDocument.body.querySelector("button")!;
+
+    const POINTER = /^pointer(move|up|cancel)$/;
+    const added: string[] = [];
+    const removed: string[] = [];
+    const realAdd = document.addEventListener;
+    const realRemove = document.removeEventListener;
+    document.addEventListener = function countedAdd(
+      type: string,
+      fn: EventListenerOrEventListenerObject,
+      opts?: boolean | AddEventListenerOptions
+    ): void {
+      if (POINTER.test(type)) added.push(type);
+      realAdd.call(document, type, fn, opts);
+    } as typeof document.addEventListener;
+    document.removeEventListener = function countedRemove(
+      type: string,
+      fn: EventListenerOrEventListenerObject,
+      opts?: boolean | EventListenerOptions
+    ): void {
+      if (POINTER.test(type)) removed.push(type);
+      realRemove.call(document, type, fn, opts);
+    } as typeof document.removeEventListener;
+
+    try {
+      pressRow(row, 300, 500);
+      pressRow(row, 300, 500);
+      release(200, 90);
+    } finally {
+      document.addEventListener = realAdd;
+      document.removeEventListener = realRemove;
+    }
+
+    // Two gestures, three listeners each. The control on the instrument: if
+    // this is not 6 the test is counting something other than what it thinks,
+    // and the balance below would be meaningless.
+    expect(added).toHaveLength(6);
+    // Every one of them removed. Without detaching first this is 3.
+    expect(removed).toHaveLength(6);
+  });
+
   it("starts no drag at all when the host supplied no canvas", () => {
     // The control on `beginInsertDrag`'s own guard: with no canvas root the
     // press must be left completely alone, so the row's click keeps working.
-    registerBlocks(BLOCKS as never, { source: "insert-drag-test" });
+    registerBlocks(BLOCKS, { source: "insert-drag-test" });
     function NoCanvas() {
       const editor = useEditorState({
         initialDocument: documentOf([node("a", "test/heading")]),
