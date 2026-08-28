@@ -73,6 +73,120 @@ export interface RichTextButtonLinkPluginProps {
   disabled?: boolean;
 }
 
+// ============================================================
+// Dialog body pieces — each one self-contained styling decision
+// ============================================================
+
+/**
+ * The dialog's color fields: background (offered only for the filled variant,
+ * whose background the color paints) and text color.
+ */
+function ButtonLinkColorFields({
+  variant,
+  bgColor,
+  onBgColorChange,
+  textColor,
+  onTextColorChange,
+}: {
+  variant: ButtonLinkVariant;
+  bgColor: string;
+  onBgColorChange: (value: string) => void;
+  textColor: string;
+  onTextColorChange: (value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {variant === "filled" && (
+        <div className="space-y-2">
+          <Label htmlFor="button-bg-color">Background Color</Label>
+          <div className="flex items-center gap-2">
+            <input
+              id="button-bg-color"
+              type="color"
+              value={bgColor}
+              onChange={e => onBgColorChange(e.target.value)}
+              className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
+            />
+            <Input
+              value={bgColor}
+              onChange={e => onBgColorChange(e.target.value)}
+              className="flex-1"
+              placeholder="#000000"
+            />
+          </div>
+        </div>
+      )}
+      <div className="space-y-2">
+        <Label htmlFor="button-text-color">Text Color</Label>
+        <div className="flex items-center gap-2">
+          <input
+            id="button-text-color"
+            type="color"
+            value={textColor}
+            onChange={e => onTextColorChange(e.target.value)}
+            className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
+          />
+          <Input
+            value={textColor}
+            onChange={e => onTextColorChange(e.target.value)}
+            className="flex-1"
+            placeholder="#ffffff"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The live preview: renders the button text with the chosen variant, size and
+ * colors so the styling is visible before inserting.
+ */
+function ButtonLinkPreview({
+  text,
+  variant,
+  size,
+  bgColor,
+  textColor,
+}: {
+  text: string;
+  variant: ButtonLinkVariant;
+  size: ButtonLinkSize;
+  bgColor: string;
+  textColor: string;
+}) {
+  return (
+    <div className="p-4 rounded-lg bg-primary/5">
+      <p className="text-xs text-muted-foreground mb-2">Preview:</p>
+      <div className="flex justify-center">
+        <span
+          className={`inline-flex items-center justify-center rounded-md font-medium transition-colors ${
+            variant === "outline" ? "border border-border bg-background" : ""
+          } ${
+            size === "sm"
+              ? "px-3 py-1.5 text-sm"
+              : size === "lg"
+                ? "px-6 py-3 text-base"
+                : "px-4 py-2 text-sm"
+          }`}
+          style={{
+            ...(variant === "filled" && {
+              backgroundColor: bgColor,
+              color: textColor,
+            }),
+            ...(variant === "outline" && {
+              color: textColor,
+              borderColor: textColor,
+            }),
+          }}
+        >
+          {text}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function RichTextButtonLinkPlugin({
   disabled = false,
 }: RichTextButtonLinkPluginProps) {
@@ -362,46 +476,13 @@ export function RichTextButtonLinkPlugin({
           />
 
           {/* Colors */}
-          <div className="grid grid-cols-2 gap-4">
-            {variant === "filled" && (
-              <div className="space-y-2">
-                <Label htmlFor="button-bg-color">Background Color</Label>
-                <div className="flex items-center gap-2">
-                  <input
-                    id="button-bg-color"
-                    type="color"
-                    value={bgColor}
-                    onChange={e => setBgColor(e.target.value)}
-                    className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
-                  />
-                  <Input
-                    value={bgColor}
-                    onChange={e => setBgColor(e.target.value)}
-                    className="flex-1"
-                    placeholder="#000000"
-                  />
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="button-text-color">Text Color</Label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="button-text-color"
-                  type="color"
-                  value={textColor}
-                  onChange={e => setTextColor(e.target.value)}
-                  className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
-                />
-                <Input
-                  value={textColor}
-                  onChange={e => setTextColor(e.target.value)}
-                  className="flex-1"
-                  placeholder="#ffffff"
-                />
-              </div>
-            </div>
-          </div>
+          <ButtonLinkColorFields
+            variant={variant}
+            bgColor={bgColor}
+            onBgColorChange={setBgColor}
+            textColor={textColor}
+            onTextColorChange={setTextColor}
+          />
 
           {/* Open in new tab */}
           <label className="flex items-center gap-2 cursor-pointer">
@@ -414,36 +495,13 @@ export function RichTextButtonLinkPlugin({
 
           {/* Preview */}
           {text.trim() && (
-            <div className="p-4 rounded-lg bg-primary/5">
-              <p className="text-xs text-muted-foreground mb-2">Preview:</p>
-              <div className="flex justify-center">
-                <span
-                  className={`inline-flex items-center justify-center rounded-md font-medium transition-colors ${
-                    variant === "outline"
-                      ? "border border-border bg-background"
-                      : ""
-                  } ${
-                    size === "sm"
-                      ? "px-3 py-1.5 text-sm"
-                      : size === "lg"
-                        ? "px-6 py-3 text-base"
-                        : "px-4 py-2 text-sm"
-                  }`}
-                  style={{
-                    ...(variant === "filled" && {
-                      backgroundColor: bgColor,
-                      color: textColor,
-                    }),
-                    ...(variant === "outline" && {
-                      color: textColor,
-                      borderColor: textColor,
-                    }),
-                  }}
-                >
-                  {text}
-                </span>
-              </div>
-            </div>
+            <ButtonLinkPreview
+              text={text}
+              variant={variant}
+              size={size}
+              bgColor={bgColor}
+              textColor={textColor}
+            />
           )}
         </div>
 
