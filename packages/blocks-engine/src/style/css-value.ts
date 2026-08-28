@@ -26,6 +26,8 @@
 import type { CssNode } from "css-tree";
 import parse from "css-tree/parser";
 
+import { hasControlCharacter } from "../url-policy";
+
 /** Why a value was refused. Each maps to a stable validation issue code. */
 export type CssValueRejection =
   | "unparsable"
@@ -97,21 +99,6 @@ const UNSAFE_URL_CHARS = /["'()\\<>]/;
  * the boundary is made of.
  */
 const UNSAFE_QUOTED_URL_CHARS = /["'\\<>]/;
-
-/**
- * True when a URL contains a control character. A URL parser strips these
- * before reading the scheme, so `java\tscript:` becomes `javascript:` in the
- * browser while looking like a scheme-less path to a check that does not.
- * Refused outright rather than stripped: a URL carrying a control character is
- * malformed however it was meant.
- */
-function hasControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const code = character.codePointAt(0) ?? 0;
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
 
 /**
  * Keywords every property accepts, whatever its value type.

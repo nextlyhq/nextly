@@ -59,6 +59,85 @@ export function normalizeUrl(value: string): string {
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
 /** Whether a URL reaches anywhere other than the document's own origin. */
+/**
+ * Schemes a stored link may name.
+ *
+ * The format's own rule, not one renderer's. A value carrying any other scheme
+ * is not a link this document can express, so nothing reading the document —
+ * a renderer drawing it, a flattener describing it, an indexer searching it —
+ * should treat it as one.
+ */
+const LINKABLE_SCHEMES: readonly string[] = ["http", "https", "mailto", "tel"];
+
+/**
+ * Any leading `scheme:`, which is what decides whether the list above applies.
+ *
+ * A value with NO scheme is left alone: `/about`, `a.png` and `#top` resolve
+ * against the page's own origin and name no destination of their own. So does
+ * `//host/x`, which carries no scheme and still reaches another host — bounding
+ * WHICH hosts may be reached is a separate question, asked of the host policy
+ * by the blocks that fetch, not of this list.
+ */
+const LINK_SCHEME = /^([a-z][a-z0-9+.-]*):/i;
+
+/**
+ * Whether a string still holds a control character.
+ *
+ * A URL parser strips these before reading the scheme, so `java\tscript:`
+ * becomes `javascript:` in the browser while looking like a scheme-less path to
+ * a check that does not. Refused outright rather than stripped: a URL carrying
+ * one is malformed however it was meant.
+ *
+ * Scanned by code point rather than matched by a regular expression: a pattern
+ * for these needs a lint suppression, and the rule it would suppress is there
+ * because a literal control character in a pattern is invisible to whoever reads
+ * it next. `0x20` is deliberately excluded — a space is not a control character,
+ * and an interior one belongs to the path.
+ *
+ * Exported for `style/css-value`, which asks the same question of a URL inside
+ * a CSS value. Two copies of this is two chances for one of them to start
+ * treating a byte differently, and the byte in question is the one that hides a
+ * scheme.
+ */
+export function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a stored value names a link this document can express.
+ *
+ * Asked of the FORMAT rather than of a renderer, because more than one reader
+ * has to agree about it: a renderer that draws nothing for an unusable link and
+ * a flattener that still reports its label describe different pages, and the
+ * description is the one nobody looks at until a crawler does.
+ *
+ * The scheme is read as the BROWSER's parser will read it — after normalising
+ * the tab, newline and leading-control tricks that hide one — so a value cannot
+ * pass here and mean something else in an attribute.
+ *
+ * @param value - anything a stored document might hold in a link position
+ * @returns whether a reader should treat it as a link
+ */
+export function isLinkableUrl(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+
+  const normalized = normalizeUrl(trimmed);
+  if (normalized === "") return false;
+  if (hasControlCharacter(normalized)) return false;
+
+  const scheme = LINK_SCHEME.exec(normalized);
+  if (scheme === null) return true;
+  const name = scheme[1];
+  if (name === undefined) return false;
+  return LINKABLE_SCHEMES.includes(name.toLowerCase());
+}
+
 export function isRemoteUrl(value: string): boolean {
   const normalized = normalizeUrl(value);
   if (URL_SCHEME.test(normalized)) return true;

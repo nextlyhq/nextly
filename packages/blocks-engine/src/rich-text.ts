@@ -49,6 +49,8 @@
  * mismatch is silent in the worst possible way — the editor treats a tree as
  * text, reads no text out of it, and commits an empty string over the passage.
  */
+import { isLinkableUrl } from "./url-policy";
+
 export const RICH_TEXT_PROP_TYPE = "richText";
 
 /**
@@ -283,10 +285,56 @@ function isInline(node: RichTextNode): boolean {
   return INLINE_CONTAINERS.has(node.type);
 }
 
+/**
+ * Labels a node keeps in a LIST of its own rather than in `text`.
+ *
+ * `button-group` stores each button under `buttons[].text`, and the renderer
+ * draws every one of them. A walk that reads only `text` and `children` sees
+ * neither, so a passage of "Choose", a group offering "Basic" and "Pro", then
+ * "today" flattens to "Choose today" — words the page shows, missing from the
+ * description of it.
+ *
+ * Projected here rather than at the consumer, so SEO, search indexing and
+ * anything else reading this walk describe the same page.
+ */
+function listedLabels(node: RichTextNode): string | null {
+  if (node.type !== "button-group" || !Array.isArray(node.buttons)) return null;
+  const labels = node.buttons.flatMap(button => {
+    const label = labelOf(button);
+    return label === null ? [] : [label];
+  });
+  return labels.length > 0 ? labels.join(" ") : null;
+}
+
+/**
+ * The label a serialized list ITEM carries, or `null` if it has none.
+ *
+ * Asked of the shape rather than of a node type, because these items are not
+ * nodes: a button in a group serializes as `{ url, text, variant, size }` with
+ * no `type` at all. A check written against the node guard rejects every real
+ * one, and a fixture that invents a `type` to get past it tests nothing.
+ *
+ * Empty labels are dropped rather than joined, so a button whose text was never
+ * filled in does not open a gap in the middle of a sentence.
+ */
+function labelOf(item: unknown): string | null {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) {
+    return null;
+  }
+  const fields = item as { text?: unknown; url?: unknown };
+  // Only what a reader would actually SHOW. A button whose URL this format
+  // cannot express is not drawn, so reporting its label would describe a page
+  // by a word that never appears on it — the mirror of the defect that made
+  // these labels worth reading in the first place.
+  if (!isLinkableUrl(fields.url)) return null;
+  const text = fields.text;
+  return typeof text === "string" && text.length > 0 ? text : null;
+}
+
 function leafText(node: RichTextNode): string | null {
   if (typeof node.text === "string") return node.text;
   if (node.type === "linebreak") return " ";
-  return null;
+  return listedLabels(node);
 }
 
 /**
