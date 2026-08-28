@@ -200,6 +200,13 @@ describe("PermissionService - Smoke Tests", () => {
       await service.updatePermission(permission.id, {
         description: "Updated description",
       });
+
+      // Assert on the STORE, not on the call resolving. Awaiting alone passes
+      // against an implementation that validates the id and returns without
+      // ever writing — which is evidence the method did not throw, not
+      // evidence it did anything.
+      const after = await service.getPermissionById(permission.id);
+      expect(after.description).toBe("Updated description");
     });
 
     it("should return 404 when updating non-existent permission", async () => {
@@ -965,6 +972,12 @@ describe("PermissionService - Smoke Tests", () => {
       await service.updatePermission(permission.id, {
         description: null as any,
       });
+
+      // Same reason as above, and the null case is the one most likely to be
+      // silently skipped: a writer that treats null as "no change" would leave
+      // the old description in place and still resolve.
+      const after = await service.getPermissionById(permission.id);
+      expect(after.description).toBeNull();
     });
 
     it("should handle empty object (no changes)", async () => {

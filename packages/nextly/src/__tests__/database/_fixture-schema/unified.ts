@@ -1078,7 +1078,12 @@ export const nextlyTables: TableDefinition[] = [
       },
       { name: "focal_x", type: "integer" },
       { name: "focal_y", type: "integer" },
-      { name: "sizes", type: "text" },
+      // `jsonb` is the fixture's ABSTRACT json type, which the generator emits
+      // as JSONB on Postgres, JSON on MySQL and TEXT on SQLite — matching the
+      // three production media schemas exactly. Declaring `text` was right only
+      // for SQLite and gave the other two a materially different column, so a
+      // test using a JSON operator ran against the wrong type.
+      { name: "sizes", type: "jsonb" },
     ],
     indexes: [
       {
