@@ -23,7 +23,13 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 import { ShortcutProvider } from "@nextlyhq/ui";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -210,60 +216,84 @@ describe("the canvas's right-click menu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("selects the pressed block before a touch long-press can open", () => {
+  it("acts on the pressed block when a long press opens the menu", () => {
     /*
-     * Radix opens a long-press from its OWN 700ms pointerdown timer and never
+     * Radix opens a long press from its OWN 700ms pointerdown timer and never
      * dispatches a `contextmenu` event, so the canvas's filtering — which runs
-     * on that event — never sees this route. Without moving the selection
-     * here, a long press on an unselected block opens the previous selection's
-     * verbs, and Delete among them acts on a block the author is not looking
-     * at. That is why the selection is asserted, not the menu: the menu here
-     * is Radix's to open, and the SUBJECT is what this must get right.
+     * on that event — never sees this route. Without carrying the pressed
+     * block across, the menu opens on the PREVIOUS selection, and Delete among
+     * its verbs acts on a block the author is not looking at.
+     *
+     * Driven as press-then-open rather than by waiting out the timer: the
+     * timer is Radix's, and what this component has to get right is the
+     * SUBJECT the menu opens on.
+     */
+    register();
+    const editor = editorSpy(pair(), "b");
+    const { container } = mount(editor);
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerDown(blockElement(container), {
+        pointerType: "touch",
+        clientX: 10,
+        clientY: 10,
+      });
+      // Nothing yet: this is a contact, not yet a gesture.
+      expect(editor.select).not.toHaveBeenCalled();
+
+      // Radix's own timer, run out. The menu opening is what carries the
+      // subject across, so the wait is the mechanism rather than a delay.
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(editor.select).toHaveBeenCalledWith("a", "replace");
+  });
+
+  it("does not move the selection on a press that never opens anything", () => {
+    /*
+     * The case that makes deferring necessary. Every touch contact begins as a
+     * pointerdown, and most become a scroll rather than a long press — Radix
+     * cancels its own timer on pointermove, but a selection made on contact
+     * would already have retargeted the inspector and the toolbar, and nothing
+     * puts it back.
      */
     register();
     const editor = editorSpy(pair(), "b");
     const { container } = mount(editor);
 
     fireEvent.pointerDown(blockElement(container), { pointerType: "touch" });
-
-    expect(editor.select).toHaveBeenCalledWith("a", "replace");
-  });
-
-  it("leaves a mouse press to the context event that follows it", () => {
-    // The control on the other side. A rule that selected on every pointer
-    // press would move the selection on the way to a plain left click, which
-    // the canvas already handles on its own event.
-    register();
-    const editor = editorSpy(pair(), "b");
-    const { container } = mount(editor);
-
-    fireEvent.pointerDown(blockElement(container), { pointerType: "mouse" });
+    fireEvent.pointerMove(blockElement(container), { pointerType: "touch" });
 
     expect(editor.select).not.toHaveBeenCalled();
   });
 
-  it("stops a touch long-press that is not aimed at a block", () => {
+  it("leaves the caret's own behaviour to the browser", () => {
     /*
-     * Preventing the default is the mechanism, not a formality: Radix composes
-     * its pointer handler BEHIND this one and skips its own when the default
-     * has been prevented, so this is what keeps the timer from opening a menu
-     * over chrome or over text being edited.
-     *
-     * `fireEvent` returns false when a handler prevented the default, which is
-     * the only observable of that decision from here.
+     * The press must not be cancelled. It fires at the start of every contact,
+     * long before anything knows whether it will become a long press, so
+     * preventing the default there takes caret placement and text selection
+     * away from an author who was only tapping into a sentence. Rejection is
+     * done by withholding the event from above instead — asserted here as the
+     * default surviving, which is the observable of that choice.
      */
     register();
     const editor = editorSpy(pair(), "a");
     const { container } = mount(editor);
-    const chrome = window.document.createElement("button");
-    chrome.setAttribute("data-nx-chrome", "");
-    blockElement(container).appendChild(chrome);
+    const editable = window.document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    blockElement(container).appendChild(editable);
 
-    const notPrevented = fireEvent.pointerDown(chrome, {
+    const notPrevented = fireEvent.pointerDown(editable, {
       pointerType: "touch",
     });
 
-    expect(notPrevented).toBe(false);
+    expect(notPrevented).toBe(true);
     expect(editor.select).not.toHaveBeenCalled();
   });
 
