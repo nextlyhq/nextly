@@ -126,6 +126,27 @@ export interface StyleCompileContext {
   blockBases?: Readonly<Record<string, NodeStyles>>;
 
   /**
+   * Typographic defaults per HTML element, keyed by tag name.
+   *
+   * A tier below {@link PageStyleContext.blockBases}, and it exists because a
+   * block type cannot express one. A heading's LEVEL is a prop, so every
+   * `core/heading` shares one block-type class and one default with it — which
+   * would give `h1` and `h3` the same size, the defect rather than the fix.
+   * The element is the only thing that distinguishes them.
+   *
+   * Emitted at zero specificity like block defaults, and BEFORE them, so at
+   * equal weight a block's own default wins on source order. Both lose to a
+   * named class and to a node's own value.
+   *
+   * A provisional layer, not a design system. Gutenberg — the closest peer that
+   * both ships blocks and renders pages — keeps metric defaults out of block
+   * CSS and defers to a theme; Nextly has no populated typography scale yet, so
+   * this bridges the gap until the fonts manager fills it, and is shaped so
+   * that manager can supply the same record later.
+   */
+  elementBases?: Readonly<Record<string, NodeStyles>>;
+
+  /**
    * Whether a node's block declares that these props draw nothing.
    *
    * A second reason a node's markup never reaches the page, beside a visibility
@@ -311,6 +332,17 @@ export interface CompiledPageCss {
  * users who never asked for one, which is why authors historically removed focus
  * styling altogether and broke keyboard navigation.
  */
+/**
+ * The elements a typographic default may be written for.
+ *
+ * Closed and ordered: closed because a tag is interpolated into a selector and
+ * a caller-supplied one would be an injection surface of exactly the kind the
+ * block-type check below refuses; ordered because two defaults at equal
+ * specificity are separated by source order, so the order they are emitted in
+ * is part of the contract rather than an artifact of iteration.
+ */
+const TYPOGRAPHIC_ELEMENTS = ["h1", "h2", "h3", "h4", "h5", "h6", "p"] as const;
+
 const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
   base: "",
   hover: ":where(:hover)",
@@ -1597,6 +1629,35 @@ export function compilePageCss(
       { origin: { kind: "page" }, trace, mayFetchUrl }
     )
   );
+
+  // Element defaults, below block defaults and above nothing. A tag reaches a
+  // SELECTOR exactly as a block type does, so it is held to a closed list
+  // rather than escaped: these are the elements the block library renders text
+  // as, and a caller naming anything else is not describing this document's
+  // typography. An allow-list rather than a grammar, because the set is small,
+  // known, and has no reason to grow without someone deciding it should.
+  const elements = ctx.elementBases ?? {};
+  for (const tag of TYPOGRAPHIC_ELEMENTS) {
+    if (!Object.hasOwn(elements, tag)) continue;
+    rules.push(
+      ...envelopeRules(
+        elements[tag],
+        `${pageRoot} ${tag}`,
+        pointer("/elementBases", tag),
+        contexts,
+        tokenPrefix,
+        warnings,
+        budget,
+        warningAllowance,
+        {
+          origin: { kind: "page" },
+          trace,
+          mayFetchUrl,
+          weightless: true,
+        }
+      )
+    );
+  }
 
   // One rule per block type present, not per node using it.
   const usedTypes = new Set<string>();

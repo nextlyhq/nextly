@@ -17,7 +17,11 @@ import {
   type BlockDocument,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import { registeredBlocks, resolvePageStyles } from "@nextlyhq/blocks-react";
+import {
+  registeredBlocks,
+  resolvePageStyles,
+  withTypographyDefaults,
+} from "@nextlyhq/blocks-react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageStyleTrace } from "./style-trace";
@@ -120,16 +124,31 @@ describe("the cascade fetched for the panel", () => {
       { breakpoints: BREAKPOINTS },
       registeredBlocks()
     );
-    const compiled = compilePageCss(page, { breakpoints: BREAKPOINTS });
+    // Through `withTypographyDefaults`, because a bare `compilePageCss` is now
+    // a different question from a render: the library adds its typographic
+    // baseline, and the engine on its own has no opinion about headings. Both
+    // sides have to be asked the same thing or the comparison reports the tier
+    // as a disagreement.
+    const compiled = compilePageCss(
+      page,
+      withTypographyDefaults({ breakpoints: BREAKPOINTS })
+    );
 
     expect(rendered.css).toBe(compiled.css);
+    // The baseline is IN what they agreed on, rather than absent from both. A
+    // comparison of two sheets that each lack the tier would pass while the
+    // panel explained a cascade the page does not have.
+    expect(compiled.css).toContain(":where(");
+    expect(compiled.css).toContain(" h1)");
     // And the trace belongs to that same compile rather than to a different one.
     expect(
       pageStyleTrace(page, { breakpoints: BREAKPOINTS }, undefined)?.entries
         .length
     ).toBe(
-      compilePageCss(page, { breakpoints: BREAKPOINTS, trace: true }).trace
-        ?.length
+      compilePageCss(
+        page,
+        withTypographyDefaults({ breakpoints: BREAKPOINTS, trace: true })
+      ).trace?.length
     );
   });
 

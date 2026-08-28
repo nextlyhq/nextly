@@ -17,6 +17,7 @@ import {
   type StyleTraceEntry,
 } from "@nextlyhq/blocks-engine";
 
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 import type { DocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import {
@@ -249,7 +250,7 @@ function compileContextFor(
   storedDocument: BlockDocument | undefined
 ): StyleCompileContext | undefined {
   if (styleContext === undefined) return undefined;
-  return {
+  return withTypographyDefaults({
     ...styleContext,
     // Derived when the caller stated none, NARROWED when it stated a record —
     // one call, because it is one question. `compilePageCss` reads a base only
@@ -269,7 +270,7 @@ function compileContextFor(
       styleContext.blockBases
     ),
     drawsNothing,
-  };
+  });
 }
 
 /** Every node id in a document, in document order. */
