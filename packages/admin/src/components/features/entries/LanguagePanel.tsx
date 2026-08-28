@@ -433,7 +433,7 @@ function filteredLanguages<T extends { code: string; label: string }>(
  * right-to-left. Muted, because nothing is being asked of the reader.
  */
 const MARKER_PLAIN_CLASS =
-  "shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground";
+  "min-w-0 truncate text-[10px] uppercase tracking-wide text-muted-foreground";
 
 /**
  * A marker naming something the author has to act on. Bordered and in the foreground colour, so
@@ -441,6 +441,21 @@ const MARKER_PLAIN_CLASS =
  */
 const MARKER_ACTIONABLE_CLASS =
   "shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground";
+
+/**
+ * The markers share ONE shrinkable strip rather than each holding its own width.
+ *
+ * A language can now carry four at once -- default, rtl, changes, review -- on a rail measured at
+ * 277px whose label and two-button action group already refuse to shrink. With every marker
+ * `shrink-0` the strip has no give, so past a certain width it paints into the Open/seed controls
+ * and makes them unreachable: an overflow that costs an ACTION, not just legibility.
+ *
+ * So the strip yields as a unit and the descriptive markers truncate inside it, while the two
+ * ACTIONABLE chips keep their width -- they are the ones naming something to be done, and a
+ * truncated "chan…" is the fact an author needed. `min-w-0` is what lets a flex child shrink
+ * below its content at all; without it the strip reports its content width and nothing gives.
+ */
+const MARKER_STRIP_CLASS = "flex min-w-0 shrink items-center gap-2";
 
 /**
  * The markers a language row shows, in a FIXED order.
@@ -532,17 +547,19 @@ function LanguageRow({
         <span className="shrink-0 whitespace-nowrap text-sm font-medium">
           {label}
         </span>
-        {rowMarkers({ isDefault, rtl, pendingChange, stale }).map(marker => (
-          <span
-            key={marker.text}
-            className={
-              marker.actionable ? MARKER_ACTIONABLE_CLASS : MARKER_PLAIN_CLASS
-            }
-            title={marker.title}
-          >
-            {marker.text}
-          </span>
-        ))}
+        <span className={MARKER_STRIP_CLASS}>
+          {rowMarkers({ isDefault, rtl, pendingChange, stale }).map(marker => (
+            <span
+              key={marker.text}
+              className={
+                marker.actionable ? MARKER_ACTIONABLE_CLASS : MARKER_PLAIN_CLASS
+              }
+              title={marker.title}
+            >
+              {marker.text}
+            </span>
+          ))}
+        </span>
         <span
           className="min-w-0 truncate text-xs text-muted-foreground"
           title={languageStateLabel(state, { pendingChange, stale })}

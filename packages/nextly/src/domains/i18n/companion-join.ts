@@ -875,7 +875,7 @@ function toStampDate(raw: unknown): Date | null {
  * MySQL `Unknown column`. Requiring the column name as well as the shape keeps this from
  * swallowing an unrelated missing column and reporting the site as having no staleness data.
  */
-function isMissingColumnError(error: unknown, column: string): boolean {
+export function isMissingColumnError(error: unknown, column: string): boolean {
   const message = error instanceof Error ? error.message : String(error);
   if (!message.includes(column)) return false;
   return /no such column|does not exist|unknown column/i.test(message);
