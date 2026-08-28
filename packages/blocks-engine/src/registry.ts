@@ -14,6 +14,7 @@ import { COMPONENT_INSTANCE_TYPE, isBlockType } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
+import { isPlainRecord } from "./plain-record";
 import { styleSupportDefinitions } from "./style/supports-map";
 import type { BlockTypeLookup } from "./validation";
 
@@ -131,11 +132,6 @@ const SUPPORT_KEY_RE = /^[a-zA-Z][a-zA-Z0-9]*$/;
 
 function fail(code: string, message: string): never {
   throw new Error(`${code}: ${message}`);
-}
-
-/** A key/value object — not null, not an array, not a function. */
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

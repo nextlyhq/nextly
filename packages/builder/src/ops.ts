@@ -32,6 +32,10 @@ import {
   isNodeType,
   isNodeVersion,
   isPlainRecord,
+  // The engine's predicate rather than a local one, so a slot name is judged
+  // the same way at a block's declaration and on every op that carries one.
+  // Two gates answering differently is how a name a position could not use
+  // gets in through a subtree.
   isUsableSlotName,
   treeDepth,
   walkNodes,
