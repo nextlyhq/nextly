@@ -52,6 +52,17 @@ import {
  * commonest structural edit in the editor is undiscoverable and awkward on a
  * laptop, and the two letters carry no relationship to the direction they move.
  */
+/**
+ * The layer these bindings register under.
+ *
+ * Named rather than spelled at the registration alone, because a surface that
+ * TELLS an author about a keystroke has to ask the shortcut manager whether
+ * that keystroke is live — and it can only ask about a layer it can name.
+ * Matching on a retyped string would let the question and the registration
+ * drift into a hint for bindings nothing holds.
+ */
+export const BLOCK_ACTIONS_LAYER = "builder-block-actions";
+
 export const MOVE_KEYS: ReadonlyArray<{
   keys: string;
   direction: MoveDirection;
@@ -172,33 +183,6 @@ const BlockActionsContext = React.createContext<BlockActions | null>(null);
  * like a missing wrapper — and it would reach a person before it reached a
  * developer.
  */
-/**
- * Whether the block keystrokes are actually bound right now.
- *
- * Separate from {@link BlockActionsContext} because the two answer different
- * questions and a surface can need the second without the first. The verbs are
- * reachable from anything under the provider; whether PRESSING a key runs them
- * depends on `enabled`, which a host turns off when something modal is over the
- * canvas.
- *
- * Defaults to `false` with no provider above, so a surface that advertises a
- * keystroke cannot advertise one nothing is listening for — an unmounted
- * provider and a disabled one are the same fact to anyone reading a hint.
- */
-const BlockKeysEnabledContext = React.createContext(false);
-
-/**
- * Whether the block keystrokes are live, for a surface that TELLS an author
- * about them.
- *
- * A hint is a claim that pressing something does something, so it has to be
- * derived from whether that is true rather than from the shortcut existing in
- * a table somewhere.
- */
-export function useBlockKeysEnabled(): boolean {
-  return React.useContext(BlockKeysEnabledContext);
-}
-
 export function useBlockActionsContext(): BlockActions {
   const actions = React.useContext(BlockActionsContext);
   if (actions === null) {
@@ -621,7 +605,7 @@ export function useBlockKeyboardActions({
   );
 
   useShortcuts([...bindings, ...editing, ...inlineEditing], {
-    name: "builder-block-actions",
+    name: BLOCK_ACTIONS_LAYER,
     enabled,
   });
 
@@ -725,16 +709,10 @@ export function BlockKeyboardActions({
   // has nothing it was already watching.
   return (
     <BlockActionsContext.Provider value={actions}>
-      {/*
-        The same default the bindings themselves take, so what a hint claims and
-        what a keypress does cannot disagree.
-      */}
-      <BlockKeysEnabledContext.Provider value={enabled ?? true}>
-        <p aria-live="polite" role="status" className="nx-sr-only">
-          {announcement}
-        </p>
-        {children}
-      </BlockKeysEnabledContext.Provider>
+      <p aria-live="polite" role="status" className="nx-sr-only">
+        {announcement}
+      </p>
+      {children}
     </BlockActionsContext.Provider>
   );
 }

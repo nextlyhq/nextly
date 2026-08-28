@@ -58,6 +58,7 @@ import {
   Input,
   TreeView,
   detectApplePlatform,
+  useActiveShortcuts,
   type TreeNode,
 } from "@nextlyhq/ui";
 import { EyeOff, Lock, SlidersHorizontal } from "lucide-react";
@@ -66,7 +67,7 @@ import * as React from "react";
 import { BlockIconMark } from "./block-icon";
 import type { EditorState } from "./editor-state";
 import { keyHint } from "./key-hint";
-import { MOVE_KEYS, useBlockKeysEnabled } from "./keyboard-actions";
+import { BLOCK_ACTIONS_LAYER, MOVE_KEYS } from "./keyboard-actions";
 import type { MoveDirection } from "./keyboard-move";
 import { ancestorIds, filterLayers, layersOf, type LayerNode } from "./layers";
 
@@ -148,9 +149,6 @@ function rowOf(
     children: node.children.map(child => rowOf(child, icons)),
   };
 }
-
-/** One id, so the tree's description and the hint cannot drift apart. */
-const MOVE_HINT_ID = "nx-layers-move-hint";
 
 /**
  * The short label each direction gets in the legend.
@@ -242,15 +240,42 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
    * absent rather than briefly wrong: this module's whole rule is that a hint
    * naming the wrong key is worse than no hint at all.
    */
+  /*
+   * Per INSTANCE, not a module constant. A host may mount two editors on one
+   * page, and a fixed id would have both trees pointing at the same element —
+   * an ambiguous lookup, where assistive technology can read one panel's tree
+   * the other panel's description.
+   */
+  const hintId = React.useId();
   const [apple, setApple] = React.useState<boolean | null>(null);
   React.useEffect(() => {
     setApple(detectApplePlatform());
   }, []);
 
-  /* Whether pressing these keys does anything, which is what makes it honest to
-   * say so. A host can mount this panel with no bindings above it, or with them
-   * turned off while something modal is over the canvas. */
-  const keysLive = useBlockKeysEnabled();
+  /*
+   * The keystrokes the manager is actually holding right now.
+   *
+   * Asked of the SHORTCUT MANAGER rather than of a React context, because the
+   * question is not "is a provider above me" — this panel is drawn through the
+   * shell's own panel region, which is a sibling of the subtree the bindings
+   * are registered in, so a context would answer no while the keys worked
+   * perfectly. The manager is shell-wide and knows what is registered wherever
+   * it was registered from.
+   *
+   * It also answers the harder half for free: a disabled layer is dropped from
+   * this list, so a host that turns the bindings off while something modal is
+   * over the canvas stops being advertised at the same moment it stops working.
+   */
+  const activeShortcuts = useActiveShortcuts();
+  const liveKeys = React.useMemo(
+    () =>
+      new Set(
+        activeShortcuts
+          .filter(shortcut => shortcut.layer === BLOCK_ACTIONS_LAYER)
+          .map(shortcut => shortcut.keys)
+      ),
+    [activeShortcuts]
+  );
 
   /*
    * Built from the binding table, so a rebound keystroke moves the hint with
@@ -259,9 +284,13 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
    */
   const hints = React.useMemo(
     () =>
-      apple === null || !keysLive
+      apple === null
         ? []
         : MOVE_KEYS.flatMap(({ keys, direction, description }) => {
+            // Named by the move table, HELD by the manager. Either alone is a
+            // claim about something else: the table says what the editor
+            // intends, and the manager says what is bound at this moment.
+            if (!liveKeys.has(keys)) return [];
             const shown = keyHint(keys, apple);
             return shown === null
               ? []
@@ -274,7 +303,7 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
                   },
                 ];
           }),
-    [apple, keysLive]
+    [apple, liveKeys]
   );
 
   return (
@@ -319,7 +348,7 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
           }
           // The hint is the tree's DESCRIPTION, so it is announced on entering
           // the tree rather than only readable by someone who can see it below.
-          aria-describedby={hints.length === 0 ? undefined : MOVE_HINT_ID}
+          aria-describedby={hints.length === 0 ? undefined : hintId}
         />
       )}
 
@@ -329,7 +358,7 @@ export function LayersPanel({ editor }: LayersPanelProps): React.JSX.Element {
         with none has nothing to say this about.
       */}
       {tree.length === 0 || nodes.length === 0 || hints.length === 0 ? null : (
-        <ul className="nx-layers-panel__hint" id={MOVE_HINT_ID}>
+        <ul className="nx-layers-panel__hint" id={hintId}>
           {hints.map(({ keys, shown, label, description }) => (
             <li className="nx-layers-panel__hint-row" key={keys}>
               <span className="nx-layers-panel__hint-key" aria-hidden="true">
