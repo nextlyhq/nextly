@@ -90,6 +90,26 @@ export const CHROME_ATTRIBUTE = "data-nx-chrome";
 
 /** Whether an event started inside editor chrome rather than inside the page. */
 /**
+ * The block a context gesture is aimed at, or `null` when it is aimed at
+ * nothing a block menu could act on.
+ *
+ * Published because a context menu can be opened TWO ways and they arrive by
+ * different events. A secondary click arrives as `contextmenu`, which the
+ * canvas sees; a touch or pen long-press is opened by Radix from its own timer
+ * on `pointerdown`, and never produces a `contextmenu` event at all. A menu
+ * that filtered one path and not the other would offer a block's verbs for a
+ * press aimed at chrome, or — worse — offer the PREVIOUS selection's verbs,
+ * with Delete among them, for a press on a block that was never selected.
+ *
+ * So the decision lives here once and both callers ask it, rather than each
+ * spelling out three rejections and drifting.
+ */
+export function contextMenuTargetOf(target: EventTarget | null): string | null {
+  if (isEditableTarget(target) || isChrome(target)) return null;
+  return nodeIdFromEvent(target);
+}
+
+/**
  * Whether the gesture landed in text the author is editing.
  *
  * Asked apart from {@link isChrome} because the answer is the same and the
@@ -586,16 +606,12 @@ function useCanvasPointer(
        * `preventDefault` is deliberately not called, so the browser's own menu
        * still appears wherever this one does not.
        */
-      if (
-        isEditableTarget(event.target) ||
-        isChrome(event.target) ||
-        nodeIdFromEvent(event.target) === null
-      ) {
+      const id = contextMenuTargetOf(event.target);
+      if (id === null) {
         event.stopPropagation();
         return;
       }
-      const id = nodeIdFromEvent(event.target);
-      if (id === null || onSelect === undefined || marked.includes(id)) return;
+      if (onSelect === undefined || marked.includes(id)) return;
       onSelect(id, "replace");
     },
     [marked, onSelect]
