@@ -27,6 +27,7 @@ import {
   canvasRootFrom,
   hasScrollbarGutter,
   overflowApplies,
+  renderSkips,
   viewportPositioned,
 } from "./geometry-dom";
 
@@ -958,5 +959,81 @@ describe("an ancestor that does not clip at all", () => {
 
     expect(clippedByAncestorRect(child, root)).toBe(false);
     expect(clippedByAncestor(child, root, SQUARE_CORNERS)).toBe(false);
+  });
+});
+
+describe("whether the render skips an element", () => {
+  /**
+   * The `checkVisibility` the RUNTIME brought, read before any case replaces it.
+   *
+   * `Element.prototype` is where the method is defined when it exists — an own,
+   * writable, enumerable, configurable data property, per the CSSOM View
+   * `partial interface Element` — so the teardown below has to put a real one
+   * back rather than delete. jsdom implements none today, which makes this
+   * `undefined` and the restore a deletion.
+   */
+  const RUNTIME_CHECK_VISIBILITY = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "checkVisibility"
+  );
+
+  /**
+   * What `checkVisibility` answers for every element in a case — or, as
+   * `undefined`, that there is no such method to ask.
+   *
+   * All three inputs to {@link renderSkips} are SUPPLIED rather than inherited
+   * from whatever the test runtime happens to implement, and the absent one is
+   * the reason: it is the behaviour on an engine older than Chrome 105, Firefox
+   * 106 or Safari 17.4, it does not stop being reachable when the runtime grows
+   * an implementation of its own, and a case that reached it by merely
+   * installing nothing would be satisfied just as well by a runtime whose
+   * method answers `true` — which is the case two below.
+   */
+  function runtimeAnswering(visible: boolean | undefined): void {
+    if (visible === undefined) {
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+      return;
+    }
+    Element.prototype.checkVisibility = () => visible;
+  }
+
+  // Whatever a case supplied is dropped and the runtime's own method put back:
+  // the captured descriptor where there was one, and its absence where there
+  // was not.
+  afterEach(() => {
+    if (RUNTIME_CHECK_VISIBILITY === undefined) {
+      Reflect.deleteProperty(Element.prototype, "checkVisibility");
+    } else {
+      Object.defineProperty(
+        Element.prototype,
+        "checkVisibility",
+        RUNTIME_CHECK_VISIBILITY
+      );
+    }
+  });
+
+  it("reports NOT skipped where the runtime cannot answer", () => {
+    /*
+     * The availability posture, stated as a test rather than left to a
+     * docblock. `checkVisibility` is absent before Chrome 105, Firefox 106 and
+     * Safari 17.4, and the answer there is the one that changes nothing: a
+     * caller that refused on absence would delete an affordance from every
+     * element on such a runtime, on no evidence about any of them.
+     *
+     * The two cases below are what make this a statement about the ABSENCE
+     * rather than about a function that answers `false` unconditionally.
+     */
+    runtimeAnswering(undefined);
+    expect(renderSkips(document.createElement("div"))).toBe(false);
+  });
+
+  it("reports skipped when the runtime says the element is not visible", () => {
+    runtimeAnswering(false);
+    expect(renderSkips(document.createElement("div"))).toBe(true);
+  });
+
+  it("reports NOT skipped when the runtime says the element is visible", () => {
+    runtimeAnswering(true);
+    expect(renderSkips(document.createElement("div"))).toBe(false);
   });
 });

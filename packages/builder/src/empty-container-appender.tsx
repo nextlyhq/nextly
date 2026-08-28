@@ -135,15 +135,19 @@
  * and it has three answers rather than two:
  *
  * - MEASURED — the pass found the element, accepted it, and holds a rectangle.
- * - DECLINED — the pass reached this container and refused it, for one of
- *   five reasons: the render produced no element for it at all; the
- *   stylesheet drew no box for the element it did produce (see the section
- *   above); the render laid out no box for that element, because something
- *   between it and the root generates none; the author positioned it against
- *   the VIEWPORT rather than against the page; or an authored ancestor clips
- *   it. `measure` states each one where it is asked. All five are re-decided
- *   on every pass, so each is a refusal for as long as the render keeps this
- *   shape rather than a permanent one.
+ * - DECLINED — the pass reached this container and refused it. The reasons are
+ *   listed rather than counted, because a total kept by hand beside the list
+ *   goes stale the moment one is inserted: the render produced no element for
+ *   it at all; the stylesheet drew no box for the element it did produce (see
+ *   the section above); the render laid out no box for that element, because
+ *   something between it and the root generates none; the render SKIPPED that
+ *   element, so the rectangle it still reports describes no place on the page;
+ *   the author positioned it against the VIEWPORT rather than against the page;
+ *   or an authored ancestor clips it. Each states its own case where it is
+ *   asked — the first in `measure`, which is the only one with no element to
+ *   ask anything of, and the rest in {@link declines}. Every one of them is
+ *   re-decided on every pass, so each is a refusal for as long as the render
+ *   keeps this shape rather than a permanent one.
  * - UNMEASURED — no pass has run at all, because there is no canvas root to
  *   run one against. Nothing has been asked about any container yet.
  *
@@ -205,6 +209,7 @@ import {
   canvasRootFrom,
   clippedByAncestorRect,
   layoutFragments,
+  renderSkips,
   viewportPositioned,
 } from "./geometry-dom";
 import type { SlotSource } from "./inserter";
@@ -401,6 +406,187 @@ export function centeredControlRect(rect: Rect, size: number): Rect {
   };
 }
 
+/**
+ * Whether this pass refuses to place a control on this element.
+ *
+ * The refusals that have an ELEMENT to ask about, gathered into one named
+ * question rather than left as conditions inside the measuring loop, so that
+ * loop reads as find, decide, record and each refusal keeps its own reason
+ * beside its own condition. The one refusal `measure` keeps is the one with no
+ * element at all — a container the render does not produce — which this
+ * function's signature cannot express and which is stated there instead. Every
+ * refusal here is re-decided on each pass: none is a permanent property of a
+ * container, only of the render as it currently stands.
+ *
+ * The ORDER is not arbitrary in one place. Whether the element generates a box
+ * and whether the render skips it are the same question answered differently by
+ * different engines, so the fragment count is asked first and the skip beside it
+ * states what it adds. Everything else here is independent, and asking it in
+ * another order would give the same answer.
+ *
+ * Takes the canvas root because one refusal is about the walk between this
+ * element and it, and reading it from the element again would be a second
+ * answer to a question `measure` has already settled for this pass.
+ */
+function declines(target: Element, root: HTMLElement): boolean {
+  /*
+   * The stylesheet's own condition, WHOLE, asked of the element the
+   * stylesheet would ask it of — not a second condition computed here.
+   *
+   * `emptySlotOf` decided WHICH containers this component knows about,
+   * from the document. That is a different population from the one
+   * `builder-chrome.css` draws its 44px box for, and the module docblock
+   * above depends on them being the same: a container the stylesheet
+   * declined has no box, so a control centred in its measured rectangle is
+   * centred in whatever that block happens to render instead. Both halves
+   * of the rule produce that, and both are reachable:
+   *
+   * - the ELEMENT does not qualify. A closed `core/accordion-item` is the
+   *   first-party case — an empty `children` slot inside a root that also
+   *   renders a `<summary>`, so the root is not `:empty` and measures the
+   *   summary's own height.
+   * - the ANCESTORS do not qualify. `Canvas` and this component are both
+   *   exported, so a host can compose them with no builder shell around them,
+   *   and the rule's `.nx-builder-chrome` scope then never applies to any
+   *   container in that canvas — every one of them sizeless, and every control
+   *   drawn on one a focusable button with no area.
+   *
+   * `Element.matches` evaluates the ancestor combinators as well as the
+   * compound, so one call covers the rule rather than the part of it that
+   * happens to be about this element.
+   */
+  if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
+    return true;
+  }
+  /*
+   * The render lays out no box for this element, so there is nothing on
+   * the canvas for a control to be anchored to.
+   *
+   * `getBoundingClientRect` still answers for such an element — with the
+   * zero rectangle — so measuring on would centre a square of no area at
+   * the canvas origin. That is the same focusable, named, invisible button
+   * the refusals around this one exist to prevent, arriving through an
+   * element the render kept and never laid out.
+   *
+   * An ANCESTOR is what puts a container here. Its own `display` cannot:
+   * `builder-chrome.css` gives the very selector matched above
+   * `display: block` at five compound units of specificity, outranking the
+   * three of the per-node rule an author's `display: none` or
+   * `display: contents` compiles into — measured in Chromium, a container
+   * carrying either still computed to `block` and generated its box. A
+   * node BETWEEN this one and the root is under no such rule, because a
+   * node holding a child is not `:empty`, so an author who hides a wrapper
+   * leaves every empty container inside it rendered, matching, and
+   * generating nothing. Where that rule is not in force at all the
+   * element's own keyword reaches this too, and the answer is the same.
+   *
+   * `layoutFragments` rather than a rectangle's area judged here. Whether
+   * an element generates a box is `geometry-dom.ts`'s question and
+   * `SpacingOverlay` already refuses on the same answer; the area is a
+   * consequence of it rather than a second reading, since the rule matched
+   * above draws a dashed border and a 2.75rem minimum height, so an
+   * element that generates a box measures more than nothing.
+   *
+   * Re-decided on the next pass like every refusal beside it: an edit that
+   * un-hides the wrapper changes `document`, and a recompiled sheet that
+   * does the same reaches the `MutationObserver` in `watchCanvasFor`, so
+   * either way something re-measures and the control comes back.
+   */
+  if (layoutFragments(target) === 0) {
+    return true;
+  }
+  /*
+   * The render SKIPPED this element, and the rectangle it reports for it
+   * anyway is not a place on the page.
+   *
+   * The sibling of the refusal above, for the engines that answer that one
+   * differently. A container inside a CLOSED `core/accordion-item` is the
+   * first-party case, and its `children` slot accepts any block, so an
+   * author reaches it by selecting a section in the Layers panel and
+   * inserting a `core/box`. Where the engine removes a closed disclosure's
+   * contents from the rendering, that box generates no fragment and the
+   * check above has already declined it. Where the engine gives the
+   * contents `content-visibility: hidden` instead — the rendering the HTML
+   * specification now describes — it generates ONE, full width and sized as
+   * though the section were open, sitting over the NEXT section's title.
+   * Every question asked before this one passes it: the element exists, it
+   * carries the slots marker, it is `:empty` inside a shell and a canvas, it
+   * is `static`, no ancestor clips it, and it has a fragment. A 44px control
+   * centred in that rectangle lands on a title belonging to another
+   * container, and pressing it reports an id the author did not point at.
+   *
+   * `renderSkips` rather than a computed value read here, because the
+   * element cannot see this about itself: the skip belongs to a box above
+   * it, so the container's own `content-visibility` computes to `visible`
+   * under both renderings. See `geometry-dom.ts` for what the question
+   * covers, which options it deliberately does not pass, and why an engine
+   * that cannot answer it declines nothing.
+   *
+   * Re-decided on the next pass like every refusal beside it, and the
+   * disclosure is the case worth naming: opening it is a user press on the
+   * canvas rather than an edit, so `document` does not change and nothing
+   * re-renders. What hears it is the `MutationObserver` in `watchCanvasFor`
+   * — the browser writes the `open` attribute onto the `<details>`, which is
+   * an attribute record inside the canvas root and outside this overlay's
+   * own layer — and the control appears as soon as that pass runs.
+   */
+  if (renderSkips(target)) {
+    return true;
+  }
+  /*
+   * Positioned against the VIEWPORT rather than against the page this
+   * overlay draws in, which is a container no control can be anchored to.
+   *
+   * `position` is a catalog keyword, so `fixed` and `sticky` are values an
+   * author stores like any other. Both hold the container still while the
+   * canvas content under it travels, so the square measured here slides off
+   * the container on the first scroll and comes to rest over unrelated
+   * content — taking the presses meant for that content with it, since this
+   * button is one of the two pieces of chrome that accept pointer events.
+   *
+   * Nothing corrects the drift, which is why it is refused instead of
+   * re-measured: the shell scrolls a section ABOVE the canvas root and a
+   * scroll event does not bubble, so `watchCanvasFor`'s capture-phase
+   * listener on the root reaches a scroller nested INSIDE the canvas and
+   * never hears that one.
+   *
+   * The same predicate `SpacingOverlay` refuses on, asked here rather than
+   * `position` being read a second time — see `viewportPositioned` in
+   * `geometry-dom.ts` for why that question belongs to the coordinate space
+   * rather than to either overlay.
+   */
+  if (viewportPositioned(target)) {
+    return true;
+  }
+  /*
+   * Excluded outright rather than measured. `clippedByAncestorRect`
+   * answers "is this element's own rectangle cut by an authored ancestor
+   * between it and the root" — a clipped container's DOM is cut where
+   * this overlay is not, so a control measured from its un-clipped
+   * rectangle would be drawn over whatever the page actually shows at
+   * that position.
+   *
+   * The RECT question rather than `clippedByAncestor`'s corner-aware one.
+   * That refinement exists for a caller drawing chrome flush against a
+   * block's edges — a spacing band runs the full length of one and does
+   * reach the corners — and this control does not: it is a fixed square
+   * anchored to the container's CENTRE, nowhere near a corner unless the
+   * container itself is barely larger than the control. Measured against
+   * an ordinary full-width child sitting flush inside a rounded, clipping
+   * parent — `core/box` directly inside `core/card`, ordinary enough that
+   * `card.tsx` names it the commonest composition in the library — the
+   * two curves genuinely disagree by a few pixels at each corner, which
+   * `clippedByAncestor` correctly reports and which is irrelevant to
+   * anything drawn away from the corners. Asking the corner-aware
+   * question here would decline the control for exactly the composition
+   * an author reaches for most.
+   */
+  if (clippedByAncestorRect(target, root)) {
+    return true;
+  }
+  return false;
+}
+
 export interface EmptyContainerAppendersProps {
   /** The document to scan for containers with nothing in them. */
   document: BlockDocument;
@@ -490,133 +676,16 @@ export function EmptyContainerAppenders({
        * which is the `root === null` return above and the one case where a
        * control genuinely is waiting to be placed.
        *
-       * Re-decided on the next pass exactly like the three refusals below: a
-       * container that starts rendering — a condition that begins to hold, an
-       * edit that gives the node markup — gets its control back as soon as
+       * Re-decided on the next pass exactly like every refusal in `declines`:
+       * a container that starts rendering — a condition that begins to hold,
+       * an edit that gives the node markup — gets its control back as soon as
        * anything re-measures.
        */
       if (target === null) {
         next.set(container.id, DECLINED);
         continue;
       }
-      /*
-       * The stylesheet's own condition, WHOLE, asked of the element the
-       * stylesheet would ask it of — not a second condition computed here.
-       *
-       * `emptySlotOf` decided WHICH containers this component knows about,
-       * from the document. That is a different population from the one
-       * `builder-chrome.css` draws its 44px box for, and the module docblock
-       * above depends on them being the same: a container the stylesheet
-       * declined has no box, so a control centred in its measured rectangle is
-       * centred in whatever that block happens to render instead. Both halves
-       * of the rule produce that, and both are reachable:
-       *
-       * - the ELEMENT does not qualify. A closed `core/accordion-item` is the
-       *   first-party case — an empty `children` slot inside a root that also
-       *   renders a `<summary>`, so the root is not `:empty` and measures the
-       *   summary's own height.
-       * - the ANCESTORS do not qualify. `Canvas` and this component are both
-       *   exported, so a host can compose them with no builder shell around
-       *   them, and the rule's `.nx-builder-chrome` scope then never applies to
-       *   any container in that canvas — every one of them sizeless, and every
-       *   control drawn on one a focusable button with no area.
-       *
-       * `Element.matches` evaluates the ancestor combinators as well as the
-       * compound, so one call covers the rule rather than the part of it that
-       * happens to be about this element.
-       */
-      if (!target.matches(EMPTY_CONTAINER_SELECTOR)) {
-        next.set(container.id, DECLINED);
-        continue;
-      }
-      /*
-       * The render lays out no box for this element, so there is nothing on
-       * the canvas for a control to be anchored to.
-       *
-       * `getBoundingClientRect` still answers for such an element — with the
-       * zero rectangle — so measuring on would centre a square of no area at
-       * the canvas origin. That is the same focusable, named, invisible button
-       * the refusals around this one exist to prevent, arriving through an
-       * element the render kept and never laid out.
-       *
-       * An ANCESTOR is what puts a container here. Its own `display` cannot:
-       * `builder-chrome.css` gives the very selector matched above
-       * `display: block` at five compound units of specificity, outranking the
-       * three of the per-node rule an author's `display: none` or
-       * `display: contents` compiles into — measured in Chromium, a container
-       * carrying either still computed to `block` and generated its box. A
-       * node BETWEEN this one and the root is under no such rule, because a
-       * node holding a child is not `:empty`, so an author who hides a wrapper
-       * leaves every empty container inside it rendered, matching, and
-       * generating nothing. Where that rule is not in force at all the
-       * element's own keyword reaches this too, and the answer is the same.
-       *
-       * `layoutFragments` rather than a rectangle's area judged here. Whether
-       * an element generates a box is `geometry-dom.ts`'s question and
-       * `SpacingOverlay` already refuses on the same answer; the area is a
-       * consequence of it rather than a second reading, since the rule matched
-       * above draws a dashed border and a 2.75rem minimum height, so an
-       * element that generates a box measures more than nothing.
-       *
-       * Re-decided on the next pass like every refusal beside it: an edit that
-       * un-hides the wrapper changes `document`, and a recompiled sheet that
-       * does the same reaches the `MutationObserver` in `watchCanvasFor`, so
-       * either way something re-measures and the control comes back.
-       */
-      if (layoutFragments(target) === 0) {
-        next.set(container.id, DECLINED);
-        continue;
-      }
-      /*
-       * Positioned against the VIEWPORT rather than against the page this
-       * overlay draws in, which is a container no control can be anchored to.
-       *
-       * `position` is a catalog keyword, so `fixed` and `sticky` are values an
-       * author stores like any other. Both hold the container still while the
-       * canvas content under it travels, so the square measured here slides off
-       * the container on the first scroll and comes to rest over unrelated
-       * content — taking the presses meant for that content with it, since this
-       * button is one of the two pieces of chrome that accept pointer events.
-       *
-       * Nothing corrects the drift, which is why it is refused instead of
-       * re-measured: the shell scrolls a section ABOVE the canvas root and a
-       * scroll event does not bubble, so `watchCanvasFor`'s capture-phase
-       * listener on the root reaches a scroller nested INSIDE the canvas and
-       * never hears that one.
-       *
-       * The same predicate `SpacingOverlay` refuses on, asked here rather than
-       * `position` being read a second time — see `viewportPositioned` in
-       * `geometry-dom.ts` for why that question belongs to the coordinate space
-       * rather than to either overlay.
-       */
-      if (viewportPositioned(target)) {
-        next.set(container.id, DECLINED);
-        continue;
-      }
-      /*
-       * Excluded outright rather than measured. `clippedByAncestorRect`
-       * answers "is this element's own rectangle cut by an authored ancestor
-       * between it and the root" — a clipped container's DOM is cut where
-       * this overlay is not, so a control measured from its un-clipped
-       * rectangle would be drawn over whatever the page actually shows at
-       * that position.
-       *
-       * The RECT question rather than `clippedByAncestor`'s corner-aware one.
-       * That refinement exists for a caller drawing chrome flush against a
-       * block's edges — a spacing band runs the full length of one and does
-       * reach the corners — and this control does not: it is a fixed square
-       * anchored to the container's CENTRE, nowhere near a corner unless the
-       * container itself is barely larger than the control. Measured against
-       * an ordinary full-width child sitting flush inside a rounded, clipping
-       * parent — `core/box` directly inside `core/card`, ordinary enough that
-       * `card.tsx` names it the commonest composition in the library — the
-       * two curves genuinely disagree by a few pixels at each corner, which
-       * `clippedByAncestor` correctly reports and which is irrelevant to
-       * anything drawn away from the corners. Asking the corner-aware
-       * question here would decline the control for exactly the composition
-       * an author reaches for most.
-       */
-      if (clippedByAncestorRect(target, root)) {
+      if (declines(target, root)) {
         next.set(container.id, DECLINED);
         continue;
       }
