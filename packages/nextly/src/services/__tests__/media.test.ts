@@ -489,7 +489,7 @@ describe("MediaService", () => {
       // A single-argument assertion passes only while the call has exactly one,
       // so it silently stopped describing this call when the bucket was added.
       expect(mockStorageDelete).toHaveBeenCalledWith("test.jpg", "media");
-      expect(mockStorageDelete).toHaveBeenCalledWith("thumb_test.jpg");
+      expect(mockStorageDelete).toHaveBeenCalledWith("thumb_test.jpg", "media");
 
       const check = await mediaService.getMediaById(mediaId);
       expect(check.success).toBe(false);
