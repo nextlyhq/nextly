@@ -55,7 +55,7 @@ import {
   BlockToolbar,
   BreakpointManager,
   BreakpointSwitcher,
-  CanvasZoomControl,
+  type CanvasZoom,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   offeredTiers,
@@ -1136,7 +1136,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * than computed here, where a second derivation would disagree with the
    * screen for exactly the frame after a panel opens.
    */
-  const [zoom, setZoom] = useState(DEFAULT_PREFERENCES.zoom);
+  /*
+   * The zoom the SHELL owns, mirrored here only to draw the canvas with it.
+   *
+   * Nothing writes it from this side. The shell persists the choice and reports
+   * it, including the value restored on load; this holds the last report so the
+   * canvas can be scaled by it. Holding it as a second source of truth and
+   * syncing back is what produced an oscillating write of `fit, 2, fit, 2` on
+   * every open — two owners, each correcting the other.
+   */
+  const [zoom, setZoom] = useState<CanvasZoom | undefined>(undefined);
   const [appliedScale, setAppliedScale] = useState(1);
   const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
     undefined
@@ -1457,6 +1466,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // already suppresses the placeholder box it sits over.
         onShowEmptyElementsChange={setShowEmptyElements}
         onZoomChange={setZoom}
+        appliedScale={appliedScale}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -1494,16 +1504,6 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
              * only the measured width it would unselect the option just
              * clicked whenever the region could not honour it.
              */}
-            {/*
-              Beside the tier switcher, because between them they answer one
-              question: which viewport is being simulated, and how large it is
-              drawn. Split across the shell they read as unrelated controls.
-            */}
-            <CanvasZoomControl
-              zoom={zoom}
-              appliedScale={appliedScale}
-              onChange={setZoom}
-            />
             <BreakpointSwitcher
               breakpoints={canvasRender.styleContext.breakpoints}
               width={requestedWidth}
@@ -1710,7 +1710,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             */
             <BlockContextMenu editor={editor}>
               <Canvas
-                zoom={zoom}
+                zoom={zoom ?? DEFAULT_PREFERENCES.zoom}
                 document={editor.document}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
