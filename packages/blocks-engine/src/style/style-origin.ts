@@ -141,6 +141,27 @@ function descendantWeight(
   return [anchorClasses + pseudoClasses, element.trim() === "" ? 0 : 1];
 }
 
+/**
+ * Whether one recorded declaration outranks another in the cascade the compiler
+ * emits.
+ *
+ * Exported because `styleOrigin` cannot answer every form of this question: it
+ * is asked once per STATE, so comparing the winners of two states happens in the
+ * caller. That comparison is the same question, and a caller re-deriving it held
+ * a second idea of what makes one selector beat another — which disagreed the
+ * moment the default tiers stopped weighing what every other tier weighs, and
+ * disagreed exactly where the answer is hard.
+ *
+ * So the weighting has one owner, here, beside the compiler that produces the
+ * selectors it describes. A caller ranks THROUGH this rather than beside it.
+ */
+export function outranksEntry(
+  entry: StyleTraceEntry,
+  other: StyleTraceEntry
+): boolean {
+  return outranks(weightOf(entry), weightOf(other));
+}
+
 /** Whether `a` outranks `b`: reach first, then classes, then types. */
 function outranks(
   a: readonly [number, number, number],
@@ -211,24 +232,18 @@ export function styleOrigin(
 ): StyleTraceEntry | undefined {
   const live = new Set(query.breakpoints);
   let winner: StyleTraceEntry | undefined;
-  let winningSpecificity: readonly [number, number, number] | undefined;
   for (const entry of trace) {
     if (entry.property !== query.property) continue;
     if (entry.state !== query.state) continue;
     if (!live.has(entry.breakpoint)) continue;
     if (!reachesNode(entry, subject) && !reachesThroughAncestor(entry, subject))
       continue;
-    const specificity = weightOf(entry);
     // Later beats earlier only at EQUAL weight, which is the cascade the
     // compiler emits: a tier's own anchor, plus whatever a descendant selector
-    // adds outside the weightless wrapper.
-    if (
-      winningSpecificity !== undefined &&
-      outranks(winningSpecificity, specificity)
-    )
-      continue;
+    // adds outside the weightless wrapper. Through the exported comparator, so
+    // this ranking and a caller's cross-state one cannot be two rankings.
+    if (winner !== undefined && outranksEntry(winner, entry)) continue;
     winner = entry;
-    winningSpecificity = specificity;
   }
   return winner;
 }
