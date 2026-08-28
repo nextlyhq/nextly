@@ -701,6 +701,15 @@ describe("insertionPointFor", () => {
   });
 });
 
+/**
+ * A definition source resolving nothing, for the cases about props and ids.
+ *
+ * Those blocks declare no starting children, so expansion has nothing to do and
+ * an empty source says exactly that. It also keeps them off the global
+ * registry, which no test here registers into.
+ */
+const noDefaults = { get: () => undefined };
+
 describe("nodeForEntry", () => {
   it("stamps the type and the version the entry carries", () => {
     // Version 3 with its migration steps, rather than the default 1: a stamp
@@ -716,7 +725,7 @@ describe("nodeForEntry", () => {
         },
       },
     ]);
-    const node = nodeForEntry(entry(entries, "acme/text"));
+    const node = nodeForEntry(entry(entries, "acme/text"), noDefaults);
 
     expect(node.type).toBe("acme/text");
     expect(node.version).toBe(3);
@@ -737,7 +746,7 @@ describe("nodeForEntry", () => {
       },
     ]);
 
-    const node = nodeForEntry(entry(entries, "acme/card#loud"));
+    const node = nodeForEntry(entry(entries, "acme/card#loud"), noDefaults);
 
     expect(node.type).toBe("acme/card");
     expect(node.props).toEqual({ tone: "shout" });
@@ -757,8 +766,8 @@ describe("nodeForEntry", () => {
     ]);
     const source = entry(entries, "acme/list");
 
-    const first = nodeForEntry(source);
-    const second = nodeForEntry(source);
+    const first = nodeForEntry(source, noDefaults);
+    const second = nodeForEntry(source, noDefaults);
     (first.props.items as string[]).push("two");
     (first.props.meta as { deep: boolean }).deep = false;
 
@@ -771,6 +780,90 @@ describe("nodeForEntry", () => {
     const entries = catalog([{ ...base, name: "acme/text" }]);
     const source = entry(entries, "acme/text");
 
-    expect(nodeForEntry(source).id).not.toBe(nodeForEntry(source).id);
+    expect(nodeForEntry(source, noDefaults).id).not.toBe(
+      nodeForEntry(source, noDefaults).id
+    );
+  });
+
+  describe("a block that declares what its slot starts with", () => {
+    /**
+     * A row declaring two columns, and the column it names.
+     *
+     * Mirrors `core/columns` without depending on it: the property under test
+     * is that the inserter EXPANDS a declaration, which must hold for a plugin
+     * container nobody here wrote.
+     */
+    const rowDefinitions = {
+      get: (type: string) =>
+        type === "acme/row"
+          ? {
+              version: 1,
+              slots: {
+                children: {
+                  defaultBlock: [{ type: "acme/cell" }, { type: "acme/cell" }],
+                },
+              },
+            }
+          : type === "acme/cell"
+            ? { version: 2 }
+            : undefined,
+    };
+
+    const rowEntry = () =>
+      entry(catalog([{ ...base, name: "acme/row" }]), "acme/row");
+
+    it("arrives carrying the children the block declares", () => {
+      const node = nodeForEntry(rowEntry(), rowDefinitions);
+
+      expect(node.slots?.children?.map(child => child.type)).toEqual([
+        "acme/cell",
+        "acme/cell",
+      ]);
+      // The child's own version, not the row's.
+      expect(node.slots?.children?.map(child => child.version)).toEqual([2, 2]);
+    });
+
+    it("gives the two children of ONE insert distinct ids", () => {
+      const node = nodeForEntry(rowEntry(), rowDefinitions);
+      const ids = (node.slots?.children ?? []).map(child => child.id);
+
+      // Length alone passes on an implementation that expands one child and
+      // repeats the reference, which is the collision this design removes.
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    });
+
+    it("gives TWO inserted rows no id in common, parents included", () => {
+      // The collision that matters is across instances, and one parent cannot
+      // produce it: an implementation caching the expanded children per type
+      // passes the test above and fails here. Two rows dropped on one page are
+      // exactly this situation, and `duplicate-node-id` is what the document
+      // validator answers if it is got wrong.
+      const source = rowEntry();
+      const first = nodeForEntry(source, rowDefinitions);
+      const second = nodeForEntry(source, rowDefinitions);
+
+      const everyId = [
+        first.id,
+        second.id,
+        ...(first.slots?.children ?? []).map(child => child.id),
+        ...(second.slots?.children ?? []).map(child => child.id),
+      ];
+
+      expect(everyId).toHaveLength(6);
+      expect(new Set(everyId).size).toBe(6);
+    });
+
+    it("leaves a block declaring no default with no slots key at all", () => {
+      // Not an empty record: the editor's empty-container check reads the
+      // absence of `slots`, so a container claiming an empty slot it never
+      // filled would be a different state to it.
+      const plain = entry(
+        catalog([{ ...base, name: "acme/text" }]),
+        "acme/text"
+      );
+
+      expect(nodeForEntry(plain, rowDefinitions).slots).toBeUndefined();
+    });
   });
 });

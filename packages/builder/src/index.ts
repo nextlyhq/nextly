@@ -201,6 +201,7 @@ export {
 } from "./drop-targets";
 export {
   blockAllowedAt,
+  registryBlockSource,
   registrySlotSource,
   type InsertTarget,
   type SlotSource,
