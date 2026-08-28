@@ -233,6 +233,10 @@ export function VersionComparePage({
             hasNextPage={list.hasNextPage}
             isFetchingNextPage={list.isFetchingNextPage}
             onLoadMore={() => void list.fetchNextPage()}
+            // Page-specific, not the aggregate: `historyUnavailable` above
+            // answers whether the history could be read at all, and a later
+            // page failing is a different event with a different remedy.
+            nextPageError={list.isFetchNextPageError ? list.error : null}
           />
         </aside>
 

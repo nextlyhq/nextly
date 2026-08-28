@@ -13,7 +13,7 @@
  * @module components/features/versions/useVersionDocumentTitle
  */
 
-import { pickTitleFieldName } from "@admin/components/features/entries/EntryList/EntryTableColumns";
+import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
 import { useSingleSchema } from "@admin/hooks/queries/useSingles";
@@ -59,24 +59,13 @@ export function useVersionDocumentTitle(scope: TitleScope): string | undefined {
     return readableText(single.data?.label) ?? scope.slug;
   }
 
-  // Which field names an entry is the collection's decision, and the entry list
-  // already makes it — through `useAsTitle` where the author set one, and a
-  // conventional field otherwise. Reused rather than restated so a comparison
-  // names an entry the way its list does.
-  // Which field names an entry is the collection's decision, and the entry list
-  // already makes it — `useAsTitle` where the author set one, a conventional
-  // field otherwise. The rule is shared rather than restated, so a comparison
-  // names an entry the way its list does.
-  const fields = collection.data?.fields;
-  const titleField = fields
-    ? pickTitleFieldName(
-        collection.data?.admin?.useAsTitle,
-        fields.map(field => field.name)
-      )
-    : undefined;
-  const fromField = titleField
-    ? readableText(entry.data?.[titleField])
-    : undefined;
+  // What an entry is called is one question with one answer, shared with the
+  // editor's heading: a document named one thing by its editor and another by
+  // the page comparing its versions is worse than either name on its own.
+  const fromField = entryTitleValue(
+    entry.data,
+    collection.data?.admin?.useAsTitle
+  );
 
   // The id is the fallback rather than the slug alone: a slug names the
   // collection, and every entry in it would then share one title. It is also

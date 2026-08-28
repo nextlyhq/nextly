@@ -48,7 +48,11 @@ function version(overrides: Partial<VersionMeta> = {}): VersionMeta {
 
 function renderRail(
   versions: VersionMeta[],
-  extra: { hasNextPage?: boolean } = {}
+  extra: {
+    hasNextPage?: boolean;
+    nextPageError?: unknown;
+    onLoadMore?: () => void;
+  } = {}
 ) {
   return render(
     <VersionTimelineRail
@@ -57,6 +61,8 @@ function renderRail(
       selected={null}
       onSelect={vi.fn()}
       hasNextPage={extra.hasNextPage}
+      nextPageError={extra.nextPageError}
+      onLoadMore={extra.onLoadMore}
     />
   );
 }
@@ -192,5 +198,60 @@ describe("VersionTimelineRail — a row that cannot be compared says so", () => 
     expect(
       within(row).queryByText(/Load more history|Nothing before this version/)
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("VersionTimelineRail — a failed Load more", () => {
+  beforeEach(() => {
+    useLocalization.mockReset();
+    useLocalization.mockReturnValue({ enabled: false, getLocale: () => null });
+  });
+
+  /**
+   * A failed next page clears `isFetchingNextPage` and returns the button to
+   * its resting label, so without a message the click appears to have done
+   * nothing — the same silence a disabled row gave before it said why.
+   */
+  it("says why the click changed nothing", () => {
+    renderRail([version()], {
+      hasNextPage: true,
+      nextPageError: new Error("Network unreachable"),
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("Network unreachable");
+  });
+
+  it("offers the retry as a retry, not as a fresh Load more", () => {
+    renderRail([version()], {
+      hasNextPage: true,
+      nextPageError: new Error("nope"),
+    });
+
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+  });
+
+  /**
+   * The rows already loaded are still valid, so the failure is reported BESIDE
+   * the list rather than in place of it — a page failing is not the history
+   * becoming unreadable.
+   */
+  it("keeps the rows it already has", () => {
+    renderRail([version()], {
+      hasNextPage: true,
+      nextPageError: new Error("nope"),
+    });
+
+    expect(screen.getByText("Version 5")).toBeInTheDocument();
+  });
+
+  /**
+   * The control. Without it every assertion above would pass on a rail that
+   * always showed an error and always said "Try again".
+   */
+  it("says nothing, and offers Load more, when nothing has failed", () => {
+    renderRail([version()], { hasNextPage: true });
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
   });
 });

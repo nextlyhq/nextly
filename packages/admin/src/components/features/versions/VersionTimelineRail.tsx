@@ -11,6 +11,7 @@
  */
 
 import { Badge, Button, Skeleton } from "@admin/components/ui";
+import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { formatDateTime } from "@admin/lib/dates/format";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
@@ -38,6 +39,14 @@ export interface VersionTimelineRailProps {
   hasNextPage?: boolean;
   isFetchingNextPage?: boolean;
   onLoadMore?: () => void;
+  /**
+   * Why the last Load more failed, or null when it did not.
+   *
+   * Separate from `isError`, which asks whether the HISTORY could be read at
+   * all: a page that failed after others loaded leaves every row on screen
+   * valid, so it is reported beside the retry rather than in place of the list.
+   */
+  nextPageError?: unknown;
 }
 
 function RailSkeleton() {
@@ -94,6 +103,49 @@ function unpairableReason(previous: Predecessor): string | null {
   return previous.kind === "first"
     ? "Nothing before this version to compare it against"
     : "Load more history to compare this version";
+}
+
+/**
+ * The control that extends the history, and what happened last time it was used.
+ *
+ * A failed request clears `isFetchingNextPage` and returns the button to its
+ * resting label, so without a message the click appears to have done nothing.
+ * The rows already on screen stay valid, which is why the failure is reported
+ * beside the retry rather than in place of the list.
+ */
+function LoadMoreFooter({
+  isFetchingNextPage,
+  nextPageError,
+  onLoadMore,
+}: {
+  isFetchingNextPage?: boolean;
+  nextPageError: unknown;
+  onLoadMore?: () => void;
+}) {
+  const failed = nextPageError !== null && nextPageError !== undefined;
+  const label = isFetchingNextPage
+    ? "Loading…"
+    : failed
+      ? "Try again"
+      : "Load more";
+  return (
+    <div className="flex flex-col gap-2 p-4">
+      {failed ? (
+        <p role="status" className="text-xs text-destructive">
+          {apiErrorMessage(nextPageError, "Could not load more history.")}
+        </p>
+      ) : null}
+      <Button
+        variant="outline"
+        size="sm"
+        className="w-full"
+        disabled={isFetchingNextPage}
+        onClick={onLoadMore}
+      >
+        {label}
+      </Button>
+    </div>
+  );
 }
 
 /** One version in the rail. */
@@ -173,6 +225,7 @@ export function VersionTimelineRail({
   hasNextPage = false,
   isFetchingNextPage = false,
   onLoadMore,
+  nextPageError = null,
 }: VersionTimelineRailProps) {
   if (isLoading) return <RailSkeleton />;
 
@@ -223,17 +276,11 @@ export function VersionTimelineRail({
       </ul>
 
       {hasNextPage ? (
-        <div className="p-4">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            disabled={isFetchingNextPage}
-            onClick={onLoadMore}
-          >
-            {isFetchingNextPage ? "Loading…" : "Load more"}
-          </Button>
-        </div>
+        <LoadMoreFooter
+          isFetchingNextPage={isFetchingNextPage}
+          nextPageError={nextPageError}
+          onLoadMore={onLoadMore}
+        />
       ) : null}
     </nav>
   );

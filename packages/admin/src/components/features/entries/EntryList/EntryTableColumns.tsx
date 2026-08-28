@@ -18,6 +18,8 @@ import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
 import { fieldLabel } from "@admin/lib/field-label";
 
+import { entryTitleField } from "../entry-title";
+
 import { EntryTableCell } from "./EntryTableCell";
 import { LanguageDots } from "./LanguageDots";
 
@@ -314,26 +316,21 @@ export function getEntryTitleField(
 }
 
 /**
- * Which field names an entry, from the author's choice and the field names.
+ * Which COLUMN names an entry.
  *
- * Separated from {@link getEntryTitleField} because the same rule is asked of
- * collections carrying two different field types — the list has schema fields,
- * the comparison page has the shape `useCollection` answers with — and neither
- * is convertible to the other. The rule reads only a setting and a list of
- * names, so it is stated once here and given a typed front door per caller,
- * rather than restated where a second copy would drift into naming an entry
- * differently on two pages.
+ * The preference order comes from `entry-title`, shared with the editor and
+ * comparison headings so a document is not called one thing by its editor and
+ * another by the page beside it. Only the last resort is decided here, because
+ * a column needs a field that exists where a heading needs text.
  */
 export function pickTitleFieldName(
   useAsTitle: string | undefined,
   fieldNames: readonly string[]
 ): string {
-  return (
-    useAsTitle ||
-    ["title", "name", "label"].find(name => fieldNames.includes(name)) ||
-    fieldNames[0] ||
-    "id"
-  );
+  // A column has to name a field that exists, so where nothing is conventional
+  // this falls back to the first field and finally to `id`: a table with an
+  // empty primary column is worse than one showing an unhelpful field.
+  return entryTitleField(useAsTitle, fieldNames) ?? fieldNames[0] ?? "id";
 }
 
 /**
