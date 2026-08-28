@@ -244,7 +244,9 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
             namespace: "DialogTestEditor",
             nodes: [...RICH_TEXT_NODES],
             onError: err => {
-              console.error(err);
+              // Re-throw: returning normally would let Lexical attempt
+              // recovery, so an editor error would never fail the test.
+              throw err;
             },
           }}
         >
