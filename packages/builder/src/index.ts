@@ -327,6 +327,23 @@ export {
  * offers, and availability derived from a second reading of the lock and move
  * rules is how the two come to disagree.
  */
+/**
+ * @experimental How large the canvas draws the page.
+ *
+ * Pure, so it stays on this entry: a host reads a stored preference and hands
+ * the result to the canvas, and neither half needs a component to do it.
+ */
+export {
+  FIT_ZOOM,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  ZOOM_STEPS,
+  readZoom,
+  steppedZoom,
+  writeZoom,
+  type CanvasZoom,
+} from "./canvas-zoom";
+
 export {
   BLOCK_GROUP,
   EDITOR_GROUP,
