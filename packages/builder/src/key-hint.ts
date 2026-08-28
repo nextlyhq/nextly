@@ -29,7 +29,7 @@
  * @module key-hint
  */
 
-import { detectApplePlatform, parseKeys } from "@nextlyhq/ui";
+import { detectApplePlatform, parseKeys, type KeyChord } from "@nextlyhq/ui";
 
 /**
  * Glyphs for keys whose NAME is not what a keyboard shows.
@@ -51,20 +51,31 @@ const KEY_GLYPHS: Readonly<Record<string, string>> = {
   " ": "Space",
 };
 
-/** The modifier labels, in the order a keyboard shortcut is conventionally written. */
-function modifierLabels(
-  chord: ReturnType<typeof parseKeys>[number],
-  apple: boolean
-): string[] {
-  const labels: string[] = [];
-  // `mod` first, because it is the outermost modifier in every convention that
-  // writes more than one.
-  if (chord.mod) labels.push(apple ? "⌘" : "Ctrl");
-  if (chord.ctrl) labels.push(apple ? "⌃" : "Ctrl");
-  if (chord.alt) labels.push(apple ? "⌥" : "Alt");
-  if (chord.shift) labels.push(apple ? "⇧" : "Shift");
-  if (chord.meta) labels.push(apple ? "⌘" : "Meta");
-  return labels;
+/**
+ * The modifiers, in the order a keyboard shortcut is conventionally written.
+ *
+ * A table rather than a run of conditions: the order IS the convention, and a
+ * list makes it the thing being read rather than something recoverable only by
+ * following five branches in sequence. `mod` leads because it is the outermost
+ * modifier wherever more than one is written.
+ */
+const MODIFIERS: ReadonlyArray<{
+  readonly held: (chord: KeyChord) => boolean;
+  readonly apple: string;
+  readonly other: string;
+}> = [
+  { held: chord => chord.mod, apple: "⌘", other: "Ctrl" },
+  { held: chord => chord.ctrl, apple: "⌃", other: "Ctrl" },
+  { held: chord => chord.alt, apple: "⌥", other: "Alt" },
+  { held: chord => chord.shift, apple: "⇧", other: "Shift" },
+  { held: chord => chord.meta, apple: "⌘", other: "Meta" },
+];
+
+/** The modifier labels this chord carries, in that order. */
+function modifierLabels(chord: KeyChord, apple: boolean): string[] {
+  return MODIFIERS.filter(modifier => modifier.held(chord)).map(modifier =>
+    apple ? modifier.apple : modifier.other
+  );
 }
 
 /**
