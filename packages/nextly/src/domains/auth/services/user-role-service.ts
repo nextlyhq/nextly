@@ -13,6 +13,7 @@ import { getDialectTables } from "../../../database";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
 
@@ -65,7 +66,7 @@ export class UserRoleService extends BaseService {
         this.db as RBACDatabaseInstance
       ).query.users.findFirst({
         columns: { id: true },
-        where: { id: userId },
+        where: { id: requireFilterValue(userId, "userId") },
       });
 
       if (!user) {
