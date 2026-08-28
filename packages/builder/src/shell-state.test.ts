@@ -54,6 +54,7 @@ describe("which panel the rail selects", () => {
     // shrinks by one, and everything remaining passes. A vanishing test reads
     // exactly like a passing one.
     expect([...LEFT_PANELS].sort()).toEqual([
+      "classes",
       "components",
       "fonts",
       "insert",

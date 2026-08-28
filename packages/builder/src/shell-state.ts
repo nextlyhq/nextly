@@ -25,6 +25,7 @@ export const LEFT_PANELS = [
   "layers",
   "components",
   "tokens",
+  "classes",
   "fonts",
   "pages",
   "settings",
