@@ -55,6 +55,12 @@ interface MinimalField {
   name: string;
   type: string;
   required?: boolean;
+  /**
+   * The per-type options bag the real field config carries. Needed here for
+   * `number` fields, whose column type is decided by `options.format`: float
+   * storage is opt-in and a bare number is an integer.
+   */
+  options?: Record<string, unknown>;
 }
 
 const RESERVED_NAMES = new Set([

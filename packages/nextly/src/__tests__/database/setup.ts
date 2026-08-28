@@ -279,7 +279,7 @@ async function dropAllTables(
  */
 async function installTableResolver(
   adapter: DrizzleAdapter,
-  type: TestDatabaseType
+  type: AdapterType
 ): Promise<void> {
   const dialect = toDialect(type);
   const bundle =
