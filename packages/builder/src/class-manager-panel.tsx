@@ -175,6 +175,21 @@ export interface ClassManagerPanelProps {
    */
   documentScan?: "complete" | "partial";
   /**
+   * The name each class is currently being RENAMED to, keyed by id.
+   *
+   * A rename is a network write and `library` does not move until it comes
+   * back, so the rendered slug is stale for as long as it is in flight. An
+   * author who renames `hero` to `promo` and types `hero` again inside that
+   * window is reverting — and comparing against the rendered name reads it as
+   * a no-op and lets the first write land.
+   *
+   * Supplied by the HOST rather than remembered here, because the host owns the
+   * write queue and this panel does not survive a switch to another rail panel.
+   * A field holding it locally lost it on exactly the switch that makes the
+   * window long enough to matter.
+   */
+  pendingSlugs?: Readonly<Record<string, string>>;
+  /**
    * The classes something ELSE supplies, which the stored library layers over.
    *
    * Needed because these two are not equally editable, exactly as the tokens
@@ -213,6 +228,7 @@ export function ClassManagerPanel({
   library,
   absence,
   documentScan,
+  pendingSlugs,
   usage,
   documentClassIds,
   suppliedClassIds,
@@ -294,6 +310,8 @@ export function ClassManagerPanel({
       <ClassSearch query={query} onChange={setQuery} />
       <ClassList
         rows={rows}
+        searching={query.trim() !== ""}
+        pendingSlugs={pendingSlugs}
         library={library}
         supplied={new Set(suppliedClassIds ?? [])}
         usageKnown={usageKnown}
@@ -378,6 +396,8 @@ const MAX_MANAGED_ROWS = 200;
 
 function ClassList({
   rows,
+  searching,
+  pendingSlugs,
   library,
   supplied,
   usageKnown,
@@ -385,22 +405,44 @@ function ClassList({
   onDelete,
 }: {
   rows: readonly ClassRow[];
+  /** Whether a search is narrowing them, for the empty-list wording. */
+  searching: boolean;
+  pendingSlugs?: Readonly<Record<string, string>>;
   library: readonly NamedClass[];
   supplied: ReadonlySet<string>;
   usageKnown: boolean;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
+  /*
+   * How many rows are mounted right now. Raised by the control below rather
+   * than fixed, because a search cannot be relied on to reach the tail: a
+   * library of `class-0` to `class-259` matches every query an author is
+   * likely to type, and the last sixty would stay unreachable however the
+   * message was worded.
+   */
+  const [limit, setLimit] = React.useState(MAX_MANAGED_ROWS);
   if (rows.length === 0) {
-    return <p className="nx-inspector__note">No classes match this search.</p>;
+    return (
+      <p className="nx-inspector__note">
+        {/*
+          Which narrowing produced the empty list. Blaming the search when the
+          box is blank sends an author to clear something that is not set, and
+          hides the filter that actually did it.
+        */}
+        {searching
+          ? "No classes match this search."
+          : "No classes match this filter."}
+      </p>
+    );
   }
-  const shown = rows.slice(0, MAX_MANAGED_ROWS);
+  const shown = rows.slice(0, limit);
   const hidden = rows.length - shown.length;
   return (
     <>
       {hidden > 0 ? (
         <p className="nx-inspector__note">
-          {`Showing ${shown.length} of ${rows.length}. Search by name to reach the rest.`}
+          {`Showing ${shown.length} of ${rows.length}.`}
         </p>
       ) : null}
       <ul className="nx-classman__list">
@@ -408,6 +450,7 @@ function ClassList({
           <li key={row.id} className="nx-classman__row">
             <ClassRowView
               row={row}
+              pendingSlug={pendingSlugs?.[row.id]}
               library={library}
               isSupplied={supplied.has(row.id)}
               usageKnown={usageKnown}
@@ -417,12 +460,24 @@ function ClassList({
           </li>
         ))}
       </ul>
+      {hidden > 0 ? (
+        <Button
+          className="nx-classman__more"
+          onClick={() => setLimit(current => current + MAX_MANAGED_ROWS)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          {`Show ${Math.min(hidden, MAX_MANAGED_ROWS)} more`}
+        </Button>
+      ) : null}
     </>
   );
 }
 
 function ClassRowView({
   row,
+  pendingSlug,
   library,
   isSupplied,
   usageKnown,
@@ -430,6 +485,8 @@ function ClassRowView({
   onDelete,
 }: {
   row: ClassRow;
+  /** The name this class is being renamed to, when a write is in flight. */
+  pendingSlug?: string;
   library: readonly NamedClass[];
   isSupplied: boolean;
   usageKnown: boolean;
@@ -441,7 +498,12 @@ function ClassRowView({
   return (
     <>
       <div className="nx-classman__fields">
-        <NameField row={row} library={library} onRename={onRename} />
+        <NameField
+          library={library}
+          onRename={onRename}
+          pendingSlug={pendingSlug}
+          row={row}
+        />
         <UsageNote row={row} usageKnown={usageKnown} />
         {isSupplied ? (
           // Named rather than shown disabled. A greyed button invites an
@@ -485,10 +547,12 @@ function ClassRowView({
  */
 function NameField({
   row,
+  pendingSlug,
   library,
   onRename,
 }: {
   row: ClassRow;
+  pendingSlug?: string;
   library: readonly NamedClass[];
   onRename: ClassManagerPanelProps["onRename"];
 }): React.ReactElement {
@@ -510,19 +574,6 @@ function NameField({
    * with the orders reversed, keeps reporting one the retry already fixed.
    */
   const attempt = React.useRef(0);
-  /*
-   * The name this row was last ASKED to take, which is not what it renders.
-   *
-   * `row.slug` is the STORED name and does not move until a save comes back
-   * through the cache. An author who renames `old` to `new` and then types
-   * `old` again inside that window is making a real edit — a revert — but the
-   * rendered slug still says `old`, so the no-op branch below discarded it and
-   * the pending first write went on to persist `new`.
-   *
-   * Cleared on refusal, because a write that did not land leaves the class
-   * with the name it already had.
-   */
-  const requested = React.useRef<string | null>(null);
   /*
    * Where a refusal goes when this row is no longer on screen.
    *
@@ -552,9 +603,13 @@ function NameField({
      * write a revision whose rendered output is identical to the one before it.
      * The draft still clears, because the author did finish editing.
      */
-    // Compared against what this row was last asked to become, falling back to
-    // the stored name when nothing is in flight.
-    if (outcome.slug === (requested.current ?? row.slug)) {
+    /*
+     * Compared against the name this class is HEADING FOR, which is the
+     * pending one while a write is in flight and the stored one otherwise.
+     * Comparing against the rendered slug read a revert as a no-op and let the
+     * superseded write land.
+     */
+    if (outcome.slug === (pendingSlug ?? row.slug)) {
       setDraft(null);
       return;
     }
@@ -573,13 +628,11 @@ function NameField({
      */
     attempt.current += 1;
     const mine = attempt.current;
-    requested.current = outcome.slug;
     let answered: ClassRenameAnswer;
     try {
       answered = onRename(row.id, outcome.slug);
     } catch {
       setDraft(null);
-      requested.current = null;
       report("This class could not be renamed.");
       return;
     }
@@ -607,7 +660,6 @@ function NameField({
           setRefused(null);
           return;
         }
-        requested.current = null;
         report(result.reason);
       })
       /*
@@ -618,7 +670,6 @@ function NameField({
        */
       .catch(() => {
         if (attempt.current !== mine) return;
-        requested.current = null;
         report("This class could not be renamed.");
       });
   };

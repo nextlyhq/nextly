@@ -824,6 +824,28 @@ function useClassSurface(
    * class.
    */
   const writes = useClassWrites(library);
+  /*
+   * Which name each class is heading for while its rename is on the network.
+   *
+   * Held HERE because it must survive the manager panel being unmounted, which
+   * the rail does on every switch. State rather than a ref: the panel renders
+   * from it, so a change has to reach the screen.
+   */
+  const [pendingSlugs, setPendingSlugs] = useState<Record<string, string>>({});
+  const markPending = useCallback(
+    (classId: string, slug: string | undefined) => {
+      setPendingSlugs(current => {
+        if (slug === undefined) {
+          if (!(classId in current)) return current;
+          const { [classId]: _gone, ...rest } = current;
+          return rest;
+        }
+        if (current[classId] === slug) return current;
+        return { ...current, [classId]: slug };
+      });
+    },
+    []
+  );
   return {
     library,
     /*
@@ -839,12 +861,14 @@ function useClassSurface(
      * save would then delete those classes rather than add one.
      */
     create: useCreateClass(writes, configured),
+    /** Which classes are mid-rename, for the manager's no-op check. */
+    pendingSlugs,
     /*
      * Withheld the same way and for the same reason: renaming against a
      * library missing everything stored would save that partial list, which
      * deletes the classes it could not see rather than renaming one.
      */
-    rename: useRenameClass(writes, configured),
+    rename: useRenameClass(writes, configured, markPending),
   };
 }
 
@@ -928,41 +952,64 @@ function useCreateClass(
  */
 function useRenameClass(
   writes: ClassWrites,
-  configured: readonly NamedClass[] | undefined
+  configured: readonly NamedClass[] | undefined,
+  /**
+   * Record which name a class is heading for while its write is in flight.
+   *
+   * Held by the CALLER rather than by the panel, because a rename outlives the
+   * panel: switching rail panels unmounts the manager, and a field remembering
+   * its own pending name lost it on exactly the switch that makes the window
+   * long enough to matter. Without it, an author who reverts a rename after
+   * coming back has the revert read as a no-op while the first write lands.
+   */
+  markPending: (classId: string, slug: string | undefined) => void
 ) {
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
-    async (classId: string, slug: string): Promise<ClassRenameOutcome> =>
-      writes.run<ClassRenameOutcome>(async existing => {
-        if (existing === undefined) {
+    async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
+      markPending(classId, slug);
+      try {
+        return await writes.run<ClassRenameOutcome>(async existing => {
+          if (existing === undefined) {
+            return {
+              result: {
+                ok: false as const,
+                reason:
+                  "This site's classes could not be read, so none can be renamed.",
+              },
+            };
+          }
+          const next = existing.map(entry =>
+            entry.id === classId ? { ...entry, slug } : entry
+          );
+          const result = await saveSection(
+            "classes",
+            classOverrideOf(configured, next)
+          );
+          if (result.saved) return { result: { ok: true as const }, next };
+          const reasons = Object.values(result.issues);
           return {
             result: {
               ok: false as const,
               reason:
-                "This site's classes could not be read, so none can be renamed.",
+                reasons.length > 0
+                  ? reasons.join(" ")
+                  : "This class could not be renamed.",
             },
           };
-        }
-        const next = existing.map(entry =>
-          entry.id === classId ? { ...entry, slug } : entry
-        );
-        const result = await saveSection(
-          "classes",
-          classOverrideOf(configured, next)
-        );
-        if (result.saved) return { result: { ok: true as const }, next };
-        const reasons = Object.values(result.issues);
-        return {
-          result: {
-            ok: false as const,
-            reason:
-              reasons.length > 0
-                ? reasons.join(" ")
-                : "This class could not be renamed.",
-          },
-        };
-      }),
-    [writes, configured, saveSection]
+        });
+      } finally {
+        /*
+         * Cleared however it went, and in a `finally` so a rejection cannot
+         * leave a class permanently reading as mid-rename. A refused write
+         * leaves the class with the name it had; a successful one is followed
+         * by a read carrying the new one. Either way the stored slug is the
+         * answer again.
+         */
+        markPending(classId, undefined);
+      }
+    },
+    [writes, configured, saveSection, markPending]
   );
 }
 
@@ -2070,6 +2117,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             classes: () => (
               <ClassManagerPanel
                 absence={classes.absence}
+                pendingSlugs={classes.pendingSlugs}
                 documentClassIds={documentClasses.ids}
                 /*
                   Whether that walk reached the whole document. It stops at the

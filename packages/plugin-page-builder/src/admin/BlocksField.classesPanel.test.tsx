@@ -497,6 +497,59 @@ describe("the classes manager reaching an author", () => {
     expect(second).toBe(first);
   });
 
+  it("remembers the name a class is heading for while its write is open", async () => {
+    /*
+     * The panel cannot remember this: the rail unmounts it on every switch, so
+     * a field holding its own pending name loses it on exactly the switch that
+     * makes the window long enough to matter. The HOST owns the write queue and
+     * therefore the answer.
+     *
+     * Driven end to end: rename `card` to `panel` with the save held open, then
+     * type `card` again. That is a REVERT, and it must reach the host rather
+     * than being read as a no-op against the still-rendered `card`.
+     */
+    let release: (() => void) | undefined;
+    holdSaves = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    storedRead = {
+      data: {
+        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+
+    const first = screen.getByLabelText("Name of card");
+    fireEvent.change(first, { target: { value: "panel" } });
+    fireEvent.blur(first);
+    await vi.waitFor(() => expect(saved.length).toBe(1));
+
+    // React fires no change when the value equals the one already there, and
+    // the field reverted to `card` when the draft cleared.
+    fireEvent.change(screen.getByLabelText("Name of card"), {
+      target: { value: "car" },
+    });
+    fireEvent.change(screen.getByLabelText("Name of card"), {
+      target: { value: "card" },
+    });
+    fireEvent.blur(screen.getByLabelText("Name of card"));
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(saved.length).toBe(2));
+
+    // The revert was written LAST, so it is the one that stands.
+    const last = JSON.stringify(saved[saved.length - 1]);
+    expect(last).toContain('"card"');
+    expect(last).not.toContain("panel");
+  });
+
   it("says a failed read failed, rather than loading forever", () => {
     // A read that FAILED will not finish. A panel still saying "loading"
     // describes a state the site is not in, and the author waits for something

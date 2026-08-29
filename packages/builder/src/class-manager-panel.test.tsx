@@ -690,11 +690,39 @@ describe("reaching a class past the row cap", () => {
     }
   );
 
-  it("says search is the way through, rather than naming the filters", () => {
-    // The note used to say to filter, which the surface could not honour once
-    // `usage` was absent and only "On this page" remained.
-    draw({ library: many, usage: undefined, documentClassIds: [] });
-    expect(screen.getByText(/Search by name to reach the rest/)).toBeTruthy();
+  it(
+    "offers a control that reaches the tail whatever the names are",
+    { timeout: 30000 },
+    () => {
+      /*
+       * Search alone is not enough and the note must not imply it is: a library
+       * of `class-0` to `class-259` matches every query an author would think to
+       * type, so the last sixty stay unreachable however the message is worded.
+       * Raising the mounted count is what cannot depend on the naming.
+       */
+      draw({ library: many, usage: undefined, documentClassIds: [] });
+      expect(screen.getByText("Showing 200 of 260.")).toBeTruthy();
+      expect(screen.queryByLabelText("Name of class-259")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show 60 more" }));
+      expect(screen.getByLabelText("Name of class-259")).toBeTruthy();
+      // Nothing left to reach, so nothing left to offer.
+      expect(
+        screen.queryByRole("button", { name: /Show \d+ more/ })
+      ).toBeNull();
+    }
+  );
+
+  it("blames the FILTER, not a search that is not set", () => {
+    // With the box blank, "no classes match this search" sends an author to
+    // clear something they never typed and hides the chip that emptied the list.
+    draw({
+      library: many,
+      usage: undefined,
+      documentClassIds: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "On this page" }));
+    expect(screen.getByText("No classes match this filter.")).toBeTruthy();
   });
 });
 
@@ -710,7 +738,7 @@ describe("a revert typed while the first rename is still in flight", () => {
     const onRename = vi.fn(
       () => new Promise<{ ok: true }>(() => undefined) // never settles
     );
-    render(
+    const view = render(
       <ClassManagerPanel
         library={LIBRARY}
         usage={{}}
@@ -719,11 +747,26 @@ describe("a revert typed while the first rename is still in flight", () => {
         onDelete={vi.fn()}
       />
     );
-
     const field = nameField("hero");
     fireEvent.change(field, { target: { value: "promo" } });
     fireEvent.blur(field);
     expect(onRename).toHaveBeenCalledTimes(1);
+
+    /*
+     * The host now says this class is heading for `promo`, which is what it
+     * knows and the panel cannot: the write lives in the host's queue and
+     * outlives this panel.
+     */
+    view.rerender(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+        pendingSlugs={{ "id-hero": "promo" }}
+      />
+    );
 
     /*
      * The row still renders `hero`, because nothing has come back — so typing
