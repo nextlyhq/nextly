@@ -525,23 +525,24 @@ describe("applyDueReleases", () => {
   });
 
   it("bounds an INTERLEAVED backlog to one release's work, not all of it", async () => {
-    // The shape this whole guard is for, and the one it silently failed to
-    // bound. The planner groups by DOCUMENT and emits in first-seen order, so
-    // members alternating across releases yield `[r1, r2, r3, r1, r2, r3, …]`.
-    // A guard keyed on "have I started this release?" is then satisfied by the
-    // first pass over the documents — every release is started within three
-    // actions, every later action belongs to a started release, and the loop
-    // runs the entire remainder. Nine writes where the budget allowed three.
+    // The shape this guard is for, and the one it silently failed to bound. The
+    // planner groups by DOCUMENT and emits in first-seen order, so members
+    // alternating across releases yield `[r1, r2, r3, r1, r2, r3, …]`. In that
+    // order starting a release costs ONE action, so every release is started
+    // within the first pass over the documents, every later action belongs to a
+    // started release, and the loop runs the whole remainder.
+    //
+    // The clock advances with WORK DONE, not with clock reads. A per-read clock
+    // ticks once per component boundary either way, so it cannot tell the
+    // grouped order from the interleaved one — which is exactly how the first
+    // version of this test passed against both.
     const publish = vi.fn(async () => {});
-    let tick = 0;
     const d = deps({
       releases: [
         release({ id: "r1" }),
         release({ id: "r2" }),
         release({ id: "r3" }),
       ],
-      // Interleaved on purpose, and on DISTINCT documents so each release is its
-      // own overlap component.
       members: [
         member({ id: "a1", releaseId: "r1", entryId: "e1" }),
         member({ id: "b1", releaseId: "r2", entryId: "e4" }),
@@ -557,11 +558,12 @@ describe("applyDueReleases", () => {
     });
     const result = await applyDueReleases({
       ...d,
-      now: () => new Date(NOW.getTime() + tick++ * 1000),
-      deadline: new Date(NOW.getTime() + 500),
+      now: () => new Date(NOW.getTime() + publish.mock.calls.length * 1000),
+      deadline: new Date(NOW.getTime() + 2500),
     });
 
-    // r1's three actions, and nothing else. Not nine.
+    // r1's three actions and nothing else. Ungrouped, all three releases would
+    // have started inside the budget and the loop would have run all nine.
     expect(publish).toHaveBeenCalledTimes(3);
     expect(result.deferred).toBe(6);
   });
@@ -620,23 +622,27 @@ describe("applyDueReleases", () => {
     expect(marked).toEqual(["r1"]);
   });
 
-  it("stops DISCHARGING once the deadline passes, between COMPONENTS", async () => {
-    // Two releases on DIFFERENT documents, so they are two overlap components.
-    // That distinction is the whole point: releases sharing a document form one
-    // component the planner says must settle together, and breaking between
-    // their members is the reversal it exists to prevent — the later winner
-    // marked published while the earlier stays scheduled, so the next tick makes
-    // the earlier the winner and republishes what was withdrawn.
+  it("discharges a whole COMPONENT or none of it", async () => {
+    // r1 and r2 share document e1, so they are ONE component the planner says
+    // must settle together; r3 is its own. Splitting the pair is the reversal
+    // the planner describes — the later winner marked published while the
+    // earlier stays scheduled, so the next tick makes the earlier the winner and
+    // republishes what was correctly withdrawn.
     //
-    // The deadline sits between the action loop's read and finalization's, so
-    // both components are APPLIED and only the second is left undischarged.
+    // The deadline falls after the first component is discharged, so the second
+    // is left for the next pass — the state it was already in.
     const marked: string[] = [];
     let tick = 0;
     const d = deps({
-      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "r2" }),
+        release({ id: "r3" }),
+      ],
       members: [
         member({ id: "a", releaseId: "r1", entryId: "e1" }),
-        member({ id: "b", releaseId: "r2", entryId: "e2" }),
+        member({ id: "b", releaseId: "r2", entryId: "e1" }),
+        member({ id: "c", releaseId: "r3", entryId: "e2" }),
       ],
       marked,
     });
@@ -646,9 +652,8 @@ describe("applyDueReleases", () => {
       deadline: new Date(NOW.getTime() + 2500),
     });
 
-    // One component discharged, one left for the next pass — the state it was
-    // already in.
-    expect(marked).toEqual(["r1"]);
+    // BOTH members of the first component, never one of them.
+    expect(marked).toEqual(["r1", "r2"]);
   });
 
   it("makes progress even when the budget is already spent", async () => {
