@@ -490,7 +490,14 @@ export type { StyleQuery, StyleSubject } from "./style/style-origin";
 // The stylesheet every page of a site shares, compiled once and addressed by its content.
 export type { SiteSheetArtifact, SiteSheetInput } from "./style/site-sheet";
 export { compileSiteSheet } from "./style/site-sheet";
-export { styleOrigin } from "./style/style-origin";
+// `outranksEntry` is published beside `styleOrigin` because that function
+// cannot answer every form of the question it answers: it is asked once per
+// STATE, so comparing two states' winners falls to the caller. Published, that
+// caller ranks THROUGH the compiler's own weighting instead of keeping a
+// second idea of what beats what — which is how the builder came to rank a
+// block default's `a:hover` above a node's own `a` after the default tiers
+// stopped weighing what the authored ones do.
+export { outranksEntry, styleOrigin } from "./style/style-origin";
 export { BREAKPOINT_AXES } from "./style/breakpoint-axes";
 /*
  * What a stored breakpoint set MEANS, which the type does not say.

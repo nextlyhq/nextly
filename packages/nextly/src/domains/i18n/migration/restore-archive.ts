@@ -18,26 +18,35 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, lte } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
+import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
 import {
   companionHasColumn,
   upsertCompanionRow,
 } from "../runtime/companion-io";
 
-/** Minimal adapter surface this helper needs — matches DrizzleAdapter. */
-export interface RestoreArchiveAdapter {
-  dialect: SupportedDialect;
-  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle's db type is dialect-specific
-  getDrizzle(): any;
+/**
+ * The slice of Drizzle this helper drives: one scoped SELECT and one scoped DELETE. Declaring
+ * only what is used keeps the dialect-specific database type out of the port, so no `any` is
+ * needed — the same shape `teardown-entity-i18n` declares for its own single statement.
+ */
+interface ArchiveReadWriteDb {
+  select(columns: Record<string, unknown>): {
+    from(table: unknown): { where(condition: unknown): Promise<unknown> };
+  };
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
 export interface RestoreArchiveArgs {
-  adapter: RestoreArchiveAdapter;
+  /**
+   * The connection to replay through. This helper both writes companion rows and asks the
+   * database for the companion's physical shape, which is the introspecting surface rather than
+   * the narrower write-only one.
+   */
+  adapter: CompanionIntrospectAdapter;
   /** Entity slug exactly as the disable migration recorded it in `archive.collection`. */
   collection: string;
   /** Physical companion table to replay into, e.g. `dc_pages_locales`. */
@@ -86,7 +95,7 @@ export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
   const { adapter, collection, companionTableName, locale } = args;
-  const db = adapter.getDrizzle();
+  const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
   const where = locale

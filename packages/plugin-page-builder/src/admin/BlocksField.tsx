@@ -877,6 +877,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // gesture begins somewhere that is not the canvas — a palette row, whose
   // pointerdown has no `currentTarget` the drag could measure against.
   const canvasRoot = useRef<HTMLDivElement | null>(null);
+  /*
+   * The same element as STATE, beside the ref rather than instead of it.
+   *
+   * The drag reads "where is the canvas now" during a gesture, which is what a
+   * ref is for. The inspector has to REACT to the canvas appearing: it stays
+   * mounted while the canvas mounts only once styles have loaded, and a ref is
+   * not reactive — assigning `.current` changes no dependency, so a reader
+   * listing the ref would see `null` once and never look again.
+   */
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(
+    null
+  );
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
   /*
    * Is a drag happening — of EITHER kind.
@@ -1574,6 +1586,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         inspector={
           <InspectorPanel
             editor={editor}
+            // The SAME ref the canvas publishes its root through, so the style
+            // tab reads the element a node is actually drawn as rather than
+            // inferring one from the document. Two refs would let the panel
+            // read a canvas that is not the one on screen.
+            canvasRoot={canvasElement}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
@@ -1745,6 +1762,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 onScale={setAppliedScale}
                 document={editor.document}
                 rootRef={canvasRoot}
+                onRoot={setCanvasElement}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}

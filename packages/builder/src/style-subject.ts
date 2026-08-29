@@ -33,6 +33,7 @@ import {
   findNode,
   locateNode,
 } from "@nextlyhq/blocks-engine";
+import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
 /** One node's own identity, without the chain above it. */
 type SubjectNode = Omit<StyleSubject, "ancestors">;
@@ -132,4 +133,62 @@ export function styleSubjectFor(
   // Reversed once, here: the walk produces nearest-first and the engine reads
   // outermost-first.
   return { ...identityOf(node), ancestors: ancestors.reverse() };
+}
+
+/**
+ * The element a node's own box is rendered as, read off the canvas.
+ *
+ * The typographic baseline compiles to `:where(h1)` — a rule on the ELEMENT —
+ * so nothing else in a subject can say whether one reaches this node. The
+ * document cannot answer it either: the tag lives inside a block's render, and
+ * `core/heading` picks it from a PROP while `core/rich-text` renders a plain
+ * `div` with its headings INSIDE. A reader that guessed from the block type
+ * would get the second case backwards and report a heading baseline as styling
+ * a rich-text block's own box.
+ *
+ * So the canvas answers. It is the page a visitor sees, so its tag cannot
+ * disagree with the cascade the browser actually ran, and it needs no new field
+ * on the block contract — which every third-party block author would otherwise
+ * inherit. `core/rich-text` comes out right for free: its root really is a
+ * `div`, so a heading baseline correctly does not reach that block's own
+ * font-size control.
+ *
+ * `undefined` when the node is not drawn. Read AFTER a commit rather than
+ * during a render, because the canvas and this panel re-render together and the
+ * DOM still holds the previous tag while the panel's body is running — asking
+ * then reports the level an author just changed away from.
+ */
+export function renderedTagOf(
+  root: HTMLElement | null | undefined,
+  nodeId: string | null
+): string | undefined {
+  if (root == null || nodeId === null) return undefined;
+  /*
+   * The id NEVER reaches a selector. The elements carrying the attribute are
+   * enumerated and their values compared as ordinary strings, which is the same
+   * shape `canvas-drag.tsx` uses to map painted elements back to nodes.
+   *
+   * Escaping was the wrong instinct and an incomplete one. A node id is author
+   * data — an imported or API-authored document can carry any string, since the
+   * document model imposes no character grammar on ids — and `querySelector`
+   * THROWS on invalid syntax rather than returning nothing. Quoting the value
+   * handles `"` and `\`, but a raw line break is not representable in a CSS
+   * string at all, so a single id containing one would take the whole style
+   * inspector down from inside an effect. Comparing strings has no such class of
+   * input.
+   *
+   * The cost is a walk over the marked elements instead of an indexed lookup. It
+   * runs once per commit for one selected node, over the elements of one page.
+   */
+  const marked = root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`);
+  // An index loop rather than `for...of`: a `NodeList` is not iterable under
+  // this package's lib target, and rather than widen that for one walk it is
+  // read the way the DOM has always allowed.
+  for (let index = 0; index < marked.length; index += 1) {
+    const element = marked[index];
+    if (element?.getAttribute(NODE_ID_ATTRIBUTE) === nodeId) {
+      return element.tagName.toLowerCase();
+    }
+  }
+  return undefined;
 }
