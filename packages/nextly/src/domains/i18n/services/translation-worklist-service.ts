@@ -237,6 +237,13 @@ export interface TranslationWorklistResult {
    * from the truth at a glance. The caller is expected to say so on screen.
    */
   skippedCollections: string[];
+  /**
+   * Collections that cannot answer the question that was asked, named separately.
+   *
+   * See {@link unanswerableCollections} for why this is not merged into the list above: this one
+   * has a remedy the caller can act on, and the others do not.
+   */
+  unanswerableCollections?: string[];
 }
 
 /** What the fan-out needs to know about one collection to query it. */
@@ -245,6 +252,15 @@ export interface LocalizedCollectionRef {
   label: string;
   /** Whether it has the draft/published lifecycle at all. */
   hasStatus: boolean;
+  /**
+   * Whether this collection's translations table can answer "has the source moved on since".
+   *
+   * A PHYSICAL fact, resolved against the database, not the declared shape — the declared one is
+   * unconditionally true and would claim every collection can answer. `undefined` means the
+   * question was never asked, which is the state for every filter other than `stale`; only an
+   * explicit `false` excludes.
+   */
+  canAnswerStaleness?: boolean;
 }
 
 /**
@@ -332,19 +348,73 @@ export function byMostRecentlyUpdated(
  * EVERY document and the worklist presents all of them as being in the state
  * that was asked for. Contributing nothing is the truthful answer; contributing
  * everything is the worst available one.
+ *
+ * 🔴 ONE PASS, producing both views. The excluded-and-named case arrives with the staleness
+ * question — a collection whose translations table cannot compare timestamps must be left out AND
+ * reported, because its exclusion is silent where a lifecycle exclusion is merely wrong. Written
+ * as two filters with complementary predicates, the two could drift: a later change to eligibility
+ * would exclude a collection without naming it, or name one that was still queried. Either is the
+ * reassuring coverage error this whole feature exists to prevent, arriving through the code meant
+ * to prevent it.
+ *
+ * So the classification happens once and both lists fall out of the same loop. `eligibleCollections`
+ * and `unanswerableCollections` are narrow views DERIVED from this, kept because most callers want
+ * only one of them.
  */
+export function classifyForWorklist<T extends LocalizedCollectionRef>(
+  localized: readonly T[],
+  state: TranslationFilterState,
+  readable: ReadonlySet<string> | undefined
+): { eligible: T[]; unanswerable: string[] } {
+  const wantsLifecycle = state === "draft" || state === "published";
+  const eligible: T[] = [];
+  const unanswerable: string[] = [];
+  for (const c of localized) {
+    if (readable !== undefined && !readable.has(c.slug)) continue;
+    if (wantsLifecycle && !c.hasStatus) continue;
+    if (state === "stale" && c.canAnswerStaleness === false) {
+      unanswerable.push(c.slug);
+      continue;
+    }
+    eligible.push(c);
+  }
+  return { eligible, unanswerable: unanswerable.sort() };
+}
+
+/** The collections this answer will query. Derived — see {@link classifyForWorklist}. */
 export function eligibleCollections<T extends LocalizedCollectionRef>(
   localized: readonly T[],
   state: TranslationFilterState,
   readable: ReadonlySet<string> | undefined
 ): T[] {
-  const wantsLifecycle = state === "draft" || state === "published";
-  return localized.filter(
-    c =>
-      (readable === undefined || readable.has(c.slug)) &&
-      (!wantsLifecycle || c.hasStatus)
-  );
+  return classifyForWorklist(localized, state, readable).eligible;
 }
+
+/** The collections that could not answer. Derived — see {@link classifyForWorklist}. */
+export function unanswerableCollections<T extends LocalizedCollectionRef>(
+  localized: readonly T[],
+  state: TranslationFilterState,
+  readable: ReadonlySet<string> | undefined
+): string[] {
+  return classifyForWorklist(localized, state, readable).unanswerable;
+}
+
+/**
+ * Which collections were asked a question they cannot answer, and so were left out.
+ *
+ * 🔴 SEPARATE from {@link notConsultedSources}, and the reason is the premise that one rests on:
+ * "the caller cannot act differently on them anyway". That is true of a collection the cap did not
+ * reach and one whose read failed — both mean "look again" — and it is FALSE here. A collection
+ * whose translations table predates the column this question is asked of has one specific remedy,
+ * `nextly migrate`, and folding it in with the others hides the one actionable case among the
+ * unactionable ones.
+ *
+ * 🔴 And it must be reported at all, which is the sharper point. An unanswerable LIFECYCLE filter
+ * returns every document, so excluding the collection silently is an improvement on something
+ * visibly wrong. An unanswerable STALENESS filter returns nothing — so a collection excluded
+ * without being named is indistinguishable from a collection with no stale translations, which is
+ * the reassuring direction and the exact claim this feature exists not to make.
+ */
 
 /**
  * Which collections the fan-out will touch, and which the cap excluded.

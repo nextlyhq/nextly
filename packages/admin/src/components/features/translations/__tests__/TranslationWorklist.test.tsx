@@ -305,6 +305,42 @@ describe("TranslationWorklist", () => {
     ).toBeInTheDocument();
   });
 
+  it("🔴 never claims nothing needs review, even on a complete answer", () => {
+    // Staleness compares two timestamps. A language written before its collection began recording
+    // them has none to compare, so the comparison returns no match — exactly as it does for a
+    // language that is genuinely current. Every collection can therefore be checked and the answer
+    // still not cover every row, which makes the unqualified claim one this tab can never make.
+    //
+    // The other four states CAN make it, which is why this is not a blanket hedge: "nothing to
+    // translate" is the answer a translator needs to be able to trust, and the control below keeps
+    // it readable.
+    worklistQuery.mockReturnValue(settled({ data: { items: [], meta: META } }));
+    renderWorklist({ state: "stale" });
+    expect(screen.getByText(/known to need review/i)).toBeInTheDocument();
+  });
+
+  it("names the migration remedy the server chose, not a hardcoded one", () => {
+    // 🔴 `nextly migrate` applies migration FILES. A development database kept in step by the sync
+    // and reload loop has no migration history carrying this column, so that advice leaves the
+    // notice unchanged after a developer follows it. The server knows which case it is in; this
+    // screen does not, so it renders what it was told.
+    worklistQuery.mockReturnValue(
+      settled({
+        data: {
+          items: [],
+          meta: {
+            ...META,
+            unanswerable: ["legacy"],
+            unanswerableRemedy: "sync" as const,
+          },
+        },
+      })
+    );
+    renderWorklist({ state: "stale" });
+    expect(screen.getByText(/db:sync/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nextly migrate/i)).not.toBeInTheDocument();
+  });
+
   it("waits for the workspace metadata before declaring the app single-language", () => {
     // The locale config arrives with the workspace query, and `useLocalization`
     // reports `enabled: false` while it is in flight — the same value a real
