@@ -37,11 +37,10 @@ import {
   authorizationGroups,
   countIsTrustworthy,
   byMostRecentlyUpdated,
-  eligibleCollections,
+  classifyForWorklist,
   hasTranslatableFields,
   notConsultedSources,
   planWorklistFanOut,
-  unanswerableCollections,
   translatedFilter,
   worklistTotal,
   worklistTotalPages,
@@ -389,8 +388,9 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       : null;
   const withStaleCapability = staleCapability?.collections ?? localized;
 
-  const eligible = eligibleCollections(withStaleCapability, state, readable);
-  const unanswerable = unanswerableCollections(
+  // Classified once. The two lists are complements of one decision, so deriving them from two
+  // calls would let them disagree about a collection.
+  const { eligible, unanswerable } = classifyForWorklist(
     withStaleCapability,
     state,
     readable

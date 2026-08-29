@@ -37,7 +37,9 @@ rather than for what was measured.
 It also says what it could not check. A collection whose translations table does
 not yet record when each language was written cannot answer this question, and a
 collection that quietly contributes nothing to a list is indistinguishable from
-one with nothing to report. Those are now named on screen, with the one thing
-that fixes it: run `nextly migrate`. That is kept separate from the collections a
-single request could not cover, because reloading helps there and would only
-loop here.
+one with nothing to report. Those are now named on screen, with the
+thing that fixes it -- `nextly migrate` on a deployed site, or a restart (or
+`nextly db:sync`) in development, because a development database kept in step by
+the sync and reload loop has no migration file that adds the column. That is kept
+separate from the collections a single request could not cover, because reloading
+helps there and would only loop here.

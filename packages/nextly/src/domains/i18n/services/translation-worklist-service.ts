@@ -348,19 +348,55 @@ export function byMostRecentlyUpdated(
  * EVERY document and the worklist presents all of them as being in the state
  * that was asked for. Contributing nothing is the truthful answer; contributing
  * everything is the worst available one.
+ *
+ * 🔴 ONE PASS, producing both views. The excluded-and-named case arrives with the staleness
+ * question — a collection whose translations table cannot compare timestamps must be left out AND
+ * reported, because its exclusion is silent where a lifecycle exclusion is merely wrong. Written
+ * as two filters with complementary predicates, the two could drift: a later change to eligibility
+ * would exclude a collection without naming it, or name one that was still queried. Either is the
+ * reassuring coverage error this whole feature exists to prevent, arriving through the code meant
+ * to prevent it.
+ *
+ * So the classification happens once and both lists fall out of the same loop. `eligibleCollections`
+ * and `unanswerableCollections` are narrow views DERIVED from this, kept because most callers want
+ * only one of them.
  */
+export function classifyForWorklist<T extends LocalizedCollectionRef>(
+  localized: readonly T[],
+  state: TranslationFilterState,
+  readable: ReadonlySet<string> | undefined
+): { eligible: T[]; unanswerable: string[] } {
+  const wantsLifecycle = state === "draft" || state === "published";
+  const eligible: T[] = [];
+  const unanswerable: string[] = [];
+  for (const c of localized) {
+    if (readable !== undefined && !readable.has(c.slug)) continue;
+    if (wantsLifecycle && !c.hasStatus) continue;
+    if (state === "stale" && c.canAnswerStaleness === false) {
+      unanswerable.push(c.slug);
+      continue;
+    }
+    eligible.push(c);
+  }
+  return { eligible, unanswerable: unanswerable.sort() };
+}
+
+/** The collections this answer will query. Derived — see {@link classifyForWorklist}. */
 export function eligibleCollections<T extends LocalizedCollectionRef>(
   localized: readonly T[],
   state: TranslationFilterState,
   readable: ReadonlySet<string> | undefined
 ): T[] {
-  const wantsLifecycle = state === "draft" || state === "published";
-  return localized.filter(
-    c =>
-      (readable === undefined || readable.has(c.slug)) &&
-      (!wantsLifecycle || c.hasStatus) &&
-      (state !== "stale" || c.canAnswerStaleness !== false)
-  );
+  return classifyForWorklist(localized, state, readable).eligible;
+}
+
+/** The collections that could not answer. Derived — see {@link classifyForWorklist}. */
+export function unanswerableCollections<T extends LocalizedCollectionRef>(
+  localized: readonly T[],
+  state: TranslationFilterState,
+  readable: ReadonlySet<string> | undefined
+): string[] {
+  return classifyForWorklist(localized, state, readable).unanswerable;
 }
 
 /**
@@ -379,21 +415,6 @@ export function eligibleCollections<T extends LocalizedCollectionRef>(
  * without being named is indistinguishable from a collection with no stale translations, which is
  * the reassuring direction and the exact claim this feature exists not to make.
  */
-export function unanswerableCollections<T extends LocalizedCollectionRef>(
-  localized: readonly T[],
-  state: TranslationFilterState,
-  readable: ReadonlySet<string> | undefined
-): string[] {
-  if (state !== "stale") return [];
-  return localized
-    .filter(
-      c =>
-        (readable === undefined || readable.has(c.slug)) &&
-        c.canAnswerStaleness === false
-    )
-    .map(c => c.slug)
-    .sort();
-}
 
 /**
  * Which collections the fan-out will touch, and which the cap excluded.

@@ -8,6 +8,7 @@ import {
   byMostRecentlyUpdated,
   eligibleCollections,
   hasTranslatableFields,
+  classifyForWorklist,
   notConsultedSources,
   planWorklistFanOut,
   unanswerableCollections,
@@ -542,5 +543,65 @@ describe("a collection that cannot answer the staleness question", () => {
     expect(
       unanswerableCollections([coll("posts")], "stale", undefined)
     ).toEqual([]);
+  });
+});
+
+describe("the two views cannot disagree", () => {
+  const coll = (slug: string, canAnswerStaleness?: boolean) => ({
+    slug,
+    label: slug,
+    hasStatus: true,
+    ...(canAnswerStaleness === undefined ? {} : { canAnswerStaleness }),
+  });
+
+  it("🔴 puts every readable collection in exactly one of the two lists", () => {
+    // The property the single classification exists for. Two filters with complementary
+    // predicates can drift: one later edit to eligibility excludes a collection without naming it,
+    // or names one that was still queried. The first is a silent zero presented as good news --
+    // the exact error this feature was built to prevent, arriving through the code that prevents
+    // it. Asserted as a PARTITION rather than as two independent expectations, because that is the
+    // invariant a future edit would break.
+    const all = [
+      coll("alpha", true),
+      coll("beta", false),
+      coll("gamma", true),
+      coll("delta", false),
+    ];
+    const { eligible, unanswerable } = classifyForWorklist(
+      all,
+      "stale",
+      undefined
+    );
+    const named = new Set(unanswerable);
+    const queried = new Set(eligible.map(c => c.slug));
+
+    expect([...queried].filter(s => named.has(s))).toEqual([]);
+    expect([...queried, ...named].sort()).toEqual([
+      "alpha",
+      "beta",
+      "delta",
+      "gamma",
+    ]);
+  });
+
+  it("keeps the derived views agreeing with the classification", () => {
+    // `eligibleCollections` and `unanswerableCollections` survive as narrow views because most
+    // callers want one of them. They must stay derivations, not re-implementations.
+    const all = [coll("alpha", true), coll("beta", false)];
+    const one = classifyForWorklist(all, "stale", undefined);
+    expect(eligibleCollections(all, "stale", undefined)).toEqual(one.eligible);
+    expect(unanswerableCollections(all, "stale", undefined)).toEqual(
+      one.unanswerable
+    );
+  });
+
+  it("names nobody an unreadable collection, in either view", () => {
+    const { eligible, unanswerable } = classifyForWorklist(
+      [coll("visible", false), coll("secret", false)],
+      "stale",
+      new Set(["visible"])
+    );
+    expect(eligible).toEqual([]);
+    expect(unanswerable).toEqual(["visible"]);
   });
 });
