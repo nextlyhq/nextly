@@ -578,8 +578,72 @@ describe("a colour typed one character at a time", () => {
     // A scroll produces no click, so nothing finished.
     expect(onColorChange).not.toHaveBeenCalled();
 
-    // The control: the same press completing as a TAP does finish it.
+    /*
+     * And the wait does not OUTLIVE the gesture. Treating the next click as the
+     * original tap is what a version retaining the listener would also pass, so
+     * this presses again first — the press that ends the abandoned wait — and
+     * the click that follows belongs to a gesture that started inside the
+     * field, which finishes nothing.
+     */
+    const field = hexField() as HTMLInputElement;
+    field.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+    field.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("finishes a TOUCH tap that completes outside", () => {
+    /*
+     * The control for the case above: without it, a picker that had simply
+     * stopped finishing on touch altogether would satisfy every assertion
+     * there.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
     outside.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("keeps a draft when a swatch has NO handler to replace it with", () => {
+    /*
+     * `onSwatchSelect` is optional and the type permits swatches without it.
+     * Dropping a draft for a callback that does nothing loses the typed colour
+     * and puts nothing in its place — the swatch does not reach the host
+     * either, so the edit simply disappears.
+     */
+    const onColorChange = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Primary" }));
+
+    // Still there to be finished.
+    fireEvent.keyDown(field, { key: "Enter" });
     expect(onColorChange).toHaveBeenCalledWith("#123456");
   });
 

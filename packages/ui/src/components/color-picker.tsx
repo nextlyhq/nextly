@@ -325,6 +325,15 @@ export function ColorPicker<TValue = string>({
     if (root === null) return;
     const onPointerDown = (event: Event): void => {
       /*
+       * Any new press ENDS whatever the last one was waiting for. A touch that
+       * became a scroll produces no click, so its pending completion would
+       * otherwise sit installed and be finished by the next unrelated click
+       * anywhere — including a press on the hex field to move the caret, which
+       * would publish text still being edited.
+       */
+      pendingTap.current?.();
+      pendingTap.current = null;
+      /*
        * A press INSIDE is not a dismissal — a swatch, a slider, the field
        * itself — and committing there would report a draft the press is about
        * to replace.
@@ -390,9 +399,19 @@ export function ColorPicker<TValue = string>({
      * goes with it.
      */
     const owner = root.ownerDocument;
+    /*
+     * A cancelled gesture ends the wait too, and is the signal the platform
+     * gives when a press becomes a scroll rather than a tap.
+     */
+    const onPointerCancel = (): void => {
+      pendingTap.current?.();
+      pendingTap.current = null;
+    };
     owner.addEventListener("pointerdown", onPointerDown, true);
+    owner.addEventListener("pointercancel", onPointerCancel, true);
     return () => {
       owner.removeEventListener("pointerdown", onPointerDown, true);
+      owner.removeEventListener("pointercancel", onPointerCancel, true);
       pendingTap.current?.();
       pendingTap.current = null;
     };
@@ -647,12 +666,20 @@ export function ColorPicker<TValue = string>({
                 className="size-6 rounded border shadow-sm"
                 style={{ backgroundColor: swatch.color }}
                 onClick={() => {
-                  // The swatch REPLACES what was being typed, so the draft goes
-                  // with it. The other replacement paths drop it inside
-                  // `commit`; this one reports through the host instead and has
-                  // to say so itself.
+                  /*
+                   * The swatch REPLACES what was being typed, so the draft goes
+                   * with it — but only where the host can actually perform the
+                   * replacement. `onSwatchSelect` is optional and the type
+                   * permits swatches without it, and dropping a draft for a
+                   * callback that does nothing loses the typed colour and puts
+                   * nothing in its place.
+                   *
+                   * The other replacement paths drop it inside `commit`; this
+                   * one reports through the host and has to say so itself.
+                   */
+                  if (onSwatchSelect === undefined) return;
                   dropDraft();
-                  onSwatchSelect?.(swatch);
+                  onSwatchSelect(swatch);
                 }}
               />
             ))}
