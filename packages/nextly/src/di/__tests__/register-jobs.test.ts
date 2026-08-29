@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
-import { WEBHOOKS_DRAIN_JOB } from "../../domains/webhooks/webhooks-drain-job";
+import { WEBHOOK_DRAIN_JOB } from "../../domains/webhooks/webhook-drain-job";
 import type { Logger } from "../../shared/types";
 
 import { reportReleasesOutcome } from "../registrations/register-jobs";
@@ -109,8 +109,8 @@ describe("the registered job types", () => {
     // write, but the DRAIN that delivers it has no request of its own — so like
     // the releases pass it must be kept queued, or an installation that goes
     // quiet stops delivering what it still owes.
-    expect(registry.get(WEBHOOKS_DRAIN_JOB)).toBeDefined();
-    expect(registry.sweeps().map(d => d.slug)).toContain(WEBHOOKS_DRAIN_JOB);
+    expect(registry.get(WEBHOOK_DRAIN_JOB)).toBeDefined();
+    expect(registry.sweeps().map(d => d.slug)).toContain(WEBHOOK_DRAIN_JOB);
 
     vi.doUnmock("../container");
     vi.resetModules();

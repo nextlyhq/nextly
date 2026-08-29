@@ -25,13 +25,14 @@ import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
-import type {
-  RunWebhookDrainOptions,
-  WebhookDrainDatabase,
+import {
+  IN_PASS_DRAIN_BOUNDS,
+  type RunWebhookDrainOptions,
+  type WebhookDrainDatabase,
 } from "../../domains/webhooks/drain-runner";
 import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
 import type { RunDrainResult } from "../../domains/webhooks/run-drain";
-import { createWebhooksDrainJob } from "../../domains/webhooks/webhooks-drain-job";
+import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
 
@@ -192,16 +193,23 @@ export function registerJobServices(ctx: RegistrationContext): void {
     // module load keeps the order a fact about the container rather than about
     // import graphs.
     registry.register(
-      createWebhooksDrainJob({
-        db: container.get<WebhookDrainDatabase>("adapter"),
-        registry: container.get<WebhookEndpointRegistry>(
-          "webhookEndpointRegistry"
-        ),
-        retention: container.get<RunWebhookDrainOptions["retention"]>(
-          "webhookRetentionDeps"
-        ),
-        onOutcome: result => reportWebhookDrainOutcome(logger, result),
-      })
+      createWebhookDrainJob(
+        container.get<WebhookDrainDatabase>("adapter"),
+        container.get<WebhookEndpointRegistry>("webhookEndpointRegistry"),
+        {
+          // Sized to fit INSIDE the jobs pass that runs it, not the webhook
+          // route's own tick. `runJobs` checks its budget before starting a
+          // handler and cannot interrupt one, so a handler that begins with a
+          // wider budget than the pass can outlive the invocation and be killed
+          // before it finalizes. Derived from the pass budget rather than
+          // restated, so raising one raises the other.
+          ...IN_PASS_DRAIN_BOUNDS,
+          retention: container.get<RunWebhookDrainOptions["retention"]>(
+            "webhookRetentionDeps"
+          ),
+        },
+        result => reportWebhookDrainOutcome(logger, result)
+      )
     );
 
     return registry;

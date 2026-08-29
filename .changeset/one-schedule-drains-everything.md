@@ -35,9 +35,15 @@ schedule you already have.
 
 Nothing you have set up stops working. `/api/webhooks/drain` is unchanged and
 still does exactly what it did; a deployment scheduling it can carry on. If you
-schedule both, they simply share the work — deliveries are claimed under a lease,
-so the same event cannot be sent twice, and whichever pass arrives second finds
-nothing left to claim.
+schedule both, they simply share the work — each delivery is claimed under a
+lease, so two passes do not both pick up the same one, and whichever arrives
+second finds nothing left to claim.
+
+That is not a promise of exactly-once delivery, and never was. Webhook delivery
+is at-least-once: the request goes out before the row recording it is finalized,
+so a process killed in between leaves that delivery eligible for another attempt.
+Every request carries a stable `webhook-id`, and receivers should continue to use
+it to ignore a repeat.
 
 Both triggers now read one set of limits for how much a single tick may do, so
 they cannot drift into behaving differently depending on which one fired.

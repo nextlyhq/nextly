@@ -40,6 +40,7 @@ import {
   type WebhookDrainDatabase,
   type WebhookDrainRegistry,
 } from "./drain-runner";
+import type { RunDrainResult } from "./run-drain";
 
 /** The slug the drain is registered and enqueued under. */
 export const WEBHOOK_DRAIN_JOB = "webhooks:drain";
@@ -66,15 +67,34 @@ export const WEBHOOK_DRAIN_JOB = "webhooks:drain";
 export function createWebhookDrainJob(
   adapter: WebhookDrainDatabase,
   registry: WebhookDrainRegistry,
-  options?: RunWebhookDrainOptions
+  options?: RunWebhookDrainOptions,
+  /**
+   * What to do with the outcome of each pass.
+   *
+   * A drain completes as a job while individual deliveries fail — a receiver is
+   * down, a URL now refuses, a payload is rejected. Those retry on their own
+   * backoff and eventually stop, and without a report the only trace of an
+   * endpoint that has stopped receiving anything is a returned object nobody
+   * read. Optional here rather than required, unlike the releases drain: this
+   * factory already exists and is already exported, so making it required would
+   * break a caller to add a diagnostic. The registration supplies a real one.
+   */
+  onOutcome?: (result: RunDrainResult) => void | Promise<void>
 ): JobDefinition<unknown> {
   return defineJob({
     slug: WEBHOOK_DRAIN_JOB,
-    // The default budget. Nothing about a sweep calls for a narrower one, and
-    // deriving it rather than restating a number keeps it with every other job.
-
+    // A sweep: an event reaches the outbox on a content write, but the DRAIN
+    // that delivers it has no request of its own. It has to happen on an
+    // interval — including on an installation that has gone quiet with
+    // deliveries still owed — so nothing is ever in a position to enqueue it,
+    // and a trigger keeps one queued instead.
+    //
+    // Without this the definition is registered and unrunnable: the queue stays
+    // empty and looks exactly like a queue with nothing to do.
+    sweep: true,
     handler: async () => {
-      await runWebhookDrain(adapter, registry, options);
+      const result = await runWebhookDrain(adapter, registry, options);
+      await onOutcome?.(result);
     },
   });
 }

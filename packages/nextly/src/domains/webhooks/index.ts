@@ -74,7 +74,3 @@ export {
   type WebhookEndpoint,
 } from "./types";
 export { WEBHOOK_DRAIN_JOB, createWebhookDrainJob } from "./webhook-drain-job";
-export {
-  createWebhooksDrainJob,
-  WEBHOOKS_DRAIN_JOB,
-} from "./webhooks-drain-job";

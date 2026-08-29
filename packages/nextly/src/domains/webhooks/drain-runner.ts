@@ -58,6 +58,39 @@ export const SCHEDULED_DRAIN_BOUNDS = {
   maxDurationMs: 25_000,
 } as const;
 
+/**
+ * The wall-clock budget one background-jobs pass allows itself.
+ *
+ * Stated here rather than imported from the route, because the route imports
+ * from this module and the reverse would be a cycle. Kept equal to
+ * `JOBS_RUN_MAX_DURATION_MS`, and the drain bounds below are derived from it.
+ */
+const JOBS_PASS_BUDGET_MS = 20_000;
+
+/**
+ * What bounds a drain running as a JOB, inside a jobs pass.
+ *
+ * Narrower than {@link SCHEDULED_DRAIN_BOUNDS}, and the difference is the whole
+ * point. `runJobs` checks its budget before STARTING a handler and cannot
+ * interrupt a running one, so a handler that begins with a budget wider than
+ * the pass's own can outlive the invocation entirely — the platform kills the
+ * process before the job row is finalized, and the sweep is simply retried
+ * having done partial work.
+ *
+ * The per-request timeout is tightened for the same reason: at the engine
+ * default a single hung receiver could stretch the pass well past its budget
+ * even having started on time.
+ */
+export const IN_PASS_DRAIN_BOUNDS = {
+  maxRounds: 10,
+  fanOutBatchSize: 50,
+  deliverBatchSize: 25,
+  // Two thirds of the pass budget, leaving room for the in-flight request the
+  // bound below caps and for the finalize that follows it.
+  maxDurationMs: Math.floor(JOBS_PASS_BUDGET_MS * 0.6),
+  requestTimeoutMs: 5_000,
+} as const;
+
 export interface RunWebhookDrainOptions {
   /** HTTP transport override; the engine defaults to the SSRF-safe safeFetch. */
   transport?: DeliverTransport;
