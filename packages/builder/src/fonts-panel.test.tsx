@@ -170,6 +170,53 @@ describe("the panel over a site that has been read", () => {
     ).toBeTruthy();
   });
 
+  it("expands a WILDCARD range rather than reading its leading digits", () => {
+    // `U+4??` is `U+0400-04FF`. Read as a plain hex run it captures `4` alone,
+    // which lands three orders of magnitude below the block it names and hands
+    // a Cyrillic face the Latin sentence it cannot draw.
+    const cyrillic: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-cyrillic.woff2", format: "woff2" }],
+      unicodeRange: "U+4??",
+    };
+    render(<FontsPanel faces={[cyrillic]} tokens={{ tokens: [] }} />);
+    expect(screen.getByText(/Почти/)).toBeTruthy();
+    expect(
+      screen.queryByText("Almost before we knew it, we had left the ground")
+    ).toBeNull();
+  });
+
+  it("refuses a sentence the range only PARTLY covers", () => {
+    // A range opening in the Cyrillic block does not mean it reaches across it.
+    // Two codepoints cannot draw a sentence, so the row falls back to glyphs
+    // taken from the range itself rather than demonstrating a fallback font.
+    const sliver: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-sliver.woff2", format: "woff2" }],
+      unicodeRange: "U+0400-0401",
+    };
+    render(<FontsPanel faces={[sliver]} tokens={{ tokens: [] }} />);
+    expect(screen.queryByText(/Почти/)).toBeNull();
+    expect(
+      screen.queryByText("Almost before we knew it, we had left the ground")
+    ).toBeNull();
+    expect(screen.getByText("\u0400\u0401")).toBeTruthy();
+  });
+
+  it("reads a comma-separated range as the union of its intervals", () => {
+    // A subset commonly declares several disjoint intervals, and the sentence
+    // has to be covered by their union rather than by any one of them.
+    const greekPlusLatin: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-mixed.woff2", format: "woff2" }],
+      unicodeRange: "U+0020-007F, U+0370-03FF",
+    };
+    render(<FontsPanel faces={[greekPlusLatin]} tokens={{ tokens: [] }} />);
+    expect(
+      screen.getByText("Almost before we knew it, we had left the ground")
+    ).toBeTruthy();
+  });
+
   it("says a site with no faces has none, rather than staying silent", () => {
     render(<FontsPanel faces={[]} tokens={{ tokens: [] }} />);
     expect(screen.getByText(/loads no font files of its own/)).toBeTruthy();

@@ -81,42 +81,136 @@ const SPECIMEN = "Almost before we knew it, we had left the ground";
  * A face subset to a non-Latin `unicodeRange` covers none of the Latin sentence
  * above, so the browser draws that row from another subset of the family or
  * from a fallback — the row would claim to demonstrate a file whose glyphs are
- * nowhere on screen. Ranges are matched by their START codepoint, which is what
- * a `unicodeRange` names first and is enough to choose a script.
+ * nowhere on screen. A candidate is chosen by whether the declared range COVERS
+ * it, not by which band the range opens in: a start codepoint says nothing
+ * about how far the range reaches, so `U+0400-0401` would otherwise be handed a
+ * whole Cyrillic sentence it can draw two characters of.
  *
  * Latin faces and faces declaring no range keep the sentence: it exercises
  * ascenders, descenders and round forms, which is what a specimen is for.
  */
-const SCRIPT_SPECIMENS: readonly {
-  readonly from: number;
-  readonly to: number;
-  readonly text: string;
-}[] = [
-  { from: 0x0370, to: 0x03ff, text: "Αλμοστ πριν το καταλάβουμε" },
-  { from: 0x0400, to: 0x04ff, text: "Почти прежде чем мы поняли" },
-  { from: 0x0590, to: 0x05ff, text: "כמעט לפני שידענו זאת" },
-  { from: 0x0600, to: 0x06ff, text: "تقريبا قبل أن ندرك ذلك" },
-  { from: 0x0900, to: 0x097f, text: "इससे पहले कि हमें पता चलता" },
-  { from: 0x0e00, to: 0x0e7f, text: "เกือบก่อนที่เราจะรู้ตัว" },
-  { from: 0x3040, to: 0x30ff, text: "気づく前に地面を離れていた" },
-  { from: 0xac00, to: 0xd7af, text: "우리가 알기도 전에 땅을 떠났다" },
+const SCRIPT_SPECIMENS: readonly string[] = [
+  "Αλμοστ πριν το καταλάβουμε",
+  "Почти прежде чем мы поняли",
+  "כמעט לפני שידענו זאת",
+  "تقريبا قبل أن ندرك ذلك",
+  "इससे पहले कि हमें पता चलता",
+  "เกือบก่อนที่เราจะรู้ตัว",
+  "気づく前に地面を離れていた",
+  "우리가 알기도 전에 땅을 떠났다",
 ];
 
-/** The first codepoint a `unicodeRange` names, or nothing when unreadable. */
-function firstCodepoint(range: string | undefined): number | undefined {
+/** One interval of a `unicode-range`, inclusive at both ends. */
+interface CodepointRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/** `U+0400`, `U+0400-04FF` or the wildcard form `U+4??`, as one interval. */
+const RANGE_ITEM = /^U\+([0-9A-F]{1,6})(?:-([0-9A-F]{1,6}))?$/i;
+const WILDCARD_ITEM = /^U\+([0-9A-F]*\?{1,6})$/i;
+
+/**
+ * The intervals a `unicode-range` names, or none when it cannot be read.
+ *
+ * The wildcard form is a separate pattern because `?` is not a hex digit and
+ * stands for every value that digit could take: `U+4??` is `U+0400-04FF`, so it
+ * expands by filling the wildcards with `0` for the floor and `F` for the
+ * ceiling. Reading it with the hex pattern captured the leading digits alone and
+ * produced an interval three orders of magnitude below the one declared.
+ *
+ * An unreadable item abandons the whole descriptor rather than contributing a
+ * partial answer: a range this cannot parse is one whose coverage is unknown,
+ * and treating the items it did parse as the whole would under-state it.
+ */
+function parseUnicodeRange(
+  range: string | undefined
+): readonly CodepointRange[] | undefined {
   if (range === undefined) return undefined;
-  const match = /U\+([0-9A-F]{1,6})/i.exec(range);
+  const parsed: CodepointRange[] = [];
+  for (const item of range.split(",")) {
+    const interval = parseRangeItem(item.trim());
+    if (interval === undefined) return undefined;
+    parsed.push(interval);
+  }
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+/** One comma-separated item of a `unicode-range`. */
+function parseRangeItem(item: string): CodepointRange | undefined {
+  const wildcard = WILDCARD_ITEM.exec(item);
+  if (wildcard?.[1] !== undefined) {
+    const digits = wildcard[1];
+    return {
+      from: Number.parseInt(digits.replace(/\?/g, "0"), 16),
+      to: Number.parseInt(digits.replace(/\?/g, "F"), 16),
+    };
+  }
+  const match = RANGE_ITEM.exec(item);
   if (match?.[1] === undefined) return undefined;
-  const value = Number.parseInt(match[1], 16);
-  return Number.isNaN(value) ? undefined : value;
+  const from = Number.parseInt(match[1], 16);
+  const to = match[2] === undefined ? from : Number.parseInt(match[2], 16);
+  return Number.isNaN(from) || Number.isNaN(to) ? undefined : { from, to };
+}
+
+/**
+ * Whether every glyph a candidate needs falls inside the declared intervals.
+ *
+ * Iterated by code point rather than by UTF-16 unit, so a character outside the
+ * basic plane is tested as the one value a `unicode-range` names it by.
+ * Whitespace is skipped: a space carries no glyph a specimen is demonstrating,
+ * and no script subset includes `U+0020`, so requiring it would reject every
+ * non-Latin candidate.
+ */
+function rangesCover(ranges: readonly CodepointRange[], text: string): boolean {
+  for (const character of text) {
+    const point = character.codePointAt(0);
+    if (point === undefined || /\s/.test(character)) continue;
+    if (!ranges.some(range => point >= range.from && point <= range.to)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Characters taken from the declared intervals themselves.
+ *
+ * The last resort, for a face whose range matches no sentence here — an icon
+ * font, or a subset narrower than any phrase. Drawing a sentence it cannot
+ * render would demonstrate a fallback, so this shows glyphs the face is
+ * declared to carry instead. Control characters and the surrogate block are
+ * skipped because neither renders as anything.
+ */
+function sampleFromRanges(ranges: readonly CodepointRange[]): string {
+  const sampled: string[] = [];
+  for (const range of ranges) {
+    for (let point = range.from; point <= range.to; point += 1) {
+      if (sampled.length >= SAMPLE_LENGTH) return sampled.join("");
+      if (renderableCodepoint(point)) sampled.push(String.fromCodePoint(point));
+    }
+  }
+  return sampled.join("");
+}
+
+/** How many glyphs a sampled specimen shows. Enough to read the shapes. */
+const SAMPLE_LENGTH = 12;
+
+/** Whether a codepoint draws anything: not a control, not half a pair. */
+function renderableCodepoint(point: number): boolean {
+  return point >= 0x20 && !(point >= 0xd800 && point <= 0xdfff);
 }
 
 /** What to draw for one face, so the row demonstrates the file it names. */
 function specimenFor(face: FontFaceDef): string {
-  const start = firstCodepoint(face.unicodeRange);
-  if (start === undefined) return SPECIMEN;
-  const script = SCRIPT_SPECIMENS.find(s => start >= s.from && start <= s.to);
-  return script?.text ?? SPECIMEN;
+  const ranges = parseUnicodeRange(face.unicodeRange);
+  // No descriptor, or one this cannot read, means the face is not declared to
+  // be a subset — the Latin sentence is the specimen with the most to show.
+  if (ranges === undefined) return SPECIMEN;
+  const covered = [SPECIMEN, ...SCRIPT_SPECIMENS].find(text =>
+    rangesCover(ranges, text)
+  );
+  return covered ?? sampleFromRanges(ranges);
 }
 
 /** The stack as CSS, so a specimen renders in the family it names. */
