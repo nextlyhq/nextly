@@ -36,10 +36,12 @@
  *
  * @module fonts-panel
  */
+import { cssString } from "@nextlyhq/blocks-engine";
 import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
 
 import {
+  emittableFaces,
   fontTokenRows,
   rowsNeedingAttention,
   tokenNotes,
@@ -88,7 +90,12 @@ function specimenStyle(value: string): React.CSSProperties {
  */
 function faceSpecimenStyle(face: FontFaceDef): React.CSSProperties {
   return {
-    fontFamily: `"${face.family}"`,
+    // Escaped through the engine's own `cssString`, the way `emitFontFaces`
+    // writes the same name into the site sheet. Quoting author data by hand
+    // produces `"ACME "Pro""` for a legal family, the browser drops the
+    // declaration, and the specimen demonstrates the fallback — the one lie
+    // this panel must not tell.
+    fontFamily: `"${cssString(face.family)}"`,
     ...(face.weight === undefined ? {} : { fontWeight: face.weight }),
     ...(face.style === undefined ? {} : { fontStyle: face.style }),
   };
@@ -218,7 +225,14 @@ function FaceList({
 }: {
   faces: readonly FontFaceDef[];
 }): React.JSX.Element {
-  if (faces.length === 0) {
+  // The list says "font files this site loads", so it shows what the compiler
+  // will emit. A shaped-but-refused face — a remote `src`, an empty one — is
+  // kept by the stored tier so its issues can be reported, and listing it here
+  // would claim a file loads when the site sheet contains no `@font-face` for
+  // it. The empty state is derived from the same list, so a site whose only
+  // faces are refused correctly reads as loading none.
+  const emittable = emittableFaces(faces);
+  if (emittable.length === 0) {
     return (
       <p className="nx-fonts__note">
         This site loads no font files of its own. Tokens may still name generic
@@ -228,7 +242,7 @@ function FaceList({
   }
   return (
     <ul className="nx-fonts__faces">
-      {faces.map(face => (
+      {emittable.map(face => (
         <li className="nx-fonts__face" key={faceKey(face)}>
           <span className="nx-fonts__face-name">{face.family}</span>
           <span className="nx-fonts__specimen" style={faceSpecimenStyle(face)}>

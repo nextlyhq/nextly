@@ -336,6 +336,7 @@ export {
   TOKEN_MODES,
   defaultSiteTokens,
   resolveSiteTokens,
+  cssString,
   emitFontFaces,
   emitTokenBlocks,
   isAuthorableTokenName,

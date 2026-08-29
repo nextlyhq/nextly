@@ -398,9 +398,11 @@ function familyToDtcg(css: string): string | string[] | undefined {
 /**
  * A CSS family list split into its families.
  *
- * The comma only separates families outside quotes: `"ACME, Inc", serif` names
- * two families, not three, and a plain split turns a real company's font into a
- * fallback list that fails over to a family called `Inc`. Quotes are removed
+ * The comma only separates families outside quotes AND outside parentheses.
+ * `"ACME, Inc", serif` names two families, not three — a plain split turns a
+ * real company's font into a fallback list failing over to a family called
+ * `Inc` — and `var(--font, Arial), sans-serif` names two, not three, because
+ * the first comma belongs to the custom property's fallback. Quotes are removed
  * because the name is the family, not the spelling, and backslash escapes are
  * resolved for the same reason.
  */
@@ -412,6 +414,10 @@ export function splitFamilyList(css: string): FamilyPart[] {
   let outsideQuotes = "";
   let raw = "";
   let quote: string | undefined;
+  // Parenthesis depth, so a comma inside `var(--font, Arial)` is not a
+  // separator. Counted rather than flagged: `var(--a, var(--b, serif))` nests,
+  // and a boolean would close on the inner `)`.
+  let depth = 0;
 
   for (let index = 0; index < css.length; index++) {
     const char = css[index];
@@ -442,7 +448,9 @@ export function splitFamilyList(css: string): FamilyPart[] {
       quoted = true;
       continue;
     }
-    if (char === ",") {
+    if (char === "(") depth += 1;
+    else if (char === ")" && depth > 0) depth -= 1;
+    if (char === "," && depth === 0) {
       parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
       current = "";
       raw = "";
@@ -466,13 +474,24 @@ export function splitFamilyList(css: string): FamilyPart[] {
 }
 
 /** Words that are keywords rather than family names when written bare. */
-const FAMILY_KEYWORD_NOT_A_NAME = new Set([
+/**
+ * Words an unquoted family name may not be, and what each one is.
+ *
+ * These stand for the whole declaration — `font-family: inherit` takes the
+ * parent's font — so a lone one is a valid value naming no family.
+ *
+ * `default` is deliberately NOT here. It must be quoted to name a font, which
+ * is why {@link FAMILY_MUST_QUOTE} carries it for the importer, but it is not a
+ * CSS-wide keyword: the font-family grammar excludes it from `<family-name>`,
+ * so a browser drops a declaration reading it bare. Reading it as a working
+ * whole-value keyword is how a dropped declaration reports as healthy.
+ */
+const CSS_WIDE_KEYWORDS = new Set([
   "inherit",
   "initial",
   "unset",
   "revert",
   "revert-layer",
-  "default",
 ]);
 
 // The five characters CSS calls whitespace. JavaScript's `\s` is a wider set —
@@ -492,6 +511,8 @@ const UNQUOTED_FAMILY = new RegExp(
   `^${IDENT_START}${IDENT_CHAR}*(?:${CSS_WS}+${IDENT_START}${IDENT_CHAR}*)*$`
 );
 const CSS_WS_EDGES = new RegExp(`^${CSS_WS}+|${CSS_WS}+$`, "g");
+/** A run of CSS whitespace, which separates identifiers within one family. */
+const CSS_WS_RUN = new RegExp(`${CSS_WS}+`, "g");
 
 /** Strip the whitespace CSS recognises from both ends, and only that. */
 function trimCssWhitespace(text: string): string {
@@ -554,7 +575,10 @@ export function familyPartKind(part: FamilyPart): FamilyPartKind {
   // `var()` is checked before the grammar, because the grammar rejects the
   // parentheses and would report a valid, common value as broken.
   if (/\bvar\(/i.test(part.name)) return "dynamic";
-  if (FAMILY_KEYWORD_NOT_A_NAME.has(lower)) return "keyword";
+  if (CSS_WIDE_KEYWORDS.has(lower)) return "keyword";
+  // Reserved, and not a whole-value keyword: bare `default` names no family and
+  // the declaration is dropped, so it is invalid rather than a working value.
+  if (lower === "default") return "invalid";
   if (GENERIC_FAMILIES.has(lower)) return "generic";
   if (!UNQUOTED_FAMILY.test(part.raw) || /[()]/.test(part.name))
     return "invalid";
@@ -646,7 +670,13 @@ function finishPart(
   // `String.trim` strips characters CSS does not treat as whitespace, so a
   // family led by one would have it removed here and pass a check the browser
   // fails.
-  return { name, raw: trimCssWhitespace(raw), quoted, valid };
+  // CSS separates the identifiers of an unquoted family with any run of its
+  // whitespace, and treats every run alike — `Brand   Sans` selects the face
+  // named `Brand Sans`. Keeping the author's spelling made an equivalent value
+  // compare unequal against the family a face declares. A QUOTED name keeps its
+  // spelling exactly: there the spaces are part of the name.
+  const collapsed = quoted ? name : name.replace(CSS_WS_RUN, " ");
+  return { name: collapsed, raw: trimCssWhitespace(raw), quoted, valid };
 }
 
 /**

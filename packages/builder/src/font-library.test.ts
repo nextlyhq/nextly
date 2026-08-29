@@ -215,8 +215,44 @@ describe("the sentence the panel draws", () => {
   it("says the check ran even when nothing needs attention", () => {
     const rows = rowsFor(["serif"]);
     expect(tokenSummary(rows, rowsNeedingAttention(rows))).toBe(
-      "1 typeface token, each asking first for a family this site provides."
+      "1 typeface token, none asking first for a typeface this site provides no file for."
     );
+  });
+
+  it("does not claim a dynamic or keyword row asks for a provided family", () => {
+    // The all-clear must report what was CHECKED, not more. A var() stack has
+    // an unknown first choice and a lone `inherit` names no family at all, so
+    // "each asking first for a family this site provides" would claim something
+    // about rows this code cannot resolve.
+    const rows = rowsFor(["var(--x), serif", "inherit"]);
+    const summary = tokenSummary(rows, rowsNeedingAttention(rows));
+    expect(summary).toContain(
+      "none asking first for a typeface this site provides no file for"
+    );
+    expect(summary).not.toContain(
+      "each asking first for a family this site provides"
+    );
+  });
+
+  it("counts a token failing DIFFERENTLY in each mode under both headings", () => {
+    // Invalid in light and unprovided in dark. Deriving one count as
+    // `attention.length - other` forced this row into one heading and out of
+    // the other, omitting a problem `tokenNotes` reports on the same row.
+    const rows = fontTokenRows(
+      {
+        tokens: [
+          {
+            name: "brand.body",
+            kind: "fontFamily",
+            values: { light: "10px, serif", dark: "Ghost, serif" },
+          },
+        ],
+      },
+      []
+    );
+    const summary = tokenSummary(rows, rowsNeedingAttention(rows));
+    expect(summary).toContain("1 ask first for a typeface");
+    expect(summary).toContain("1 hold a value no browser will read");
   });
 
   it("counts UNREADABLE and UNPROVIDED separately", () => {
