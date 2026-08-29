@@ -524,6 +524,48 @@ describe("applyDueReleases", () => {
     expect(marked).toEqual(["r1"]);
   });
 
+  it("bounds an INTERLEAVED backlog to one release's work, not all of it", async () => {
+    // The shape this whole guard is for, and the one it silently failed to
+    // bound. The planner groups by DOCUMENT and emits in first-seen order, so
+    // members alternating across releases yield `[r1, r2, r3, r1, r2, r3, …]`.
+    // A guard keyed on "have I started this release?" is then satisfied by the
+    // first pass over the documents — every release is started within three
+    // actions, every later action belongs to a started release, and the loop
+    // runs the entire remainder. Nine writes where the budget allowed three.
+    const publish = vi.fn(async () => {});
+    let tick = 0;
+    const d = deps({
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "r2" }),
+        release({ id: "r3" }),
+      ],
+      // Interleaved on purpose, and on DISTINCT documents so each release is its
+      // own overlap component.
+      members: [
+        member({ id: "a1", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b1", releaseId: "r2", entryId: "e4" }),
+        member({ id: "c1", releaseId: "r3", entryId: "e7" }),
+        member({ id: "a2", releaseId: "r1", entryId: "e2" }),
+        member({ id: "b2", releaseId: "r2", entryId: "e5" }),
+        member({ id: "c2", releaseId: "r3", entryId: "e8" }),
+        member({ id: "a3", releaseId: "r1", entryId: "e3" }),
+        member({ id: "b3", releaseId: "r2", entryId: "e6" }),
+        member({ id: "c3", releaseId: "r3", entryId: "e9" }),
+      ],
+      mutations: { publish },
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    // r1's three actions, and nothing else. Not nine.
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(result.deferred).toBe(6);
+  });
+
   it("finishes a started release whose actions are NOT contiguous", async () => {
     // The planner groups by DOCUMENT and emits in first-seen document order, so
     // one release's actions can be interleaved with another's: `[r1, r2, r1]`.
@@ -556,20 +598,15 @@ describe("applyDueReleases", () => {
   it("bounds discharging by ATTEMPTS, not by successful writes", async () => {
     // `markReleasePublished` answers `false` for a release an overlapping drain
     // already settled. Gating the deadline on the SUCCESS count leaves it at
-    // zero, so the check never fires and every row gets a serial write with the
-    // budget long gone.
+    // zero, so the check never fires and every component gets its serial writes
+    // with the budget long gone.
     const marked: string[] = [];
     let tick = 0;
     const d = deps({
-      releases: [
-        release({ id: "r1" }),
-        release({ id: "r2" }),
-        release({ id: "r3" }),
-      ],
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
       members: [
         member({ id: "a", releaseId: "r1", entryId: "e1" }),
-        member({ id: "b", releaseId: "r2", entryId: "e1" }),
-        member({ id: "c", releaseId: "r3", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
       ],
       marked,
       markRefuses: true,
@@ -577,46 +614,41 @@ describe("applyDueReleases", () => {
     await applyDueReleases({
       ...d,
       now: () => new Date(NOW.getTime() + tick++ * 1000),
-      deadline: new Date(NOW.getTime() + 500),
+      deadline: new Date(NOW.getTime() + 2500),
     });
 
-    expect(marked.length).toBeLessThan(3);
-    expect(marked.length).toBeGreaterThan(0);
+    expect(marked).toEqual(["r1"]);
   });
 
-  it("stops DISCHARGING releases once the deadline has passed", async () => {
-    // Finalization is one write per due release and the action loop cannot bound
-    // it: several releases collapsing onto ONE document produce a single action,
-    // so the loop finishes well inside budget and leaves every release still to
-    // discharge. A backlog of those overruns the tick here having satisfied
-    // every check above.
+  it("stops DISCHARGING once the deadline passes, between COMPONENTS", async () => {
+    // Two releases on DIFFERENT documents, so they are two overlap components.
+    // That distinction is the whole point: releases sharing a document form one
+    // component the planner says must settle together, and breaking between
+    // their members is the reversal it exists to prevent — the later winner
+    // marked published while the earlier stays scheduled, so the next tick makes
+    // the earlier the winner and republishes what was withdrawn.
+    //
+    // The deadline sits between the action loop's read and finalization's, so
+    // both components are APPLIED and only the second is left undischarged.
     const marked: string[] = [];
     let tick = 0;
     const d = deps({
-      releases: [
-        release({ id: "r1" }),
-        release({ id: "r2" }),
-        release({ id: "r3" }),
-      ],
-      // All on the SAME document, so the winner rule collapses them to one
-      // action and the action loop has nothing left to bound.
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
       members: [
         member({ id: "a", releaseId: "r1", entryId: "e1" }),
-        member({ id: "b", releaseId: "r2", entryId: "e1" }),
-        member({ id: "c", releaseId: "r3", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
       ],
       marked,
     });
     await applyDueReleases({
       ...d,
       now: () => new Date(NOW.getTime() + tick++ * 1000),
-      deadline: new Date(NOW.getTime() + 500),
+      deadline: new Date(NOW.getTime() + 2500),
     });
 
-    // Not all three. What it did not discharge stays scheduled and is settled
-    // next pass — the state it was already in.
-    expect(marked.length).toBeLessThan(3);
-    expect(marked.length).toBeGreaterThan(0);
+    // One component discharged, one left for the next pass — the state it was
+    // already in.
+    expect(marked).toEqual(["r1"]);
   });
 
   it("makes progress even when the budget is already spent", async () => {

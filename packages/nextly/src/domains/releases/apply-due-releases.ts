@@ -241,43 +241,54 @@ export async function applyDueReleases(
   // permanently. That is the same discharge-what-did-not-happen failure this
   // module already refuses for a failed member.
   const unfinished = new Set<string>();
-  // The budget stops the pass STARTING A NEW RELEASE, and never abandons one
-  // part-way. Bounding by ACTION instead starves: a release with more actions
-  // than fit the budget would replay the same prefix on every tick — repeating
-  // its mutations, hooks and outbox events — and never reach the suffix, because
-  // the plan is rebuilt from members each time and the order is stable.
-  // Guaranteeing "one action runs" is not the same as guaranteeing progress.
+  // The budget's unit is an OVERLAP COMPONENT, and every other unit is wrong.
   //
-  // Finishing a release once started is what makes progress durable without a
-  // per-action record, which this domain does not have — that is the same schema
-  // change the crash-between-mutations gap needs. The residual cost is stated
-  // rather than hidden: a SINGLE release larger than a tick still overruns it.
-  const started = new Set<string>();
-  for (let i = 0; i < plan.actions.length; i += 1) {
-    const action = plan.actions[i];
-    // Checked BEFORE starting, never mid-action: nothing here can interrupt a
-    // content mutation, and abandoning one half-done outside the database is
-    // worse than being late. `started.size > 0` guarantees progress — a budget
-    // too small for even one release must still move, or a backlog stalls
+  // Not the action: `applyOne` cannot be interrupted, and stopping between two
+  // actions of one release leaves it started and unfinished, so the next tick
+  // rebuilds the same plan and repeats the same prefix forever.
+  //
+  // Not the release either, for two reasons that only appear together. The
+  // planner groups by DOCUMENT and emits in first-seen document order, so an
+  // interleaved backlog yields `[r1, r2, r3, r1, r2, r3]` — starting each
+  // release costs one action, every release is started within the first pass
+  // over the documents, and a release-level guard then never fires again. And
+  // the discharge rule treats an overlap component as inseparable: deferring one
+  // member of a component holds the whole component open, so nothing in it is
+  // finalized and every tick repeats the members it did reach.
+  //
+  // A component is what can be started and finished as a unit. `plan.overlapping
+  // Releases` is a complete partition — a release touching nothing else appears
+  // in a set of one — so this bounds ordinary backlogs by release and joined
+  // ones by the set that must settle together.
+  const componentOf = new Map<string, number>();
+  plan.overlappingReleases.forEach((group, index) => {
+    for (const id of group) componentOf.set(id, index);
+  });
+  // Ordered so a component's actions are contiguous. The planner's own order is
+  // by document and provides no such grouping; without this the guard has
+  // nothing left to defer by the time it first fires.
+  const ordered = [...plan.actions].sort(
+    (a, b) =>
+      (componentOf.get(a.releaseId) ?? 0) - (componentOf.get(b.releaseId) ?? 0)
+  );
+  const startedComponents = new Set<number>();
+  for (const action of ordered) {
+    const component = componentOf.get(action.releaseId) ?? -1;
+    // Checked only when entering a NEW component, and never mid-component:
+    // nothing here can interrupt a content mutation, and a half-applied
+    // component is the reversal this module already refuses. At least one
+    // component always runs, or a budget too small for one stalls a backlog
     // forever while every pass reports success.
     if (
       deps.deadline !== undefined &&
-      !started.has(action.releaseId) &&
-      started.size > 0 &&
+      !startedComponents.has(component) &&
+      startedComponents.size > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
-      // DEFER this action and keep going, rather than breaking. A release's
-      // actions are NOT contiguous here: the planner groups by document and
-      // emits in first-seen document order, so an interleaved backlog yields
-      // `[r1, r2, r1]`. Breaking at `r2` would defer the trailing `r1` too,
-      // leaving a release both started and unfinished — and the next tick
-      // rebuilds the same plan, repeats the first `r1` write, and stops in the
-      // same place. That is the starvation this guard exists to prevent,
-      // reintroduced by assuming an ordering nothing provides.
       unfinished.add(action.releaseId);
       continue;
     }
-    started.add(action.releaseId);
+    startedComponents.add(component);
     outcomes.push(await applyOne(deps, action));
   }
   const deferred = plan.actions.length - outcomes.length;
@@ -307,34 +318,37 @@ export async function applyDueReleases(
   }
 
   let published = 0;
-  // ATTEMPTS, not successes. `markReleasePublished` answers `false` for a
-  // release its fence finds already published or cancelled by an overlapping
-  // drain — so gating on `published` lets a large set of those run one serial
-  // write each with the budget long gone, because the counter never leaves
-  // zero. Counting attempts keeps the same one-write progress guarantee without
-  // making the bound depend on the writes succeeding.
-  let finalized = 0;
-  for (const id of plan.releaseIds) {
-    if (heldOpen.has(id)) continue;
-    // The deadline again. Discharging is one write per due release, and the
-    // action loop can pass its check while leaving hundreds of these — a backlog
-    // of empty releases, or many releases collapsing onto few document actions,
-    // overruns the tick here having satisfied every check above. A release left
-    // undischarged stays scheduled and is settled next pass, which is the state
-    // it was already in.
+  // Discharged by COMPONENT, for the reason the planner states: splitting one
+  // reverses work. If the deadline fell between two members of a component, the
+  // later winner could be marked published while the earlier stayed scheduled —
+  // and the next tick, seeing only the earlier, would make it the winner and
+  // republish what was correctly withdrawn.
+  //
+  // Counted by ATTEMPT, not by success: `markReleasePublished` answers `false`
+  // for a release an overlapping drain already settled, so gating on successes
+  // leaves the counter at zero and every row gets a serial write with the budget
+  // long gone.
+  let finalizedComponents = 0;
+  for (const group of plan.overlappingReleases) {
+    const settleable = group.filter(
+      id => !heldOpen.has(id) && plan.releaseIds.includes(id)
+    );
+    if (settleable.length === 0) continue;
     if (
       deps.deadline !== undefined &&
-      finalized > 0 &&
+      finalizedComponents > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
       break;
     }
-    finalized += 1;
-    // A FRESH clock, not the pass's start. `publishedAt` is defined as the
-    // moment materialisation completed, and `at` was captured before members
-    // were loaded, identities resolved and every content mutation run — on a
-    // slow pass or a large due set that difference is substantial.
-    if (await deps.repository.markReleasePublished(id, now())) published += 1;
+    finalizedComponents += 1;
+    for (const id of settleable) {
+      // A FRESH clock, not the pass's start. `publishedAt` is defined as the
+      // moment materialisation completed, and `at` was captured before members
+      // were loaded, identities resolved and every content mutation run — on a
+      // slow pass or a large due set that difference is substantial.
+      if (await deps.repository.markReleasePublished(id, now())) published += 1;
+    }
   }
 
   const failed = outcomes.filter(o => o.failure !== null).length;
