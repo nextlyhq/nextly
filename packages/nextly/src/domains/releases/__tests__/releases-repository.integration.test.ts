@@ -17,6 +17,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { seedLiveAuthor } from "./helpers/live-author";
+
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -482,6 +484,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // A live author. `findDueDecisions` projects a member only when its
+          // author still exists and is active, matching the write path that runs
+          // AS them — an unattributed member describes an effect no write could
+          // perform, so it is correctly invisible.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
@@ -588,6 +595,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "unpublish",
+          // A live author. `findDueDecisions` projects a member only when its
+          // author still exists and is active, matching the write path that runs
+          // AS them — an unattributed member describes an effect no write could
+          // perform, so it is correctly invisible.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
@@ -672,6 +684,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: up.id,
           ...ref("e1", null),
           action: "publish",
+          // A live author. `findDueDecisions` projects a member only when its
+          // author still exists and is active, matching the write path that runs
+          // AS them — an unattributed member describes an effect no write could
+          // perform, so it is correctly invisible.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(up.id, PAST, "UTC");
 

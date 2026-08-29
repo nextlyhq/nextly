@@ -56,6 +56,13 @@ export type ReleasesDbApi = VersionsDbApi & {
 
 const RELEASES = "nextly_releases";
 const MEMBERS = "nextly_release_members";
+/**
+ * Read ONLY to answer whether a member's author may still act. This module owns
+ * no user behaviour and writes nothing here; the alternative is resolving an
+ * identity per document on the hot read path, which is the cost the whole memo
+ * in `pending-transition-cache` exists to avoid.
+ */
+const USERS = "users";
 
 /** The document a member points at. */
 export interface DocumentRef {
@@ -548,12 +555,29 @@ export class ReleasesRepository {
     });
     if (members.length === 0) return NO_DECISIONS;
 
+    // A member whose author can no longer act is not projected.
+    //
+    // The write path already refuses one: materialisation runs every action as
+    // the member's `createdBy` precisely so that "schedule this" cannot become a
+    // privilege escalation with a delay on it. This seam used to ignore that
+    // entirely — it projected any due member of any scheduled release — so
+    // deactivating somebody stopped their scheduled publish from being WRITTEN
+    // while the read path went on making it LOOK applied. And because a refused
+    // member holds its release open, the release stayed `scheduled` forever and
+    // the projection with it. Not a window: permanent.
+    //
+    // Filtered here rather than derived from the materialiser's verdict because
+    // nothing triggers a drain yet, so a fix that waited for one would not fire
+    // at all. This one is correct on the next read.
+    const authorized = await this.filterByLiveAuthor(members);
+    if (authorized.length === 0) return NO_DECISIONS;
+
     const releases = await this.loadScheduledReleases(
-      members.map(m => m.releaseId)
+      authorized.map(m => m.releaseId)
     );
     if (releases.size === 0) return NO_DECISIONS;
 
-    const grouped = groupMembersByDocument(members, releases);
+    const grouped = groupMembersByDocument(authorized, releases);
 
     const reveal: string[] = [];
     const hide: string[] = [];
@@ -621,6 +645,57 @@ export class ReleasesRepository {
       if (row.scheduledAt !== null) instants.push(row.scheduledAt);
     }
     return instants;
+  }
+
+  /**
+   * The members whose author still exists and is still active.
+   *
+   * A second `IN` query rather than a join, matching {@link loadScheduledReleases}
+   * directly above: the adapter layer is dialect-agnostic and expresses no joins,
+   * and two small keyed reads are the shape this repository already pays on a
+   * read that reaches here at all.
+   *
+   * A member with NO recorded author is dropped without asking anybody. That is
+   * the same verdict the materialiser reaches — there is nobody to act as, and
+   * the only fallback is the privileged principal it refuses — so admitting it
+   * here would project an effect no write could ever perform.
+   *
+   * A failure PROPAGATES rather than resolving to "everyone is live". Answering
+   * that on a failed lookup would reinstate exactly the projection this exists to
+   * prevent, and it would do so precisely when the database is unhealthy. The
+   * caller treating a throw as "no release is due" would be wrong in the other
+   * direction, which is why the transition memo above propagates too.
+   */
+  private async filterByLiveAuthor(
+    members: ReleaseMemberRow[]
+  ): Promise<ReleaseMemberRow[]> {
+    const authorIds = [
+      ...new Set(
+        members
+          .map(m => m.createdBy)
+          .filter((id): id is string => typeof id === "string" && id !== "")
+      ),
+    ];
+    if (authorIds.length === 0) return [];
+
+    const rows = await this.db.select<{ id: string; isActive: boolean }>(
+      USERS,
+      {
+        columns: ["id", "isActive"],
+        where: {
+          and: [
+            { column: "id", op: "IN", value: authorIds },
+            // Asked of the database rather than filtered in memory, so a dialect
+            // storing this as 0/1 (SQLite) and one storing a real boolean answer
+            // the same question. A truthiness check here would read `0` as false
+            // on one dialect and the string "0" as TRUE on another.
+            { column: "isActive", op: "=", value: true },
+          ],
+        },
+      }
+    );
+    const live = new Set(rows.map(r => r.id));
+    return members.filter(m => m.createdBy !== null && live.has(m.createdBy));
   }
 
   private async loadScheduledReleases(
