@@ -2,19 +2,15 @@
 "nextly": patch
 ---
 
-A scheduled release can now take content down in every language.
+Every language of an entry can now be taken down at once.
 
-Publishing every language of an entry at once has been possible since i18n M7.
-Withdrawing them had no counterpart at any layer — no admin hook, no route, no
-service method — so a content release could schedule a takedown that no code
-path could perform on a localized collection. The write it fell back to was an
-ordinary update carrying no locale, which reaches the DEFAULT language only: a
-withdrawal left every other translation published while the release's read path
-hid the whole entry, so a translation reappeared the moment that projection went
-away.
+Publishing every language has been possible since i18n M7. Withdrawing them had
+no counterpart at any layer — no admin hook, no route, no service method — so
+there was no way to take a localized document down as a whole. An ordinary
+update carrying no locale reaches the DEFAULT language only, leaving every other
+translation published.
 
-`unpublishAllLocales` closes it, and document-wide release members now go
-through the all-languages operation in both directions.
+`unpublishAllLocales` closes it.
 
 The direction is a parameter rather than a second method. Publishing every
 language and withdrawing every language differ in a target status, an access

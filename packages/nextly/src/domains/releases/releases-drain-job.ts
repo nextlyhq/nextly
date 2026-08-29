@@ -34,7 +34,6 @@ import type { JobDefinition } from "../jobs/job-registry";
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
 import { createReleaseMutations } from "./release-mutations";
-import type { AllLocalesLifecyclePort } from "./release-mutations";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
 
@@ -45,11 +44,6 @@ export function createReleasesDrainJob(deps: {
   db: ReleasesDbApi;
   /** The Direct API the member's bound client wraps. */
   contentApi: JobContentSource;
-  /**
-   * The all-languages lifecycle, for document-wide members on localized
-   * collections. See {@link AllLocalesLifecyclePort}.
-   */
-  allLocales?: AllLocalesLifecyclePort;
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
   /**
@@ -73,10 +67,7 @@ export function createReleasesDrainJob(deps: {
     handler: async () => {
       const result = await applyDueReleases({
         repository: new ReleasesRepository(deps.db),
-        mutations: createReleaseMutations({
-          contentApi: deps.contentApi,
-          allLocales: deps.allLocales,
-        }),
+        mutations: createReleaseMutations({ contentApi: deps.contentApi }),
         runAs: deps.runAs,
       });
       await deps.onOutcome(result);
