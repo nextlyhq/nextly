@@ -631,31 +631,34 @@ describe("applyDueReleases", () => {
     expect(marked.length).toBeLessThan(4);
   });
 
-  it("ALWAYS discharges a component it applied, even past the deadline", async () => {
-    // r1 and r2 share document e1, so they are one component, and this pass
-    // performs its content mutation. Leaving them scheduled because the clock
-    // ran out makes the NEXT tick plan and perform that mutation again —
-    // rerunning hooks and appending outbox events for a write that already
-    // landed — while `deferred` reports zero, because nothing was skipped. A
-    // truncated pass would look clean and do the expensive half twice.
+  it("ALWAYS discharges every component it applied, even past the deadline", async () => {
+    // TWO applied components, because one cannot discriminate: the first is
+    // always discharged whatever the clock says, so a single-component fixture
+    // passes with or without the exemption.
     //
-    // Discharging is one write per release, so finishing what was applied can
-    // overrun by that much and no more.
+    // Leaving the second scheduled because the clock ran out makes the next tick
+    // plan and perform its content mutation AGAIN — rerunning hooks and
+    // appending outbox events for a write that already landed — while `deferred`
+    // reports zero, because nothing was skipped. A truncated pass would look
+    // clean and do the expensive half twice.
+    //
+    // The deadline sits between the action loop's clock read and finalization's
+    // second, so both components are applied and the second would be dropped
+    // without the exemption.
     const marked: string[] = [];
     let tick = 0;
     const d = deps({
       releases: [release({ id: "r1" }), release({ id: "r2" })],
       members: [
         member({ id: "a", releaseId: "r1", entryId: "e1" }),
-        member({ id: "b", releaseId: "r2", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
       ],
       marked,
     });
     await applyDueReleases({
       ...d,
       now: () => new Date(NOW.getTime() + tick++ * 1000),
-      // Already spent before finalization begins.
-      deadline: new Date(NOW.getTime() - 60_000),
+      deadline: new Date(NOW.getTime() + 2500),
     });
 
     expect(marked).toEqual(["r1", "r2"]);
