@@ -14,8 +14,9 @@ import { nextly } from "../../direct-api/nextly";
 import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
 import type { RunAsDeps, RunAsUser } from "../../shared/lib/resolve-run-as";
 
-import { SWEEP_KEY_PREFIX, type JobRegistry } from "./job-registry";
+import type { JobRegistry } from "./job-registry";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
+import { SWEEP_KEY_PREFIX } from "./portable-key";
 import { runJobs, type RunJobsResult } from "./run-jobs";
 
 /**

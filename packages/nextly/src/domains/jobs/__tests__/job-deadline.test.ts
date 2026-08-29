@@ -63,18 +63,37 @@ const noContentApi = new Proxy({} as never, {
   },
 });
 
-/** Runs a pass and returns the contexts every handler invocation received. */
+/** How far the clock moves between one job finishing and the next starting. */
+const GAP_MS = 1_000;
+
+/**
+ * Runs a pass and returns the contexts every handler invocation received.
+ *
+ * **The clock ADVANCES between jobs**, and that is what gives these tests their
+ * discriminating power. With a frozen clock, an implementation that computed
+ * `now() + maxDurationMs` separately for every job would hand out an identical
+ * instant to each one and satisfy a "they all match" assertion perfectly — the
+ * test would pass against exactly the design it exists to rule out.
+ *
+ * Advancing it inside the handler, rather than on every `now()` call, keeps the
+ * movement to the boundary between jobs: nothing inside a single job's own
+ * bookkeeping shifts, so the only thing the assertions can be reading is where
+ * the deadline is anchored.
+ */
 async function contextsFrom(
   ids: string[],
   maxDurationMs: number
 ): Promise<JobContext[]> {
   const seen: JobContext[] = [];
+  let clock = NOW.getTime();
+
   const registry = new JobRegistry();
   registry.register(
     defineJob({
       slug: "test:capture",
       handler: async (_input, context) => {
         seen.push(context);
+        clock += GAP_MS;
       },
     })
   );
@@ -86,7 +105,7 @@ async function contextsFrom(
       findUser: async () => ({ id: "u1", isActive: true }),
       listRoleSlugs: async () => ["editor"],
     },
-    now: () => NOW,
+    now: () => new Date(clock),
     maxDurationMs,
     contentApi: noContentApi,
   });
@@ -116,7 +135,7 @@ describe("the deadline a handler is given", () => {
     expect(context?.deadline.getTime()).toBe(NOW.getTime() + 5_000);
   });
 
-  it("is the SAME instant for every job in one pass", async () => {
+  it("is the SAME instant for every job, even as the clock moves between them", async () => {
     // One pass, one deadline. A fresh budget per job would be a promise the
     // runner cannot keep — the invocation dies at one instant whatever a later
     // job was told, and a job starting late genuinely has less room.
@@ -125,5 +144,31 @@ describe("the deadline a handler is given", () => {
     expect(contexts).toHaveLength(3);
     const instants = new Set(contexts.map(c => c.deadline.getTime()));
     expect(instants.size).toBe(1);
+  });
+
+  it("stays anchored to the pass's START, not to when each job began", async () => {
+    // The assertion that actually rules out a per-job budget. Each job starts
+    // GAP_MS later than the last, so an implementation computing
+    // `now() + maxDurationMs` per job would hand the third job an instant
+    // 2 * GAP_MS beyond the first. Anchored to the start, all three equal
+    // NOW + budget however long the pass has been running.
+    const contexts = await contextsFrom(["a", "b", "c"], 20_000);
+
+    for (const context of contexts) {
+      expect(context.deadline.getTime()).toBe(NOW.getTime() + 20_000);
+    }
+  });
+
+  it("gives each handler its own Date, so one cannot move another's", async () => {
+    // `Date` is mutable. Sharing one object lets a handler that applies a safety
+    // margin with `setTime` silently change the deadline every later job in the
+    // pass is handed.
+    const contexts = await contextsFrom(["a", "b"], 20_000);
+
+    expect(contexts[0]?.deadline).not.toBe(contexts[1]?.deadline);
+
+    const before = contexts[1]?.deadline.getTime();
+    contexts[0]?.deadline.setTime(0);
+    expect(contexts[1]?.deadline.getTime()).toBe(before);
   });
 });

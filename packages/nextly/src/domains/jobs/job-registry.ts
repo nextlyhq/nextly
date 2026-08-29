@@ -26,6 +26,7 @@ import { NextlyError } from "../../errors";
 import type { UserContext } from "../collections/services/collection-types";
 
 import type { JobContentApi } from "./job-content-api";
+import { MAX_PORTABLE_KEY_LENGTH, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 
 /** Attempts a job gets before it is given up on. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
@@ -39,20 +40,9 @@ export const DEFAULT_MAX_ATTEMPTS = 5;
  * dialect, rather than accepted at definition and failing only at enqueue time
  * and only on MySQL.
  */
-export const MAX_JOB_SLUG_LENGTH = 191;
+export const MAX_JOB_SLUG_LENGTH = MAX_PORTABLE_KEY_LENGTH;
 
-/**
- * What a sweep's dedupe key is prefixed with.
- *
- * Lives here, with the validation that charges for it, rather than beside the
- * function that builds the key: a sweep's key is DERIVED from its slug and held
- * to the same portable length limit the slug is, so the prefix spends part of
- * the slug's budget. Without accounting for it, a slug of 186-191 characters is
- * accepted by `defineJob` and its key refused by `enqueue` — and because
- * queueing a sweep is deliberately allowed to fail without failing the pass,
- * the only symptom is a job type that never runs.
- */
-export const SWEEP_KEY_PREFIX = "sweep:";
+export { SWEEP_KEY_PREFIX, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 
 /** What a handler is told about the run it is in. */
 export interface JobContext {
@@ -166,12 +156,9 @@ export function defineJob<TInput = unknown>(
   // A sweep is charged for its own dedupe key here, where the slug is refused
   // with a message naming the real budget — rather than at enqueue, which runs
   // on a scheduler tick with nobody watching.
-  if (
-    input.sweep &&
-    SWEEP_KEY_PREFIX.length + slug.length > MAX_JOB_SLUG_LENGTH
-  ) {
+  if (input.sweep && slug.length > MAX_SWEEP_SLUG_LENGTH) {
     throw NextlyError.invalidInput({
-      message: `A sweep's slug may be at most ${MAX_JOB_SLUG_LENGTH - SWEEP_KEY_PREFIX.length} characters, because its dedupe key is derived from it.`,
+      message: `A sweep's slug may be at most ${MAX_SWEEP_SLUG_LENGTH} characters, because its dedupe key is derived from it.`,
       logContext: { slug, length: slug.length },
     });
   }

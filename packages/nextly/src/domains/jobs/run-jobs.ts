@@ -329,7 +329,12 @@ async function runOne(
         user: identity.user,
         now: now(),
         content: createJobContentApi(identity.user, deps.contentApi),
-        deadline,
+        // A FRESH Date per invocation, from the pass's fixed instant. `Date` is
+        // mutable, so handing every handler the same object lets one that calls
+        // `setTime` on it — applying a safety margin, say — silently move the
+        // deadline every later job in this pass is given. Copying costs nothing
+        // and makes the value behave the way its readers assume it does.
+        deadline: new Date(deadline.getTime()),
       })
     );
   } catch (error) {
