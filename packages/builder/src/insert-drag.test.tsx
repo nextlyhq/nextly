@@ -712,6 +712,46 @@ describe("dragging a block from the palette onto the canvas", () => {
     expect(editorRef?.undoDepth).toBe(1);
   });
 
+  it("survives a SECOND pointer being cancelled by the browser", () => {
+    // The press guard stops a second contact taking the gesture over, but the
+    // browser can still withdraw that contact a moment later — recognising a
+    // touch-scroll, say. A cancel is a fact about ONE pointer, so ending the
+    // drag on it undoes the very gesture the guard exists to protect: a stray
+    // finger on a block, cancelled by the browser, would kill a palette drag
+    // the author is mid-way through.
+    const { container, row } = renderTwo();
+    pressRow(row, 300, 500);
+    moveTo(200, 154);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    const canvas = canvasRootOf(container);
+    fireEvent.pointerCancel(canvas, { pointerId: 9 });
+
+    // Still in flight, and still ending where ITS pointer settled.
+    expect(dragState.draggingBlockName).toBe("test/heading");
+    release(200, 154);
+    expect(ids()).toEqual(["a", "b", INSERTED]);
+    expect(editorRef?.undoDepth).toBe(1);
+  });
+
+  it("still abandons the drag when the OWNING pointer is cancelled", () => {
+    // The must-differ control. A cancel handler that ignored every pointer
+    // would satisfy the case above while breaking what cancel is FOR — the
+    // browser has taken the gesture away, and continuing to draw a drag it
+    // no longer owns leaves an indicator the author cannot dismiss.
+    const { container, row } = renderTwo();
+    pressRow(row, 300, 500);
+    moveTo(200, 154);
+
+    fireEvent.pointerCancel(canvasRootOf(container), { pointerId: 7 });
+
+    expect(dragState.draggingBlockName).toBeNull();
+    // And a release afterwards commits nothing, because there is no gesture.
+    release(200, 154);
+    expect(ids()).toEqual(["a", "b"]);
+    expect(editorRef?.undoDepth).toBe(0);
+  });
+
   it("starts no drag at all when the host supplied no canvas", () => {
     // The control on `beginInsertDrag`'s own guard: with no canvas root the
     // press must be left completely alone, so the row's click keeps working.
