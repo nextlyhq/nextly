@@ -1030,6 +1030,20 @@ export interface CanvasProps {
    */
   rootRef?: React.RefObject<HTMLDivElement | null>;
   /**
+   * The same element, published as a VALUE so a caller can react to it
+   * appearing.
+   *
+   * A ref is not reactive. This canvas mounts only once styles have loaded
+   * while the surfaces beside it stay mounted throughout, so a reader that
+   * captured `rootRef` on its first render sees `null` and is never told
+   * otherwise — assigning `.current` changes no dependency, so an effect
+   * listing the ref never looks again.
+   *
+   * `rootRef` stays for the readers that only ever ask "where is it now" during
+   * a gesture, where a ref is exactly right.
+   */
+  onRoot?: (root: HTMLDivElement | null) => void;
+  /**
    * The site sheet, the same value the published route passes. Required — see
    * the module docblock for why this one is not optional.
    */
@@ -1147,6 +1161,7 @@ export interface CanvasProps {
 export function Canvas({
   document,
   rootRef,
+  onRoot,
   siteStyles,
   selectedId = null,
   selectedIds,
@@ -1172,6 +1187,15 @@ export function Canvas({
       rootRef.current = null;
     };
   }, [rootRef]);
+
+  // The same element as a value, for readers that must react to it arriving.
+  useEffect(() => {
+    if (onRoot === undefined) return;
+    onRoot(root.current);
+    return () => {
+      onRoot(null);
+    };
+  }, [onRoot]);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,

@@ -80,7 +80,7 @@ export interface InspectorPanelProps {
    * the surface renders in isolation, its tests pass, and every real selection
    * in the shipped editor silently loses the answer.
    */
-  canvasRoot?: { readonly current: HTMLElement | null };
+  canvasRoot?: HTMLElement | null;
   /**
    * The site's class library, forwarded to the style tab's class selector.
    *
