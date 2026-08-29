@@ -520,6 +520,41 @@ describe("applyDueReleases", () => {
     expect(marked).toEqual(["r1"]);
   });
 
+  it("stops DISCHARGING releases once the deadline has passed", async () => {
+    // Finalization is one write per due release and the action loop cannot bound
+    // it: several releases collapsing onto ONE document produce a single action,
+    // so the loop finishes well inside budget and leaves every release still to
+    // discharge. A backlog of those overruns the tick here having satisfied
+    // every check above.
+    const marked: string[] = [];
+    let tick = 0;
+    const d = deps({
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "r2" }),
+        release({ id: "r3" }),
+      ],
+      // All on the SAME document, so the winner rule collapses them to one
+      // action and the action loop has nothing left to bound.
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e1" }),
+        member({ id: "c", releaseId: "r3", entryId: "e1" }),
+      ],
+      marked,
+    });
+    await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    // Not all three. What it did not discharge stays scheduled and is settled
+    // next pass — the state it was already in.
+    expect(marked.length).toBeLessThan(3);
+    expect(marked.length).toBeGreaterThan(0);
+  });
+
   it("makes progress even when the budget is already spent", async () => {
     // A budget too small for a single action must still move, or a backlog
     // stalls forever while every pass reports success.
