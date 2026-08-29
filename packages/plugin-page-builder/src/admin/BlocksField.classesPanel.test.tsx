@@ -29,6 +29,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
+/** The document the editor opens with, when a test needs one with nodes in it. */
+let openWith: unknown;
+
 /** Props the inspector recorder captured on the most recent render. */
 const seen: { inspector: Record<string, unknown> | undefined } = {
   inspector: undefined,
@@ -40,6 +43,8 @@ let clientConfig: Record<string, unknown> | undefined;
 let storedRead: { data: unknown; isPending: boolean; error: unknown };
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
+/** When set, every save blocks on this until the test releases it. */
+let holdSaves: Promise<void> | null;
 const saved: Array<Record<string, unknown>> = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
@@ -101,6 +106,13 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useUpdateSingleDocument: () => ({
     mutateAsync: async (value: Record<string, unknown>) => {
       saved.push(value);
+      /*
+       * Held open when the test asks. A mock that resolves immediately closes
+       * the very window these tests exist to enter: the second edit then
+       * composes after the first has already advanced the base, and passes
+       * whether or not composition is serialised.
+       */
+      if (holdSaves !== null) await holdSaves;
       if (saveResult instanceof Error) throw saveResult;
       return saveResult;
     },
@@ -111,7 +123,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 const { BlocksField } = await import("./BlocksField");
 
 function Host(): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: undefined } });
+  const { control } = useForm({ defaultValues: { body: openWith } });
   return <BlocksField name="body" control={control} />;
 }
 
@@ -136,6 +148,8 @@ beforeEach(() => {
   clientConfig = {};
   storedRead = { data: undefined, isPending: false, error: null };
   saveResult = { success: true };
+  holdSaves = null;
+  openWith = undefined;
   saved.length = 0;
 });
 
@@ -260,6 +274,56 @@ describe("the classes manager reaching an author", () => {
     expect(await screen.findByText("The site style is locked.")).toBeTruthy();
   });
 
+  it("composes a queued rename AFTER the one before it settles", async () => {
+    /*
+     * The window that matters: both edits are made while the FIRST save is
+     * still on the network. Serialising transmission alone is not enough —
+     * the second payload is already built by then, so it carries the first
+     * class's old slug and writing it undoes that rename while reporting
+     * success.
+     *
+     * The save is held open deliberately. With a mock that resolves at once,
+     * the second edit composes after the first has advanced the base, and the
+     * test passes against code that does not serialise composition at all.
+     */
+    let release: (() => void) | undefined;
+    holdSaves = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    storedRead = {
+      data: {
+        classes: [
+          { id: "id-card", slug: "card", orderIndex: 0, styles: {} },
+          { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+
+    // BOTH edits committed before anything is released.
+    const first = screen.getByLabelText("Name of card");
+    fireEvent.change(first, { target: { value: "panel" } });
+    fireEvent.blur(first);
+    const second = screen.getByLabelText("Name of hero");
+    fireEvent.change(second, { target: { value: "banner" } });
+    fireEvent.blur(second);
+
+    await act(async () => {
+      release?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await vi.waitFor(() => expect(saved.length).toBe(2));
+
+    const last = JSON.stringify(saved[saved.length - 1]);
+    expect(last).toContain("banner");
+    expect(last).toContain("panel");
+    expect(last).not.toContain('"card"');
+  });
+
   it("builds a second rename on the FIRST, not on the stale render", async () => {
     /*
      * Every write here replaces the whole class list, and the rendered library
@@ -297,6 +361,41 @@ describe("the classes manager reaching an author", () => {
     expect(last).toContain("banner");
     expect(last).toContain("panel");
     expect(last).not.toContain('"card"');
+  });
+
+  it("uses the HOST's limits to decide what the page applies", () => {
+    /*
+     * A site that raised or lowered `limits` renders under those, and a walk
+     * here under the engine's defaults selects different nodes — reporting a
+     * class as absent from a page that renders it. A ceiling of one node means
+     * only the first is read, so the second node's class is not marked.
+     */
+    clientConfig = { limits: { maxNodes: 1 } };
+    // Two nodes, each carrying a class, so a ceiling of one truncates the walk.
+    openWith = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "n1", type: "core/text", props: {}, classes: ["id-card"] },
+        { id: "n2", type: "core/text", props: {}, classes: ["id-hero"] },
+      ],
+    };
+    storedRead = {
+      data: {
+        classes: [
+          { id: "id-card", slug: "card", orderIndex: 0, styles: {} },
+          { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    // Reading fewer nodes than the document holds is reported, rather than the
+    // shortfall being presented as "these classes are not on this page".
+    expect(screen.getByTestId("panel").textContent).toContain(
+      "more blocks than can be read at once"
+    );
   });
 
   it("says a failed read failed, rather than loading forever", () => {

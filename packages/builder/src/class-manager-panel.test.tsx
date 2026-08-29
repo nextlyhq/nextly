@@ -519,3 +519,102 @@ describe("two renames on one row, answered out of order", () => {
     expect(screen.queryByText("The first one was refused.")).toBeNull();
   });
 });
+
+describe("a rename handler that fails before it returns", () => {
+  it("reports a SYNCHRONOUS throw like any other refusal", async () => {
+    // A permission or storage check that throws is a legitimate handler. The
+    // exception escaped the event handler, so the draft stayed and the author
+    // was told nothing.
+    const onRename = vi.fn(() => {
+      throw new Error("not allowed");
+    });
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    expect(await screen.findByText(/could not be renamed/i)).toBeTruthy();
+  });
+});
+
+describe("a filter whose backing data disappears", () => {
+  it("CLEARS the selection rather than masking it", () => {
+    /*
+     * Deriving a display value while the stored one stayed selected left two
+     * answers to "which filter is active", and the hidden one came back the
+     * moment usage was readable again — narrowing a list the author had last
+     * seen showing everything.
+     */
+    const view = render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Not in index" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+
+    // Usage goes away, then comes back.
+    view.rerender(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    view.rerender(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")
+    ).toBe("true");
+  });
+});
+
+describe("deleting while the index was never read", () => {
+  it("does not claim the index knows of no document using it", () => {
+    // Rows are built from a placeholder empty map, so the usual wording would
+    // be reassurance derived from never having asked — offered immediately
+    // before an irreversible site-wide write.
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
+    // Addressed through the confirm button rather than by role: the filter
+    // chips are a `group` too, and matching both would assert about whichever
+    // came first.
+    const confirm = screen
+      .getByRole("button", { name: "Confirm deleting hero" })
+      .closest("div");
+    expect(confirm?.textContent).toContain("has not been read");
+    expect(confirm?.textContent).not.toContain("knows of no document");
+  });
+});

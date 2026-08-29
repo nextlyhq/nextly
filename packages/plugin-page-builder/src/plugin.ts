@@ -412,6 +412,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // key already says.
         ...(opts.remotePatterns !== undefined ||
         opts.checklist !== undefined ||
+        opts.limits !== undefined ||
         opts.siteStyle !== undefined
           ? {
               clientConfig: {
@@ -428,6 +429,15 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
                 ...(opts.siteStyle === undefined
                   ? {}
                   : { siteStyle: configStyle }),
+                /*
+                 * The bounds the renderer draws under, so the admin asks the
+                 * same question the page answers. The classes manager walks the
+                 * open document to say which classes a page applies, and a walk
+                 * under different limits selects different nodes — reporting a
+                 * class as absent from a page that renders it. Plain numbers,
+                 * and nothing secret: the published page is drawn under them.
+                 */
+                ...(opts.limits === undefined ? {} : { limits: opts.limits }),
               },
             }
           : {}),

@@ -137,6 +137,15 @@ export interface ClassManagerPanelProps {
   /** The class ids the open document applies, for the on-this-page filter. */
   documentClassIds: readonly string[];
   /**
+   * Whether that list covers the whole document.
+   *
+   * The walk producing it stops at the document's node ceiling, so a class
+   * applied past that bound is missing from the list — and its absence must
+   * not be read as "not on this page". `"partial"` says so on the surface
+   * rather than leaving the filter to make a claim it cannot support.
+   */
+  documentScan?: "complete" | "partial";
+  /**
    * The classes something ELSE supplies, which the stored library layers over.
    *
    * Needed because these two are not equally editable, exactly as the tokens
@@ -174,6 +183,7 @@ export interface ClassManagerPanelProps {
 export function ClassManagerPanel({
   library,
   absence,
+  documentScan,
   usage,
   documentClassIds,
   suppliedClassIds,
@@ -188,9 +198,18 @@ export function ClassManagerPanel({
    * an empty panel with nothing to explain it.
    */
   const offerable = offerableFilters(usage !== undefined);
-  const active = offerable.some(entry => entry.value === filter)
-    ? filter
-    : "all";
+  const stillOffered = offerable.some(entry => entry.value === filter);
+  /*
+   * CLEARED rather than masked. Deriving a display value while the stored one
+   * stayed `"not-in-index"` left two answers to "which filter is active", and
+   * the hidden one came back the moment usage was readable again — narrowing a
+   * list the author had last seen showing everything, with no chip to explain
+   * why.
+   */
+  React.useEffect(() => {
+    if (!stillOffered) setFilter("all");
+  }, [stillOffered]);
+  const active = stillOffered ? filter : "all";
 
   if (library === undefined) {
     return (
@@ -215,6 +234,15 @@ export function ClassManagerPanel({
       <div className="nx-classman__head">
         <h2 className="nx-classman__title">Classes</h2>
       </div>
+      {documentScan === "partial" ? (
+        // Stated rather than silently narrowing: the page filter and the row
+        // marks are still TRUE where they appear, and it is their absence that
+        // cannot be trusted.
+        <p className="nx-inspector__note">
+          This page has more blocks than can be read at once, so a class it uses
+          may not be marked here.
+        </p>
+      ) : null}
       {usageKnown ? null : (
         // Stated once, at the top, rather than on every row. It is a property
         // of this reading of the site, not of any one class.
@@ -340,6 +368,7 @@ function ClassRowView({
       {confirming && onDelete !== undefined ? (
         <DeleteConfirm
           row={row}
+          usageKnown={usageKnown}
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
             setConfirming(false);
@@ -404,7 +433,21 @@ function NameField({
       setDraft(null);
       return;
     }
-    const answered = onRename(row.id, outcome.slug);
+    /*
+     * Called inside a boundary that catches a SYNCHRONOUS throw, so a handler
+     * failing before it returns is treated exactly as one that rejects. A
+     * permission or storage check that throws is a legitimate implementation
+     * of the contract, and letting it escape the event handler left the draft
+     * uncleared and the author told nothing at all.
+     */
+    let answered: ClassRenameAnswer;
+    try {
+      answered = onRename(row.id, outcome.slug);
+    } catch {
+      setDraft(null);
+      setRefused("This class could not be renamed.");
+      return;
+    }
     /*
      * The draft clears immediately, because the author DID finish editing and
      * a field that holds their text hostage until the network answers reads as
@@ -532,10 +575,12 @@ function UsageNote({
  */
 function DeleteConfirm({
   row,
+  usageKnown,
   onCancel,
   onConfirm,
 }: {
   row: ClassRow;
+  usageKnown: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }): React.ReactElement {
@@ -543,9 +588,18 @@ function DeleteConfirm({
   return (
     <div className="nx-classman__confirm" role="group">
       <p className="nx-classman__issue">
-        {warning.hasIndexedUsage
-          ? `Delete “${row.slug}”? The index has it on ${warning.indexedDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
-          : `Delete “${row.slug}”? The index knows of no document using it, but it cannot rule one out.`}
+        {/*
+          Three wordings, because there are three states and the middle one is
+          the dangerous one to collapse. Rows are built from an empty map when
+          no index was read, so "knows of no document using it" would be
+          reassurance derived entirely from never having asked — offered
+          immediately before an irreversible site-wide write.
+        */}
+        {!usageKnown
+          ? `Delete “${row.slug}”? Where this class is used has not been read, so there is no telling how many documents carry it. Deleting removes it from every one of them.`
+          : warning.hasIndexedUsage
+            ? `Delete “${row.slug}”? The index has it on ${warning.indexedDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
+            : `Delete “${row.slug}”? The index knows of no document using it, but it cannot rule one out.`}
       </p>
       <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
         Cancel

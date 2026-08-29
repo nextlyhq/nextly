@@ -35,6 +35,9 @@
 
 import {
   resolveSiteTokens,
+  isPlainRecord,
+  DEFAULT_LIMITS,
+  type DocumentLimits,
   getBlock,
   hasBlock,
   registerBlocks,
@@ -88,6 +91,7 @@ import {
   documentAfter,
   type InlineEditOutcome,
   ClassManagerPanel,
+  type ClassCreation,
   FontsPanel,
   type ClassRenameOutcome,
 } from "@nextlyhq/builder/shell";
@@ -623,7 +627,7 @@ function TokensStudio({
  * silently overridden by them.
  */
 /**
- * The library a class write must build on, which is not always the rendered one.
+ * One serialised writer for every whole-section class write.
  *
  * Every write here is read-modify-write over the WHOLE section: the payload is
  * the complete class list, because that is what `saveSection` stores. So the
@@ -631,45 +635,114 @@ function TokensStudio({
  * `library` is stale for as long as a save takes to come back through the
  * cache.
  *
- * Two edits inside that window both compose from the same snapshot. The shared
- * mutation scope serialises TRANSMISSION, so both land — but the second payload
- * was already computed without the first, and writing it undoes the first edit
- * while reporting success. Renaming two classes quickly restores the first
- * name; creating two classes quickly deletes the first class.
+ * Two things follow, and each was a separate defect.
  *
- * So a completed write ADVANCES the base, and a fresh read from the host
- * REPLACES it: the server's answer is authoritative the moment it arrives, and
- * anything composed locally after it was composed against older facts.
+ * **Composition must happen inside the queue, not before it.** Serialising
+ * only TRANSMISSION is not enough: both callers compose their payload, then
+ * queue, so the second was already built without the first. `run` therefore
+ * takes a FUNCTION and calls it after the previous write settles, so every
+ * payload is composed against the result of the one before it.
  *
- * Identity is what separates the two cases. `library` is a new array whenever
- * the host has re-read, so comparing the reference the base was taken from
- * against the one in hand distinguishes "the host has answered since" from
- * "nothing has changed but our own writes".
+ * **One base, shared.** Creating and renaming are the same read-modify-write
+ * over the same list. Two independent bases meant a rename that had not yet
+ * refreshed was invisible to a creation, which then wrote a list carrying the
+ * old slug — and in the other order, dropped the new class.
+ *
+ * A completed write ADVANCES the base; a fresh read from the host REPLACES it,
+ * because the server's answer is authoritative the moment it arrives.
  */
-function useClassWriteBase(library: readonly NamedClass[] | undefined): {
-  base: () => readonly NamedClass[] | undefined;
-  advance: (next: readonly NamedClass[]) => void;
-} {
-  const held = useRef<{
-    from: readonly NamedClass[] | undefined;
-    value: readonly NamedClass[] | undefined;
-  }>({ from: library, value: library });
+interface ClassWrites {
+  /**
+   * Run one whole-section write, composed against the freshest list.
+   *
+   * The callback receives the base and answers with the payload it composed
+   * plus its own result. Returning `next` separately is what lets this advance
+   * the base ONLY when the write succeeded — a refused write changed nothing,
+   * and building the following edit on it would persist something the server
+   * rejected.
+   */
+  run: <T>(
+    write: (existing: readonly NamedClass[] | undefined) => Promise<{
+      result: T;
+      next?: readonly NamedClass[];
+    }>
+  ) => Promise<T>;
+}
 
-  const base = useCallback((): readonly NamedClass[] | undefined => {
-    if (held.current.from !== library) {
-      held.current = { from: library, value: library };
-    }
-    return held.current.value;
+function useClassWrites(
+  library: readonly NamedClass[] | undefined
+): ClassWrites {
+  const held = useRef(library);
+  /*
+   * The host's answer supersedes anything composed locally. This runs only
+   * when `library` changes identity, which is exactly when a re-read has
+   * landed — during a save's window the identity is unchanged and the base
+   * keeps whatever the writes advanced it to.
+   */
+  useEffect(() => {
+    held.current = library;
   }, [library]);
 
-  const advance = useCallback(
-    (next: readonly NamedClass[]) => {
-      held.current = { from: library, value: next };
+  // The chain every write joins. Held as a ref so it survives re-renders: a
+  // queue recreated on render would let two writes run concurrently again.
+  const tail = useRef<Promise<unknown>>(Promise.resolve());
+
+  const run = useCallback(
+    <T,>(
+      write: (existing: readonly NamedClass[] | undefined) => Promise<{
+        result: T;
+        next?: readonly NamedClass[];
+      }>
+    ): Promise<T> => {
+      const started = tail.current.then(async () => {
+        const answered = await write(held.current);
+        if (answered.next !== undefined) held.current = answered.next;
+        return answered.result;
+      });
+      // The chain must not break on a rejection, or every later write is
+      // rejected with an error belonging to an edit the author has forgotten.
+      tail.current = started.then(
+        () => undefined,
+        () => undefined
+      );
+      return started;
     },
-    [library]
+    []
   );
 
-  return { base, advance };
+  return { run };
+}
+
+/**
+ * The document bounds the host renders under, as published to the browser.
+ *
+ * Read DEFENSIVELY and one key at a time: `clientConfig` is JSON that crossed a
+ * transport, so nothing here can assume a shape. Anything unreadable falls back
+ * to the engine's defaults, which is what the renderer itself falls back to —
+ * so the two still agree rather than diverging in the direction that would
+ * misreport which classes a page applies.
+ */
+function readDocumentLimits(
+  clientConfig: Record<string, unknown> | undefined
+): DocumentLimits {
+  const declared = clientConfig?.limits;
+  if (!isPlainRecord(declared)) return DEFAULT_LIMITS;
+  // Built by overriding the defaults key by key rather than by asserting a
+  // shape onto the transported value: the keys come from `DEFAULT_LIMITS`, so
+  // a bound the engine adds later is carried without this being edited, and a
+  // key the host sent that the engine does not have is ignored.
+  const merged: DocumentLimits = { ...DEFAULT_LIMITS };
+  for (const key of Object.keys(DEFAULT_LIMITS) as (keyof DocumentLimits)[]) {
+    const supplied = declared[key];
+    if (
+      typeof supplied === "number" &&
+      Number.isFinite(supplied) &&
+      supplied > 0
+    ) {
+      merged[key] = supplied;
+    }
+  }
+  return merged;
 }
 
 /**
@@ -714,6 +787,14 @@ function useClassSurface(
   const failed = classReadFailed(pending, error);
   const library = readableClassLibrary(siteStyle, pending, failed);
   const configured = config?.classes;
+  /*
+   * ONE writer for both edits. Creating and renaming are the same
+   * read-modify-write over the same list, so two independent queues let a
+   * rename that had not yet refreshed be invisible to a creation — which then
+   * wrote a list carrying the old slug, and in the other order dropped the new
+   * class.
+   */
+  const writes = useClassWrites(library);
   return {
     library,
     /*
@@ -728,73 +809,83 @@ function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useCreateClass(library, configured),
+    create: useCreateClass(writes, configured),
     /*
      * Withheld the same way and for the same reason: renaming against a
      * library missing everything stored would save that partial list, which
      * deletes the classes it could not see rather than renaming one.
      */
-    rename: useRenameClass(library, configured),
+    rename: useRenameClass(writes, configured),
   };
 }
 
 function useCreateClass(
-  library: readonly NamedClass[] | undefined,
+  writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
   // Its own write handle rather than one passed in. The caller is already the
   // largest component in this file, and a dependency a hook can obtain for
   // itself is a statement that does not need to live there.
   const { save: saveSection } = useSaveSiteStyle();
-  const { base, advance } = useClassWriteBase(library);
   return useCallback(
-    async (slug: string) => {
-      // The base rather than the rendered library, for the reason the rename
-      // uses it: two creations inside one save's window both composed from the
-      // same snapshot, and the second wrote a list without the first class.
-      const existing = base();
-      if (existing === undefined) {
+    async (slug: string) =>
+      // Composed INSIDE the queue, so a creation following a rename builds on
+      // that rename rather than on the list they both started from.
+      //
+      // The result type is stated rather than inferred: inference takes the
+      // first branch it meets, which is the refusal, and the success branch
+      // then fails to assign.
+      writes.run<ClassCreation>(async existing => {
+        if (existing === undefined) {
+          return {
+            result: {
+              ok: false as const,
+              reason:
+                "This site's classes could not be read, so none can be added.",
+            },
+          };
+        }
+        const classId = newId();
+        const next: NamedClass[] = [
+          ...existing,
+          {
+            id: classId,
+            slug,
+            orderIndex: nextOrderIndex(existing),
+            styles: {},
+          },
+        ];
+        /*
+         * Only what DIFFERS from the site's own config classes. The base is the
+         * MERGED set the canvas compiles, so saving it whole would copy every
+         * config class into the database on the first creation and mask the
+         * site's code from then on — the argument `tokenOverrideOf` already
+         * makes for tokens.
+         */
+        const result = await saveSection(
+          "classes",
+          classOverrideOf(configured, next)
+        );
+        // `next` is returned ONLY on success, so a refused write never becomes
+        // the base the following edit builds on.
+        if (result.saved) {
+          return { result: { ok: true as const, classId }, next };
+        }
+        const reasons = Object.values(result.issues);
+        // An empty `issues` is still a refusal — the transport could not
+        // describe it. Reporting it as saved is the one outcome that must never
+        // be silent, which is the rule the breakpoints writer below follows too.
         return {
-          ok: false as const,
-          reason:
-            "This site's classes could not be read, so none can be added.",
+          result: {
+            ok: false as const,
+            reason:
+              reasons.length > 0
+                ? reasons.join(" ")
+                : "This class could not be saved.",
+          },
         };
-      }
-      const classId = newId();
-      const next: NamedClass[] = [
-        ...existing,
-        { id: classId, slug, orderIndex: nextOrderIndex(existing), styles: {} },
-      ];
-      /*
-       * Only what DIFFERS from the site's own config classes. `library` is the
-       * MERGED set the canvas compiles, so saving it whole would copy every
-       * config class into the database on the first creation and mask the
-       * site's code from then on — the argument `tokenOverrideOf` already
-       * makes for tokens.
-       */
-      const result = await saveSection(
-        "classes",
-        classOverrideOf(configured, next)
-      );
-      if (result.saved) {
-        // Only on success, so a refused write does not become the base the
-        // next edit builds on.
-        advance(next);
-        return { ok: true as const, classId };
-      }
-      const reasons = Object.values(result.issues);
-      // An empty `issues` is still a refusal — the transport could not describe
-      // it. Reporting it as saved is the one outcome that must never be silent,
-      // which is the rule the breakpoints writer below follows too.
-      return {
-        ok: false as const,
-        reason:
-          reasons.length > 0
-            ? reasons.join(" ")
-            : "This class could not be saved.",
-      };
-    },
-    [base, advance, configured, saveSection]
+      }),
+    [writes, configured, saveSection]
   );
 }
 
@@ -807,56 +898,42 @@ function useCreateClass(
  * row reading as renamed until the next read contradicted it.
  */
 function useRenameClass(
-  library: readonly NamedClass[] | undefined,
+  writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
   const { save: saveSection } = useSaveSiteStyle();
-  const { base, advance } = useClassWriteBase(library);
   return useCallback(
-    async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
-      // The base rather than the rendered library: a rename committed while an
-      // earlier one is still in flight must build on that earlier one, or it
-      // writes a list in which the first rename never happened.
-      const existing = base();
-      if (existing === undefined) {
+    async (classId: string, slug: string): Promise<ClassRenameOutcome> =>
+      writes.run<ClassRenameOutcome>(async existing => {
+        if (existing === undefined) {
+          return {
+            result: {
+              ok: false as const,
+              reason:
+                "This site's classes could not be read, so none can be renamed.",
+            },
+          };
+        }
+        const next = existing.map(entry =>
+          entry.id === classId ? { ...entry, slug } : entry
+        );
+        const result = await saveSection(
+          "classes",
+          classOverrideOf(configured, next)
+        );
+        if (result.saved) return { result: { ok: true as const }, next };
+        const reasons = Object.values(result.issues);
         return {
-          ok: false,
-          reason:
-            "This site's classes could not be read, so none can be renamed.",
+          result: {
+            ok: false as const,
+            reason:
+              reasons.length > 0
+                ? reasons.join(" ")
+                : "This class could not be renamed.",
+          },
         };
-      }
-      const next = existing.map(entry =>
-        entry.id === classId ? { ...entry, slug } : entry
-      );
-      /*
-       * Only what DIFFERS from the site's own config classes, exactly as
-       * creating one does. Saving the merged library whole would copy every
-       * config class into the database and mask the site's own code from then
-       * on — and a rename is the operation where that is easiest to miss,
-       * because the visible result looks identical either way.
-       */
-      const result = await saveSection(
-        "classes",
-        classOverrideOf(configured, next)
-      );
-      if (result.saved) {
-        // Only on success. A refused write changed nothing, so advancing would
-        // build the next edit on a list the server never accepted.
-        advance(next);
-        return { ok: true };
-      }
-      const reasons = Object.values(result.issues);
-      // An empty `issues` is still a refusal — the transport could not describe
-      // it. Reporting it as saved is the one outcome that must never be silent.
-      return {
-        ok: false,
-        reason:
-          reasons.length > 0
-            ? reasons.join(" ")
-            : "This class could not be renamed.",
-      };
-    },
-    [base, advance, configured, saveSection]
+      }),
+    [writes, configured, saveSection]
   );
 }
 
@@ -1605,9 +1682,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * open page apply this class", and a truncated walk answers that for fewer
    * nodes rather than answering it wrongly.
    */
-  const documentClassIds = useMemo(
-    () => classUsageOf(editor.document).ids,
-    [editor.document]
+  const documentClasses = useMemo(
+    // The HOST's limits, not the engine's defaults. A site that raised or
+    // lowered them renders under those, and a walk here under different bounds
+    // selects different nodes — which would report a class as absent from a
+    // page that renders it, or present on one that does not.
+    () => classUsageOf(editor.document, readDocumentLimits(clientConfig)),
+    [editor.document, clientConfig]
   );
 
   /*
@@ -1960,7 +2041,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             classes: () => (
               <ClassManagerPanel
                 absence={classes.absence}
-                documentClassIds={documentClassIds}
+                documentClassIds={documentClasses.ids}
+                /*
+                  Whether that walk reached the whole document. It stops at the
+                  node ceiling, and a class applied past it is missing from the
+                  list — which the panel must not read as "not on this page".
+                */
+                documentScan={documentClasses.complete ? "complete" : "partial"}
                 library={classes.library}
                 onRename={classes.rename}
                 /*

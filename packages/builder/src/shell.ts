@@ -399,7 +399,13 @@ export type { SelectionBreadcrumbProps } from "./breadcrumb";
  * not the save.
  */
 export { ClassSelector } from "./class-selector";
-export type { ClassSelectorProps } from "./class-selector";
+/*
+ * `ClassCreation` travels with the selector's props because a HOST implements
+ * `onCreateClass` and has to name what it answers with. It was reachable only
+ * through `ClassSelectorProps["onCreateClass"]`, which spells one type as a
+ * lookup into another and reads as though the answer were private.
+ */
+export type { ClassCreation, ClassSelectorProps } from "./class-selector";
 /*
  * The notice surface is deliberately NOT exported.
  *
