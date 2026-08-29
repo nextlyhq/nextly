@@ -279,9 +279,8 @@ export async function copyDefaultLocaleOntoMain(
  * The column is deliberately not declared on the companion's own Drizzle table — see
  * `readCompanionStamps` for why — so this drives a narrow handle built for the three columns it
  * needs, `buildCompanionStampTable`, rather than the companion's table. `.set()` can then name
- * the column, and the value is encoded by the same dialect mapping every other Drizzle write
- * uses; a hand-built statement would bind a `Date` straight to the driver and write the local
- * wall clock into a column that records no zone.
+ * the column while product database access stays on Drizzle, and the guard below is composed as
+ * a real condition instead of being concatenated into a statement.
  *
  * A companion that predates the column is not an error here: it simply has no stamp to clear, and
  * every locale on it already reads as UNKNOWN. Recognising that case takes a predicate that walks

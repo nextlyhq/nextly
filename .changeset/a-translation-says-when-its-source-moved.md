@@ -29,8 +29,12 @@
 Record when each language of a document was last written, so a later change can
 tell a finished translation from one whose source has moved on since.
 
-This release is the groundwork only: the timestamp is recorded on every write,
-for every kind of localized content, and nothing surfaces it yet.
+This release is the groundwork only: a language's timestamp moves when that
+language's CONTENT is written, for every kind of localized content, and nothing
+surfaces it yet. Publishing or unpublishing a language changes no words, so it
+leaves the timestamp alone -- otherwise a lifecycle change on the source
+language would report every translation as needing review on an edit nobody
+made.
 
 Collections that already exist are seeded from their version history, so their
 languages carry a timestamp from the moment this lands. Singles are not seeded,
