@@ -38,14 +38,31 @@ not as a description of what that plugin currently emits.
 
 ## What the builder emits
 
-Every rule the builder writes is anchored to the page root and carries at least
-two classes' worth of weight:
+Every rule the builder writes is anchored to the page root. How much weight it
+carries beyond that depends on whether a person chose it.
+
+An AUTHORED value — anything set in the builder — carries at least two classes'
+worth, so it outranks your site's ordinary CSS:
 
 ```css
 .nx-pb-page.nx-pb-page .nx-pb-a1b2 {
   color: blue;
 }
 ```
+
+A DEFAULT — a heading's baseline size, a block type's starting look, neither of
+which anyone asked for — carries exactly one class, with the rest of the
+selector inside `:where()` so it contributes nothing:
+
+```css
+.nx-pb-page :where(h1) {
+  font-size: 2.25em;
+}
+```
+
+That is deliberate, and it is the whole distinction: a default is something your
+site can override with ordinary CSS, and an authored value is not. The table
+below gives the exact weights.
 
 Two things follow, and both are enforced by tests rather than by convention.
 

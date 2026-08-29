@@ -163,16 +163,32 @@ export function renderedTagOf(
   nodeId: string | null
 ): string | undefined {
   if (root == null || nodeId === null) return undefined;
-  // A node id is author data reaching a SELECTOR, and an unescaped one does not
-  // merely miss — `querySelector` THROWS on invalid syntax, so an id an author
-  // is free to choose would take down the panel rather than lose one indicator.
-  //
-  // Escaped as an attribute VALUE rather than through `CSS.escape`, which
-  // escapes an IDENTIFIER: inside quotes a `.`, `:` or `*` is already literal
-  // and only the quote and the backslash end the string early. `CSS.escape` is
-  // also absent from some DOM implementations, so reaching for it would make
-  // this throw in exactly the environments that cannot afford a throw.
-  const value = nodeId.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-  const element = root.querySelector(`[${NODE_ID_ATTRIBUTE}="${value}"]`);
-  return element?.tagName.toLowerCase();
+  /*
+   * The id NEVER reaches a selector. The elements carrying the attribute are
+   * enumerated and their values compared as ordinary strings, which is the same
+   * shape `canvas-drag.tsx` uses to map painted elements back to nodes.
+   *
+   * Escaping was the wrong instinct and an incomplete one. A node id is author
+   * data — an imported or API-authored document can carry any string, since the
+   * document model imposes no character grammar on ids — and `querySelector`
+   * THROWS on invalid syntax rather than returning nothing. Quoting the value
+   * handles `"` and `\`, but a raw line break is not representable in a CSS
+   * string at all, so a single id containing one would take the whole style
+   * inspector down from inside an effect. Comparing strings has no such class of
+   * input.
+   *
+   * The cost is a walk over the marked elements instead of an indexed lookup. It
+   * runs once per commit for one selected node, over the elements of one page.
+   */
+  const marked = root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`);
+  // An index loop rather than `for...of`: a `NodeList` is not iterable under
+  // this package's lib target, and rather than widen that for one walk it is
+  // read the way the DOM has always allowed.
+  for (let index = 0; index < marked.length; index += 1) {
+    const element = marked[index];
+    if (element?.getAttribute(NODE_ID_ATTRIBUTE) === nodeId) {
+      return element.tagName.toLowerCase();
+    }
+  }
+  return undefined;
 }

@@ -1091,7 +1091,8 @@ interface EnvelopeContext {
    * The selector part kept OUTSIDE `:where()` when this envelope's rules are
    * written as defaults, with everything else wrapped.
    *
-   * Set for a block type's DEFAULTS and for nothing else. The page-root prefix
+   * Set for the two DEFAULT tiers — a block type's and the typographic baseline
+   * keyed by element — and for nothing else. The page-root prefix
    * is doubled so an AUTHOR's values beat ordinary host CSS, and defaults
    * inherited that contract without it ever being argued for them — but a
    * default nobody can override is not a default. Builder.io shipped

@@ -82,6 +82,13 @@ export type SharedStyleInputs = Pick<
   | "namedClasses"
   | "tokenPrefix"
   | "blockBases"
+  // The typographic baseline is part of the IDENTITY, not merely of the
+  // compile. A host replacing it changes what every heading and paragraph
+  // renders as, and a stored sheet compiled against the old one is wrong in a
+  // way nothing downstream can detect — so it has to move the stamp, exactly as
+  // a changed `blockBases` does. `ENCODING` is at `v3` for the neighbouring
+  // reason: a sheet stored before this field existed was compiled without the
+  // baseline at all, and is refused rather than served.
   | "elementBases"
   | "previewContainer"
 >;
