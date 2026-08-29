@@ -627,25 +627,36 @@ describe("a library far larger than a screen", () => {
     styles: {},
   }));
 
-  it("bounds what it mounts, and says how much it did not show", () => {
-    /*
-     * The `All` filter matches the whole library, so an unbounded list mounts
-     * a text input per class — two thousand of them on a site near the limit.
-     * The remainder is NAMED rather than dropped quietly: this is the surface
-     * an author uses to decide a class is unused, so a list that silently
-     * stops is one they would read as complete.
-     */
-    render(
-      <ClassManagerPanel
-        library={many}
-        usage={{}}
-        documentClassIds={[]}
-        onRename={vi.fn()}
-        onDelete={vi.fn()}
-      />
-    );
-    const fields = screen.getAllByRole("textbox");
-    expect(fields.length).toBeLessThan(many.length);
-    expect(screen.getByText(/Showing \d+ of 260/)).toBeTruthy();
-  });
+  /*
+   * An explicit timeout, in the OPTIONS form. Mounting two hundred rows and
+   * their inputs costs the better part of a second on an idle machine, and the
+   * default five seconds is reached on a loaded one — this test timed out in a
+   * parallel run having passed in isolation. The number form (`it(name, ms,
+   * fn)`) is silently ignored by vitest, so it has to be this shape.
+   */
+  it(
+    "bounds what it mounts, and says how much it did not show",
+    { timeout: 30000 },
+    () => {
+      /*
+       * The `All` filter matches the whole library, so an unbounded list mounts
+       * a text input per class — two thousand of them on a site near the limit.
+       * The remainder is NAMED rather than dropped quietly: this is the surface
+       * an author uses to decide a class is unused, so a list that silently
+       * stops is one they would read as complete.
+       */
+      render(
+        <ClassManagerPanel
+          library={many}
+          usage={{}}
+          documentClassIds={[]}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      );
+      const fields = screen.getAllByRole("textbox");
+      expect(fields.length).toBeLessThan(many.length);
+      expect(screen.getByText(/Showing \d+ of 260/)).toBeTruthy();
+    }
+  );
 });
