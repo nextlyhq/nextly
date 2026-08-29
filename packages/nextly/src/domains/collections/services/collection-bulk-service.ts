@@ -371,13 +371,15 @@ async function runLegacyBatchItem<TItem>(
       if (options.stopOnError) {
         // Thrown inside the try on purpose: the catch below records it
         // like any unexpected error before re-throwing, which is the
-        // accounting every legacy loop performed for this case. The
-        // abort's message is caller-facing on purpose — the failing index
-        // plus the worker's public failure reason, both of which the
-        // per-item accounting already returns — and invalidInput is the
-        // factory whose public message the caller supplies.
-        throw NextlyError.invalidInput({
-          message: `Entry at index ${index} failed: ${verdict.message}`,
+        // accounting every legacy loop performed for this case. A typed
+        // internal failure: a returned worker failure may be a hook,
+        // access, or server problem rather than caller input, so the
+        // public message stays generic and the per-index detail rides the
+        // cause, which the wire never serializes.
+        throw NextlyError.internal({
+          cause: new Error(
+            `Entry at index ${index} failed: ${verdict.message}`
+          ),
         });
       }
     }
@@ -1862,11 +1864,16 @@ export class CollectionBulkService extends BaseService {
       // their intents go with them — an undone delete busts no tags.
       state.eventRecorded = false;
       state.intents.length = 0;
-      // The note names the failing index but stays on the error's public
-      // contract — this result is returned to callers, so a typed
-      // NextlyError contributes its envelope message, not its cause.
-      const batchError = batchErrorMessage(error);
-      const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
+      // The note names the failing item from the accounting the loop
+      // already recorded — its index and its public per-item message —
+      // rather than introspecting the abort, whose cause may hold
+      // operational detail the result must not widen.
+      const firstFailure = state.errors[0];
+      const abortDetail =
+        firstFailure !== undefined
+          ? `Entry at index ${firstFailure.index} failed: ${firstFailure.error}`
+          : batchErrorMessage(error);
+      const rollbackNote = `Batch rolled back; no entries were deleted: ${abortDetail}`;
       rebuildRolledBackDeleteErrors(state, ids, rollbackNote);
     }
     // Delete always reports the outbox signal, even when nothing recorded:

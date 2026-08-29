@@ -937,18 +937,18 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             () => undefined,
             (error: unknown) => error
           );
-          // The abort is typed and caller-facing: invalidInput is the
-          // factory whose public message the caller supplies, and the
-          // message names the failing index plus the worker's public
-          // failure reason — both of which the per-item accounting
-          // already returns — so no private cause detail is needed.
+          // The abort is a typed internal failure: the public message stays
+          // generic — a returned worker failure may be a hook, access, or
+          // server problem, not caller input — and the per-index detail
+          // rides the cause, which the wire never serializes.
           if (!(rejection instanceof NextlyError)) {
             throw new Error(
               "expected the stopOnError abort to be a NextlyError"
             );
           }
-          expect(rejection.code).toBe("INVALID_INPUT");
-          expect(rejection.message).toContain("Entry at index 1 failed");
+          expect(rejection.code).toBe("INTERNAL_ERROR");
+          expect(rejection.message).toBe("An unexpected error occurred.");
+          expect(rejection.cause?.message).toContain("Entry at index 1 failed");
         });
 
         it("leaves the outbox signal absent on the twin when no item records an event", async () => {
