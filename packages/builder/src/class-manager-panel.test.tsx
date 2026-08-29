@@ -12,7 +12,13 @@
  * @module class-manager-panel.test
  */
 import type { NamedClass } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -436,5 +442,80 @@ describe("a rename the host refuses", () => {
     fireEvent.change(field, { target: { value: "renamed" } });
     fireEvent.blur(field);
     expect(await screen.findByText(/could not be renamed/i)).toBeTruthy();
+  });
+});
+
+describe("a host that answers a rename with nothing", () => {
+  it("treats an undefined resolution as silence, not as failure", async () => {
+    /*
+     * A merely `async` handler already satisfied the older `void` contract, so
+     * these callers exist. Reading `.ok` off a resolved `Promise<void>` throws,
+     * the throw is caught, and a rename that SUCCEEDED is then reported to the
+     * author as having failed — the worst direction for this to go wrong in.
+     */
+    const onRename = vi.fn(async () => undefined);
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    await act(async () => {
+      fireEvent.change(field, { target: { value: "renamed" } });
+      fireEvent.blur(field);
+    });
+    /*
+     * The chain has to SETTLE before absence means anything. Asserting straight
+     * after the blur passes whether or not the guard is there, because the
+     * message it is looking for could not have been rendered yet — measured:
+     * removing the guard left this test green.
+     */
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onRename).toHaveBeenCalled();
+    expect(screen.queryByText(/could not be renamed/i)).toBeNull();
+  });
+});
+
+describe("two renames on one row, answered out of order", () => {
+  it("ignores a refusal the author has already moved past", async () => {
+    // The superseded attempt's answer describes a name that is no longer being
+    // asked for, so reporting it points at an edit that no longer exists.
+    let settleFirst: ((v: { ok: false; reason: string }) => void) | undefined;
+    const first = new Promise<{ ok: false; reason: string }>(resolve => {
+      settleFirst = resolve;
+    });
+    const onRename = vi
+      .fn()
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ ok: true as const });
+
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "second" } });
+    fireEvent.blur(field);
+    fireEvent.change(nameField("hero"), { target: { value: "third" } });
+    fireEvent.blur(nameField("hero"));
+    await vi.waitFor(() => expect(onRename).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      settleFirst?.({ ok: false, reason: "The first one was refused." });
+      await first.catch(() => undefined);
+    });
+    expect(screen.queryByText("The first one was refused.")).toBeNull();
   });
 });

@@ -91,6 +91,21 @@ export type ClassRenameOutcome =
   | { readonly ok: true }
   | { readonly ok: false; readonly reason: string };
 
+/**
+ * What a rename may answer with, including answering nothing.
+ *
+ * `Promise<void>` is in the union deliberately. A host whose handler is merely
+ * `async` already satisfied the older `void` contract — TypeScript accepts any
+ * return type where `void` is declared — so narrowing to the outcome alone
+ * would stop those callers compiling. The runtime cost is worse than the
+ * compile one: a resolved `Promise<void>` read as `result.ok` throws, the throw
+ * is caught, and a rename that SUCCEEDED is reported to the author as failed.
+ *
+ * So an `undefined` resolution means the host is not reporting, which is the
+ * same silence the synchronous form has always meant.
+ */
+export type ClassRenameAnswer = void | Promise<ClassRenameOutcome | void>;
+
 export interface ClassManagerPanelProps {
   /**
    * The site's class library, or `undefined` while the host has not read it.
@@ -100,6 +115,16 @@ export interface ClassManagerPanelProps {
    * and an author must not be shown "no classes" for a library still loading.
    */
   library: readonly NamedClass[] | undefined;
+  /**
+   * Why the library is absent, when it is.
+   *
+   * A read that FAILED will not finish, and a surface that goes on saying
+   * "loading" describes a state the site is not in — the author waits for
+   * something that is never coming rather than retrying or reporting it. The
+   * selector and the fonts panel already draw this distinction; the manager
+   * discarded it and showed one wording for both.
+   */
+  absence?: "pending" | "failed";
   /**
    * Documents known to reference each class, keyed by id. A floor.
    *
@@ -133,10 +158,7 @@ export interface ClassManagerPanelProps {
    * silent leaves the row looking renamed whatever happened, so returning a
    * {@link ClassRenameOutcome} is how a refusal reaches the author.
    */
-  onRename: (
-    classId: string,
-    slug: string
-  ) => void | Promise<ClassRenameOutcome>;
+  onRename: (classId: string, slug: string) => ClassRenameAnswer;
   /**
    * Delete a class, removing it from every document that references it.
    *
@@ -151,6 +173,7 @@ export interface ClassManagerPanelProps {
 /** Every class the site renders, filtered, renameable and deletable. */
 export function ClassManagerPanel({
   library,
+  absence,
   usage,
   documentClassIds,
   suppliedClassIds,
@@ -172,7 +195,11 @@ export function ClassManagerPanel({
   if (library === undefined) {
     return (
       <div className="nx-classman">
-        <p className="nx-inspector__note">Loading classes…</p>
+        <p className="nx-inspector__note">
+          {absence === "failed"
+            ? "This site's classes could not be read."
+            : "Loading classes…"}
+        </p>
       </div>
     );
   }
@@ -349,6 +376,16 @@ function NameField({
    * because a stale reason beside a fresh draft describes neither.
    */
   const [refused, setRefused] = React.useState<string | null>(null);
+  /*
+   * Which rename this row is currently waiting on.
+   *
+   * An author can commit a second rename while the first is still in flight,
+   * and the answers can arrive in either order. Without this, a refusal from
+   * the superseded attempt lands after the newer edit cleared it, and the row
+   * reports a failure for a rename that is no longer being attempted — or,
+   * with the orders reversed, keeps reporting one the retry already fixed.
+   */
+  const attempt = React.useRef(0);
   const id = React.useId();
   const outcome =
     draft === null ? null : renamedClassName(draft, row.id, library);
@@ -378,9 +415,21 @@ function NameField({
     setDraft(null);
     setRefused(null);
     if (answered === undefined) return;
+    attempt.current += 1;
+    const mine = attempt.current;
     void answered
       .then(result => {
-        if (!result.ok) setRefused(result.reason);
+        // Superseded: a newer rename on this row is the one being awaited, and
+        // this answer describes a name the author has already moved past.
+        if (attempt.current !== mine) return;
+        // `undefined` is a host that does not report, which is silence rather
+        // than refusal — reading `.ok` off it would throw, and the catch below
+        // would then present a SUCCESSFUL rename as a failed one.
+        if (result === undefined || result.ok) {
+          setRefused(null);
+          return;
+        }
+        setRefused(result.reason);
       })
       /*
        * A REJECTED promise is a refusal too. The contract is to answer, but a
@@ -389,6 +438,7 @@ function NameField({
        * was added to remove.
        */
       .catch(() => {
+        if (attempt.current !== mine) return;
         setRefused("This class could not be renamed.");
       });
   };

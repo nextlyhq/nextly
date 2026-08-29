@@ -623,6 +623,56 @@ function TokensStudio({
  * silently overridden by them.
  */
 /**
+ * The library a class write must build on, which is not always the rendered one.
+ *
+ * Every write here is read-modify-write over the WHOLE section: the payload is
+ * the complete class list, because that is what `saveSection` stores. So the
+ * list a write composes from decides what survives it, and the rendered
+ * `library` is stale for as long as a save takes to come back through the
+ * cache.
+ *
+ * Two edits inside that window both compose from the same snapshot. The shared
+ * mutation scope serialises TRANSMISSION, so both land — but the second payload
+ * was already computed without the first, and writing it undoes the first edit
+ * while reporting success. Renaming two classes quickly restores the first
+ * name; creating two classes quickly deletes the first class.
+ *
+ * So a completed write ADVANCES the base, and a fresh read from the host
+ * REPLACES it: the server's answer is authoritative the moment it arrives, and
+ * anything composed locally after it was composed against older facts.
+ *
+ * Identity is what separates the two cases. `library` is a new array whenever
+ * the host has re-read, so comparing the reference the base was taken from
+ * against the one in hand distinguishes "the host has answered since" from
+ * "nothing has changed but our own writes".
+ */
+function useClassWriteBase(library: readonly NamedClass[] | undefined): {
+  base: () => readonly NamedClass[] | undefined;
+  advance: (next: readonly NamedClass[]) => void;
+} {
+  const held = useRef<{
+    from: readonly NamedClass[] | undefined;
+    value: readonly NamedClass[] | undefined;
+  }>({ from: library, value: library });
+
+  const base = useCallback((): readonly NamedClass[] | undefined => {
+    if (held.current.from !== library) {
+      held.current = { from: library, value: library };
+    }
+    return held.current.value;
+  }, [library]);
+
+  const advance = useCallback(
+    (next: readonly NamedClass[]) => {
+      held.current = { from: library, value: next };
+    },
+    [library]
+  );
+
+  return { base, advance };
+}
+
+/**
  * Whether a read has FAILED rather than merely not finished yet.
  *
  * A separate function because "not arrived" and "will never arrive" are
@@ -696,16 +746,20 @@ function useCreateClass(
   // largest component in this file, and a dependency a hook can obtain for
   // itself is a statement that does not need to live there.
   const { save: saveSection } = useSaveSiteStyle();
+  const { base, advance } = useClassWriteBase(library);
   return useCallback(
     async (slug: string) => {
-      if (library === undefined) {
+      // The base rather than the rendered library, for the reason the rename
+      // uses it: two creations inside one save's window both composed from the
+      // same snapshot, and the second wrote a list without the first class.
+      const existing = base();
+      if (existing === undefined) {
         return {
           ok: false as const,
           reason:
             "This site's classes could not be read, so none can be added.",
         };
       }
-      const existing = library;
       const classId = newId();
       const next: NamedClass[] = [
         ...existing,
@@ -722,7 +776,12 @@ function useCreateClass(
         "classes",
         classOverrideOf(configured, next)
       );
-      if (result.saved) return { ok: true as const, classId };
+      if (result.saved) {
+        // Only on success, so a refused write does not become the base the
+        // next edit builds on.
+        advance(next);
+        return { ok: true as const, classId };
+      }
       const reasons = Object.values(result.issues);
       // An empty `issues` is still a refusal — the transport could not describe
       // it. Reporting it as saved is the one outcome that must never be silent,
@@ -735,7 +794,7 @@ function useCreateClass(
             : "This class could not be saved.",
       };
     },
-    [library, configured, saveSection]
+    [base, advance, configured, saveSection]
   );
 }
 
@@ -752,16 +811,21 @@ function useRenameClass(
   configured: readonly NamedClass[] | undefined
 ) {
   const { save: saveSection } = useSaveSiteStyle();
+  const { base, advance } = useClassWriteBase(library);
   return useCallback(
     async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
-      if (library === undefined) {
+      // The base rather than the rendered library: a rename committed while an
+      // earlier one is still in flight must build on that earlier one, or it
+      // writes a list in which the first rename never happened.
+      const existing = base();
+      if (existing === undefined) {
         return {
           ok: false,
           reason:
             "This site's classes could not be read, so none can be renamed.",
         };
       }
-      const next = library.map(entry =>
+      const next = existing.map(entry =>
         entry.id === classId ? { ...entry, slug } : entry
       );
       /*
@@ -775,7 +839,12 @@ function useRenameClass(
         "classes",
         classOverrideOf(configured, next)
       );
-      if (result.saved) return { ok: true };
+      if (result.saved) {
+        // Only on success. A refused write changed nothing, so advancing would
+        // build the next edit on a list the server never accepted.
+        advance(next);
+        return { ok: true };
+      }
       const reasons = Object.values(result.issues);
       // An empty `issues` is still a refusal — the transport could not describe
       // it. Reporting it as saved is the one outcome that must never be silent.
@@ -787,7 +856,7 @@ function useRenameClass(
             : "This class could not be renamed.",
       };
     },
-    [library, configured, saveSection]
+    [base, advance, configured, saveSection]
   );
 }
 
@@ -1890,6 +1959,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             ),
             classes: () => (
               <ClassManagerPanel
+                absence={classes.absence}
                 documentClassIds={documentClassIds}
                 library={classes.library}
                 onRename={classes.rename}

@@ -259,4 +259,54 @@ describe("the classes manager reaching an author", () => {
     // author less than the server already said.
     expect(await screen.findByText("The site style is locked.")).toBeTruthy();
   });
+
+  it("builds a second rename on the FIRST, not on the stale render", async () => {
+    /*
+     * Every write here replaces the whole class list, and the rendered library
+     * does not refresh until the save comes back through the cache. Two
+     * renames inside that window both composed from the same snapshot, so the
+     * second wrote a list in which the first rename never happened — and it
+     * reported success while undoing it.
+     */
+    storedRead = {
+      data: {
+        classes: [
+          { id: "id-card", slug: "card", orderIndex: 0, styles: {} },
+          { id: "id-hero", slug: "hero", orderIndex: 1, styles: {} },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    await act(async () => {
+      const first = screen.getByLabelText("Name of card");
+      fireEvent.change(first, { target: { value: "panel" } });
+      fireEvent.blur(first);
+    });
+    await act(async () => {
+      const second = screen.getByLabelText("Name of hero");
+      fireEvent.change(second, { target: { value: "banner" } });
+      fireEvent.blur(second);
+    });
+
+    expect(saved.length).toBe(2);
+    // The SECOND payload is the one that decides, because it is written last.
+    // It must carry both renames; carrying only its own is the defect.
+    const last = JSON.stringify(saved[saved.length - 1]);
+    expect(last).toContain("banner");
+    expect(last).toContain("panel");
+    expect(last).not.toContain('"card"');
+  });
+
+  it("says a failed read failed, rather than loading forever", () => {
+    // A read that FAILED will not finish. A panel still saying "loading"
+    // describes a state the site is not in, and the author waits for something
+    // that is never coming.
+    storedRead = { data: undefined, isPending: false, error: new Error("403") };
+    openEditor();
+    const panel = screen.getByTestId("panel");
+    expect(panel.textContent).toContain("could not be read");
+    expect(panel.textContent).not.toContain("Loading classes");
+  });
 });
