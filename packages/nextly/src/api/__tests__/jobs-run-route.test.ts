@@ -10,19 +10,31 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { RunJobsResult } from "../../domains/jobs/run-jobs";
+
 const HELD = "x-test-permissions";
+
+/**
+ * Typed as the REAL `RunJobsResult`. The first version of this mock invented a
+ * `succeeded` field the runner does not return, and because the module was
+ * mocked nothing type-checked the invention — the route documented and the test
+ * asserted a shape no caller would ever receive. Annotating the return type is
+ * what makes the compiler the oracle instead of the mock.
+ */
+const PASS_SUMMARY: RunJobsResult = {
+  claimed: 2,
+  done: 2,
+  failed: 0,
+  retried: 0,
+  unrecorded: 0,
+};
 
 const runJobsPass = vi.fn(
   async (
     _adapter: unknown,
     _registry: unknown,
     _options: { batchSize?: number; maxDurationMs?: number }
-  ) => ({
-    claimed: 2,
-    succeeded: 2,
-    failed: 0,
-    retried: 0,
-  })
+  ): Promise<RunJobsResult> => PASS_SUMMARY
 );
 
 const registry = { get: () => undefined, slugs: () => [] };
@@ -69,6 +81,10 @@ vi.mock("../../shared/lib/env", () => ({
 
 vi.mock("../../auth/csrf/validate", () => ({ validateOrigin: () => true }));
 
+vi.mock("../../dispatcher/helpers/di", () => ({
+  getLoggerFromDI: () => undefined,
+}));
+
 const { runJobsRoute } = await import("../jobs-run-route");
 
 function post(permissions?: string): Request {
@@ -110,16 +126,12 @@ describe("runJobsRoute", () => {
 
   it("returns the pass summary as the mutation item", async () => {
     const response = await runJobsRoute(post("manage-background-jobs"));
-    const body = (await response.json()) as {
-      item: { claimed: number; succeeded: number };
-    };
+    const body = (await response.json()) as { item: RunJobsResult };
 
-    expect(body.item).toEqual({
-      claimed: 2,
-      succeeded: 2,
-      failed: 0,
-      retried: 0,
-    });
+    // Compared against the runner's OWN result, not a shape retyped here: a
+    // hand-written expectation is a second description of `RunJobsResult` and
+    // would keep passing after the real one changed.
+    expect(body.item).toEqual(PASS_SUMMARY);
   });
 
   it("runs the pass against the SHARED registry, not one of its own", async () => {

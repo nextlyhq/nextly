@@ -28,6 +28,7 @@
 
 import { requireAnyPermission } from "../auth/middleware";
 import { container } from "../di";
+import { getLoggerFromDI } from "../dispatcher/helpers/di";
 import type { JobRegistry } from "../domains/jobs/job-registry";
 import {
   runJobsPass,
@@ -78,7 +79,10 @@ function requireJobsRunPermission(
  * session-only: a scheduler has no session.
  *
  * Response: the canonical mutation envelope `{ message, item }`, where `item`
- * is the pass summary (claimed, succeeded, failed, retried).
+ * is `RunJobsResult` — `claimed`, `done`, `failed`, `retried`, and
+ * `unrecorded`, the attempts whose outcome could not be written because the
+ * lease had already passed to another runner. Named from the type rather than
+ * described here in prose, so the two cannot drift.
  */
 export const runJobsRoute = withErrorHandler(
   async (request: Request): Promise<Response> => {
@@ -99,6 +103,14 @@ export const runJobsRoute = withErrorHandler(
     const result = await runJobsPass(adapter, registry, {
       batchSize: JOBS_RUN_BATCH_SIZE,
       maxDurationMs: JOBS_RUN_MAX_DURATION_MS,
+      // A sweep that cannot be queued is the failure that hides itself: the
+      // pass succeeds, reports zero work, and the thing it was meant to keep
+      // running silently stops. Said out loud rather than swallowed.
+      onSweepError: (error, slug) =>
+        getLoggerFromDI()?.error("A sweep could not be queued", {
+          slug,
+          error: error instanceof Error ? error.message : String(error),
+        }),
     });
 
     return respondMutation("Background job pass completed.", result);

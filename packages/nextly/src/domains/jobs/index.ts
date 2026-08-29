@@ -46,6 +46,7 @@ export {
 export {
   databaseRunAs,
   runJobsPass,
+  sweepDedupeKey,
   type JobsPassDatabase,
   type RunJobsPassOptions,
 } from "./jobs-runner";

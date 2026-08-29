@@ -342,6 +342,7 @@ async function handleApiKeyRequest(
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
+  "jobs",
   "generalSettings",
   "previewLinks",
   "previewUrl",

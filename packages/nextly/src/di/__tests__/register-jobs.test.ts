@@ -90,6 +90,13 @@ describe("the registered job types", () => {
     const registry = singletons.get("jobRegistry") as JobRegistry;
     expect(registry.get(RELEASES_DRAIN_JOB)).toBeDefined();
 
+    // And registered as a SWEEP. Being in the registry only means the runner
+    // can find the handler; a release comes due at an instant with no request
+    // attached, so unless a trigger keeps one queued there is never a row to
+    // find. Registered-but-not-a-sweep is the same silent failure as
+    // defined-but-not-registered, one layer along.
+    expect(registry.sweeps().map(d => d.slug)).toContain(RELEASES_DRAIN_JOB);
+
     vi.doUnmock("../container");
     vi.resetModules();
   });
