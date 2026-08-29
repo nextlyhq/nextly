@@ -69,6 +69,12 @@ export function reportReleasesOutcome(
     published: result.published,
     applied: result.applied,
     failed: result.failed,
+    // Without this a bounded pass logs EXACTLY like an ordinary one: same
+    // counts, no sign that scheduled work was left behind. Reporting the field
+    // from `applyDueReleases` and then dropping it here would defeat the whole
+    // reason it exists — an operator watching a backlog stall would see a run
+    // of clean completions.
+    deferred: result.deferred,
   });
 
   for (const outcome of result.outcomes) {

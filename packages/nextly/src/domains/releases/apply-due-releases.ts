@@ -266,10 +266,16 @@ export async function applyDueReleases(
       started.size > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
-      for (let j = i; j < plan.actions.length; j += 1) {
-        unfinished.add(plan.actions[j].releaseId);
-      }
-      break;
+      // DEFER this action and keep going, rather than breaking. A release's
+      // actions are NOT contiguous here: the planner groups by document and
+      // emits in first-seen document order, so an interleaved backlog yields
+      // `[r1, r2, r1]`. Breaking at `r2` would defer the trailing `r1` too,
+      // leaving a release both started and unfinished — and the next tick
+      // rebuilds the same plan, repeats the first `r1` write, and stops in the
+      // same place. That is the starvation this guard exists to prevent,
+      // reintroduced by assuming an ordering nothing provides.
+      unfinished.add(action.releaseId);
+      continue;
     }
     started.add(action.releaseId);
     outcomes.push(await applyOne(deps, action));
@@ -301,6 +307,13 @@ export async function applyDueReleases(
   }
 
   let published = 0;
+  // ATTEMPTS, not successes. `markReleasePublished` answers `false` for a
+  // release its fence finds already published or cancelled by an overlapping
+  // drain — so gating on `published` lets a large set of those run one serial
+  // write each with the budget long gone, because the counter never leaves
+  // zero. Counting attempts keeps the same one-write progress guarantee without
+  // making the bound depend on the writes succeeding.
+  let finalized = 0;
   for (const id of plan.releaseIds) {
     if (heldOpen.has(id)) continue;
     // The deadline again. Discharging is one write per due release, and the
@@ -311,11 +324,12 @@ export async function applyDueReleases(
     // it was already in.
     if (
       deps.deadline !== undefined &&
-      published > 0 &&
+      finalized > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
       break;
     }
+    finalized += 1;
     // A FRESH clock, not the pass's start. `publishedAt` is defined as the
     // moment materialisation completed, and `at` was captured before members
     // were loaded, identities resolved and every content mutation run — on a

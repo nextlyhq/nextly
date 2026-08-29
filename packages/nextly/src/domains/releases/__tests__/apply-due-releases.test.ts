@@ -62,6 +62,8 @@ function deps(over: {
   cancelled?: string;
   /** A release POSTPONED after the plan was built: still scheduled, new instant. */
   rescheduledTo?: Date;
+  /** Make `markReleasePublished` answer `false`, as its fence does. */
+  markRefuses?: boolean;
 }): ApplyDueReleasesDeps {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
@@ -76,7 +78,9 @@ function deps(over: {
           over.rescheduledTo.getTime() === scheduledAt.getTime()),
       markReleasePublished: async id => {
         over.marked?.push(id);
-        return true;
+        // The fence answers `false` for a release an overlapping drain already
+        // settled. Overridable so a fixture can build that case.
+        return over.markRefuses !== true;
       },
     },
     mutations: {
@@ -518,6 +522,66 @@ describe("applyDueReleases", () => {
 
     // r1 was performed and may discharge; r2 was never started and must not.
     expect(marked).toEqual(["r1"]);
+  });
+
+  it("finishes a started release whose actions are NOT contiguous", async () => {
+    // The planner groups by DOCUMENT and emits in first-seen document order, so
+    // one release's actions can be interleaved with another's: `[r1, r2, r1]`.
+    // A guard that BREAKS at the first unstarted release would defer the
+    // trailing r1 too — leaving a release both started and unfinished, so the
+    // next tick rebuilds the same plan, repeats the first r1 write, and stops in
+    // the same place forever.
+    const publish = vi.fn(async () => {});
+    let tick = 0;
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
+        member({ id: "c", releaseId: "r1", entryId: "e3" }),
+      ],
+      mutations: { publish },
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    // BOTH of r1's actions ran; only r2 was deferred.
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(result.deferred).toBe(1);
+  });
+
+  it("bounds discharging by ATTEMPTS, not by successful writes", async () => {
+    // `markReleasePublished` answers `false` for a release an overlapping drain
+    // already settled. Gating the deadline on the SUCCESS count leaves it at
+    // zero, so the check never fires and every row gets a serial write with the
+    // budget long gone.
+    const marked: string[] = [];
+    let tick = 0;
+    const d = deps({
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "r2" }),
+        release({ id: "r3" }),
+      ],
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e1" }),
+        member({ id: "c", releaseId: "r3", entryId: "e1" }),
+      ],
+      marked,
+      markRefuses: true,
+    });
+    await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    expect(marked.length).toBeLessThan(3);
+    expect(marked.length).toBeGreaterThan(0);
   });
 
   it("stops DISCHARGING releases once the deadline has passed", async () => {
