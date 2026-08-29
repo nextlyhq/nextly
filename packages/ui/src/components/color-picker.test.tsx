@@ -467,10 +467,10 @@ describe("a colour typed one character at a time", () => {
       new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
     );
     /*
-     * `focusout`, not `blur`. React delegates from the root and maps `onBlur`
-     * onto the bubbling `focusout`, so a non-bubbling native `blur` never
-     * reaches the handler at all — a first attempt used one, and the case then
-     * passed against the broken version because the second path never ran.
+     * `focusout`, not `blur`. React delegates from its root and maps `onBlur`
+     * onto the bubbling `focusout`, so a non-bubbling native `blur` reaches no
+     * handler: the second path would not run, and this case would be green
+     * because nothing happened twice rather than because the guard held.
      */
     field.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
 
@@ -503,9 +503,53 @@ describe("a colour typed one character at a time", () => {
     preset.dispatchEvent(
       new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
     );
-    field.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    /*
+     * With `relatedTarget`, because that is what a browser supplies and it is
+     * what the handler reads: focus is moving TO the preset, which is inside
+     * the picker, so this blur is not a finish.
+     */
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: preset })
+    );
+    fireEvent.click(preset);
 
     expect(onColorChange).not.toHaveBeenCalledWith("#123456");
+  });
+
+  it("keeps a draft when the EYEDROPPER is cancelled", () => {
+    /*
+     * The eyedropper's button is inside the picker, so pressing it is not a
+     * dismissal — but it is not a replacement either until sampling succeeds.
+     * Cancelling leaves nothing to replace the value with, so a draft dropped
+     * on the press would be lost with nothing put in its place.
+     */
+    const onColorChange = vi.fn();
+    const windowWithEyeDropper = window as unknown as Record<string, unknown>;
+    windowWithEyeDropper.EyeDropper = class {
+      open(): Promise<{ sRGBHex: string }> {
+        return Promise.reject(new Error("dismissed"));
+      }
+    };
+
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const eyedropper = screen.getByRole("button", {
+      name: "Pick a colour from the screen",
+    });
+    eyedropper.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: eyedropper })
+    );
+
+    // Still there to be finished, rather than silently gone.
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+
+    delete windowWithEyeDropper.EyeDropper;
   });
 
   it("keeps a draft when the press is the FIELD itself", () => {
@@ -612,10 +656,10 @@ describe("a colour typed one character at a time", () => {
      * surface is the conventional answer; and clicking away moves focus out of
      * the field first, so that path commits through the blur instead.
      *
-     * Reporting from an unmount was tried and removed: a host that coalesces a
-     * picker gesture on close has already decided what to write by then, so the
-     * value is published into nothing — `style-colour-panel` writes once on
-     * close and saw zero.
+     * Reporting from an unmount would arrive after a host that coalesces a
+     * picker gesture on close has already decided what to write, so the value
+     * would be published into nothing — `style-colour-panel` writes once on
+     * close.
      *
      * A COMPLETE colour is used deliberately. The unfinished case below would
      * pass on a picker that simply never reported, so this one carries the

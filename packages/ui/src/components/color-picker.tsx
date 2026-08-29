@@ -182,8 +182,13 @@ export function ColorPicker<TValue = string>({
   className,
 }: ColorPickerProps<TValue>) {
   const fieldId = React.useId();
+  /** The picker's own subtree, for telling a press inside it from a dismissal. */
   const rootRef = React.useRef<HTMLDivElement>(null);
-  const fieldRef = React.useRef<HTMLInputElement>(null);
+  /**
+   * The saturation area, whose BOX is what turns a pointer position into a
+   * saturation and brightness pair — the mapping needs the rectangle, not the
+   * element.
+   */
   const surfaceRef = React.useRef<HTMLDivElement>(null);
   const [hsva, setHsva] = React.useState<Hsva>(() => toHsva(color));
   // What the hex field shows while it is being typed into. A half-typed value
@@ -334,23 +339,13 @@ export function ColorPicker<TValue = string>({
       const inside =
         path.includes(root) ||
         (isNode(event.target) && root.contains(event.target));
-      if (inside) {
-        /*
-         * A press inside that is NOT the field replaces the value: a preset, a
-         * recent colour, the surface. The browser blurs the field before that
-         * press becomes a click, so leaving the draft would have the blur
-         * publish the typed literal first and the replacement second — two
-         * edits recorded for one the author made, and for a preset an
-         * `onColorChange` beside the `onSwatchSelect` that was the point.
-         */
-        const field = fieldRef.current;
-        const inField =
-          field !== null &&
-          (path.includes(field) ||
-            (isNode(event.target) && field.contains(event.target)));
-        if (!inField) dropDraft();
-        return;
-      }
+      // A press inside decides NOTHING about the draft. Whether it becomes a
+      // replacement is not knowable here — the eyedropper's button is inside
+      // and its sampling can be cancelled, leaving nothing to replace with —
+      // so each path that actually replaces the value drops the draft as part
+      // of doing so, and the blur below declines to report one while focus is
+      // moving within this picker.
+      if (inside) return;
       commitDraft();
     };
     /*
@@ -539,7 +534,6 @@ export function ColorPicker<TValue = string>({
         </label>
         <Input
           id={`${fieldId}-hex`}
-          ref={fieldRef}
           className="font-mono"
           value={draftHex ?? rendered}
           /*
@@ -567,7 +561,22 @@ export function ColorPicker<TValue = string>({
             event.preventDefault();
             commitDraft();
           }}
-          onBlur={() => commitDraft()}
+          onBlur={event => {
+            /*
+             * Focus moving WITHIN the picker is not a finish. Pressing a
+             * preset, a recent colour or the eyedropper blurs this field before
+             * that press becomes a click, so reporting here would publish the
+             * typed literal first and the replacement second — two edits for
+             * the one the author made.
+             *
+             * `relatedTarget` is what the focus is moving TO, and it is null
+             * when focus leaves the document entirely, which IS a finish.
+             */
+            const next = event.relatedTarget;
+            const root = rootRef.current;
+            if (root !== null && isNode(next) && root.contains(next)) return;
+            commitDraft();
+          }}
         />
         {canPickFromScreen && (
           <Button
@@ -594,7 +603,14 @@ export function ColorPicker<TValue = string>({
                 aria-label={swatch.label}
                 className="size-6 rounded border shadow-sm"
                 style={{ backgroundColor: swatch.color }}
-                onClick={() => onSwatchSelect?.(swatch)}
+                onClick={() => {
+                  // The swatch REPLACES what was being typed, so the draft goes
+                  // with it. The other replacement paths drop it inside
+                  // `commit`; this one reports through the host instead and has
+                  // to say so itself.
+                  dropDraft();
+                  onSwatchSelect?.(swatch);
+                }}
               />
             ))}
           </div>
