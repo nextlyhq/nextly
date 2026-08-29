@@ -67,6 +67,7 @@ import {
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
+import { useRenderedTag } from "./use-rendered-tag";
 
 export interface InspectorPanelProps {
   /**
@@ -214,6 +215,14 @@ export function InspectorPanel({
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
+  // Owned here rather than in the style tab: reading it needs a subscription to
+  // the canvas, and the panel that decides which control shows a value should
+  // not also hold one. Passed down as an answer, exactly as `cascade` is.
+  const renderedTag = useRenderedTag(
+    canvasRoot,
+    editor.selectedId,
+    editor.document
+  );
   const inspection = inspectSelection(editor.document, editor.selectedId);
 
   // Declared before the early returns below, because a hook has to run on every
@@ -343,7 +352,7 @@ export function InspectorPanel({
         <TabsContent value="style">
           <StyleInspectorPanel
             editor={editor}
-            canvasRoot={canvasRoot}
+            renderedTag={renderedTag}
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}
