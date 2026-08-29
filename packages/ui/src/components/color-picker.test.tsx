@@ -95,13 +95,19 @@ describe("choosing a preset", () => {
 });
 
 describe("the hex field", () => {
-  it("publishes a colour once it is one", () => {
+  it("publishes a colour once it is one AND finished", () => {
+    /*
+     * The finish is the addition, and the reason is in the case below it: a
+     * prefix of a valid colour is itself a valid colour, so publishing per
+     * keystroke let an intermediate stand as the stored value whenever the
+     * author stopped early.
+     */
     const onColorChange = vi.fn();
     render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
 
-    fireEvent.change(screen.getByLabelText("Hex colour"), {
-      target: { value: "#3b82f6" },
-    });
+    const field = screen.getByLabelText("Hex colour");
+    fireEvent.change(field, { target: { value: "#3b82f6" } });
+    fireEvent.blur(field);
 
     expect(onColorChange).toHaveBeenCalledWith("#3b82f6");
   });
@@ -293,9 +299,11 @@ describe("hue survives a colour that has none", () => {
     const onColorChange = vi.fn();
     render(<Controlled initial="#0000ff" onColorChange={onColorChange} />);
 
-    fireEvent.change(screen.getByLabelText("Hex colour"), {
-      target: { value: "#000000" },
-    });
+    const field = screen.getByLabelText("Hex colour");
+    fireEvent.change(field, { target: { value: "#000000" } });
+    // FINISHED, because a typed colour is reported when the author finishes it
+    // and this case needs the surface actually moved to black before it arrows.
+    fireEvent.blur(field);
     // Black is unlit AS WELL as colourless, so brightness and saturation both
     // have to come back up before any hue is observable at all. A single step
     // on one axis lands on `#030303`, which is grey whichever hue is stored —
@@ -352,5 +360,111 @@ describe("recent colours", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "#ff0000" }));
     expect(onColorChange).toHaveBeenCalledWith("#ff0000");
+  });
+});
+
+describe("a colour typed one character at a time", () => {
+  const hexField = () => screen.getByLabelText("Hex colour");
+
+  it("reports NOTHING until the author finishes it", () => {
+    /*
+     * The defect this closes, in the sequence it was measured in. `parseHex`
+     * accepts 3, 4, 6 and 8 digits, so a PREFIX of a valid colour is itself a
+     * valid colour: `#123456` passes through `#123` and `#1234` on the way.
+     * Publishing each of those made the last one stick whenever the author
+     * paused — `#12345` left the host holding `#11223344`, a colour nobody
+     * typed, silently replacing the stored one.
+     *
+     * Asserted on the CALL COUNT as well as the value, because a version that
+     * published the right final colour after publishing two wrong ones would
+     * satisfy a value-only assertion while the defect was still live: the harm
+     * is what a host commits when the author stops early.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    for (const text of ["#1", "#12", "#123", "#1234", "#12345"]) {
+      fireEvent.change(hexField(), { target: { value: text } });
+    }
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("reports the colour once ENTER finishes it", () => {
+    // The control. Without it the case above passes on a picker that never
+    // reports anything at all.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter" });
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
+  });
+
+  it("reports it on leaving the field", () => {
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
+  });
+
+  it("reports NOTHING when the picker GOES AWAY mid-draft", () => {
+    /*
+     * Dismissal is not a finish. Escape means cancel, so a draft dying with the
+     * surface is the conventional answer; and clicking away moves focus out of
+     * the field first, so that path commits through the blur instead.
+     *
+     * Reporting from an unmount was tried and removed: a host that coalesces a
+     * picker gesture on close has already decided what to write by then, so the
+     * value is published into nothing — `style-colour-panel` writes once on
+     * close and saw zero.
+     *
+     * A COMPLETE colour is used deliberately. The unfinished case below would
+     * pass on a picker that simply never reported, so this one carries the
+     * discrimination: the value was reportable and was still not reported.
+     */
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    view.unmount();
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("reports NOTHING when an unfinished colour goes away", () => {
+    // The measured case end to end: stop at five digits, dismiss, and the host
+    // must still hold what it held.
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#12345" } });
+    view.unmount();
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("shows the STORED colour again after an unfinished draft is dropped", () => {
+    // What is shown and what is saved have to agree once the draft is gone.
+    // They did not before: the field kept the text while the host held a stale
+    // intermediate.
+    render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
+
+    fireEvent.change(hexField(), { target: { value: "#12345" } });
+    fireEvent.blur(hexField());
+
+    expect((hexField() as HTMLInputElement).value.toLowerCase()).toBe(
+      "#000000"
+    );
   });
 });

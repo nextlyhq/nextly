@@ -192,6 +192,41 @@ export function ColorPicker<TValue = string>({
     }
   }, [color, rendered, showAlpha]);
 
+  /*
+   * A typed colour is reported when the author FINISHES it, never per
+   * keystroke.
+   *
+   * `parseHex` accepts 3, 4, 6 and 8 digits, so a PREFIX of a valid colour is
+   * itself a valid colour: typing `#123456` passes through `#123` and `#1234`
+   * on the way. Reporting each of those made the last one stick whenever the
+   * author paused or the surface went away — `#12345` left the host holding
+   * `#11223344`, a colour nobody typed, silently replacing the stored one.
+   *
+   * So the field holds a draft and this is the only thing that publishes it:
+   * Enter, and leaving the field. Dragging is untouched and still reports
+   * continuously, which is what its coalescing exists for — a drag has no
+   * finish to wait for, and typing does.
+   *
+   * DISMISSAL IS NOT A FINISH, deliberately. Escape means cancel, so a draft
+   * dying with the surface is the conventional answer rather than a loss; and
+   * clicking away moves focus out of the field first, so that path commits
+   * through the blur below. Reporting from an unmount instead would arrive
+   * after a host that coalesces a gesture on close has already decided what to
+   * write, which is a value published into nothing.
+   */
+  const commitDraft = (text: string | null): void => {
+    setDraftHex(null);
+    if (text === null) return;
+    const parsed = parseHex(text);
+    // An unfinishable draft is DISCARDED rather than reported. The field
+    // returns to the colour that is actually stored, so what is shown and what
+    // is saved agree — which they did not when a stale intermediate stood in
+    // for the text on screen.
+    if (!parsed) return;
+    setHsva(prev => hsvaFrom(parsed, parsed.alpha, prev.h));
+    onColorChange(toHex(parsed, showAlpha ? parsed.alpha : 1));
+  };
+
   const commit = (next: Hsva): void => {
     setHsva(next);
     setDraftHex(null);
@@ -366,19 +401,21 @@ export function ColorPicker<TValue = string>({
           id={`${fieldId}-hex`}
           className="font-mono"
           value={draftHex ?? rendered}
-          onChange={event => {
-            const text = event.target.value;
-            setDraftHex(text);
-            const parsed = parseHex(text);
-            // Only a value that IS a colour is published. A field mid-typing is
-            // the ordinary state of one, and reporting `#ab` as a colour would
-            // repaint the surface black under the person typing it.
-            if (parsed) {
-              setHsva(hsvaFrom(parsed, parsed.alpha, hsva.h));
-              onColorChange(toHex(parsed, showAlpha ? parsed.alpha : 1));
-            }
+          /*
+           * A keystroke moves the DRAFT and nothing else — not the surface, not
+           * the host. Moving the surface here would also fight the re-seeding
+           * effect above, which compares the rendered hex against the host's
+           * prop and would pull a half-typed value straight back.
+           */
+          onChange={event => setDraftHex(event.target.value)}
+          onKeyDown={event => {
+            if (event.key !== "Enter") return;
+            // Kept off the surrounding form, which may have a submit of its own:
+            // finishing a colour is not submitting whatever contains it.
+            event.preventDefault();
+            commitDraft(event.currentTarget.value);
           }}
-          onBlur={() => setDraftHex(null)}
+          onBlur={event => commitDraft(event.target.value)}
         />
         {canPickFromScreen && (
           <Button

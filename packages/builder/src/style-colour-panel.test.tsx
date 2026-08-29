@@ -394,6 +394,14 @@ describe("the contrast verdict is reachable from the control it describes", () =
   });
 });
 
+/** Move the picker the way a DRAG does: continuously, with no finish to wait for. */
+function movePicker(): void {
+  fireEvent.keyDown(
+    screen.getByRole("application", { name: /Saturation and brightness/ }),
+    { key: "ArrowRight" }
+  );
+}
+
 describe("a picker gesture is ONE editor operation", () => {
   it("does not write while the picker is being moved, and writes once on close", async () => {
     // The UI picker fires `onColorChange` on every pointer event, so committing
@@ -405,16 +413,18 @@ describe("a picker gesture is ONE editor operation", () => {
     const editor = mount(styles("#3b82f6"));
     fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
 
-    // The picker's own hex field stands in for the drag: it reaches the same
-    // `onColorChange` the surface and sliders do.
-    const hex = screen
-      .getAllByRole("textbox")
-      .find(input => input !== screen.getByRole("textbox", { name: "Color" }));
-    expect(hex).toBeDefined();
-    if (hex === undefined) return;
-    fireEvent.change(hex, { target: { value: "#ff0000" } });
-    fireEvent.change(hex, { target: { value: "#00ff00" } });
-    fireEvent.change(hex, { target: { value: "#0000ff" } });
+    /*
+     * The SURFACE, not the hex field. The field used to stand in for a drag
+     * because typing published on every keystroke exactly as dragging does; it
+     * no longer does — a typed colour is reported when the author finishes it —
+     * so the field would reach a different path from the one this case names,
+     * and every assertion below would go on passing while saying nothing about
+     * a drag. The surface is keyboard-operable, which is what makes a real move
+     * expressible without pointer geometry jsdom cannot supply.
+     */
+    movePicker();
+    movePicker();
+    movePicker();
 
     // Three moves, no writes.
     expect(editor.applyAll).not.toHaveBeenCalled();
@@ -535,6 +545,9 @@ describe("the picker can replace a stored token with a literal", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
 
     // The swatch now follows the draft rather than snapping back to the token.
     expect(
@@ -564,6 +577,9 @@ describe("a picker gesture survives the field being replaced", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
     expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Unmount without ever closing the popover.
@@ -596,6 +612,9 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
 
     // Now pick a token preset, which commits immediately.
     fireEvent.click(screen.getByRole("button", { name: "color.ink" }));
@@ -621,6 +640,9 @@ describe("a discrete choice supersedes an unfinished gesture", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
 
     fireEvent.click(screen.getByRole("button", { name: "Clear Color" }));
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
@@ -647,6 +669,9 @@ describe("a superseded gesture stays superseded even when the choice is refused"
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
 
     fireEvent.click(screen.getByRole("button", { name: "color.ink" }));
     const afterToken = editor.applyAll.mock.calls.length;
@@ -680,6 +705,9 @@ describe("clearing a token while the picker is open", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
 
     // The real order: React's handler on the button, then the document
     // dismissal Radix listens for, then the click.
@@ -753,6 +781,9 @@ describe("a dismissal that is NOT a superseding control", () => {
     expect(hex).toBeDefined();
     if (hex === undefined) return;
     fireEvent.change(hex, { target: { value: "#ff0000" } });
+    // FINISHED, because a typed colour is reported when the author finishes
+    // it rather than per keystroke.
+    fireEvent.blur(hex);
     expect(editor.applyAll).not.toHaveBeenCalled();
 
     // Somewhere outside the picker that commits nothing of its own.
@@ -1085,6 +1116,13 @@ describe("a Reset beside a picker mid-gesture", () => {
     expect(picker).toBeDefined();
     if (picker === undefined) return;
     fireEvent.change(picker, { target: { value: hex } });
+    /*
+     * FINISHED, because a typed colour is reported when the author finishes it
+     * rather than per keystroke. That reports the colour ONCE, which is what
+     * leaves a gesture pending — the panel records a picker report and writes
+     * on close, so a report is not itself a write.
+     */
+    fireEvent.blur(picker);
   };
 
   it("drops the gesture the Reset replaced, rather than queueing it", async () => {
