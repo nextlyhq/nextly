@@ -58,6 +58,14 @@ export interface LifecycleDirection {
    * reusing the publish wording would tell them it is.
    */
   nothingToDoMessage: string;
+  /**
+   * What to report when the transition succeeded.
+   *
+   * Direction-specific for the same reason as {@link nothingToDoMessage}: this
+   * string reaches operational logs and API callers, and a takedown that reports
+   * "All languages published." tells every reader the opposite of what happened.
+   */
+  successMessage: string;
 }
 
 /** Put every language of a document live. */
@@ -66,6 +74,7 @@ export const PUBLISH_ALL_LOCALES: LifecycleDirection = {
   accessAction: "publish",
   stampsFirstPublished: true,
   nothingToDoMessage: "Nothing to publish (collection has no status).",
+  successMessage: "All languages published.",
 };
 
 /** Take every language of a document down. */
@@ -75,6 +84,7 @@ export const WITHDRAW_ALL_LOCALES: LifecycleDirection = {
   // A withdrawal never establishes first publication; see the field's note.
   stampsFirstPublished: false,
   nothingToDoMessage: "Nothing to unpublish (collection has no status).",
+  successMessage: "All languages unpublished.",
 };
 
 /** The document a lifecycle transition targets, and who is asking. */

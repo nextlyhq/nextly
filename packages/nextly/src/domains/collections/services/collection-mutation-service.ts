@@ -3837,8 +3837,15 @@ export class CollectionMutationService extends BaseService {
       const publishStoredRules = this.accessService.getAccessRules(
         publishCollection as Record<string, unknown>
       );
+      // Keyed by the direction, not hardcoded to `publish`. `publish` and
+      // `unpublish` are separate rule kinds, and a collection may define a
+      // document-dependent rule for one and a static rule for the other — so
+      // asking whether "the publish rule" is document-dependent decides
+      // deferral for a withdrawal by inspecting a rule that will never judge it.
       const deferPublishDocumentRule =
-        this.accessService.isDocumentDependentRule(publishStoredRules?.publish);
+        this.accessService.isDocumentDependentRule(
+          publishStoredRules?.[direction.accessAction]
+        );
       const publishDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
         direction.accessAction,
@@ -3984,7 +3991,11 @@ export class CollectionMutationService extends BaseService {
               const documentDenied =
                 await this.accessService.evaluateTransitionDocumentRule(
                   publishDocumentRule.accessRules,
-                  "publish",
+                  // The action this transition is actually performing. Hardcoded
+                  // to "publish" it would enforce the publish rule against a
+                  // withdrawal — admitting one its own unpublish rule denies,
+                  // and refusing one on the strength of an unrelated rule.
+                  direction.accessAction,
                   publishDocumentRule.user,
                   lockedRow
                 );
@@ -4483,7 +4494,7 @@ export class CollectionMutationService extends BaseService {
       return {
         success: true,
         statusCode: 200,
-        message: "All languages published.",
+        message: direction.successMessage,
         data: { id: params.entryId, status: direction.nextStatus },
         eventRecorded,
         revalidationIntent,
