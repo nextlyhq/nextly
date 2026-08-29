@@ -21,6 +21,30 @@
  * `filterEntries` — two answers to "does this row match", disagreeing about
  * block names and keywords, with the tested one silently overruled.
  *
+ * ## The layout is two-dimensional and the KEYBOARD is not
+ *
+ * Tiles sit in a grid, and Down still moves to the next tile rather than the
+ * one below. That reads as an oversight and is a deliberate retreat from the
+ * opposite, which was built and removed.
+ *
+ * The primitives publish a `listbox`, whose keyboard model is one-dimensional
+ * by definition: a screen reader announces "option 4 of 18" and Down means the
+ * next option. Moving by a ROW instead makes the announcement a lie — Down
+ * silently skips two — so a grid keyboard is only honest alongside a grid
+ * accessibility tree, with rows, cells and coordinates.
+ *
+ * That tree is not something this file can add on top. `aria-activedescendant`
+ * and the scroll-into-view are driven from the primitives' own navigation, and
+ * a controlled `value` set from outside updates neither: the highlight and
+ * this panel's description strip would follow while the announced option and
+ * the scroll position stayed where they were. Owning them instead means owning
+ * roving focus and the ARIA wiring — the second implementation of this widget
+ * that the paragraphs above exist to refuse.
+ *
+ * So the grid is a LAYOUT. Reading order is left to right and then down, which
+ * is the order the primitives already move in, and search is what makes a long
+ * palette reachable without arrowing at all.
+ *
  * @module insert-panel
  */
 
@@ -43,6 +67,7 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { InsertDragEntry } from "./canvas-drag";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
@@ -50,12 +75,10 @@ import {
   catalogFrom,
   entryById,
   filterEntries,
-  gridNeighbour,
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
   registrySlotSource,
-  type GridStep,
   type InsertionPoint,
   type InsertEntry,
 } from "./inserter";
@@ -95,92 +118,39 @@ export interface InsertPanelProps {
   categoryOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
+  /**
+   * Begins a drag carrying an entry, when the host has a canvas to drop onto.
+   *
+   * Optional, and its absence changes nothing: the rows still insert on click,
+   * which is the route WCAG 2.2 SC 2.5.7 requires and the one this only ever
+   * supplements. A panel mounted without a canvas — a story, a test — simply
+   * has nothing to drag onto.
+   *
+   * The node is built HERE, by a thunk the drag calls at the release, because
+   * this panel's definitions are one snapshot taken per mount. Resolving the
+   * type again inside the drag would read the registry a second time, and the
+   * row an author dragged could then differ from the subtree that lands.
+   */
+  beginInsertDrag?: (
+    event: React.PointerEvent<HTMLElement>,
+    entry: InsertDragEntry
+  ) => void;
 }
 
 /**
  * How many tiles sit in a row.
  *
- * A CONSTANT rather than a count derived from the panel's measured width, and
- * both consumers read this one value: the stylesheet through the custom
- * property set on each grid, and the arrow-key arithmetic through
- * `gridNeighbour`. Measured from a width would need the layout to have
- * happened before the keyboard could answer, and the two would disagree for
- * the frame after a drag.
+ * A CONSTANT rather than a count derived from the panel's measured width:
+ * measuring would need the layout to have happened before anything could read
+ * it. Three because the panel opens at 300px and its padding and gaps leave
+ * about 85px per tile there — a glyph and a short word. It is also what keeps
+ * the grid from REFLOWING while the author drags the panel's edge, which would
+ * move a tile out from under the cursor mid-drag.
  *
- * Three because the panel opens at 300px and its padding and gaps leave about
- * 86px per tile there — a glyph and a short word. It is also what keeps the
- * grid from REFLOWING while the author drags the panel's edge: a column count
- * that changed with the width would move a tile out from under the cursor
- * mid-drag.
+ * The KEYBOARD does not read this, and that is deliberate — see the note on
+ * arrow keys in this module's documentation.
  */
 const GRID_COLUMNS = 3;
-
-/**
- * Which arrow key means which direction, or `undefined` where the panel wants
- * nothing to do with the key.
- *
- * A table rather than a switch so the set is enumerable: the command
- * primitives bind their own meanings to Home, End and the modified arrows, and
- * a handler that claimed a key by pattern would take one of those the day it
- * was added.
- */
-const ARROW_STEPS: Readonly<Record<string, GridStep>> = {
-  ArrowUp: "up",
-  ArrowDown: "down",
-  ArrowLeft: "left",
-  ArrowRight: "right",
-};
-
-/**
- * Whether the caret in the search field would move if this key reached it.
- *
- * Horizontal arrows belong to the TEXT FIELD first. Focus stays in the search
- * input while the highlight moves — that is how the command primitives work —
- * so a panel that claimed Left and Right outright would make the search box
- * uneditable: an author correcting a typo would move the tile selection
- * instead of the caret.
- *
- * So the panel takes those keys only once the field has no use for them:
- * nothing selected, and the caret already at the end it is being asked to move
- * past. That is the same rule a browser's address bar follows, and it never
- * takes a keystroke the field would have consumed.
- */
-function caretWouldMove(target: EventTarget | null, back: boolean): boolean {
-  if (!(target instanceof HTMLInputElement)) return false;
-  const { selectionStart, selectionEnd } = target;
-  // A field that reports no selection at all cannot say where its caret is, so
-  // the safe answer is that it might move — leaving the key with the field.
-  if (selectionStart === null || selectionEnd === null) return true;
-  // A range collapses to one end before the caret travels, so the first press
-  // is the field's.
-  if (selectionStart !== selectionEnd) return true;
-  return back ? selectionStart > 0 : selectionStart < target.value.length;
-}
-
-/**
- * Which direction a key press means for the grid, or `undefined` where the key
- * is not the grid's to take.
- *
- * Three separate reasons to decline, gathered here rather than spread through
- * the handler: the key is not an arrow; the key is MODIFIED, and the command
- * primitives bind first, last and by-group to those — this runs before theirs,
- * so claiming one would remove it silently; or the key is horizontal and the
- * search field still has a caret to move with it.
- */
-function stepFor(
-  event: React.KeyboardEvent<HTMLElement>
-): GridStep | undefined {
-  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
-    return undefined;
-  }
-  const step = ARROW_STEPS[event.key];
-  if (step === undefined) return undefined;
-  const horizontal = step === "left" || step === "right";
-  if (horizontal && caretWouldMove(event.target, step === "left")) {
-    return undefined;
-  }
-  return step;
-}
 
 /** Sentence describing where the next insert will land. */
 function placementLabel(point: InsertionPoint, label?: string): string {
@@ -201,6 +171,7 @@ export function InsertPanel({
   nesting,
   categoryOrder,
   onInsert,
+  beginInsertDrag,
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
 
@@ -279,13 +250,23 @@ export function InsertPanel({
    * editors side by side — and duplicate ids would have every tile in one
    * describe itself with the other's sentence.
    *
+   * The entry id is NOT part of the generated id, only its key. A variation's
+   * name is an unrestricted string and a variation entry is identified as
+   * `block#variation`, so a variation named "wide card" would put a SPACE in
+   * the attribute — and `aria-describedby` is a space-separated list of id
+   * references, so assistive technology would look for two ids that do not
+   * exist and announce the tile with no description at all. A position is
+   * opaque and cannot carry a separator.
+   *
    * Keyed off the CATALOG rather than the filtered groups, so an id belongs to
    * an entry for the life of the mount instead of changing as an author types.
    */
   const idPrefix = React.useId();
   const descriptionIds = React.useMemo(() => {
     const ids = new Map<string, string>();
-    for (const entry of catalog) ids.set(entry.id, `${idPrefix}-${entry.id}`);
+    catalog.forEach((entry, index) => {
+      ids.set(entry.id, `${idPrefix}-block-${index}`);
+    });
     return ids;
   }, [catalog, idPrefix]);
 
@@ -299,21 +280,6 @@ export function InsertPanel({
    */
   const described =
     entryById(groups, active) ?? groups[0]?.entries[0] ?? undefined;
-
-  const onArrow = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const step = stepFor(event);
-    if (step === undefined) return;
-    const next = gridNeighbour(groups, described?.id, step, GRID_COLUMNS);
-    if (next === null) return;
-    setActive(next);
-    /*
-     * Consuming the key is what stands the primitives' own handler down: it
-     * calls this one first and then skips its own work when the event has been
-     * defaulted. Left standing, its linear "next item" would run as well and
-     * the highlight would end up one tile past wherever this put it.
-     */
-    event.preventDefault();
-  };
 
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
@@ -366,7 +332,6 @@ export function InsertPanel({
         label="Insert a block"
         value={described?.id}
         onValueChange={setActive}
-        onKeyDown={onArrow}
       >
         <CommandInput
           value={query}
@@ -418,6 +383,32 @@ export function InsertPanel({
                    */
                   aria-label={entry.label}
                   aria-describedby={descriptionIds.get(entry.id)}
+                  // Beside `onSelect`, never instead of it. A press stays a
+                  // click until it has travelled far enough to mean a drag, so
+                  // this does not consume the row's own activation — and a host
+                  // that supplies no drag leaves the row exactly as it was.
+                  onPointerDown={event => {
+                    /*
+                     * Describe this tile on the PRESS, not only on a hover.
+                     *
+                     * A touch screen produces no `pointermove` before contact,
+                     * and hover is what the primitives report a highlight
+                     * from — so on touch the strip would still be describing
+                     * whatever was current when the panel opened, and the tap
+                     * that finally moved it is the same tap that inserts. A
+                     * finger resting on a tile now reads its sentence before
+                     * lifting, and a finger dragging across tiles reads each
+                     * one it passes.
+                     */
+                    setActive(entry.id);
+                    beginInsertDrag?.(event, {
+                      blockName: entry.blockName,
+                      makeNode: () => nodeForEntry(entry, blockSource, nesting),
+                      // The same notification the click path sends, so a host
+                      // cannot see one kind of insert and miss the other.
+                      onInserted: onInsert,
+                    });
+                  }}
                 >
                   <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>

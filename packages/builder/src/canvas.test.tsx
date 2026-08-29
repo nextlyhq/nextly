@@ -46,6 +46,7 @@ import {
   canvasScale,
   nodeIdFromEvent,
 } from "./canvas";
+import type { CanvasZoom } from "./canvas-zoom";
 
 // Explicit because this package does not enable vitest globals, and without
 // them testing-library never registers its own cleanup: every render stays
@@ -823,7 +824,7 @@ describe("what the canvas reports about the box it got", () => {
   }
 
   /** A canvas asked for `width`, so it has a region to scale against. */
-  function atWidth(width: number) {
+  function atWidth(width: number, zoom?: CanvasZoom) {
     return render(
       <Canvas
         document={
@@ -835,6 +836,7 @@ describe("what the canvas reports about the box it got", () => {
         }
         siteStyles={PREVIEWABLE}
         preview={{ container: "nx-preview-viewport", width }}
+        {...(zoom === undefined ? {} : { zoom })}
       />
     );
   }
@@ -884,6 +886,169 @@ describe("what the canvas reports about the box it got", () => {
        */
       expect(zoomOf(root)).toBe(`${912 / 1280}`);
       expect(root.style.transform).toBe("");
+    });
+
+    it("draws a chosen scale at the tier that asks for no width", () => {
+      /*
+       * The widest tier requests nothing — the box IS the region — and that is
+       * the state the editor opens in, so it is where a zoom control is used
+       * most. Nothing has to be fitted there, and a chosen scale still has to
+       * reach the box: the alternative is a control whose label moves while
+       * the canvas stays at `zoom: 1`.
+       */
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+          zoom={{ kind: "fixed", scale: 1.5 }}
+        />
+      );
+
+      const root = rootOf(container);
+      expect(zoomOf(root)).toBe("1.5");
+      /*
+       * And the width is COMPENSATED, which is the point rather than an
+       * incidental. `zoom` participates in layout and divides the logical width
+       * the container queries resolve against, so a plain full width came out
+       * at region/scale: at 200% a 911px region became 455px and the canvas
+       * started previewing the MOBILE tier. Magnifying showed a different
+       * layout instead of a larger one.
+       *
+       * Multiplying the percentage back restores the width the box had. No
+       * measurement is involved, so nothing here has to observe a region that
+       * the zoom is itself changing.
+       */
+      // Matched on the RATIO rather than the spelling: engines normalise the
+      // expression differently — jsdom reports `calc(150%)` for what is
+      // authored as `calc(100% * 1.5)` — and the ratio is the behaviour.
+      expect(root.style.width.replace(/\s+/g, "")).toMatch(/(100%\*1\.5|150%)/);
+    });
+
+    it("leaves that tier alone while FITTING", () => {
+      // The control on the other side. A rule that zoomed whenever there was no
+      // requested width would scale the default view by whatever the fit
+      // produced, which is the behaviour this replaces rather than repeats.
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+        />
+      );
+
+      expect(zoomOf(rootOf(container))).toBe("");
+    });
+
+    it("draws a chosen scale on a site that previews no viewport at all", () => {
+      /*
+       * Previewing needs a container name AND a site declaring viewport tiers,
+       * and the default configuration has neither — so there is no preview
+       * object, which is the state most sites are in. Nesting the scale inside
+       * that object left the control moving a number on screen and changing
+       * nothing for exactly those sites.
+       */
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          zoom={{ kind: "fixed", scale: 1.5 }}
+        />
+      );
+
+      expect(zoomOf(rootOf(container))).toBe("1.5");
+    });
+
+    it("refuses a scale it cannot paint at", () => {
+      /*
+       * `CanvasZoom` is exported, so a host can build one directly and never
+       * pass through the storage guard. Interpolated into a `zoom` declaration
+       * these produce either a rule the browser drops or a canvas beyond reach
+       * of the control that would undo it, so the check belongs where a scale
+       * is USED rather than only where one is parsed.
+       */
+      /*
+       * WITH a preview, which is the path the validation is load-bearing on.
+       * Without one the box style already declines to apply an unchosen scale,
+       * so a no-preview fixture passes whether or not the scale was checked —
+       * it cannot separate the two guards.
+       */
+      const previewing = atWidth(1280, { kind: "fixed", scale: Number.NaN });
+      region(912);
+      expect(zoomOf(rootOf(previewing.container))).not.toContain("NaN");
+      previewing.unmount();
+
+      for (const scale of [Number.NaN, Infinity, 0, 500]) {
+        const { container, unmount } = render(
+          <Canvas
+            document={
+              {
+                formatVersion: 1,
+                kind: "page",
+                nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+              } as never
+            }
+            siteStyles={{ css: "", classes: {} } as never}
+            zoom={{ kind: "fixed", scale }}
+          />
+        );
+        // Falls back to fitting, which paints nothing rather than painting a
+        // value the browser cannot use.
+        expect(zoomOf(rootOf(container))).toBe("");
+        unmount();
+      }
+    });
+
+    it("draws a CHOSEN scale where fitting would not have", () => {
+      /*
+       * The case the old shape could not express. A fit that needs no shrinking
+       * is left unzoomed and centred, so every scale at or above 1 took the
+       * `maxWidth` path — and no reading of `maxWidth` magnifies. Choosing 150%
+       * has to reach `zoom`, or the control moves a number on screen and
+       * nothing else.
+       */
+      const { container } = atWidth(600, { kind: "fixed", scale: 1.5 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(zoomOf(root)).toBe("1.5");
+      // And NOT the fitting shape, which has no way to magnify.
+      expect(root.style.maxWidth).toBe("");
+    });
+
+    it("holds a chosen scale when the region changes under it", () => {
+      /*
+       * Choosing a scale means it stops moving when the panels do. Re-deriving
+       * it anyway is the defect this replaces: the canvas fell from 89% to
+       * 59.5% because a panel opened, with nothing said and no way back.
+       *
+       * The region is moved to a width that WOULD have produced a different
+       * fit, so a canvas still fitting reports something else here.
+       */
+      const { container } = atWidth(1280, { kind: "fixed", scale: 1 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(zoomOf(root)).toBe("1");
+      expect(root.style.width).toBe("1280px");
     });
 
     it("leaves a tier that FITS unscaled and centred", () => {
@@ -1654,5 +1819,109 @@ describe("what the canvas reports about the box it got", () => {
     );
 
     expect(FakeResizeObserver.last).toBeUndefined();
+  });
+});
+
+describe("reporting the scale to a host that keeps changing its mind", () => {
+  /**
+   * The document every case here draws, which is beside the point in all of
+   * them: what varies is the reporter, not what is under it.
+   */
+  const DOCUMENT = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+  } as never;
+
+  it("does not report again when only the reporter's IDENTITY changed", () => {
+    /*
+     * The conventional host writes the reporter inline, so every render of it
+     * hands the canvas a new function. Depended on directly, each report would
+     * update the host, the update would produce a new identity, and the new
+     * identity would report again — a render loop on a host that did nothing
+     * wrong. Two renders with the same scale must produce ONE report.
+     */
+    const reports: number[] = [];
+    const view = render(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={scale => reports.push(scale)}
+      />
+    );
+
+    expect(reports).toEqual([1.5]);
+
+    view.rerender(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={scale => reports.push(scale)}
+      />
+    );
+
+    expect(reports).toEqual([1.5]);
+  });
+
+  it("reports the CURRENT scale to a reporter that arrives late", () => {
+    /*
+     * A host can resolve its reporter from its own state, so the prop moves
+     * from `undefined` to a function after the canvas has already settled on a
+     * scale. Keyed on the scale alone the effect would not re-run at that
+     * moment, and the host would hold its initial guess until the author
+     * happened to pick a different zoom.
+     *
+     * The scale is deliberately NOT 1 here: a reporter told `1` cannot be
+     * distinguished from one told the default, so the case would pass against
+     * an implementation that reports nothing and a host that assumed.
+     */
+    const reports: number[] = [];
+    const view = render(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+      />
+    );
+
+    view.rerender(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={scale => reports.push(scale)}
+      />
+    );
+
+    expect(reports).toEqual([1.5]);
+  });
+
+  it("reports each scale the canvas actually takes", () => {
+    // The control for both cases above: an implementation that never reported
+    // after the first render would satisfy the identity case, and one that
+    // reported on every render would satisfy the arrival case.
+    const reports: number[] = [];
+    const onScale = (scale: number) => reports.push(scale);
+    const view = render(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 1.5 }}
+        onScale={onScale}
+      />
+    );
+
+    view.rerender(
+      <Canvas
+        document={DOCUMENT}
+        siteStyles={PREVIEWABLE}
+        zoom={{ kind: "fixed", scale: 0.75 }}
+        onScale={onScale}
+      />
+    );
+
+    expect(reports).toEqual([1.5, 0.75]);
   });
 });

@@ -35,25 +35,29 @@ reading rather than recognising, and the panel ran to well over a screen for a
 library of twenty blocks.
 
 Making it a grid on its own would have meant deleting the descriptions. A tile
-at the panel's default width is about eighty-six pixels — an icon and a short
+at the panel's default width is about eighty-five pixels — an icon and a short
 word — while the descriptions run from ninety-nine to a hundred and eighty-five
 characters, and they are not padding. Card's description is what says it CLIPS
 its contents, which is the whole reason to choose it over Box. Accordion's is
 what says it restricts what can be dropped inside it. A grid that dropped them
 would look better and answer fewer questions.
 
-So the descriptions moved rather than went. The tile under the pointer, or
-under the keyboard, is described in full in a strip at the foot of the panel.
-It follows FOCUS as well as hover, which is what separates it from a tooltip: a
-tooltip is reachable only with a mouse, so it is no help on a touch screen and
-no help at all to anyone arrowing through the panel.
+So the descriptions moved rather than went. The tile under the pointer, under
+the keyboard, or under a finger is described in full in a strip at the foot of
+the panel. It follows FOCUS as well as hover, which is what separates it from a
+tooltip: a tooltip is reachable only with a mouse, so it is no help on a touch
+screen and no help at all to anyone arrowing through the panel. It follows a
+PRESS too, because a touch screen sends no hover before contact — without that,
+the tap that finally moved the description would be the same tap that inserts.
 
-Arrow keys now follow the grid rather than the old list. Down moves a row, not
-one tile to the right, and it crosses into the next category at the column it
-left — landing on the tile that is visually below, including where a category
-ends on a short row. Left and Right move one tile, but only once the search
-field has no caret left to move, so correcting a typo in the search box still
-edits the text instead of jumping the selection.
+Arrow keys are unchanged, and that is deliberate rather than an omission. The
+palette publishes listbox semantics, where a screen reader announces "option 4
+of 18" and Down means the next option; moving by a grid ROW instead would make
+that announcement wrong by two every time. An honest grid keyboard needs a grid
+accessibility tree — rows, cells and coordinates — and that is not something
+the panel can add on top of the widget it composes. The grid is a layout, and
+reading order runs left to right and then down, which is the order the arrow
+keys already move in.
 
 Each tile is now NAMED by its block and DESCRIBED by its sentence, rather than
 announcing the two run together. A screen reader previously read a tile as
@@ -61,3 +65,10 @@ announcing the two run together. A screen reader previously read a tile as
 with no separator, and whether any separator appeared at all depended on the
 stylesheet rather than the markup. The two are now stated separately, so the
 block's name is read first and its description second.
+
+The description reference is also safe for blocks nobody has written yet. A
+variation's name is an unrestricted string and a variation is identified as
+`block#variation`, so a variation named "wide card" used to put a SPACE in the
+reference — which is a space-separated list of ids, so assistive technology
+looked for two ids that did not exist and announced the tile with no
+description at all.

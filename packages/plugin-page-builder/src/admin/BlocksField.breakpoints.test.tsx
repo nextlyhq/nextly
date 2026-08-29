@@ -122,7 +122,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       steps: [],
       dismiss: () => {},
     }),
-    useCanvasDrag: () => ({ handlers: {}, target: null }),
+    // `draggingBlockName` is part of the state this hook reports and is what
+    // the editor asks "is a drag happening" — a stub omitting it answers
+    // `undefined`, which is not `null`, so the editor hides its chrome for a
+    // drag that is not happening.
+    useCanvasDrag: () => ({
+      handlers: {},
+      target: null,
+      draggingId: null,
+      draggingBlockName: null,
+    }),
     useEditorState: () => ({
       document: DOCUMENT,
       selectedId: null,
@@ -246,6 +255,22 @@ afterEach(() => {
 });
 
 describe("the container the canvas is compiled against", () => {
+  it("gives the canvas the reporter the zoom control reads", () => {
+    /*
+     * The scale the canvas paints at is reported back so the control can name
+     * it — including while FITTING, where it is derived from a region only the
+     * canvas measures.
+     *
+     * Asserted on the CANVAS's own props rather than inside `preview`, because
+     * that is exactly where it was wrong: an extra key on an inferred object is
+     * accepted and ignored rather than refused, so the reporter never ran and
+     * the control sat at 100% while the canvas zoomed.
+     */
+    openEditor();
+
+    expect(seen.canvas?.onScale).toBeTypeOf("function");
+  });
+
   it("tells the layers panel that the move keystrokes are bound", () => {
     /*
      * The panel cannot work this out where it sits. It is drawn in the shell's

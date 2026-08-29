@@ -16,6 +16,9 @@
  *
  * @module insert-panel.test
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -123,6 +126,88 @@ describe("InsertPanel", () => {
     // fail the populated case below.
     expect(op.at).toEqual({ index: 0 });
     expect(onInsert).toHaveBeenCalledWith(op.node);
+  });
+
+  it("offers a row as a drag, carrying the block it names", () => {
+    // The panel is where a palette drag STARTS, and the node is built here
+    // rather than inside the drag: these definitions are one snapshot taken per
+    // mount, so resolving the type again later would read the registry a second
+    // time and could answer with a different subtree than the row shows.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    const beginInsertDrag = vi.fn();
+    render(<InsertPanel editor={editor} beginInsertDrag={beginInsertDrag} />);
+
+    // The OPTION rather than its label text: the description strip repeats the
+    // name of whichever tile is current, so a text query matches two elements
+    // and refuses on the ambiguity. This is also the element carrying the
+    // handler, rather than a child it happens to bubble from.
+    fireEvent.pointerDown(tile("Text"), {
+      button: 0,
+      pointerId: 1,
+    });
+
+    expect(beginInsertDrag).toHaveBeenCalledTimes(1);
+    const entry = beginInsertDrag.mock.calls[0][1];
+    expect(entry.blockName).toBe("acme/text");
+    // The THUNK is what matters, not that a callback fired: it must build the
+    // block this row names. Asserting only that the drag was started would
+    // pass for a row that handed over some other entry entirely.
+    expect(entry.makeNode().type).toBe("acme/text");
+    // And starting a drag must not itself edit the document — the insert
+    // happens at the release, in the drag.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("still inserts on click when no drag was supplied", () => {
+    // The control, and the accessible path: a host with no canvas passes no
+    // drag, and the row must behave exactly as it did before it could be
+    // dragged. Click-to-insert is the WCAG 2.2 SC 2.5.7 alternative.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} />);
+
+    fireEvent.pointerDown(tile("Text"), { button: 0, pointerId: 1 });
+    fireEvent.click(tile("Text"));
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("reserves the sideways gesture on a row, so touch can drag it", () => {
+    /*
+     * Asserted against the stylesheet because there is nothing else that could
+     * see it. `touch-action` is honoured by a real compositor deciding whether
+     * a movement belongs to the page or to the element; jsdom has no such
+     * decision to make, and every pointer test in this package would pass with
+     * the declaration deleted.
+     *
+     * The failure it guards is invisible in every other way: on a touch
+     * browser the default lets the browser claim the gesture as a pan, and it
+     * announces that with `pointercancel` — which this engine correctly treats
+     * as the drag being withdrawn. So the drag abandons itself part-way, only
+     * on touch, and nothing in CI is capable of noticing.
+     */
+    const css = readFileSync(
+      join(process.cwd(), "src/styles/builder-chrome.css"),
+      "utf8"
+    );
+    const rule = css.slice(css.indexOf(".nx-insert-panel [cmdk-item] {"));
+    const firstBlock = rule.slice(0, rule.indexOf("}"));
+
+    // Population: a renamed selector would leave every assertion below reading
+    // an empty string, and "no forbidden value found" would pass on nothing.
+    expect(firstBlock.length).toBeGreaterThan(0);
+    expect(firstBlock).toContain("touch-action: pan-y;");
+    // `pan-y` and not `none`, which is the tempting stronger answer: the
+    // palette is a scrolling list, and taking vertical panning too would trade
+    // a broken drag for a list a finger cannot scroll.
+    expect(firstBlock).not.toContain("touch-action: none");
   });
 
   it("judges a supplied block's declared children by the supplied rules", () => {
@@ -409,6 +494,47 @@ describe("the grid, and the strip that describes it", () => {
     expect(description?.textContent).toBe("Block number 0.");
   });
 
+  it("gives a description an id with no WHITESPACE in it", () => {
+    /*
+     * A variation's name is an unrestricted string and a variation entry is
+     * identified as `block#variation`, so a variation named "wide card" would
+     * put a space in the attribute. `aria-describedby` is a space-separated
+     * list of id REFERENCES, so assistive technology would look for two ids
+     * that do not exist and announce the tile with no description at all —
+     * silently, because a reference that resolves to nothing is not an error.
+     *
+     * Asserted on the resolved element as well as on the attribute: an id
+     * that merely lacks spaces still fails if it names nothing.
+     */
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/card",
+          description: "A card that clips.",
+          editor: {
+            label: "Card",
+            // The space is the whole point: nothing validates a variation's
+            // name, and the entry identifying it is `block#variation`.
+            variations: [{ name: "wide card", label: "Wide card" }],
+          },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    const wide = tile("Wide card");
+    const id = wide.getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    expect(id).not.toMatch(/\s/);
+    // A variation carries no sentence of its own, so this is the block's —
+    // which is what a description reference has to resolve to.
+    expect(document.getElementById(id ?? "")?.textContent).toBe(
+      "A card that clips."
+    );
+  });
+
   it("describes the tile the highlight is on, before anything is touched", () => {
     // The strip is the only place a sighted author reads the sentence now, so
     // a panel that opened with it blank would have removed the information
@@ -419,61 +545,75 @@ describe("the grid, and the strip that describes it", () => {
     expect(strip()).toBe("B0 Block number 0.");
   });
 
-  it("moves DOWN by a row, not by one tile", () => {
+  it("describes a tile on the PRESS, so touch reads it before lifting", () => {
     /*
-     * The whole point of the grid being a grid. Three columns, so the tile
-     * below B0 is B3 — a panel that kept the list's linear navigation would
-     * answer B1, which is the tile to its RIGHT.
+     * A touch screen produces no `pointermove` before contact, and hover is
+     * what the primitives report a highlight from — so on touch the strip
+     * would describe whatever was current when the panel opened, and the tap
+     * that finally moved it is the same tap that inserts.
+     *
+     * Driven with `pointerDown` and NOT `pointerMove`, because pointer-move is
+     * the path that already worked: a case using it would pass against the
+     * defect it is written for.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    expect(strip()).toBe("B0 Block number 0.");
+
+    fireEvent.pointerDown(tile("B4"), { button: 0, pointerId: 1 });
+
+    expect(strip()).toBe("B4 Block number 4.");
+  });
+
+  it("leaves ArrowDown to the primitives, moving by ONE tile", () => {
+    /*
+     * The grid is a LAYOUT, and the keyboard stays the primitives'. Down means
+     * the next option, which is the tile to the RIGHT — deliberately, because
+     * the list publishes `listbox` semantics and a screen reader announces
+     * "option 2 of 7". A panel that moved by a row instead would make that
+     * announcement wrong by two every time.
+     *
+     * B1 rather than B3 is the whole assertion. Reinstating row movement here
+     * without also publishing a grid accessibility tree is what this excludes.
      */
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
     fireEvent.keyDown(search(), { key: "ArrowDown" });
 
-    expect(strip()).toBe("B3 Block number 3.");
-  });
-
-  it("moves RIGHT by one tile once the search field has no use for the key", () => {
-    // The field is empty, so there is no caret to move and the key is the
-    // grid's.
-    sevenBlocks();
-    render(<InsertPanel editor={editorSpy(documentOf())} />);
-
-    fireEvent.keyDown(search(), { key: "ArrowRight" });
-
     expect(strip()).toBe("B1 Block number 1.");
   });
 
-  it("leaves a horizontal arrow to the SEARCH FIELD while a caret can move", () => {
+  it("leaves a horizontal arrow to the SEARCH FIELD entirely", () => {
     /*
-     * Focus stays in the search box while the highlight moves, so a panel that
-     * claimed Left and Right outright would make the box uneditable: an author
-     * correcting a typo would move the tile selection instead of the caret.
+     * Focus stays in the search box while the highlight moves, so a horizontal
+     * arrow belongs to the caret and nothing else — claiming it at either end
+     * of the text would make the box awkward to edit for a gain the layout
+     * does not need, since Down already reaches the next tile.
      *
-     * Asserted against the same key succeeding once the caret is at the end,
-     * because an assertion that the highlight did not move is satisfied by a
-     * handler that never runs at all.
+     * The caret is deliberately at the END, which is where a panel claiming
+     * "the field has no use for this key" would take it. That the highlight
+     * stays put is the property; the control below is what stops the case
+     * passing on a panel where NO key moves anything.
      */
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 
     const input = search();
     fireEvent.change(input, { target: { value: "b" } });
-    (input as HTMLInputElement).setSelectionRange(0, 0);
+    (input as HTMLInputElement).setSelectionRange(1, 1);
     fireEvent.keyDown(input, { key: "ArrowRight" });
     expect(strip()).toBe("B0 Block number 0.");
 
-    (input as HTMLInputElement).setSelectionRange(1, 1);
-    fireEvent.keyDown(input, { key: "ArrowRight" });
+    // The control: the same panel, a key the primitives DO bind, and the
+    // highlight moves. Without it an inert panel satisfies the assertion above.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
     expect(strip()).toBe("B1 Block number 1.");
   });
 
   it("leaves a MODIFIED arrow to the command primitives", () => {
-    /*
-     * They bind first, last and by-group to the modified arrows, and this
-     * handler runs before theirs — so claiming a modified key would remove a
-     * binding silently. Meta+Down is theirs and means "last".
-     */
+    // They bind first, last and by-group to the modified arrows. Meta+Down is
+    // theirs and means "last".
     sevenBlocks();
     render(<InsertPanel editor={editorSpy(documentOf())} />);
 

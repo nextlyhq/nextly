@@ -1568,3 +1568,74 @@ describe("F6 from a focused drag handle", () => {
     ).toBeTruthy();
   });
 });
+
+describe("telling the host which zoom the shell is holding", () => {
+  /**
+   * A stored preference set carrying a NON-DEFAULT zoom.
+   *
+   * The value has to differ from the default for any assertion here to mean
+   * something: a host told `fit` cannot tell the shell from a host that
+   * assumed, so a case built on the default passes against a shell that
+   * reports nothing at all. Stored in its PERSISTED form — a number, which is
+   * what `writeZoom` emits — because a record carrying the runtime object is
+   * rejected on read and restores the default, which is the value the case is
+   * built to exclude.
+   */
+  const STORED = JSON.stringify({ ...DEFAULT_PREFERENCES, zoom: 1.5 });
+
+  it("reports the stored zoom to a host that wires its handler LATE", () => {
+    /*
+     * A host can resolve `onZoomChange` from its own state, so the prop moves
+     * from `undefined` to a function after the shell has already loaded its
+     * preferences. Keyed on the value alone the effect does not re-run at that
+     * moment, and the host draws its canvas at the default while the shell's
+     * control reads 150%.
+     */
+    stubContainerFits(true);
+    const store = memoryStore(STORED);
+    const onZoomChange = vi.fn();
+    const view = render(<BuilderShell onExit={vi.fn()} store={store} />);
+
+    view.rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onZoomChange={onZoomChange}
+      />
+    );
+
+    expect(onZoomChange).toHaveBeenCalledWith({ kind: "fixed", scale: 1.5 });
+  });
+
+  it("does not report again when only the handler's IDENTITY changed", () => {
+    // The control. Reporting on identity would satisfy the case above while
+    // closing a render loop around any host that writes its handler inline.
+    stubContainerFits(true);
+    const store = memoryStore(STORED);
+    const reports: unknown[] = [];
+    const view = render(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onZoomChange={zoom => reports.push(zoom)}
+      />
+    );
+
+    // The stored value, not the default: the shell reads its store in an
+    // effect, so the mount report carries the default and the restore that
+    // follows carries this. Asserting the LAST one keeps the case about the
+    // value the shell settled on rather than about how many passes it took.
+    const settled = reports.length;
+    expect(reports.at(-1)).toEqual({ kind: "fixed", scale: 1.5 });
+
+    view.rerender(
+      <BuilderShell
+        onExit={vi.fn()}
+        store={store}
+        onZoomChange={zoom => reports.push(zoom)}
+      />
+    );
+
+    expect(reports).toHaveLength(settled);
+  });
+});
