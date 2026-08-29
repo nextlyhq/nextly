@@ -22,6 +22,26 @@
  * go live up to {@link DEFAULT_TTL_MS} late on a multi-instance deployment
  * that has had no local write. It is never missed, and never early.
  *
+ * ## The TTL bounds the MEMO, not the pages derived from it
+ *
+ * That last sentence was false for the caller that matters, and the gap is why
+ * {@link PendingTransitionCache.stalenessCeilingSeconds} exists. An empty memo
+ * makes `nextTransition` answer `null`, which the cache bound turned into
+ * `false` — cache this page tag-only, i.e. until something flushes it. On a
+ * multi-instance deployment the flush has ALREADY happened: instance B
+ * scheduled the release and flushed the shared tags, and the re-render that
+ * flush caused landed on instance A, whose memo still says nothing is
+ * scheduled. A's memo expires thirty seconds later, but nothing re-renders that
+ * page, so this class is never asked again and the page outlives the release
+ * indefinitely — bounded by no clock at all rather than by the TTL.
+ *
+ * So the ceiling is published and the bound applies it to every answer: a page
+ * derived from this memo may never outlive the memo. The cost is that a runtime
+ * with a database attached revalidates public reads on the TTL even when no
+ * release has ever been scheduled — accepted deliberately, because the
+ * alternative is a page that serves pre-release content forever and shows
+ * nothing wrong while doing it.
+ *
  * @module domains/releases/pending-transition-cache
  */
 
@@ -132,6 +152,24 @@ export class PendingTransitionCache {
       if (instant.getTime() > nowMs) return instant;
     }
     return null;
+  }
+
+  /**
+   * The longest a page derived from an answer of this memo may be cached.
+   *
+   * Every answer, not only the empty one. An instant this memo DOES know about
+   * still describes the schedule as of up to a TTL ago, so a release scheduled
+   * remotely for an earlier instant is invisible for the same window; capping
+   * only the `null` case would leave that page cached past a transition it
+   * never heard about.
+   *
+   * Seconds, and rounded UP: the caller's unit is seconds, and a ceiling that
+   * rounded down would expire the page fractionally before the memo it is meant
+   * to track — cheap, but it would make the two disagree about the very
+   * window this exists to keep them agreeing on.
+   */
+  stalenessCeilingSeconds(): number {
+    return Math.ceil(this.ttlMs / 1000);
   }
 
   /**

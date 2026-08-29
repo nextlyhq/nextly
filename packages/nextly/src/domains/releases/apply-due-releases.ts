@@ -40,6 +40,12 @@
  * failure mode a scheduled publish can least afford — nobody is watching at
  * 03:00, and "nothing was published" reads exactly like "nothing was due".
  *
+ * It is a real guarantee only while EVERY fallible step in {@link applyOne} is
+ * wrapped. One was not: the per-action schedule check — an ordinary database
+ * read, on the ordinary path — took the whole pass down with it whenever the
+ * connection blipped, skipping every later action and every unrelated due
+ * release. One blip then looked exactly like a quiet night.
+ *
  * @module domains/releases/apply-due-releases
  */
 
@@ -96,7 +102,20 @@ export interface ReleaseMutations {
 export interface ApplyDueReleasesDeps {
   repository: {
     findDueReleases(now: Date): Promise<ReleaseRow[]>;
-    listMembers(releaseId: string): Promise<ReleaseMemberRow[]>;
+    /**
+     * Members of EVERY due release, in one query.
+     *
+     * Batched rather than asked per release because this is the last thing that
+     * happens before the first content mutation: one round trip per due release
+     * made the drain's time-to-first-write — and the job lease it holds — grow
+     * directly with the size of the due set, which is largest exactly when a
+     * deployment or an imported schedule has left many releases due at once.
+     *
+     * Safe to flatten because the winner rule is a TOTAL order (instant, then
+     * creation time, then member id), so no answer depends on the order rows
+     * come back in.
+     */
+    listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]>;
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
     markReleasePublished(id: string, at: Date): Promise<boolean>;
   };
@@ -116,6 +135,16 @@ export type MaterialisationFailure =
   | "IDENTITY_LOOKUP_FAILED"
   /** The content mutation itself was refused or errored. */
   | "WRITE_FAILED"
+  /**
+   * The "is this release still scheduled?" read failed.
+   *
+   * Distinct from {@link MaterialisationFailure} `RELEASE_NO_LONGER_SCHEDULED`
+   * on purpose: a read that ERRORED is not evidence the release was cancelled,
+   * so this is recorded as a failure, holds the release open, and is retried on
+   * the next pass — where cancellation is a verdict that discharges nothing but
+   * is final for this action.
+   */
+  | "SCHEDULE_CHECK_FAILED"
   /**
    * The member names a single locale. Per-locale release visibility is not
    * built: see the refusal in `applyOne` for why performing it would be worse
@@ -159,10 +188,7 @@ export async function applyDueReleases(
     return { due: 0, published: 0, applied: 0, failed: 0, outcomes: [] };
   }
 
-  const members: ReleaseMemberRow[] = [];
-  for (const release of releases) {
-    members.push(...(await deps.repository.listMembers(release.id)));
-  }
+  const members = await deps.repository.listMembersOf(releases.map(r => r.id));
 
   const plan = planReleaseMaterialisation({
     releases: releases.map(r => ({
@@ -220,6 +246,16 @@ export async function applyDueReleases(
   };
 }
 
+/**
+ * One action's outcome — and never a rejection.
+ *
+ * That is an INVARIANT, not an observation: the pass's "every action is
+ * attempted" promise is only as good as it. Every fallible step below is
+ * wrapped individually, which is why there is no catch-all here — a boundary
+ * `try` would be a branch no test could reach, and an unreachable guard is a
+ * worse record of the rule than this sentence. **A bare `await` added to this
+ * function breaks the guarantee**, silently, for every release due that minute.
+ */
 async function applyOne(
   deps: ApplyDueReleasesDeps,
   action: MaterialisationAction
@@ -261,9 +297,25 @@ async function applyOne(
   // published and cannot un-publish the documents. Checked per ACTION rather
   // than once per pass, so a cancel is honoured for every document not yet
   // written rather than only for releases the pass had not started.
-  if (
-    !(await deps.repository.isStillDueAt(action.releaseId, action.scheduledAt))
-  ) {
+  //
+  // Wrapped because it is a database read on the ordinary path, and an
+  // unwrapped one here aborted the entire pass: a transient connection failure
+  // on the FIRST action skipped every later action and every unrelated due
+  // release, so one blip looked exactly like a quiet night.
+  let stillDue: boolean;
+  try {
+    stillDue = await deps.repository.isStillDueAt(
+      action.releaseId,
+      action.scheduledAt
+    );
+  } catch (error) {
+    return {
+      ...base,
+      failure: "SCHEDULE_CHECK_FAILED",
+      detail: messageOf(error),
+    };
+  }
+  if (!stillDue) {
     return { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
   }
 

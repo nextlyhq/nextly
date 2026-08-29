@@ -26,8 +26,10 @@ export interface ReleaseCacheBound {
   /**
    * Seconds a read may be cached for, or `false` for tag-only busting.
    *
-   * `false` is the overwhelmingly common answer — nothing scheduled — and is
-   * reached from a memo rather than a query.
+   * A runtime with releases wired always answers with a NUMBER, reached from a
+   * memo rather than a query. `false` — cache until something flushes it — is
+   * reserved for {@link NO_RELEASE_CACHE_BOUND}, where there is no schedule to
+   * be wrong about.
    */
   maxCacheSeconds(now: Date): Promise<number | false>;
 }
@@ -38,11 +40,24 @@ export const NO_RELEASE_CACHE_BOUND: ReleaseCacheBound = {
 };
 
 export function createReleaseCacheBound(deps: {
-  cache: { nextTransition(now: Date): Promise<Date | null> };
+  cache: {
+    nextTransition(now: Date): Promise<Date | null>;
+    stalenessCeilingSeconds(): number;
+  };
 }): ReleaseCacheBound {
   return {
     async maxCacheSeconds(now: Date): Promise<number | false> {
-      return secondsToNextTransition(await deps.cache.nextTransition(now), now);
+      const scheduled = secondsToNextTransition(
+        await deps.cache.nextTransition(now),
+        now
+      );
+      // The memo cannot see a schedule written by another instance, so no page
+      // derived from it may outlive it. `false` here would mean "cache until
+      // something flushes this" — and on the deployment where that is wrong,
+      // the flush has already happened, on the instance that made the schedule.
+      // See the note in `pending-transition-cache`.
+      const ceiling = deps.cache.stalenessCeilingSeconds();
+      return scheduled === false ? ceiling : Math.min(scheduled, ceiling);
     },
   };
 }

@@ -49,9 +49,19 @@ two ways to go stale — a tag someone busts, or a fixed number of seconds — a
 neither fits a scheduled publish: tags do nothing until something runs, so a
 page cached before the due instant could serve pre-release content
 indefinitely, and a fixed window is a guess unrelated to when anything changes.
-The cache lifetime is now derived from the schedule itself, so a page whose
-content has a release due in three hours may be cached for three hours and no
-longer.
+The cache lifetime is now derived from the schedule itself, and capped by how
+stale the schedule this server holds may be.
+
+That cap is a behaviour change worth knowing about: a runtime with a database
+attached now revalidates public reads on a thirty-second window even where no
+release has ever been scheduled, where it previously cached them until a tag
+was busted. The alternative was worse and silent. The schedule is read through
+a short-lived memo, and a server that has not itself written the schedule
+cannot see one written by another server for the length of that memo — so a
+page rendered in that window was being cached with no expiry at all, on the
+strength of a memo saying nothing was due. It then outlived the release
+indefinitely, because nothing re-rendered the page to ask again. A page may now
+never outlive the memo its bound came from.
 
 Three permissions are seeded — reading content releases, creating them, and
 publishing them. Scheduling is deliberately separate from creating: assembling
