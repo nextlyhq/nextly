@@ -39,6 +39,20 @@ export type { BuilderShellProps } from "./builder-shell";
  * keeps the cascade from being walked per control; `style-trace.ts` says why it
  * is compiled a second time.
  */
+/*
+ * The inspector's own answer to whether it can show anything for a selection,
+ * exported because a HOST needs it.
+ *
+ * A host drawing both the panel and the canvas has to keep them agreeing about
+ * the interaction state, and the panel withholds its whole tab strip — the
+ * state control with it — for a selection it cannot inspect. An unregistered
+ * block type is that case and reads as one ordinary selection to anything
+ * counting ids, so a host deriving the answer itself gets it wrong on exactly
+ * the input the predicate exists for.
+ *
+ * A pure function over a document, so it crosses this entry carrying no state
+ * and no React.
+ */
 export { selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 

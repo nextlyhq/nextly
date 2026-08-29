@@ -232,6 +232,28 @@ const INSPECTOR_TABS = [
  * fight a host restoring a state deliberately. This runs exactly when a person
  * leaves the tab.
  */
+/**
+ * The state the panel actually edits, which is `base` unless a setter came with
+ * it.
+ *
+ * The binding permits a state without an `onChange`, and that shape has to mean
+ * something rather than being merely allowed. Read literally it is a state
+ * nobody can leave: the switcher is withheld because nothing could act on a
+ * choice, the tab handler has no callback to return the canvas with, and every
+ * control below would go on reading and writing a state with no visible control
+ * saying which one — the exact arrangement this panel's contract exists to
+ * prevent, reached through the type instead of through a miswiring.
+ *
+ * Normalised rather than refused, because a host part-way through adopting the
+ * control should get a working base editor rather than a broken one.
+ */
+export function editedStyleState(
+  binding: StyleStateBinding | undefined
+): StyleState {
+  if (binding?.onChange === undefined) return "base";
+  return binding.state ?? "base";
+}
+
 function tabChangeHandler(
   setTab: (next: string) => void,
   onStyleStateChange: ((state: StyleState) => void) | undefined
@@ -420,7 +442,7 @@ export function InspectorPanel({
             carry the choice to its canvas.
           */}
           <StyleStateField
-            state={styleState?.state}
+            state={editedStyleState(styleState)}
             onSelect={styleState?.onChange}
             node={styleNode}
             breakpoints={breakpoints}
@@ -429,7 +451,7 @@ export function InspectorPanel({
             editor={editor}
             renderedTag={renderedTag}
             policy={policy}
-            state={styleState?.state}
+            state={editedStyleState(styleState)}
             breakpoint={breakpoint}
             cascade={cascade}
             breakpoints={breakpoints}

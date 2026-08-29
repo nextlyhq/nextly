@@ -35,7 +35,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { InspectorPanel } from "./inspector-panel";
+import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
 
@@ -228,6 +228,39 @@ describe("what InspectorPanel forwards to the style tab", () => {
     ).toBeDefined();
     expect(screen.queryByRole("radio", { name: /Pressed.*has styles/ })).toBe(
       null
+    );
+  });
+
+  it("edits BASE when a host supplies a state with no setter", () => {
+    /*
+     * The binding permits `{ state: "hover" }` alone, and read literally that is
+     * a state nobody can leave: the switcher is withheld because nothing could
+     * act on a choice, the tab handler has no callback to return the canvas
+     * with, and the controls below would go on reading and writing hover with
+     * no visible control saying so — the arrangement this panel's contract
+     * exists to prevent, reached through the type rather than a miswiring.
+     *
+     * Asserted through the rendered controls rather than on a prop, because
+     * what matters is which state the panel EDITS. The class surface is the
+     * cheapest observable that differs, so the case reads the switcher's
+     * absence and the style panel's presence together.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ state: "hover" }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(
+      screen.queryByRole("radiogroup", { name: "Interaction state" })
+    ).toBeNull();
+    expect(editedStyleState({ state: "hover" })).toBe("base");
+    expect(editedStyleState({ state: "hover", onChange: vi.fn() })).toBe(
+      "hover"
     );
   });
 
