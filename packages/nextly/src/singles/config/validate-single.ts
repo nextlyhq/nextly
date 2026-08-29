@@ -32,7 +32,10 @@ import {
   isOwnableSystemColumn,
   isReservedSystemColumn,
 } from "../../lib/system-columns";
-import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
+import {
+  NEWLY_RESERVED_SLUG_NOTES,
+  SYSTEM_RESOURCES,
+} from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -476,6 +479,7 @@ export function validateSingleConfig(
   validateSlugShared(config.slug, errsBase, {
     entityLabel: "Single",
     reservedSlugsSet: RESERVED_SINGLE_SLUGS_SET,
+    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 

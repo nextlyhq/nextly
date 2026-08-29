@@ -1,0 +1,49 @@
+---
+"nextly": patch
+"create-nextly-app": patch
+"@nextlyhq/admin": patch
+"@nextlyhq/admin-css": patch
+"@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
+"@nextlyhq/ui": patch
+"@nextlyhq/adapter-drizzle": patch
+"@nextlyhq/adapter-postgres": patch
+"@nextlyhq/adapter-mysql": patch
+"@nextlyhq/adapter-sqlite": patch
+"@nextlyhq/storage-s3": patch
+"@nextlyhq/storage-uploadthing": patch
+"@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-form-builder": patch
+"@nextlyhq/plugin-page-builder": patch
+"@nextlyhq/plugin-seo": patch
+"@nextlyhq/plugin-sdk": patch
+"@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
+"@nextlyhq/prettier-config": patch
+"@nextlyhq/telemetry": patch
+"@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
+---
+
+Record when each language of a document was last written, so a later change can
+tell a finished translation from one whose source has moved on since.
+
+This release is the groundwork only: a language's timestamp moves when that
+language's CONTENT is written, for every kind of localized content, and nothing
+surfaces it yet. Publishing or unpublishing a language changes no words, so it
+leaves the timestamp alone -- otherwise a lifecycle change on the source
+language would report every translation as needing review on an edit nobody
+made.
+
+Collections that already exist are seeded from their version history, so their
+languages carry a timestamp from the moment this lands. Singles are not seeded,
+even though they keep history that would allow it: nothing reads the signal for
+a Single today, and seeding one would commit every future reader to whatever
+this release happened to write. Their languages are stamped from their next
+save onward, like any language whose history is unknown.
+
+A database created before this keeps no history of when each language was
+written, so the value is seeded from version history where that exists and left
+unknown where it does not. Unknown is never treated as up to date: a language
+the system cannot vouch for is left alone rather than described as current.

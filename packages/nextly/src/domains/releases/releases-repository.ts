@@ -13,18 +13,21 @@
  *
  * @module domains/releases/releases-repository
  */
+import type { CacheRevalidator } from "../../revalidation/types";
 import type {
   ReleaseMemberAction,
   ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import type { VersionsDbApi } from "../versions/db-api";
+import type { VersionsDbApi, VersionsWhere } from "../versions/db-api";
 
 import { releaseMemberKey } from "./release-member-key";
+import { releaseRevalidationIntent } from "./release-revalidation";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
 import type { DueMember } from "./resolve-release-effect";
 import { resolveReleaseEffect } from "./resolve-release-effect";
+import { invalidateTransitionCacheFor } from "./transition-cache-registry";
 
 /**
  * The database surface this repository needs.
@@ -33,7 +36,23 @@ import { resolveReleaseEffect } from "./resolve-release-effect";
  * update, delete — and a second declaration of the same shape would drift from
  * this one silently, which is the divergence this codebase has a rule about.
  */
-export type ReleasesDbApi = VersionsDbApi;
+/**
+ * The versions port, plus the one capability materialisation needs.
+ *
+ * `VersionsDbApi.update` returns nothing, which is enough for everything that
+ * edits a stored version. Marking a release published is different: it is a
+ * state transition that must happen exactly once even though the runner
+ * delivering it is AT-LEAST-ONCE, so the write has to say whether it was the
+ * one that moved the row. Widened here rather than in the versions port,
+ * because that port's own note says any widening should be a deliberate act.
+ */
+export type ReleasesDbApi = VersionsDbApi & {
+  updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: VersionsWhere
+  ): Promise<number>;
+};
 
 const RELEASES = "nextly_releases";
 const MEMBERS = "nextly_release_members";
@@ -93,6 +112,39 @@ export interface NewReleaseMember extends DocumentRef {
  * second spelling of the same document — two spellings would silently return
  * an empty member list, which reads exactly like "nothing is scheduled".
  */
+/**
+ * The due members of each document, keyed by ENTRY.
+ *
+ * By entry and not by entry-and-locale. A key carrying the locale produced two
+ * groups for one document, each resolving its own winner — so an older
+ * document-wide publish and a newer takedown could put the SAME id in both the
+ * reveal and hide sets, and the two read paths then disagreed about it.
+ *
+ * A member whose release is not scheduled contributes nothing: an unscheduled
+ * release is somebody still deciding, and consulting it would make adding a
+ * document to a draft release change what readers see.
+ */
+function groupMembersByDocument(
+  members: ReleaseMemberRow[],
+  releases: Map<string, { scheduledAt: Date | null }>
+): Map<string, DueMember[]> {
+  const grouped = new Map<string, DueMember[]>();
+  for (const member of members) {
+    const release = releases.get(member.releaseId);
+    if (release === undefined || release.scheduledAt === null) continue;
+    const bucket = grouped.get(member.entryId) ?? [];
+    bucket.push({
+      memberId: member.id,
+      releaseId: member.releaseId,
+      action: member.action,
+      scheduledAt: release.scheduledAt,
+      createdAt: member.createdAt,
+    });
+    grouped.set(member.entryId, bucket);
+  }
+  return grouped;
+}
+
 export function documentRefKey(ref: DocumentRef): string {
   return [ref.scopeKind, ref.scopeSlug, ref.entryId, ref.locale ?? ""]
     .map(encodeURIComponent)
@@ -100,7 +152,43 @@ export function documentRefKey(ref: DocumentRef): string {
 }
 
 export class ReleasesRepository {
-  constructor(private readonly db: ReleasesDbApi) {}
+  /**
+   * @param revalidator flushed when a release's SCHEDULE changes, so pages
+   *   cached before it was scheduled stop serving past the transition. Taken at
+   *   construction rather than per call: there is one place per runtime that
+   *   knows how to reach the cache, and a per-call parameter is a thing 31 call
+   *   sites can each forget. A runtime with no cache passes nothing.
+   */
+  constructor(
+    private readonly db: ReleasesDbApi,
+    private readonly revalidator?: CacheRevalidator
+  ) {}
+
+  /**
+   * Flush the tags of every document this release names.
+   *
+   * Best-effort and never throws: a schedule that committed must not be
+   * reported as failed because a cache could not be reached, and the bound
+   * computed at the next read is a second line of defence for exactly this.
+   */
+  private async revalidateMembersOf(releaseId: string): Promise<void> {
+    // Drop the shared transition memo FIRST, and unconditionally. Flushing tags
+    // re-renders the page, and the re-render reads that memo — a stale one
+    // hands it the same "nothing scheduled" bound it had before, so the page is
+    // cached tag-only again against a release the schedule already knows about.
+    // Done even with no revalidator wired: the memo is wrong either way.
+    invalidateTransitionCacheFor(this.db);
+
+    if (this.revalidator === undefined) return;
+    try {
+      const intent = releaseRevalidationIntent(
+        await this.listMembers(releaseId)
+      );
+      if (intent !== null) await this.revalidator.flush([intent]);
+    } catch {
+      // Deliberately swallowed; see the note above.
+    }
+  }
 
   async createRelease(input: NewRelease): Promise<ReleaseRow> {
     const now = new Date();
@@ -139,6 +227,7 @@ export class ReleasesRepository {
       },
       { and: [{ column: "id", op: "=", value: id }] }
     );
+    await this.revalidateMembersOf(id);
   }
 
   /**
@@ -158,6 +247,137 @@ export class ReleasesRepository {
       },
       { and: [{ column: "id", op: "=", value: id }] }
     );
+    // Cancelling changes what a read returns just as scheduling does: a page
+    // cached with a lifetime derived from this release is now bounded by an
+    // instant that will never arrive.
+    await this.revalidateMembersOf(id);
+  }
+
+  /**
+   * Every scheduled release whose instant has arrived.
+   *
+   * `scheduledAt <= now` is decided HERE in TypeScript rather than in the
+   * where clause, for the reason `findDueMembersFor` gives: dueness is one
+   * judgement, and `resolveReleaseEffect` already owns it. A second spelling in
+   * SQL would be a second place for the boundary case — a release scheduled for
+   * 09:00 is in effect AT 09:00, not from the first request after it — to be
+   * got wrong, and the two would disagree silently.
+   */
+  async findDueReleases(now: Date): Promise<ReleaseRow[]> {
+    const rows = await this.db.select<ReleaseRow>(RELEASES, {
+      where: {
+        and: [{ column: "state", op: "=", value: "scheduled" }],
+      },
+    });
+    const nowMs = now.getTime();
+    return rows.filter(
+      row => row.scheduledAt !== null && row.scheduledAt.getTime() <= nowMs
+    );
+  }
+
+  /**
+   * Move a materialised release to `published`, and say whether THIS caller
+   * moved it.
+   *
+   * Fenced on `state = "scheduled"`, and the answer matters. The runner that
+   * delivers materialisation is at-least-once by contract, so two passes can
+   * apply the same release; the member writes are idempotent and survive that,
+   * but the transition is not something to report twice. The fence also refuses
+   * a release CANCELLED between the drain reading it and this write — without
+   * it, calling a release off during its own materialisation would still mark
+   * it published.
+   *
+   * `updateCount` rather than `update({ returning })` for the reason the jobs
+   * repository gives: MySQL has no RETURNING, and the adapter emulates it by
+   * re-selecting on a predicate this very write invalidates.
+   */
+  async markReleasePublished(id: string, at: Date): Promise<boolean> {
+    const affected = await this.db.updateCount(
+      RELEASES,
+      {
+        state: "published" satisfies ReleaseState,
+        publishedAt: at,
+        updatedAt: at,
+      },
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "=", value: "scheduled" },
+        ],
+      }
+    );
+    return affected > 0;
+  }
+
+  /**
+   * Whether this release is still scheduled FOR THE SAME INSTANT the plan was
+   * built against.
+   *
+   * Asked immediately before each content write, because cancelling is the one
+   * thing a person does to a release BETWEEN a drain reading it and the drain
+   * acting on it, and the fence on `markReleasePublished` comes too late — it
+   * stops the row being marked published and cannot un-publish the documents.
+   *
+   * This narrows the window to a single action rather than closing it: a cancel
+   * landing during the write itself is still lost. Closing it entirely would
+   * need a claim into a distinct in-progress state, which this schema's
+   * `draft | scheduled | published | cancelled` cannot express, and which would
+   * trade this race for a worse one — a crash mid-pass would strand the release
+   * in a state no later drain picks up.
+   */
+  async isStillDueAt(id: string, scheduledAt: Date): Promise<boolean> {
+    const rows = await this.db.select<{
+      state: ReleaseState;
+      scheduledAt: Date | null;
+    }>(RELEASES, {
+      columns: ["state", "scheduledAt"],
+      where: { and: [{ column: "id", op: "=", value: id }] },
+    });
+    const row = rows[0];
+    if (row === undefined || row.state !== "scheduled") return false;
+
+    // The INSTANT too, not only the state. Postponing a due release leaves it
+    // `scheduled`, so a state-only check sees nothing wrong and the stale plan
+    // publishes at the moment somebody just moved it away from.
+    //
+    // Compared in whole seconds: SQLite stores epoch seconds, so a millisecond
+    // comparison would hold on two dialects and fail on the third for a
+    // difference that is not real.
+    if (row.scheduledAt === null) return false;
+    return (
+      Math.floor(row.scheduledAt.getTime() / 1000) ===
+      Math.floor(scheduledAt.getTime() / 1000)
+    );
+  }
+
+  /** Every member of one release, in the order they were added. */
+  async listMembers(releaseId: string): Promise<ReleaseMemberRow[]> {
+    return this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: { and: [{ column: "releaseId", op: "=", value: releaseId }] },
+    });
+  }
+
+  /**
+   * Members of many releases in ONE query.
+   *
+   * The materialisation pass loads every due release's members before it writes
+   * anything, and asking per release put N serial round trips in front of the
+   * first content mutation — worst exactly when N is large, which is when a
+   * deployment or an imported schedule leaves many releases due together.
+   *
+   * The empty case returns without asking: `IN ()` is a syntax error on every
+   * dialect this supports, and "no releases" is an ordinary state, not a
+   * caller's mistake.
+   */
+  async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
+    if (releaseIds.length === 0) return [];
+    return this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: {
+        and: [
+          { column: "releaseId", op: "IN", value: [...new Set(releaseIds)] },
+        ],
+      },
+    });
   }
 
   async addMember(input: NewReleaseMember): Promise<ReleaseMemberRow> {
@@ -175,13 +395,36 @@ export class ReleasesRepository {
     };
     // Client-side id and no RETURNING, for the reason `createRelease` gives.
     await this.db.insert(MEMBERS, { ...row }, { returning: [] });
+    // Membership can change AFTER a release is scheduled, and then this
+    // document's cached pages are bounded by a schedule that did not include
+    // it. Flushed here for the same reason scheduling flushes: a bound computed
+    // at read time cannot reach into an entry that already exists.
+    await this.revalidateMembersOf(input.releaseId);
     return row;
   }
 
   async removeMember(memberId: string): Promise<void> {
+    // The row is read BEFORE the delete: afterwards there is nothing left to
+    // say which document's tags to flush, and the projection that release was
+    // producing would stay cached with no write to clear it.
+    const rows = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: { and: [{ column: "id", op: "=", value: memberId }] },
+    });
+    const removed = rows[0];
+
     await this.db.delete(MEMBERS, {
       and: [{ column: "id", op: "=", value: memberId }],
     });
+
+    invalidateTransitionCacheFor(this.db);
+    if (removed !== undefined && this.revalidator !== undefined) {
+      try {
+        const intent = releaseRevalidationIntent([removed]);
+        if (intent !== null) await this.revalidator.flush([intent]);
+      } catch {
+        // Best-effort, as everywhere else this flushes.
+      }
+    }
   }
 
   /**
@@ -310,25 +553,7 @@ export class ReleasesRepository {
     );
     if (releases.size === 0) return NO_DECISIONS;
 
-    const grouped = new Map<string, DueMember[]>();
-    for (const member of members) {
-      const release = releases.get(member.releaseId);
-      if (release === undefined || release.scheduledAt === null) continue;
-      // Grouped by ENTRY, which is the whole document. Grouping by a key that
-      // also carried the locale produced two groups for one document, each
-      // resolving its own winner — so an older document-wide publish and a
-      // newer takedown could put the SAME id in both sets, and the two read
-      // paths then disagreed about it.
-      const bucket = grouped.get(member.entryId) ?? [];
-      bucket.push({
-        memberId: member.id,
-        releaseId: member.releaseId,
-        action: member.action,
-        scheduledAt: release.scheduledAt,
-        createdAt: member.createdAt,
-      });
-      grouped.set(member.entryId, bucket);
-    }
+    const grouped = groupMembersByDocument(members, releases);
 
     const reveal: string[] = [];
     const hide: string[] = [];
@@ -366,7 +591,21 @@ export class ReleasesRepository {
    * A release leaves `scheduled` when it materialises or is cancelled, so this
    * returns `null` again once nothing is outstanding.
    */
-  async findEarliestScheduledTransition(): Promise<Date | null> {
+  /**
+   * Every scheduled instant, ascending.
+   *
+   * The whole list rather than the earliest, because two callers ask different
+   * questions of it and the earliest answers only one. "Is anything due?" wants
+   * an instant at or before now; "how long may this page be cached?" wants the
+   * next instant strictly AFTER now — and those differ precisely when an
+   * overdue release is still `scheduled`, which is exactly what a release held
+   * open by a failed member looks like. Answering the second from the earliest
+   * would report tag-only forever while a later release went unbounded.
+   *
+   * One query either way: it already read every row and discarded all but the
+   * first.
+   */
+  async findScheduledTransitions(): Promise<Date[]> {
     const rows = await this.db.select<{ scheduledAt: Date | null }>(RELEASES, {
       columns: ["scheduledAt"],
       where: {
@@ -377,10 +616,11 @@ export class ReleasesRepository {
       },
       orderBy: [{ column: "scheduledAt", direction: "asc" }],
     });
+    const instants: Date[] = [];
     for (const row of rows) {
-      if (row.scheduledAt !== null) return row.scheduledAt;
+      if (row.scheduledAt !== null) instants.push(row.scheduledAt);
     }
-    return null;
+    return instants;
   }
 
   private async loadScheduledReleases(

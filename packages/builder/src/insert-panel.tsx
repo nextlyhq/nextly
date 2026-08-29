@@ -43,6 +43,7 @@ import {
 import * as React from "react";
 
 import { BlockIconMark } from "./block-icon";
+import type { InsertDragEntry } from "./canvas-drag";
 import type { EditorState } from "./editor-state";
 import {
   allowedEntries,
@@ -92,6 +93,23 @@ export interface InsertPanelProps {
   categoryOrder?: readonly string[];
   /** Notified after a successful insert, with the node that was added. */
   onInsert?: (node: BlockNode) => void;
+  /**
+   * Begins a drag carrying an entry, when the host has a canvas to drop onto.
+   *
+   * Optional, and its absence changes nothing: the rows still insert on click,
+   * which is the route WCAG 2.2 SC 2.5.7 requires and the one this only ever
+   * supplements. A panel mounted without a canvas — a story, a test — simply
+   * has nothing to drag onto.
+   *
+   * The node is built HERE, by a thunk the drag calls at the release, because
+   * this panel's definitions are one snapshot taken per mount. Resolving the
+   * type again inside the drag would read the registry a second time, and the
+   * row an author dragged could then differ from the subtree that lands.
+   */
+  beginInsertDrag?: (
+    event: React.PointerEvent<HTMLElement>,
+    entry: InsertDragEntry
+  ) => void;
 }
 
 /** Sentence describing where the next insert will land. */
@@ -113,6 +131,7 @@ export function InsertPanel({
   nesting,
   categoryOrder,
   onInsert,
+  beginInsertDrag,
 }: InsertPanelProps): React.JSX.Element {
   const [query, setQuery] = React.useState("");
 
@@ -236,6 +255,19 @@ export function InsertPanel({
                   key={entry.id}
                   value={entry.id}
                   onSelect={() => insert(entry)}
+                  // Beside `onSelect`, never instead of it. A press stays a
+                  // click until it has travelled far enough to mean a drag, so
+                  // this does not consume the row's own activation — and a host
+                  // that supplies no drag leaves the row exactly as it was.
+                  onPointerDown={event => {
+                    beginInsertDrag?.(event, {
+                      blockName: entry.blockName,
+                      makeNode: () => nodeForEntry(entry, blockSource, nesting),
+                      // The same notification the click path sends, so a host
+                      // cannot see one kind of insert and miss the other.
+                      onInserted: onInsert,
+                    });
+                  }}
                 >
                   <BlockIconMark icon={entry.icon} />
                   <span className="nx-insert-panel__label">{entry.label}</span>

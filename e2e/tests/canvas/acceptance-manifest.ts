@@ -106,7 +106,7 @@ export const ACCEPTANCE_PROPERTIES: readonly AcceptanceProperty[] = [
     greenIn: "B-15",
     status: "deferred",
     reason:
-      "the panel CANNOT be dragged from: insert-panel.tsx has no drag code at all and inserts by click (line 162). B-15's drag half was never built, so this is blocked on a feature rather than on scaffolding — mounting the panel would not help. See task:pb-inserter-drag",
+      "the feature exists now and the HARNESS cannot drive it: builder-canvas/harness.tsx mounts useCanvasDrag with no canvas root and no palette, so there is nothing to drag from. Its `data-nx-dragging` also reads `draggingId`, which is null for a drag carrying a block type rather than a node — so a palette drag would be invisible to the probe even once a palette is mounted. Scaffolding now, not a missing feature. See task:pb-inserter-drag",
   },
   {
     n: 12,

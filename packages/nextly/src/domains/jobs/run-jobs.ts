@@ -64,7 +64,7 @@ import { nextAttempt } from "./job-backoff";
 import { createJobContentApi } from "./job-content-api";
 import { DEFAULT_MAX_ATTEMPTS, type JobRegistry } from "./job-registry";
 import type { FinalizeInput, FinalizeOutcome, JobRow } from "./jobs-repository";
-import { resolveRunAs, type RunAsDeps } from "./resolve-run-as";
+import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 
 /** Rows claimed and finalized per pass when the caller does not say. */
 export const DEFAULT_BATCH_SIZE = 50;

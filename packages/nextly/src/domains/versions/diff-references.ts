@@ -125,10 +125,15 @@ function collect(fields: FieldDiff[], out: ReferenceRequest[]): void {
       // Stated rather than left to fall through, so a node kind added later
       // has to be considered here instead of being skipped in silence.
       //
-      // `richText` carries media as an identity token folded into the block's
-      // text, not as a structured reference this hydrator can resolve, so a
-      // media node inside rich text is labelled by its src or id rather than by
-      // its filename. `source`, `text` and `unknown` carry no reference at all.
+      // `richText` does carry media, and not in a form this walker can resolve.
+      // A decorator's identity lives in its own properties — `src`, `images`,
+      // `buttons` — which the projection records under the path taken to reach
+      // them and reports as `attrChanges` on the block holding it. Those are
+      // values inside a document rather than a field whose type declares what
+      // it points at, so there is no id here to exchange for a filename: a
+      // changed image reads as its `src` changing, where it changed.
+      //
+      // `source`, `text` and `unknown` carry no reference at all.
       case "richText":
       case "source":
       case "text":

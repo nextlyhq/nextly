@@ -18,6 +18,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { isSystemResource } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
 interface PermissionsTableLike {
   resource: unknown;
@@ -63,6 +64,26 @@ function buildHiddenPermissionConditions(
  * const result = await permissionService.listPermissions({ action: 'read' });
  * ```
  */
+/**
+ * The permission fields an update may change, named ONCE.
+ *
+ * They were enumerated three times inside `updatePermission` -- in the no-op comparison, in the
+ * payload construction, and in the parameter type -- and the three had to agree for the method to
+ * be correct. A field added to the payload but forgotten in the comparison makes an update that
+ * changes only that field return early as a no-op, which is a write that silently does nothing;
+ * forgotten the other way, an unchanged request writes anyway. Neither shows up as an error.
+ *
+ * Deriving both behaviours from one list makes those two disagreements unrepresentable, and the
+ * parameter type below is the one remaining copy, which the compiler ties to this list.
+ */
+const EDITABLE_PERMISSION_FIELDS = [
+  "name",
+  "slug",
+  "action",
+  "resource",
+  "description",
+] as const;
+
 export class PermissionService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -357,6 +378,11 @@ export class PermissionService extends BaseService {
    *   one of the hidden internal permissions (resource = 'permissions', or
    *   create/delete on 'settings'). The hidden case maps to NOT_FOUND
    *   intentionally — exposing it as FORBIDDEN would leak the policy.
+   * @throws NextlyError(INTERNAL_ERROR) when the id is nullish or empty. That
+   *   is not a miss, it is a caller bug: Drizzle drops an `undefined` filter
+   *   key entirely, so the lookup would run WITHOUT a where clause and return
+   *   an arbitrary permission — including the hidden ones the NOT_FOUND
+   *   mapping above exists to conceal. Refused rather than answered.
    */
   async getPermissionById(permissionId: string): Promise<{
     id: string;
@@ -367,24 +393,7 @@ export class PermissionService extends BaseService {
     description: string | null;
     category?: string;
   }> {
-    const permission = await (
-      this.db as RBACDatabaseInstance
-    ).query.permissions.findFirst({
-      where: { id: permissionId },
-      columns: {
-        id: true,
-        name: true,
-        slug: true,
-        action: true,
-        resource: true,
-        description: true,
-      },
-    });
-
-    if (!permission) {
-      // Identifier moves to logContext per §13.8.
-      throw NextlyError.notFound({ logContext: { permissionId } });
-    }
+    const permission = await this.requirePermissionById(permissionId);
 
     const isHiddenPermission =
       permission.resource === "permissions" ||
@@ -617,34 +626,56 @@ export class PermissionService extends BaseService {
    * @param changes - Fields to update
    * @returns Success/failure status
    */
+  /**
+   * Load one permission's editable shape, or refuse.
+   *
+   * The two readers of this — the detail read and the update — had byte-identical lookups, and
+   * the pair became a genuine hazard rather than mere repetition once the unfiltered-lookup guard
+   * arrived: `requireFilterValue` has to wrap the id at BOTH, because Drizzle drops an object
+   * filter key whose value is `undefined` and compiles the query with no WHERE clause at all. One
+   * copy guarded and one not returns an arbitrary row from the second, which is the failure the
+   * guard exists to remove, reintroduced by the copy nobody looked at.
+   *
+   * @throws NextlyError(NOT_FOUND) when no permission carries this id.
+   * @throws NextlyError(INTERNAL_ERROR) when the id is empty — a caller bug, not a missing row.
+   */
+  private async requirePermissionById(permissionId: string): Promise<{
+    id: string;
+    name: string;
+    slug: string;
+    action: string;
+    resource: string;
+    description: string | null;
+  }> {
+    const permission = await (
+      this.db as RBACDatabaseInstance
+    ).query.permissions.findFirst({
+      where: { id: requireFilterValue(permissionId, "permissionId") },
+      columns: {
+        id: true,
+        name: true,
+        slug: true,
+        action: true,
+        resource: true,
+        description: true,
+      },
+    });
+
+    // Identifier moves to logContext per §13.8.
+    if (!permission) {
+      throw NextlyError.notFound({ logContext: { permissionId } });
+    }
+    return permission;
+  }
+
   async updatePermission(
     permissionId: string,
-    changes: {
-      name?: string;
-      slug?: string;
-      action?: string;
-      resource?: string;
-      description?: string;
-    }
+    changes: Partial<
+      Record<(typeof EDITABLE_PERMISSION_FIELDS)[number], string>
+    >
   ): Promise<void> {
     try {
-      const permission = await (
-        this.db as RBACDatabaseInstance
-      ).query.permissions.findFirst({
-        where: { id: permissionId },
-        columns: {
-          id: true,
-          name: true,
-          slug: true,
-          action: true,
-          resource: true,
-          description: true,
-        },
-      });
-
-      if (!permission) {
-        throw NextlyError.notFound({ logContext: { permissionId } });
-      }
+      const permission = await this.requirePermissionById(permissionId);
 
       if (
         changes.resource !== undefined &&
@@ -653,33 +684,22 @@ export class PermissionService extends BaseService {
         await this.validateResource(changes.resource);
       }
 
-      if (
-        (changes.name === undefined || changes.name === permission.name) &&
-        (changes.slug === undefined || changes.slug === permission.slug) &&
-        (changes.action === undefined ||
-          changes.action === permission.action) &&
-        (changes.resource === undefined ||
-          changes.resource === permission.resource) &&
-        (changes.description === undefined ||
-          changes.description === permission.description)
-      ) {
-        // No-op: nothing to update. Returning void is idempotent and
-        // semantically correct here (the resource is already in the
-        // requested state).
-        return;
-      }
+      // No-op: nothing to update. Returning void is idempotent and semantically correct here
+      // (the resource is already in the requested state).
+      const movesSomething = EDITABLE_PERMISSION_FIELDS.some(
+        field =>
+          changes[field] !== undefined && changes[field] !== permission[field]
+      );
+      if (!movesSomething) return;
 
-      const updateData: PermissionUpdateData = {
-        ...(changes.name !== undefined ? { name: changes.name } : {}),
-        ...(changes.slug !== undefined ? { slug: changes.slug } : {}),
-        ...(changes.action !== undefined ? { action: changes.action } : {}),
-        ...(changes.resource !== undefined
-          ? { resource: changes.resource }
-          : {}),
-        ...(changes.description !== undefined
-          ? { description: changes.description }
-          : {}),
-      };
+      // Every SUPPLIED field, not only the changed ones -- which is what the enumerated version
+      // did, and the difference is observable: re-sending a field at its current value still
+      // writes it, and a trigger or an updated_at stamp can depend on that.
+      const updateData: PermissionUpdateData = {};
+      for (const field of EDITABLE_PERMISSION_FIELDS) {
+        const value = changes[field];
+        if (value !== undefined) updateData[field] = value;
+      }
 
       await (this.db as RBACDatabaseInstance)
         .update(this.tables.permissions)
@@ -712,7 +732,7 @@ export class PermissionService extends BaseService {
     const permission = await (
       this.db as RBACDatabaseInstance
     ).query.permissions.findFirst({
-      where: { id: permissionId },
+      where: { id: requireFilterValue(permissionId, "permissionId") },
       columns: {
         id: true,
         resource: true,

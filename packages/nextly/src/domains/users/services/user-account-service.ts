@@ -30,6 +30,7 @@ import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 
 import { UserQueryService } from "./user-query-service";
 
@@ -161,7 +162,7 @@ export class UserAccountService extends BaseService {
     let user;
     try {
       user = await this.db.query.users.findFirst({
-        where: { id: userId },
+        where: { id: requireFilterValue(userId, "userId") },
         columns: { id: true },
       });
     } catch (err) {
@@ -192,7 +193,7 @@ export class UserAccountService extends BaseService {
    */
   async hasPassword(userId: number | string): Promise<boolean> {
     const user = await this.db.query.users.findFirst({
-      where: { id: userId },
+      where: { id: requireFilterValue(userId, "userId") },
       columns: {
         passwordHash: true,
       },
@@ -208,7 +209,7 @@ export class UserAccountService extends BaseService {
     userId: number | string
   ): Promise<string | null> {
     const user = await this.db.query.users.findFirst({
-      where: { id: userId },
+      where: { id: requireFilterValue(userId, "userId") },
       columns: {
         passwordHash: true,
       },

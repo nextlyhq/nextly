@@ -149,12 +149,30 @@ describe("preferences round-trip", () => {
     // exercises this field rather than passing on the strength of a default
     // that both the write and a no-op read would agree on.
     showEmptyElements: false,
+    // Non-default for the same reason, and FIXED rather than fit: fit is the
+    // default, and it is also what a read falls back to when it cannot make
+    // sense of what was stored — so a round trip carrying fit would pass
+    // whether the value survived or was discarded.
+    zoom: { kind: "fixed", scale: 1.5 },
   };
 
   it("restores what was written", () => {
     const store = memoryStore();
     writePreferences(store, stored);
     expect(readPreferences(store)).toEqual(stored);
+  });
+
+  it("falls back to fitting when the stored zoom is not one", () => {
+    /*
+     * Preferences written before there was a zoom have no such field, and a
+     * hand-edited or later-version file can carry anything. A scale outside the
+     * bounds is the case that matters: it would paint the canvas at a size from
+     * which the control that sets it cannot be reached.
+     */
+    for (const bad of [undefined, "1.5", 0, 99, null]) {
+      const store = memoryStore(JSON.stringify({ ...stored, zoom: bad }));
+      expect(readPreferences(store).zoom).toEqual(DEFAULT_PREFERENCES.zoom);
+    }
   });
 
   it("uses the defaults when nothing was ever stored", () => {
@@ -201,6 +219,7 @@ describe("preferences round-trip", () => {
       // Absent from the stored JSON above, so it falls back the same way
       // `leftPinned` does here rather than surfacing as `undefined`.
       showEmptyElements: DEFAULT_PREFERENCES.showEmptyElements,
+      zoom: DEFAULT_PREFERENCES.zoom,
     });
   });
 

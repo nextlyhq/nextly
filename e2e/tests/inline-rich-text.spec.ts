@@ -41,6 +41,28 @@ function textNode(text: string) {
   };
 }
 
+/**
+ * A heading node, for the caret case a paragraph cannot cover.
+ *
+ * A paragraph's box barely moves when the library's typographic baseline is
+ * applied — line height and margins only. A heading's moves the most of
+ * anything on the page: `h1` carries a `2.25em` size, a `1.15` line height and
+ * a `1.5em` top margin, so its glyph boxes sit somewhere a paragraph's never
+ * do. The caret is derived from the POINTER against those boxes, so a fixture
+ * whose layout cannot change is a fixture that cannot see this fail.
+ */
+function heading(text: string) {
+  return {
+    type: "heading",
+    tag: "h1",
+    format: "",
+    indent: 0,
+    version: 1,
+    direction: null,
+    children: [textNode(text)],
+  };
+}
+
 function paragraph(text: string) {
   return {
     type: "paragraph",
@@ -176,11 +198,65 @@ test.describe("a passage edited on the canvas", () => {
     await page.keyboard.type("X");
 
     const passage = page.locator(PASSAGE).first();
-    // Asserted on both sides. "does not end with X" alone passes against an
-    // editor that typed nothing at all, and "contains X" alone passes against
-    // one that appended.
-    await expect(passage).toContainText("X");
-    await expect(passage).not.toContainText("worldX");
+    // The whole string, at the OFFSET the click implies, rather than "contains
+    // X" and "does not end with X" — that pair rules out an append and an
+    // editor that typed nothing, and is satisfied by every other insertion
+    // point, which is the thing this case is actually about. `0.55` across
+    // "Hello world" is the boundary before `world`, so the caret belongs at
+    // index 6.
+    await expect(passage).toHaveText("Hello Xworld");
+  });
+
+  test("types where the author clicked inside a HEADING", async ({ page }) => {
+    /*
+     * The same property as the paragraph case above, on the block whose layout
+     * this library actually moves. A heading is styled by the typographic
+     * baseline — size, line height, weight and a top margin — so its text sits
+     * at coordinates a paragraph's never occupies, and the inline editor
+     * applies its own theme at edit-start. If those two typographies diverge,
+     * the caret is measured against a layout the author never saw and lands on
+     * an unrelated character.
+     *
+     * A paragraph cannot stand in for this: its box barely moves, so it agrees
+     * with the defect it would be meant to catch.
+     */
+    await openBuilderWith(page, [heading(SENTENCE)]);
+
+    // The fixture REACHED the mechanism, asserted before the property. A
+    // `heading` node the block does not render as a heading would leave this
+    // case a second paragraph test wearing a heading's name — passing, and
+    // covering nothing the case above does not already cover.
+    const rendered = page.locator(`${PASSAGE} h1`).first();
+    await expect(rendered).toBeVisible();
+    const size = await rendered.evaluate(
+      element => getComputedStyle(element).fontSize
+    );
+    // The baseline's own `2.25em` against an unstyled 16px ancestor, so 36px.
+    // Not merely "larger than a paragraph": that is satisfied by any styling at
+    // all, including a host's, and this has to be THIS library's value or the
+    // test is not exercising the change. The unit matters to the number — `em`
+    // multiplies whatever this heading inherits, which is what lets an author's
+    // page or block typography reach it, so a size set anywhere above the
+    // canvas would move this figure rather than break the mechanism.
+    expect(size).toBe("36px");
+
+    await enterPassage(page, 0.55);
+
+    await page.keyboard.type("X");
+
+    const passage = page.locator(PASSAGE).first();
+    // The whole string, at the OFFSET the click implies. `contains "X"` plus
+    // `does not contain "worldX"` is satisfied by every insertion except the
+    // final one — `XHello world` and `Hello Xworld` both pass it — so it rules
+    // out an append and says nothing about the failure this case is named for,
+    // where a caret measured against the wrong layout lands on an unrelated
+    // character.
+    //
+    // `0.55` across "Hello world" is the boundary before `world`, so the caret
+    // belongs at index 6 and the passage reads `Hello Xworld`. Measured, not
+    // assumed: a double-click SELECTS the word, and the editor collapses that
+    // selection to the pointer rather than replacing it.
+    await expect(passage).toHaveText("Hello Xworld");
   });
 
   test("leaves a list when Enter is pressed on an empty item", async ({

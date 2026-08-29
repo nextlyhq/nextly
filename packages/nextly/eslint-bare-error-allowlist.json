@@ -27,7 +27,7 @@
   "src/dispatcher/handlers/user-field-dispatcher.ts": 2,
   "src/dispatcher/helpers/validation.ts": 3,
   "src/domains/auth/services/api-key-service.ts": 1,
-  "src/domains/auth/services/expression-validator.ts": 13,
+  "src/domains/auth/services/expression-validator.ts": 12,
   "src/domains/auth/services/role-inheritance-service.ts": 2,
   "src/domains/auth/services/role/utils.ts": 2,
   "src/domains/collections/services/collection-bulk-service.ts": 1,

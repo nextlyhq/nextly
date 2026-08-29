@@ -16,6 +16,9 @@
  *
  * @module insert-panel.test
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -110,6 +113,87 @@ describe("InsertPanel", () => {
     // fail the populated case below.
     expect(op.at).toEqual({ index: 0 });
     expect(onInsert).toHaveBeenCalledWith(op.node);
+  });
+
+  it("offers a row as a drag, carrying the block it names", () => {
+    // The panel is where a palette drag STARTS, and the node is built here
+    // rather than inside the drag: these definitions are one snapshot taken per
+    // mount, so resolving the type again later would read the registry a second
+    // time and could answer with a different subtree than the row shows.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    const beginInsertDrag = vi.fn();
+    render(<InsertPanel editor={editor} beginInsertDrag={beginInsertDrag} />);
+
+    fireEvent.pointerDown(screen.getByText("Text"), {
+      button: 0,
+      pointerId: 1,
+    });
+
+    expect(beginInsertDrag).toHaveBeenCalledTimes(1);
+    const entry = beginInsertDrag.mock.calls[0][1];
+    expect(entry.blockName).toBe("acme/text");
+    // The THUNK is what matters, not that a callback fired: it must build the
+    // block this row names. Asserting only that the drag was started would
+    // pass for a row that handed over some other entry entirely.
+    expect(entry.makeNode().type).toBe("acme/text");
+    // And starting a drag must not itself edit the document — the insert
+    // happens at the release, in the drag.
+    expect(editor.apply).not.toHaveBeenCalled();
+  });
+
+  it("still inserts on click when no drag was supplied", () => {
+    // The control, and the accessible path: a host with no canvas passes no
+    // drag, and the row must behave exactly as it did before it could be
+    // dragged. Click-to-insert is the WCAG 2.2 SC 2.5.7 alternative.
+    registerBlocks(
+      [{ ...base, name: "acme/text", editor: { label: "Text" } }] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} />);
+
+    fireEvent.pointerDown(screen.getByText("Text"), {
+      button: 0,
+      pointerId: 1,
+    });
+    fireEvent.click(screen.getByText("Text"));
+
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("reserves the sideways gesture on a row, so touch can drag it", () => {
+    /*
+     * Asserted against the stylesheet because there is nothing else that could
+     * see it. `touch-action` is honoured by a real compositor deciding whether
+     * a movement belongs to the page or to the element; jsdom has no such
+     * decision to make, and every pointer test in this package would pass with
+     * the declaration deleted.
+     *
+     * The failure it guards is invisible in every other way: on a touch
+     * browser the default lets the browser claim the gesture as a pan, and it
+     * announces that with `pointercancel` — which this engine correctly treats
+     * as the drag being withdrawn. So the drag abandons itself part-way, only
+     * on touch, and nothing in CI is capable of noticing.
+     */
+    const css = readFileSync(
+      join(process.cwd(), "src/styles/builder-chrome.css"),
+      "utf8"
+    );
+    const rule = css.slice(css.indexOf(".nx-insert-panel [cmdk-item] {"));
+    const firstBlock = rule.slice(0, rule.indexOf("}"));
+
+    // Population: a renamed selector would leave every assertion below reading
+    // an empty string, and "no forbidden value found" would pass on nothing.
+    expect(firstBlock.length).toBeGreaterThan(0);
+    expect(firstBlock).toContain("touch-action: pan-y;");
+    // `pan-y` and not `none`, which is the tempting stronger answer: the
+    // palette is a scrolling list, and taking vertical panning too would trade
+    // a broken drag for a list a finger cannot scroll.
+    expect(firstBlock).not.toContain("touch-action: none");
   });
 
   it("judges a supplied block's declared children by the supplied rules", () => {

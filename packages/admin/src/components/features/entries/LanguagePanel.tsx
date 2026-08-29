@@ -308,6 +308,7 @@ function LanguageRows({
           isDefault={locale.code === defaultLocale}
           state={languageState(translations?.[locale.code])}
           pendingChange={translations?.[locale.code]?.pendingChange}
+          stale={translations?.[locale.code]?.stale}
           isActive={locale.code === active}
           canSeed={canSeed}
           metaKnown={metaKnown}
@@ -427,6 +428,76 @@ function filteredLanguages<T extends { code: string; label: string }>(
   return { offersFilter, shown: locales.filter(l => matchesQuery(l, query)) };
 }
 
+/**
+ * A marker that merely describes the language: which one is the default, which reads
+ * right-to-left. Muted, because nothing is being asked of the reader.
+ */
+const MARKER_PLAIN_CLASS =
+  "min-w-0 truncate text-[10px] uppercase tracking-wide text-muted-foreground";
+
+/**
+ * A marker naming something the author has to act on. Bordered and in the foreground colour, so
+ * it separates from the descriptive ones at a glance.
+ */
+const MARKER_ACTIONABLE_CLASS =
+  "shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground";
+
+/**
+ * The markers share ONE shrinkable strip rather than each holding its own width.
+ *
+ * A language can now carry four at once -- default, rtl, changes, review -- on a rail measured at
+ * 277px whose label and two-button action group already refuse to shrink. With every marker
+ * `shrink-0` the strip has no give, so past a certain width it paints into the Open/seed controls
+ * and makes them unreachable: an overflow that costs an ACTION, not just legibility.
+ *
+ * So the strip yields as a unit and the descriptive markers truncate inside it, while the two
+ * ACTIONABLE chips keep their width -- they are the ones naming something to be done, and a
+ * truncated "chan…" is the fact an author needed. `min-w-0` is what lets a flex child shrink
+ * below its content at all; without it the strip reports its content width and nothing gives.
+ */
+const MARKER_STRIP_CLASS = "flex min-w-0 shrink items-center gap-2";
+
+/**
+ * The markers a language row shows, in a FIXED order.
+ *
+ * Derived as a list rather than written as four conditionals in the JSX, and the order being
+ * stated once here is the point: a row whose markers reorder according to which happen to be set
+ * reads as a different kind of row each time, and an order spread across four independent `&&`
+ * branches is not something anybody can check.
+ *
+ * All of them are `shrink-0`, which is measured rather than stylistic. In a 277px rail the row's
+ * describing half is the part that gives way, so a marker that shrank would truncate to nothing
+ * exactly when the row is tight — and "published · unpublished changes" truncating to
+ * "publishe…" hides the one fact in the row an author has to act on. The state text beside them
+ * is the thing that yields instead.
+ */
+function rowMarkers(flags: {
+  isDefault?: boolean;
+  rtl?: boolean;
+  pendingChange?: boolean;
+  stale?: boolean;
+}): { text: string; title?: string; actionable: boolean }[] {
+  const markers: { text: string; title?: string; actionable: boolean }[] = [];
+  if (flags.isDefault) markers.push({ text: "default", actionable: false });
+  if (flags.rtl) markers.push({ text: "rtl", actionable: false });
+  if (flags.pendingChange) {
+    markers.push({
+      text: "changes",
+      title: "This language has changes that have not been published",
+      actionable: true,
+    });
+  }
+  if (flags.stale) {
+    markers.push({
+      text: "review",
+      title:
+        "The source language was edited after this translation was written",
+      actionable: true,
+    });
+  }
+  return markers;
+}
+
 function LanguageRow({
   code,
   label,
@@ -434,6 +505,7 @@ function LanguageRow({
   isDefault,
   state,
   pendingChange,
+  stale,
   isActive,
   canSeed,
   metaKnown,
@@ -448,6 +520,8 @@ function LanguageRow({
   state: LanguageState;
   /** Whether this language holds a saved change nobody has published. */
   pendingChange?: boolean;
+  /** i18n B2: the source language moved after this one was written. */
+  stale?: boolean;
   isActive: boolean;
   canSeed: boolean;
   metaKnown: boolean;
@@ -473,32 +547,22 @@ function LanguageRow({
         <span className="shrink-0 whitespace-nowrap text-sm font-medium">
           {label}
         </span>
-        {isDefault && (
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-            default
-          </span>
-        )}
-        {rtl && (
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
-            rtl
-          </span>
-        )}
-        {/* A chip, not part of the state text, and measured that way: in a
-            277px rail "published · unpublished changes" truncated to
-            "publishe…", which hides the one fact in the row an author has to
-            act on. The chip does not shrink, so it survives at any width — the
-            same device the `default` and `rtl` markers already use. */}
-        {pendingChange && (
-          <span
-            className="shrink-0 rounded-sm border border-border px-1 text-[10px] uppercase tracking-wide text-foreground"
-            title="This language has changes that have not been published"
-          >
-            changes
-          </span>
-        )}
+        <span className={MARKER_STRIP_CLASS}>
+          {rowMarkers({ isDefault, rtl, pendingChange, stale }).map(marker => (
+            <span
+              key={marker.text}
+              className={
+                marker.actionable ? MARKER_ACTIONABLE_CLASS : MARKER_PLAIN_CLASS
+              }
+              title={marker.title}
+            >
+              {marker.text}
+            </span>
+          ))}
+        </span>
         <span
           className="min-w-0 truncate text-xs text-muted-foreground"
-          title={languageStateLabel(state, pendingChange)}
+          title={languageStateLabel(state, { pendingChange, stale })}
         >
           {LANGUAGE_STATE_LABEL[state]}
         </span>

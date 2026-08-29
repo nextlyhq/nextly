@@ -458,6 +458,19 @@ export class CollectionQueryService extends BaseService {
       locales: this.localization.locales.map(l => l.code),
       defaultLocale: this.localization.defaultLocale,
       hasStatus: companion.hasStatus,
+      // 🔴 `staleness` is deliberately NOT supplied, so every locale reports its staleness as
+      // UNKNOWN.
+      //
+      // Nothing here can establish whether a given companion physically carries `_updated_at`.
+      // `hasUpdatedAt` on the schema reports the DECLARED shape and is unconditionally true, which
+      // is a claim about a column nobody checked, and a companion created before the column
+      // existed has no path that adds it. Reporting staleness from a capability that cannot be
+      // checked is the one thing this must not do: a wrong "needs review" is indistinguishable
+      // from a right one to the person reading it.
+      //
+      // Omission is the mechanism rather than a flag, because it is already the defined answer for
+      // a caller that cannot ask — see `readCompanionStamps`.
+
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValue:
         companion.hasStatus && statusFilterValue
@@ -571,6 +584,17 @@ export class CollectionQueryService extends BaseService {
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
       hasStatus: companion.hasStatus,
+      // 🔴 Left absent, which makes the `stale` filter answer `1=0` — nothing here is KNOWN to be
+      // stale.
+      //
+      // `companion.hasUpdatedAt` reports the DECLARED shape and is unconditionally true, which is
+      // a claim about a physical column that nothing has checked. A companion created before the
+      // column existed has no path that adds it, so emitting SQL naming it would fail the query
+      // for that collection — and a filter that cannot be evaluated is worse than one returning
+      // nothing, because the worklist would present every document as needing review.
+      //
+      // Absent is already the defined answer for "cannot answer", so this is the designed
+      // conservative path rather than a flag.
       defaultLocale: this.localization.defaultLocale,
       filter,
     });

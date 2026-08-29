@@ -108,6 +108,55 @@ describe("AuthService", () => {
       expect(dbUser).toBeUndefined();
     });
 
+    it("pays for the password hash EVEN on a duplicate, so both paths cost the same", async () => {
+      // 🔴 This test pins an ANTI-ENUMERATION property, and it exists because
+      // the opposite assertion stood here and was wrong.
+      //
+      // `/api/auth/register` answers a taken address and a free one with
+      // byte-identical responses on purpose (spec §13.2 silent-success), so
+      // duration is the only channel left. `stallResponse` is a FLOOR rather
+      // than a fixed duration -- it pads a fast response up to
+      // `loginStallTimeMs` (500ms) and does nothing to a slow one -- so
+      // skipping the hash on the duplicate path returns a registered address at
+      // ~500ms while a free one waits out bcrypt, measured at ~2.9s locally and
+      // ~9.8s on a loaded runner. A stopwatch then separates two responses the
+      // endpoint went to some trouble to make identical.
+      //
+      // Asserted on the CALL rather than the clock: a duration assertion would
+      // be flaky on a loaded runner and would still pass if the hash moved
+      // somewhere else in the request.
+      //
+      // The availability concern that argued for skipping it is real and is
+      // answered elsewhere: `register` sits in the per-IP auth rate-limit
+      // bucket in `auth/handlers/router.ts`, checked before dispatch. Skipping
+      // the hash would not have bounded it anyway -- an attacker burning CPU
+      // sends UNREGISTERED addresses, which reach the hash either way.
+      const existingEmail = "existing@test.com";
+      await testDb.db.insert(testDb.schema.users).values(
+        userFactory({
+          email: existingEmail,
+          passwordHash: await hashPassword(
+            "ValidPassword123!",
+            FIXTURE_SALT_ROUNDS
+          ),
+        })
+      );
+
+      const password = await import("../../../auth/password");
+      const hashSpy = vi.spyOn(password, "hashPassword");
+
+      await expect(
+        service.registerUser({
+          email: existingEmail,
+          password: "DifferentPassword123!",
+        })
+      ).rejects.toMatchObject({ code: "DUPLICATE", statusCode: 409 });
+
+      // The duplicate path did the same expensive work the success path does.
+      expect(hashSpy).toHaveBeenCalledTimes(1);
+      hashSpy.mockRestore();
+    });
+
     it("should reject registration with duplicate email", async () => {
       // Arrange: Create existing user
       const existingEmail = "existing@test.com";

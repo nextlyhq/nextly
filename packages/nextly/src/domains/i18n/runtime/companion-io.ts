@@ -17,9 +17,14 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { toSnakeCase as toCanonicalSnakeCase } from "../../schema/services/field-column-descriptor";
 import { resolveLocalizedFieldNames } from "../classify-fields";
+import {
+  COMPANION_STRUCTURAL_COLUMNS,
+  COMPANION_UPDATED_AT_COLUMN,
+} from "../companion-columns";
 import type { LocalizedFieldRef } from "../companion-join";
 import { claimGuardCondition } from "../migration/transition-state";
 import type {
@@ -28,6 +33,7 @@ import type {
 } from "../migration/transition-state";
 
 import { buildCompanionRuntimeTable } from "./companion-registration";
+import { encodeStamp } from "./companion-stamp-column";
 
 /**
  * A held transition, plus the condition a statement can carry to prove it is still held.
@@ -61,6 +67,22 @@ export interface CompanionSchema {
   localizedFields: LocalizedFieldRef[];
   /** Whether the companion carries a per-locale `_status` column (entity has Draft/Published). */
   hasStatus: boolean;
+  /**
+   * Whether the companion carries the per-locale `_updated_at` column (i18n B2).
+   *
+   * Unconditionally `true`, because unlike `_status` this column is part of every companion's
+   * declared shape rather than a consequence of the entity's configuration. It is still a FIELD
+   * rather than a literal at each reader, for two reasons: readers then treat it exactly as they
+   * treat `hasStatus`, so neither can be passed while the other is forgotten; and if it ever
+   * becomes conditional, one definition changes instead of every call site.
+   *
+   * This is the DECLARED shape, not an introspection — the same contract `hasStatus` reports. A
+   * database whose companion physically predates the column is brought into step by
+   * `reconcileCompanionColumns`; until it is, a staleness query against that collection fails, and
+   * the worklist already reports a collection whose read failed as one this answer did not cover.
+   * That is the honest outcome: it never claims a clean backlog for a collection it could not ask.
+   */
+  hasUpdatedAt: boolean;
 }
 
 /**
@@ -108,6 +130,7 @@ export function buildCompanionSchema(args: {
     companionTableName: companion.companionTableName,
     localizedFields,
     hasStatus: args.status === true,
+    hasUpdatedAt: true,
   };
 }
 
@@ -154,20 +177,146 @@ interface CompanionWriteAdapter {
  * row are untouched. Uses the composite PK `(_parent, _locale)` as the conflict target. No-op when
  * `companionData` is empty. Optionally stamps a per-locale `_status` (entities with Draft/Published).
  */
+/**
+ * How a companion write treats `_updated_at` (i18n B2).
+ *
+ * - `"stamp"` (default) — write the current time when the write carries translated content.
+ * - `"omit"` — leave the column out of the statement entirely, for a companion that physically
+ *   predates it. On an existing row this PRESERVES whatever stamp is there.
+ * - `"clear"` — write NULL, for an archive replay, where the content being written is older than
+ *   whatever the row currently holds and its true chronology is unknown.
+ *
+ * `"omit"` and `"clear"` are distinct because the conflict clause updates only the columns named:
+ * omitting leaves an existing stamp standing, which is exactly wrong when the content beside it
+ * is being replaced with something older.
+ */
+export type CompanionStampMode = "stamp" | "omit" | "clear";
+
+/**
+ * The `_updated_at` a companion write should carry, or nothing at all (i18n B2).
+ *
+ * Exported because TWO write paths reach the companion and both must answer this the same way.
+ * The update path goes through {@link upsertCompanionRow}; the collection CREATE path inserts the
+ * row directly through its transaction, so it spreads this in instead. A rule computed separately
+ * at each would be one edit away from disagreeing, and the disagreement is silent: a locale
+ * written by the path that forgot keeps a NULL stamp, reads as UNKNOWN, and is never reported
+ * stale. Nobody notices a warning that does not appear.
+ *
+ * 🔴 CONTENT decides the stamp, not the write. `_updated_at` answers "when was this language last
+ * WRITTEN", and a lifecycle transition writes no language. Stamping a `_status`-only change would
+ * move the source's timestamp past every target and report the whole site as needing review on an
+ * action that changed not one word — and publishing a stale target would clear its warning while
+ * the translation still said what it said.
+ *
+ * Structural columns are subtracted rather than `_status` alone, so a further structural column
+ * added later cannot be mistaken for content. Note `_status` arrives BOTH ways — inside
+ * `companionData` on an ordinary update, and as the separate `status` argument — so testing the
+ * argument alone would miss the common path.
+ *
+ * @returns `{ _updated_at }` when the write carries translated content, `{}` otherwise, so the
+ *   caller can spread it unconditionally.
+ */
+export function companionContentStamp(
+  companionData: Record<string, unknown>,
+  companionTableName: string,
+  dialect: SupportedDialect,
+  now?: Date
+): Record<string, unknown> {
+  const writesContent = Object.keys(companionData).some(
+    column => !COMPANION_STRUCTURAL_COLUMNS.has(column)
+  );
+  if (!writesContent) return {};
+  return {
+    // 🔴 Encoded the way Drizzle would encode it, not handed to the driver raw.
+    //
+    // A `Date` bound straight to a driver writes the LOCAL wall clock into a column that records
+    // no time zone, while every timestamp Drizzle writes is UTC. On a UTC server the two agree and
+    // nothing looks wrong, which is why the difference survives CI — and this comparison reads
+    // BOTH bases, because the back-fill seeds from Drizzle-written version rows. A mixed pair can
+    // order backwards, which inverts the staleness answer rather than degrading it.
+    [COMPANION_UPDATED_AT_COLUMN]: encodeStamp(
+      new Date(now?.getTime() ?? Date.now()),
+      companionTableName,
+      dialect
+    ),
+  };
+}
+
 export async function upsertCompanionRow(
   adapter: CompanionWriteAdapter,
   companionTableName: string,
   parentId: string,
   locale: string,
   companionData: Record<string, unknown>,
-  status?: string
+  status?: string,
+  options: { now?: Date; updatedAt?: CompanionStampMode } = {}
 ): Promise<void> {
   const withStatus =
     status !== undefined
       ? { ...companionData, _status: status }
       : companionData;
-  const cols = Object.keys(withStatus);
-  if (cols.length === 0) return;
+  // Counted BEFORE the timestamp is added, so "nothing to write" still means nothing to write.
+  // Stamping first would turn every no-op call into a real write that moves `_updated_at` without
+  // any content changing — and since staleness is `source._updated_at > target._updated_at`, that
+  // is not a harmless extra row touch: it would mark every other locale stale against a source
+  // that nobody edited.
+  if (Object.keys(withStatus).length === 0) return;
+
+  // i18n B2: when THIS locale was last written. Bound as a `Date`, which every dialect handles —
+  // node-postgres and mysql2 serialize it natively, and the SQLite adapter converts it to epoch
+  // seconds in `sanitizeSqliteValue`, on BOTH surfaces this function runs over (the adapter's
+  // `executeQuery` and a transaction's `execute` via `companionWriteVia`). Verified rather than
+  // assumed: the two paths sanitize in different functions, and a `Date` that survived one and
+  // not the other would work in a test and throw in production.
+  //
+  // Opt-out rather than opt-in, because the failure of forgetting is silent. A locale written
+  // through a path that skipped the stamp keeps a NULL `_updated_at`, reads as UNKNOWN, and is
+  // never reported stale — the warning simply never fires for it, and nobody notices a warning
+  // that does not appear.
+  //
+  // The two non-default modes look alike and are NOT interchangeable, which is why they are named
+  // rather than expressed as one boolean.
+  //
+  // `"omit"` leaves the column out of the statement, for a companion that physically predates it
+  // where naming it would fail outright. On an existing row that PRESERVES whatever stamp is
+  // there.
+  //
+  // `"clear"` writes NULL, for an archive replay. Preserving would be wrong there: this upsert
+  // replaces a row's content with OLDER archived text, so a locale translated after localization
+  // was re-enabled but before `i18n:restore` ran would keep its recent stamp on restored content
+  // and read as current. Omitting the column looks like the same thing and is not, because the
+  // conflict clause updates only the columns named — the untouched stamp survives.
+  //
+  // 🔴 CONTENT decides the stamp, not the write. `_updated_at` answers "when was this language
+  // last WRITTEN", and a lifecycle transition writes no language. Publishing the source locale is
+  // a `_status` change and nothing else — stamping it would move the source's timestamp past
+  // every target's and report the whole site as needing review, on an action that changed not one
+  // word. The reverse is as bad: publishing a stale target would clear its warning while the
+  // translation still says what it said.
+  //
+  // Structural columns are subtracted rather than `_status` alone, so a further one added to the
+  // companion later cannot be mistaken for content by this test. Note `_status` arrives BOTH ways
+  // — inside `companionData` on an ordinary update, and as the `status` argument — so testing the
+  // argument alone would miss the common path.
+  //
+  // This also settles a divergence between endpoints: `publishAllLocales` writes `_status` with a
+  // raw UPDATE that never reaches this function, so a publish through that path could not stamp
+  // anyway. Two lifecycle transitions now behave the same way whichever endpoint performs them.
+  const withStamp =
+    options.updatedAt === "omit"
+      ? withStatus
+      : options.updatedAt === "clear"
+        ? { ...withStatus, [COMPANION_UPDATED_AT_COLUMN]: null }
+        : {
+            ...withStatus,
+            ...companionContentStamp(
+              companionData,
+              companionTableName,
+              adapter.dialect,
+              options.now
+            ),
+          };
+  const cols = Object.keys(withStamp);
 
   const isMysql = adapter.dialect === "mysql";
   const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
@@ -179,7 +328,7 @@ export async function upsertCompanionRow(
   const valuePlaceholders = allCols
     .map(c => {
       params.push(
-        c === "_parent" ? parentId : c === "_locale" ? locale : withStatus[c]
+        c === "_parent" ? parentId : c === "_locale" ? locale : withStamp[c]
       );
       return ph();
     })
@@ -261,6 +410,32 @@ export interface CompanionIntrospectAdapter extends CompanionWriteAdapter {
  * Issues DDL, so it belongs to `db:sync` and never to boot — a running deployment must not alter
  * its own schema because a config file changed.
  */
+/**
+ * The version scope an i18n entity kind records its history under, or `undefined` when it records
+ * none — which is what decides whether `_updated_at` can be back-filled for it (i18n B2).
+ *
+ * Stated once rather than at each call site, because the two are the same question and a second
+ * spelling of it would let one unattended path seed a companion the other leaves blank, for the
+ * same entity, with nothing to indicate which ran.
+ *
+ * `fieldGroup` maps to `undefined` structurally: `nextly_versions.scope_kind` has no member for
+ * it, so there is no history to read and NULL is the true answer rather than a gap.
+ *
+ * `single` maps to `undefined` by SCOPE, not by structure — Singles do have version history, and
+ * seeding from it would work. It is withheld because nothing surfaces the signal for a Single:
+ * there is no Singles worklist, so a back-fill there would populate a column no screen reads,
+ * while committing every future reader to whatever it happened to seed.
+ *
+ * This bounds the BACK-FILL alone. `upsertCompanionRow` stamps every companion write whatever the
+ * entity, so Singles accumulate truthful timestamps from now on; only their history stays
+ * unknown, which is the same state any locale with no durable versions is in.
+ */
+export function versionScopeForEntityKind(
+  kind: I18nTransitionKind
+): VersionScopeKind | undefined {
+  return kind === "collection" ? "collection" : undefined;
+}
+
 export async function reconcileCompanionColumns(
   adapter: CompanionIntrospectAdapter,
   args: {
@@ -276,6 +451,12 @@ export async function reconcileCompanionColumns(
     fields: CompanionFieldLike[];
     dialect: SupportedDialect;
     status?: boolean;
+    /**
+     * Which version scope this entity's history is recorded under, enabling the `_updated_at`
+     * back-fill (i18n B2). Omit for an entity with no version history — a field group — where
+     * NULL is the true answer rather than a gap.
+     */
+    versionScope?: VersionScopeKind;
   },
   onError?: (error: unknown) => void
 ): Promise<void> {
@@ -316,6 +497,21 @@ export async function reconcileCompanionColumns(
     // every run, so a partial apply simply finishes on the next one.
     const hasStatus = present.has("_status");
 
+    // i18n B2: `_updated_at` IS reconciled here, and the contrast with `_status` above is the
+    // whole justification rather than an inconsistency.
+    //
+    // `_status` cannot be added unattended because ADD-then-back-fill is not retryable from
+    // physical shape alone: if the ADD lands and the back-fill does not, every later run sees the
+    // column present, concludes the companion is in step, and leaves published content reading as
+    // draft. The half-applied state is a LIE that repairs itself into permanence.
+    //
+    // `_updated_at`'s half-applied state is NULL, and NULL already means UNKNOWN to the only
+    // thing that reads it — the staleness comparison, which answers "not stale and not known"
+    // rather than "fine". The back-fill is guarded by `WHERE _updated_at IS NULL`, so a later run
+    // finishes what a partial one started. Nothing degrades into a false statement, so the
+    // reasoning that keeps `_status` out does not reach this column.
+    const hasUpdatedAt = present.has(COMPANION_UPDATED_AT_COLUMN);
+
     // Draft/Published was switched on after this companion was created, so `_status` is now
     // required and absent. Reconciling it is unsafe for the reasons above — but returning
     // quietly is worse than either: the caller persists `status: true`, reports success, and
@@ -337,8 +533,20 @@ export async function reconcileCompanionColumns(
     }
 
     // Nothing missing — the overwhelmingly common case, and worth leaving before the statement
-    // builder runs.
-    if (desired.every(f => present.has(toColumn(f.name)))) return;
+    // builder runs. `hasUpdatedAt` is part of the condition rather than a separate check: a
+    // companion whose translated columns are all present but which predates `_updated_at` still
+    // has work to do, and testing the localized columns alone would return here and leave every
+    // such companion permanently unstamped.
+    //
+    // 🔴 An entity with a VERSION SCOPE never leaves here, and that is deliberate. Its
+    // `_updated_at` back-fill owes a statement whose completion physical shape cannot report: a
+    // successfully back-filled row whose locale had no durable history is NULL, exactly like one
+    // that was never seeded. So the reconcile re-issues the guarded UPDATE rather than inferring
+    // completion from the column being present — see `buildUpdatedAtBackfill`. An entity with no
+    // version scope emits no back-fill at all, so for it this stays a plain early return.
+    const columnsInStep =
+      hasUpdatedAt && desired.every(f => present.has(toColumn(f.name)));
+    if (columnsInStep && args.versionScope === undefined) return;
 
     // Feed the canonical builder the columns that already exist as `oldLocalized`, so what it
     // emits is exactly the difference. `old` is a subset of `new` by construction here, which
@@ -357,6 +565,11 @@ export async function reconcileCompanionColumns(
       builtBy: args.builtBy,
       status: hasStatus,
       companionHasStatus: hasStatus,
+      // Introspected, so `false` is a measurement rather than a default. The builder distinguishes
+      // it from `undefined` — "nobody looked" — precisely because an unconditional ADD COLUMN
+      // would fail on every companion that already has the column.
+      companionHasUpdatedAt: hasUpdatedAt,
+      versionScope: args.versionScope,
       companionExists: true,
     });
     for (const stmt of statements) {
@@ -364,26 +577,51 @@ export async function reconcileCompanionColumns(
     }
   } catch (error) {
     // Same check-then-act window as the create path: a concurrent sync or reload may have added
-    // the very columns this run was adding, and `ADD COLUMN` is not idempotent. Re-introspect
-    // and treat "the shape we wanted is now present" as success, whoever produced it.
-    try {
-      const { introspectLiveSnapshot: reread } = await import(
-        "../../schema/pipeline/diff/introspect-live"
-      );
-      const after = await reread(adapter.getDrizzle(), adapter.dialect, [
-        companionTableName,
-      ]);
-      const now = new Set(
-        after.tables
-          .find(t => t.name === companionTableName)
-          ?.columns.map(c => c.name) ?? []
-      );
-      if (desired.every(f => now.has(toColumn(f.name)))) return;
-    } catch {
-      // Fall through to reporting the original error: if we cannot even re-read the table,
-      // the reconcile genuinely did not succeed.
-    }
+    // the very columns this run was adding, and `ADD COLUMN` is not idempotent. Treat "the shape
+    // we wanted is now present" as success, whoever produced it.
+    //
+    // 🔴 SHAPE only. This says nothing about the `_updated_at` back-fill having run, and must not
+    // be read as though it did — a back-filled row whose locale had no durable history is NULL,
+    // exactly like one never seeded, so no introspection can report that. The back-fill is
+    // re-issued on the next reconcile instead of being inferred complete here.
+    if (await companionShapeIsPresent(adapter, companionTableName, desired))
+      return;
     onError?.(error);
+  }
+}
+
+/**
+ * Does the live companion now carry every column this reconcile wanted?
+ *
+ * Answers only the physical shape, and answers `false` when it cannot look: a table that cannot
+ * be re-read has not been shown to be healthy, so the caller reports its original error rather
+ * than swallowing it on the strength of a failed check.
+ */
+async function companionShapeIsPresent(
+  adapter: CompanionIntrospectAdapter,
+  companionTableName: string,
+  desired: CompanionFieldLike[]
+): Promise<boolean> {
+  try {
+    const { introspectLiveSnapshot } = await import(
+      "../../schema/pipeline/diff/introspect-live"
+    );
+    const after = await introspectLiveSnapshot(
+      adapter.getDrizzle(),
+      adapter.dialect,
+      [companionTableName]
+    );
+    const now = new Set(
+      after.tables
+        .find(t => t.name === companionTableName)
+        ?.columns.map(c => c.name) ?? []
+    );
+    return (
+      now.has(COMPANION_UPDATED_AT_COLUMN) &&
+      desired.every(f => now.has(toColumn(f.name)))
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -461,6 +699,15 @@ function isMissingTableError(error: unknown): boolean {
  * failure (transient, connection, permission) is rethrown, so a caller gating a
  * write on this never mistakes an unavailable database for an absent table and
  * silently skips the write.
+ *
+ * Stays a plan-only probe while its column-level sibling reads the catalog, and the difference
+ * is the call frequency rather than a preference. This one backs the cached readiness verdict
+ * that every localized write consults, so it runs once per entity per cache window on the
+ * request path; a catalog read there would reintroduce exactly the per-write introspection cost
+ * `companion-readiness` exists to remove. The column probes run on schema changes and
+ * migrations, where one extra round trip is not measurable. It is also already safe in the way
+ * a bare `catch` is not: {@link isMissingTableError} verifies the dialect's own wording for an
+ * absent RELATION, and everything else propagates.
  */
 export async function companionTableExists(
   adapter: CompanionWriteAdapter,
@@ -482,23 +729,60 @@ export async function companionTableExists(
 /**
  * Whether an EXISTING companion physically has the per-locale `_status` column. Used by the
  * runtime reconcile to decide whether a later Draft/Published toggle must ADD/DROP `_status`
- * on an already-provisioned companion. A missing column throws on the probe select → false.
+ * on an already-provisioned companion.
  */
 export async function companionHasStatusColumn(
-  adapter: CompanionWriteAdapter,
+  adapter: CompanionIntrospectAdapter,
   companionTableName: string
 ): Promise<boolean> {
-  const isMysql = adapter.dialect === "mysql";
-  const table = isMysql
-    ? `\`${companionTableName}\``
-    : `"${companionTableName}"`;
-  const col = isMysql ? "`_status`" : `"_status"`;
-  try {
-    await adapter.executeQuery(`SELECT ${col} FROM ${table} LIMIT 0`);
-    return true;
-  } catch {
-    return false;
-  }
+  return companionHasColumn(adapter, companionTableName, "_status");
+}
+
+/**
+ * Whether an EXISTING companion physically carries `column`.
+ *
+ * Answered by reading the table's column list, through the same introspection the companion
+ * reconcile uses. The alternative — a plan-only `SELECT … LIMIT 0` and a `catch` — is cheaper by
+ * one round trip and wrong in two ways that matter here.
+ *
+ * 🔴 A `catch` cannot tell ABSENT from UNREACHABLE, and the two want opposite behaviour. A
+ * transient connection failure, or a role that may write but not select, would answer `false` —
+ * "this companion has no such column" — and every caller treats that as a fact about the schema.
+ * The archive replay is where it bites: `false` makes it choose `"omit"` over `"clear"`, so an
+ * existing locale row keeps its NEWER timestamp while its content is replaced with OLDER archived
+ * material, and the translation reads as current when it is not. A column list has no such
+ * ambiguity — the column is in it or it is not — and anything that stops the question being
+ * answered at all propagates instead of being flattened into a schema claim.
+ *
+ * The second reason is the repository's: database access is Drizzle only, and this was the last
+ * hand-built statement on the localization write path.
+ *
+ * 🔴 MUST NOT be called inside an open transaction. A failed query marks the whole PostgreSQL
+ * transaction aborted, after which the real statement dies with `current transaction is aborted`
+ * and the error names an innocent one. That is the same hazard `companion-readiness` documents,
+ * and it is why callers probe BEFORE they open one.
+ *
+ * A companion that does not exist has no columns, so it answers `false` — unchanged from the
+ * probe this replaces, where the statement failed on the missing relation.
+ */
+export async function companionHasColumn(
+  adapter: CompanionIntrospectAdapter,
+  companionTableName: string,
+  column: string
+): Promise<boolean> {
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [companionTableName]
+  );
+  return (
+    snapshot.tables
+      .find(t => t.name === companionTableName)
+      ?.columns.some(c => c.name === column) ?? false
+  );
 }
 
 /**

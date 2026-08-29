@@ -20,10 +20,13 @@ import { and, eq, sql } from "drizzle-orm";
 import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
 import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
 import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
+import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
+import { isMissingColumnError } from "../companion-join";
 import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
 import { buildCompanionRuntimeTable } from "./companion-registration";
+import { buildCompanionStampTable } from "./companion-stamp-table";
 
 /** Minimal field shape these copies need. */
 export interface CopyableField {
@@ -270,6 +273,60 @@ export async function copyDefaultLocaleOntoMain(
  * last the authority. Defaulted, because the companion's `_status` is NOT NULL while main's
  * `status` need not be.
  */
+/**
+ * Set one locale's `_updated_at` to NULL, tolerating a companion that has no such column.
+ *
+ * The column is deliberately not declared on the companion's own Drizzle table — see
+ * `readCompanionStamps` for why — so this drives a narrow handle built for the three columns it
+ * needs, `buildCompanionStampTable`, rather than the companion's table. `.set()` can then name
+ * the column while product database access stays on Drizzle, and the guard below is composed as
+ * a real condition instead of being concatenated into a statement.
+ *
+ * A companion that predates the column is not an error here: it simply has no stamp to clear, and
+ * every locale on it already reads as UNKNOWN. Recognising that case takes a predicate that walks
+ * the CAUSE chain, because Drizzle wraps the driver error and the wording this must match is on
+ * the cause rather than on the error a caller catches. Anything else rethrows, so a permission
+ * fault is not quietly absorbed into "there was nothing to do".
+ *
+ * The guard is part of the statement rather than a check before it. This clears the stamp on
+ * EVERY row of the locale, and the caller passes the SOURCE locale — one half of every comparison
+ * in the collection — so a superseded worker running it unguarded erases the whole collection's
+ * chronology rather than one row's.
+ */
+async function clearLocaleStamp(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    companionTableName: string;
+    locale: string;
+    guard?: { key: string; value: string };
+  }
+): Promise<void> {
+  const stamp = buildCompanionStampTable(
+    args.companionTableName,
+    adapter.dialect
+  );
+  const meta = metaTableFor(adapter.dialect);
+  const thisLocale = eq(stamp.locale as never, args.locale);
+
+  try {
+    await adapter
+      .getDrizzle<UpdatableDb>()
+      .update(stamp.table)
+      .set({ [COMPANION_UPDATED_AT_COLUMN]: null })
+      .where(
+        args.guard
+          ? and(
+              thisLocale,
+              sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+            )
+          : thisLocale
+      );
+  } catch (error) {
+    if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return;
+    throw error;
+  }
+}
+
 export async function refreshDefaultLocaleFromMain(
   adapter: CompanionIntrospectAdapter,
   args: CopyArgs & {
@@ -294,6 +351,36 @@ export async function refreshDefaultLocaleFromMain(
     values._status = sql`coalesce((select ${resolved.main.status} from ${resolved.mainTable} where ${correlate}), ${COMPANION_DEFAULT_STATUS})`;
   }
   if (Object.keys(values).length === 0) return;
+
+  // 🔴 Clear this locale's `_updated_at` BEFORE replacing its content (i18n B2).
+  //
+  // This is a companion CONTENT write that does not go through `upsertCompanionRow`: it copies the
+  // source locale's columns from the now-authoritative main table when localization is re-enabled
+  // over a companion that survived a disable. Leaving the stamp alone attaches the OLD chronology
+  // to NEW content, so a target that really is stale compares newer than its source and is never
+  // reported.
+  //
+  // NULL rather than a timestamp, because what is true here is that the chronology is unknown:
+  // the content came from main, whose own `updated_at` would be the precise answer but is not
+  // reliably present on every entity kind this helper serves. Unknown under-reports, which is the
+  // direction this feature fails in everywhere else.
+  //
+  // Ordered FIRST on purpose. If the clear lands and the copy does not, the row keeps its old
+  // content with an unknown stamp — safe. The other order leaves new content wearing an old
+  // stamp, which is the defect itself.
+  //
+  // 🔴 CARRIES THE SAME CLAIM GUARD as the copy, and inside the same statement rather than as a
+  // pre-check, which would reopen the race the guard exists to close. This statement is NOT the
+  // harmless one it looks like: it clears the stamp on EVERY row of the locale, and the locale it
+  // is called for is the SOURCE — one half of every comparison in the collection. A superseded
+  // worker running it unguarded therefore erases the whole collection's chronology and hides
+  // every stale translation in it until each source row is rewritten, which is a far larger
+  // effect than the one row it appears to touch.
+  await clearLocaleStamp(adapter, {
+    companionTableName: args.companionTableName,
+    locale: args.locale,
+    guard: args.guard,
+  });
 
   const meta = metaTableFor(adapter.dialect);
   const thisLocale = eq(resolved.companion._locale as never, args.locale);

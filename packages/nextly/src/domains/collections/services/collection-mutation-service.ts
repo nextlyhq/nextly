@@ -113,6 +113,7 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
+  companionContentStamp,
   companionWriteVia,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
@@ -3226,6 +3227,17 @@ export class CollectionMutationService extends BaseService {
               _parent: entry.id,
               _locale: localizedWrite.writeLocale,
               ...localizedWrite.companionData,
+              // i18n B2: this is the THIRD companion write path, and it does not go through
+              // `upsertCompanionRow` -- it inserts a brand-new row on a parent this transaction
+              // has just created, where there is no conflict to resolve. The stamp rule is shared
+              // rather than restated, because a create that forgot it would leave every new
+              // document's translations reading as UNKNOWN until each locale was rewritten, and a
+              // staleness signal that never fires for new content is invisible.
+              ...companionContentStamp(
+                localizedWrite.companionData,
+                localizedWrite.companionTableName,
+                this.dialect
+              ),
             },
             {}
           );

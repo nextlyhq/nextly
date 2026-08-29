@@ -18,22 +18,35 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, lte } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
-import { upsertCompanionRow } from "../runtime/companion-io";
+import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
+import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
+import {
+  companionHasColumn,
+  upsertCompanionRow,
+} from "../runtime/companion-io";
 
-/** Minimal adapter surface this helper needs — matches DrizzleAdapter. */
-export interface RestoreArchiveAdapter {
-  dialect: SupportedDialect;
-  executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle's db type is dialect-specific
-  getDrizzle(): any;
+/**
+ * The slice of Drizzle this helper drives: one scoped SELECT and one scoped DELETE. Declaring
+ * only what is used keeps the dialect-specific database type out of the port, so no `any` is
+ * needed — the same shape `teardown-entity-i18n` declares for its own single statement.
+ */
+interface ArchiveReadWriteDb {
+  select(columns: Record<string, unknown>): {
+    from(table: unknown): { where(condition: unknown): Promise<unknown> };
+  };
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
 
 export interface RestoreArchiveArgs {
-  adapter: RestoreArchiveAdapter;
+  /**
+   * The connection to replay through. This helper both writes companion rows and asks the
+   * database for the companion's physical shape, which is the introspecting surface rather than
+   * the narrower write-only one.
+   */
+  adapter: CompanionIntrospectAdapter;
   /** Entity slug exactly as the disable migration recorded it in `archive.collection`. */
   collection: string;
   /** Physical companion table to replay into, e.g. `dc_pages_locales`. */
@@ -82,7 +95,7 @@ export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
   const { adapter, collection, companionTableName, locale } = args;
-  const db = adapter.getDrizzle();
+  const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
   const where = locale
@@ -123,13 +136,42 @@ export async function restoreI18nArchive(
     g.data[r.field] = r.value;
   }
 
+  // 🔴 Probed ONCE before the loop, because `"clear"` NAMES the column and a companion that
+  // predates it would fail the whole restore before a single archived value landed. That is a
+  // regression the chronology fix introduced: the previous mode omitted the column, so it
+  // tolerated a legacy companion by accident. Registry-owned companions have no transition that
+  // adds the column, so this state is reachable rather than theoretical.
+  //
+  // A probe rather than a catch-and-retry: a failed statement marks a PostgreSQL transaction
+  // aborted, and asking once outside the loop costs one plan-only query instead of one failure
+  // per locale.
+  const canClearStamp = await companionHasColumn(
+    adapter,
+    companionTableName,
+    COMPANION_UPDATED_AT_COLUMN
+  );
+
   for (const g of grouped.values()) {
     await upsertCompanionRow(
       adapter,
       companionTableName,
       g.entryId,
       g.locale,
-      g.data
+      g.data,
+      undefined,
+      // 🔴 Replay must not date these translations to the moment they were restored (i18n B2).
+      // The archive stores per-FIELD rows -- `field` and `value` -- so it never held the original
+      // `_updated_at` and there is nothing to put back. Stamping would fabricate a chronology:
+      // source content edited after re-enabling but before the replay would look OLDER than the
+      // archived translation, and a genuinely stale target would be reported current.
+      //
+      // "clear" rather than "omit", and the difference is the whole correctness of this line. A
+      // locale may ALREADY have a row -- someone translates it after localization is re-enabled
+      // but before `i18n:restore` runs -- and the conflict clause updates only the columns named.
+      // Omitting the stamp would leave that recent value standing while this statement replaces
+      // the content beneath it with older archived text, so the restored translation would read
+      // as current. Writing NULL says what is true: unknown.
+      { updatedAt: canClearStamp ? "clear" : "omit" }
     );
   }
 

@@ -200,6 +200,13 @@ describe("PermissionService - Smoke Tests", () => {
       await service.updatePermission(permission.id, {
         description: "Updated description",
       });
+
+      // Assert on the STORE, not on the call resolving. Awaiting alone passes
+      // against an implementation that validates the id and returns without
+      // ever writing — which is evidence the method did not throw, not
+      // evidence it did anything.
+      const after = await service.getPermissionById(permission.id);
+      expect(after.description).toBe("Updated description");
     });
 
     it("should return 404 when updating non-existent permission", async () => {
@@ -741,47 +748,46 @@ describe("PermissionService - Smoke Tests", () => {
       });
     });
 
-    // SKIPPED against finding:permission-service-null-id-escapes-as-typeerror.
-    // `getPermissionById` has no id guard, unlike its sibling
-    // RoleQueryService.getRoleById which throws VALIDATION_ERROR. A null id
-    // reaches drizzle and comes back as a raw TypeError -- not a NextlyError,
-    // so it carries no code and no status and cannot be mapped.
-    //
-    // Rewriting this to expect the TypeError would make the defect permanent,
-    // so the contract stays asserted here and the test stays off until the
-    // guard lands. The fix is production code and this branch is test-only.
-    it.skip("should return 404 for null permission ID", async () => {
-      // Act
-
+    // An empty id is a CALLER bug, not a miss. Drizzle drops an `undefined`
+    // filter key, so an unguarded lookup runs with no where clause and returns
+    // an arbitrary permission — measured: with two seeded, it returned "Read
+    // Posts". `requireFilterValue` refuses it, which is why this is
+    // INTERNAL_ERROR rather than NOT_FOUND.
+    it("refuses a null permission ID rather than running an unfiltered lookup", async () => {
       await expect(
         service.getPermissionById(null as any)
-      ).rejects.toMatchObject({
-        code: "NOT_FOUND",
-      });
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR", statusCode: 500 });
     });
 
-    // SKIPPED against the same finding, and this one was a FALSE GREEN.
-    // `where: { id: undefined }` drops the filter, so findFirst returns the
-    // FIRST ROW of the table. Measured: with two permissions seeded, an
-    // undefined id returned "Read Posts" rather than throwing. It passes here
-    // only because this suite's table is empty -- a green assertion that this
-    // input is safe, which goes red the moment any permission exists, and
-    // which defeats the NOT_FOUND masking the docblock uses to hide the
-    // internal permissions.
-    it.skip("should return 404 for undefined permission ID", async () => {
-      // Act
+    it("refuses an undefined permission ID, even with rows present", async () => {
+      // Seeded deliberately. Without rows the unguarded lookup ALSO returned
+      // nothing, which is why the original version of this test passed while
+      // the defect was live: an empty table hides a missing WHERE clause.
+      await service.ensurePermission(
+        "read",
+        "posts",
+        "Read Posts",
+        "read-posts"
+      );
+      await service.ensurePermission(
+        "write",
+        "posts",
+        "Write Posts",
+        "write-posts"
+      );
 
       await expect(
         service.getPermissionById(undefined as any)
-      ).rejects.toMatchObject({
-        code: "NOT_FOUND",
-      });
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR", statusCode: 500 });
     });
 
-    it("should return 404 for empty string permission ID", async () => {
-      // Act
+    it("refuses an empty-string permission ID", async () => {
+      // Empty string is the third value Drizzle cannot filter on usefully, and
+      // `requireFilterValue` rejects all three together rather than leaving one
+      // to be discovered later.
       await expect(service.getPermissionById("")).rejects.toMatchObject({
-        code: "NOT_FOUND",
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
       });
     });
 
@@ -966,6 +972,12 @@ describe("PermissionService - Smoke Tests", () => {
       await service.updatePermission(permission.id, {
         description: null as any,
       });
+
+      // Same reason as above, and the null case is the one most likely to be
+      // silently skipped: a writer that treats null as "no change" would leave
+      // the old description in place and still resolve.
+      const after = await service.getPermissionById(permission.id);
+      expect(after.description).toBeNull();
     });
 
     it("should handle empty object (no changes)", async () => {

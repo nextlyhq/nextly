@@ -911,6 +911,7 @@ async function ensureLocalizedCompanionsForReload(
   const {
     ensureCompanionTable,
     reconcileCompanionColumns,
+    versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
   } = await import("../domains/i18n/runtime/companion-io");
@@ -1095,6 +1096,9 @@ async function ensureLocalizedCompanionsForReload(
           fields: entity.fields ?? [],
           dialect: adapter.dialect,
           status: entity.status === true,
+          // Decides whether `_updated_at` can be seeded from version history for this
+          // entity kind; a kind with no history correctly seeds nothing.
+          versionScope: versionScopeForEntityKind(kind),
         },
         error => {
           console.warn(

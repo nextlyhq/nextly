@@ -25,6 +25,7 @@ import {
   toPageStyles,
   type PageStyles,
 } from "./styles";
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 
 const blocks = createBlockResolver([]);
 
@@ -523,7 +524,7 @@ describe("a preview artifact read back UNDER a context", () => {
       compilePageCss(doc(styled), context(previewContainer) as never),
       undefined,
       undefined,
-      sharedStyleInputsId(context(previewContainer))
+      sharedStyleInputsId(withTypographyDefaults(context(previewContainer)))
     );
     return { ...compiled, css: `${compiled.css}\n/* stored-copy */` };
   };

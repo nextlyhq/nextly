@@ -18,6 +18,28 @@ const spec: CompanionMigrationSpec = {
 };
 
 describe("buildLocalizationDownSql", () => {
+  it("never brings `_updated_at` home to the main table", () => {
+    const sql = buildLocalizationDownSql(spec);
+
+    // 🔴 Disabling localization re-adds the TRANSLATED columns to main and drops
+    // the companion. `_updated_at` is structural, not translated -- it records
+    // when a locale was written, and a main table has no locales -- so re-adding
+    // it would put a companion's bookkeeping column on the content table and
+    // leave it there permanently, since this path is not reversible.
+    //
+    // It holds by construction rather than by a filter: the down path renders
+    // `spec.columns`, which `deriveCompanionSpec` builds from localized FIELDS,
+    // and `_updated_at` is not a field. Pinned anyway, because the next author
+    // to add a structural column may well reach for `spec.columns` to carry it.
+    expect(sql).not.toContain(`"_updated_at"`);
+
+    // The must-be-found control. This assertion is satisfied by absence, so on
+    // its own it would pass just as happily against an empty string or a
+    // renamed helper. The translated column proves the search can find a column
+    // name in this output at all.
+    expect(sql).toContain(`"title"`);
+  });
+
   it("re-adds the relocated column to the main table", () => {
     expect(buildLocalizationDownSql(spec)).toContain(
       `ALTER TABLE "dc_pages" ADD COLUMN "title" TEXT`

@@ -896,6 +896,7 @@ export async function ensureLocalizedCompanions(
   const {
     ensureCompanionTable,
     reconcileCompanionColumns,
+    versionScopeForEntityKind,
     mainTableExists,
     resolveCompanionSeedDebt,
   } = await import("../../domains/i18n/runtime/companion-io");
@@ -997,6 +998,41 @@ export async function ensureLocalizedCompanions(
         continue;
       }
       const tableName = resolveTableName(entity);
+      // What both companion calls below say about this entity, said once.
+      //
+      // They ask different things of it -- one creates the table, the other brings an existing
+      // one into step -- but the entity they are describing is the same entity, from the same
+      // config, in the same iteration. Spelling that description twice let the two drift on a
+      // field that belongs to neither call in particular: `status` reaching one and not the other
+      // is a companion built with a `_status` column that the reconcile then does not know about.
+      const companionEntityArgs = {
+        // The dev build syncs what nextly.config.ts declares.
+        builtBy: "codeFirst" as const,
+        slug: entity.slug,
+        tableName,
+        fields: entity.fields ?? [],
+        dialect,
+        status: entity.status === true,
+      };
+
+      // How both companion calls report a failure, differing only in what they were doing and
+      // what it costs the user.
+      //
+      // Written once because the SHAPE is the contract, not the wording: each failure has to name
+      // the entity, name the physical table, say which writes stop working, and register the slug
+      // so the command exits non-zero. A second copy keeps all four in step only for as long as
+      // nobody edits one -- and the one most likely to be edited is the message, which is the part
+      // that carries the remedy.
+      const reportCompanionFailure =
+        (attempted: string, consequence: string) =>
+        (error: unknown): void => {
+          logger.error(
+            `Could not ${attempted} the translations table for "${entity.slug}" (${tableName}_locales). ` +
+              `${consequence}: ` +
+              `${error instanceof Error ? error.message : String(error)}`
+          );
+          failures.push(entity.slug!);
+        };
       if (
         phase === "beforeApply" &&
         !(await mainTableExists(
@@ -1018,13 +1054,7 @@ export async function ensureLocalizedCompanions(
       await ensureCompanionTable(
         adapter as unknown as DrizzleAdapter,
         {
-          // The dev build syncs what nextly.config.ts declares.
-          builtBy: "codeFirst" as const,
-          slug: entity.slug,
-          tableName,
-          fields: entity.fields ?? [],
-          dialect,
-          status: entity.status === true,
+          ...companionEntityArgs,
           // Turns creation into a transition: content already on the main table is
           // copied in as this locale's rows, instead of being left behind an empty
           // companion that reads null.
@@ -1065,14 +1095,10 @@ export async function ensureLocalizedCompanions(
                 })
             : undefined,
         },
-        error => {
-          logger.error(
-            `Could not prepare the translations table for "${entity.slug}" (${tableName}_locales). ` +
-              `Writes in a non-default locale will be refused until it exists: ` +
-              `${error instanceof Error ? error.message : String(error)}`
-          );
-          failures.push(entity.slug!);
-        }
+        reportCompanionFailure(
+          "prepare",
+          "Writes in a non-default locale will be refused until it exists"
+        )
       );
       // Skipped before the push, which is what creates the columns a reconcile looks for.
       if (phase === "beforeApply") continue;
@@ -1086,22 +1112,15 @@ export async function ensureLocalizedCompanions(
       await reconcileCompanionColumns(
         adapter as unknown as DrizzleAdapter,
         {
-          // Same config-derived sync as the creation above.
-          builtBy: "codeFirst" as const,
-          slug: entity.slug,
-          tableName,
-          fields: entity.fields ?? [],
-          dialect,
-          status: entity.status === true,
+          ...companionEntityArgs,
+          // Decides whether `_updated_at` can be seeded from version history for this
+          // entity kind; a kind with no history correctly seeds nothing.
+          versionScope: versionScopeForEntityKind(kind),
         },
-        error => {
-          logger.error(
-            `Could not update the translations table for "${entity.slug}" (${tableName}_locales). ` +
-              `Newly translatable fields will fail to save until it matches: ` +
-              `${error instanceof Error ? error.message : String(error)}`
-          );
-          failures.push(entity.slug!);
-        }
+        reportCompanionFailure(
+          "update",
+          "Newly translatable fields will fail to save until it matches"
+        )
       );
     }
   }

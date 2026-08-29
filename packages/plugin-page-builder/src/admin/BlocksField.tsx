@@ -55,6 +55,7 @@ import {
   BlockToolbar,
   BreakpointManager,
   BreakpointSwitcher,
+  type CanvasZoom,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
   offeredTiers,
@@ -224,10 +225,10 @@ function ensureCoreBlocksRegistered(): void {
  * these are two unrelated causes that happen to share an operator.
  */
 function emptyContainerAppenderHidden(
-  draggingId: string | null,
+  dragging: boolean,
   showEmptyElements: boolean
 ): boolean {
-  return draggingId !== null || !showEmptyElements;
+  return dragging || !showEmptyElements;
 }
 
 /**
@@ -872,7 +873,36 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const slots = useMemo(registrySlotSource, []);
   const nesting = useMemo(registryNestingSource, []);
-  const drag = useCanvasDrag({ editor, slots, nesting });
+  // The canvas root, published by `Canvas` below and read by the drag when a
+  // gesture begins somewhere that is not the canvas — a palette row, whose
+  // pointerdown has no `currentTarget` the drag could measure against.
+  const canvasRoot = useRef<HTMLDivElement | null>(null);
+  /*
+   * The same element as STATE, beside the ref rather than instead of it.
+   *
+   * The drag reads "where is the canvas now" during a gesture, which is what a
+   * ref is for. The inspector has to REACT to the canvas appearing: it stays
+   * mounted while the canvas mounts only once styles have loaded, and a ref is
+   * not reactive — assigning `.current` changes no dependency, so a reader
+   * listing the ref would see `null` once and never look again.
+   */
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(
+    null
+  );
+  const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
+  /*
+   * Is a drag happening — of EITHER kind.
+   *
+   * Not `draggingId`, which is the moving node's id and is null for the whole
+   * of a drag from the palette: the block has no node until the release makes
+   * one. Chrome gated on the id stays up while an author drags a new block in,
+   * and the toolbar sits above the drop indicator, covering the position being
+   * aimed at.
+   *
+   * Derived once and shared by the three surfaces below, so they cannot come to
+   * disagree about what counts as a drag.
+   */
+  const dragging = drag.draggingBlockName !== null;
 
   /*
    * The empty-container appender's only read of a block's definition: its
@@ -1126,6 +1156,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const [requestedTier, setRequestedTier] = useState<BreakpointId | undefined>(
     undefined
   );
+  /*
+   * The zoom, and the scale it produces, held apart.
+   *
+   * The first is what the author ASKED for and the shell persists it. The
+   * second is what the canvas is painting at, which while fitting is derived
+   * from a region only the canvas measures — so it is reported back rather
+   * than computed here, where a second derivation would disagree with the
+   * screen for exactly the frame after a panel opens.
+   */
+  /*
+   * The zoom the SHELL owns, mirrored here only to draw the canvas with it.
+   *
+   * Nothing writes it from this side. The shell persists the choice and reports
+   * it, including the value restored on load; this holds the last report so the
+   * canvas can be scaled by it. Holding it as a second source of truth and
+   * syncing BACK is what produced an oscillating write of `fit, 2, fit, 2` on
+   * every open — two owners, each correcting the other.
+   *
+   * Seeded with the same default the shell starts from, so there is no absent
+   * state for the canvas to interpret. That is safe only because this direction
+   * is one-way: with nothing sending a zoom back, a default held here can never
+   * reach the store to overwrite what the author chose.
+   */
+  const [zoom, setZoom] = useState<CanvasZoom>(DEFAULT_PREFERENCES.zoom);
+  const [appliedScale, setAppliedScale] = useState(1);
   const [measuredWidth, setMeasuredWidth] = useState<number | undefined>(
     undefined
   );
@@ -1443,6 +1498,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // so the appender below can be suppressed by the SAME switch that
         // already suppresses the placeholder box it sits over.
         onShowEmptyElementsChange={setShowEmptyElements}
+        onZoomChange={setZoom}
+        appliedScale={appliedScale}
         // Whether the page is live, which the admin's own chrome would have
         // shown had this editor not asked for it to be hidden. `undoDepth` is
         // the editor's OWN dirty signal: the form's is false for as long as the
@@ -1529,6 +1586,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         inspector={
           <InspectorPanel
             editor={editor}
+            // The SAME ref the canvas publishes its root through, so the style
+            // tab reads the element a node is actually drawn as rather than
+            // inferring one from the document. Two refs would let the panel
+            // read a canvas that is not the one on screen.
+            canvasRoot={canvasElement}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
@@ -1588,7 +1650,11 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         renderPanel={panel => {
           if (panel === "insert") {
             return (
-              <InsertPanel editor={editor} categoryOrder={CORE_CATEGORIES} />
+              <InsertPanel
+                editor={editor}
+                categoryOrder={CORE_CATEGORIES}
+                beginInsertDrag={drag.beginInsertDrag}
+              />
             );
           }
           if (panel === "layers") {
@@ -1686,7 +1752,17 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             */
             <BlockContextMenu editor={editor}>
               <Canvas
+                zoom={zoom}
+                /*
+                  On the CANVAS, not inside `preview`. The scale is reported
+                  whether or not a viewport is being previewed, and an extra key
+                  on that inferred object is accepted and ignored rather than
+                  refused — so the reporter simply never ran.
+                */
+                onScale={setAppliedScale}
                 document={editor.document}
+                rootRef={canvasRoot}
+                onRoot={setCanvasElement}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}
@@ -1715,19 +1791,13 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   sit over the canvas the author is aiming at, naming a block
                   that is in the middle of moving.
                 */}
-                    <BlockToolbar
-                      editor={editor}
-                      hidden={drag.draggingId !== null}
-                    />
+                    <BlockToolbar editor={editor} hidden={dragging} />
                     {/*
                   Suppressed for the same reason and by the same signal. The
                   bands report a layout that is mid-change during a drag, so
                   every value on them is about to be wrong.
                 */}
-                    <SpacingOverlay
-                      editor={editor}
-                      hidden={drag.draggingId !== null}
-                    />
+                    <SpacingOverlay editor={editor} hidden={dragging} />
                     {/*
                   Suppressed during a drag for the same reason the toolbar and
                   the bands are: the document is mid-change, so a control
@@ -1745,7 +1815,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                       slots={slots}
                       blocks={blocks}
                       hidden={emptyContainerAppenderHidden(
-                        drag.draggingId,
+                        dragging,
                         showEmptyElements
                       )}
                       onAppend={nodeId => {

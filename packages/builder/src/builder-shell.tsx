@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import type { CanvasZoom } from "./canvas-zoom";
+import { CanvasZoomControl } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
 import {
   BUILDER_CHROME_CLASS,
@@ -155,6 +157,28 @@ export interface BuilderShellProps {
    * changes here and not at every call site that duplicated it.
    */
   onShowEmptyElementsChange?: (showEmptyElements: boolean) => void;
+  /**
+   * Reports the canvas zoom, and takes the change back.
+   *
+   * The shell owns it because the shell owns preferences, and a host owns what
+   * to DO with it — the canvas is the host's to render, so only it can apply a
+   * scale. Reported the same way `showEmptyElements` is, including on the first
+   * value, so a host never has to assume the default.
+   */
+  onZoomChange?: (zoom: CanvasZoom) => void;
+  /**
+   * The scale the canvas is actually painting at, for the zoom control.
+   *
+   * Travels UP because only the canvas can know it — while fitting it is
+   * derived from a region the canvas measures — and the canvas is the host's to
+   * render. The zoom itself travels DOWN, because this shell owns preferences
+   * and therefore owns the choice.
+   *
+   * One direction each is the whole design. Holding the zoom on both sides and
+   * syncing them is what produced an oscillating write of `fit, 2, fit, 2` on
+   * every open: two owners, each correcting the other.
+   */
+  appliedScale?: number;
   /** The canvas. The shell never looks inside it. */
   children?: React.ReactNode;
   /** The inspector's contents. */
@@ -440,6 +464,12 @@ function usePreferences(store: PreferenceStore) {
  * builds a fresh object every call, so identity is always false and the restore
  * effect would set state on every mount even when nothing changed.
  */
+/** Whether two zooms mean the same thing, which is not object identity. */
+function sameZoom(a: CanvasZoom, b: CanvasZoom): boolean {
+  if (a.kind !== b.kind) return false;
+  return a.kind === "fixed" && b.kind === "fixed" ? a.scale === b.scale : true;
+}
+
 function shallowEqualPreferences(
   a: ShellPreferences,
   b: ShellPreferences
@@ -447,7 +477,8 @@ function shallowEqualPreferences(
   if (
     a.leftPanel !== b.leftPanel ||
     a.leftPinned !== b.leftPinned ||
-    a.showEmptyElements !== b.showEmptyElements
+    a.showEmptyElements !== b.showEmptyElements ||
+    !sameZoom(a.zoom, b.zoom)
   ) {
     return false;
   }
@@ -719,6 +750,8 @@ function useSeparatorRegionEscape(
 }
 
 function ShellRegions({
+  appliedScale = 1,
+  onZoomPick,
   renderPanel,
   availablePanels,
   children,
@@ -733,6 +766,8 @@ function ShellRegions({
   active,
   loadCount,
 }: Omit<BuilderShellProps, "store"> & {
+  /** The zoom picker, or absent where the host wired none. */
+  onZoomPick: ((next: CanvasZoom) => void) | undefined;
   preferences: ShellPreferences;
   update: (change: (current: ShellPreferences) => ShellPreferences) => void;
   /**
@@ -876,6 +911,24 @@ function ShellRegions({
             }
           />
         </Label>
+        {/*
+          Rendered by the shell, not handed to the host as a slot, because the
+          shell owns preferences and this control edits one. A host drawing its
+          own would hold the value in a second place, and the two would correct
+          each other on every open.
+
+          Only where the host has WIRED it, though. The canvas belongs to the
+          host, so without `onZoomChange` there is nothing to apply a choice to:
+          the control would store a preference, report a percentage the canvas
+          does not honour, and read 100% whatever was picked. A shell that
+          predates this — the README example and the playground harness among
+          them — should gain no control rather than a dead one.
+        */}
+        <CanvasZoomControl
+          zoom={preferences.zoom}
+          appliedScale={appliedScale}
+          onChange={onZoomPick}
+        />
       </header>
 
       <div className="flex min-h-0 flex-1">
@@ -1103,6 +1156,8 @@ export function BuilderShell({
   store,
   openInsertPanelToken,
   onShowEmptyElementsChange,
+  onZoomChange,
+  appliedScale = 1,
   ...props
 }: BuilderShellProps) {
   // The browser store is built once: rebuilt each render it would change
@@ -1207,6 +1262,50 @@ export function BuilderShell({
   React.useEffect(() => {
     onShowEmptyElementsChangeRef.current?.(preferences.showEmptyElements);
   }, [preferences.showEmptyElements]);
+  /*
+   * A zoom chosen outside this shell, stored here.
+   *
+   * Compared by VALUE rather than by object identity: a host rebuilding the
+   * object each render — which the conventional inline handler does — would
+   * write preferences on every render, and every write reports back out, which
+   * is a loop rather than a preference.
+   */
+  /*
+   * The zoom picker, resolved here rather than where it is drawn.
+   *
+   * `undefined` when the host has wired nothing, which is what makes the
+   * control render nothing — see its own documentation for why a dead one is
+   * worse than none. Deciding it at the render site put the branch inside a
+   * region that is already the largest function in this file.
+   */
+  const onZoomPick = React.useMemo(
+    () =>
+      onZoomChange === undefined
+        ? undefined
+        : (next: CanvasZoom) => update(current => ({ ...current, zoom: next })),
+    [onZoomChange, update]
+  );
+
+  /*
+   * The zoom, held and reported the same way and for the same reasons, plus
+   * one the value above does not have: whether a listener EXISTS is itself a
+   * dependency.
+   *
+   * A host can resolve `onZoomChange` from its own state, so the prop moves
+   * from `undefined` to a callback after the first render. Keyed on the value
+   * alone, the effect would not re-run at that moment and the host would carry
+   * the default zoom until the author happened to pick another — its canvas
+   * drawn at a scale the control does not claim.
+   */
+  const onZoomChangeRef = React.useRef(onZoomChange);
+  React.useEffect(() => {
+    onZoomChangeRef.current = onZoomChange;
+  });
+  const reportingZoom = onZoomChange !== undefined;
+  React.useEffect(() => {
+    onZoomChangeRef.current?.(preferences.zoom);
+  }, [reportingZoom, preferences.zoom]);
+
   /*
    * Where overlays inside this shell portal to. State rather than a ref,
    * because `PortalProvider` has to RE-RENDER once the node exists; a ref
@@ -1367,6 +1466,8 @@ export function BuilderShell({
                */}
               <PortalProvider container={overlayHost}>
                 <ShellRegions
+                  appliedScale={appliedScale}
+                  onZoomPick={onZoomPick}
                   {...props}
                   preferences={preferences}
                   update={update}

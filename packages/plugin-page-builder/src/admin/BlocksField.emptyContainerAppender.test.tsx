@@ -117,7 +117,17 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       steps: [],
       dismiss: () => {},
     }),
-    useCanvasDrag: () => ({ handlers: {}, target: null, draggingId }),
+    useCanvasDrag: () => ({
+      handlers: {},
+      target: null,
+      draggingId,
+      // Derived from this file's own knob rather than stated separately: the
+      // editor asks `draggingBlockName` whether a drag is happening, because a
+      // drag from the palette has no node id at all. Left out, it reads
+      // `undefined` — not `null` — and every case here runs as though a drag
+      // were in flight.
+      draggingBlockName: draggingId === null ? null : "core/heading",
+    }),
     useEditorState: () => ({
       document: DOCUMENT,
       selectedId: null,

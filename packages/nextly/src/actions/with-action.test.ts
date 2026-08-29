@@ -1,10 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock next/headers BEFORE importing withAction so its module-load-time
-// import resolves to the mock. The default returns an empty Headers instance.
+// Mocked through `actions/next-runtime`, the seam that owns the lazy Next
+// resolution. Mocking "next/headers" directly does NOT work here and the
+// difference is not cosmetic: that module is loaded via `createRequire`, which
+// `vi.mock` cannot intercept because it resolves ESM specifiers. Measured — the
+// ESM import received the mock while the createRequire call received the real
+// module and threw "headers was called outside a request scope", so the whole
+// upstream-id path was unreachable from a test.
 let mockedHeaders: Headers = new Headers();
-vi.mock("next/headers", () => ({
-  headers: async () => mockedHeaders,
+vi.mock("./next-runtime", async importOriginal => ({
+  // PARTIAL mock. Only `getHeaders` is substituted; `getUnstableRethrow` keeps
+  // the real implementation, because the redirect test below depends on Next's
+  // actual sentinel handling — a stubbed no-op swallows the redirect into a
+  // result envelope instead of re-throwing it, which is the exact behaviour
+  // that test exists to protect.
+  ...(await importOriginal<typeof import("./next-runtime")>()),
+  getHeaders: () => async () => mockedHeaders,
 }));
 
 import { DbError } from "../database/errors";
@@ -124,20 +135,46 @@ describe("withAction — error path", () => {
 });
 
 describe("withAction — requestId", () => {
-  // SKIPPED against finding:with-action-header-path-has-no-test-seam.
-  // `with-action.ts` resolves Next through `createRequire(import.meta.url)`,
-  // so `next/headers` is never a specifier vi.mock can intercept. Measured in
-  // one probe with this same mock in scope: the ESM import receives the mock,
-  // the createRequire call receives the real module and throws "headers was
-  // called outside a request scope". The catch then returns a generated id, so
-  // this assertion cannot be reached however the header is set.
-  //
-  // Kept as-is rather than rewritten to assert the fallback: the fallback is
-  // already covered by the test below, and rewriting this one would delete the
-  // only record that the upstream-id precedence chain -- x-request-id,
-  // x-vercel-id, cf-ray -- is unverified.
-  it.skip("honors x-request-id from headers() when set", async () => {
+  it("honors x-request-id from headers() when set", async () => {
     mockedHeaders = new Headers({ "x-request-id": "req_upstream0000001" });
+    const action = withAction(async () => {
+      throw NextlyError.notFound();
+    });
+    const result = await action();
+    if (!result.ok) {
+      expect(result.error.requestId).toBe("req_upstream0000001");
+    }
+  });
+
+  it.each([
+    ["x-vercel-id", "vercel-req-0001"],
+    ["cf-ray", "cfray-0001"],
+  ])("honors %s when x-request-id is absent", async (header, value) => {
+    // The precedence CHAIN, not just its first link. The finding this seam
+    // closes noted that `x-vercel-id` and `cf-ray` shared the same
+    // untestability as `x-request-id`, so all three were unverified together.
+    // Each is a real deployment's trace id — Vercel's and Cloudflare's — and a
+    // request id that silently stops honouring one breaks trace correlation
+    // with nothing failing.
+    mockedHeaders = new Headers({ [header]: value });
+    const action = withAction(async () => {
+      throw NextlyError.notFound();
+    });
+    const result = await action();
+    if (!result.ok) {
+      expect(result.error.requestId).toBe(value);
+    }
+  });
+
+  it("prefers x-request-id over the platform headers", async () => {
+    // Order matters and is otherwise untested: with all three present the
+    // caller-supplied id must win, or a request traced end-to-end by the
+    // client is renamed by whichever proxy it passed through.
+    mockedHeaders = new Headers({
+      "x-request-id": "req_upstream0000001",
+      "x-vercel-id": "vercel-req-0001",
+      "cf-ray": "cfray-0001",
+    });
     const action = withAction(async () => {
       throw NextlyError.notFound();
     });

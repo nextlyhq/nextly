@@ -36,6 +36,7 @@ import type { UserContext } from "../../direct-api/types/shared";
 import { NextlyError } from "../../errors/nextly-error";
 import { cachedFind } from "../cache/cached-find";
 import { nextlySingleTags } from "../cache/nextly-tags";
+import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 
 import { markDynamic } from "./mark-dynamic";
 import { triggerNotFound } from "./not-found";
@@ -412,6 +413,10 @@ function buildSingleRoute<TNode>(
       markDynamic();
       return read(null);
     }
+    // Bounded by the next scheduled release, exactly as the collection route
+    // is. A release member names either scope, so a Single without this keeps
+    // serving its pre-release document until something unrelated busts a tag.
+    const cacheSeconds = await releaseBoundedRevalidate(config.revalidate);
     return cachedFind(() => read(null), {
       tags: [...nextlySingleTags(config.slug), ...(config.tags ?? [])],
       // The locale is part of the key: one Single serves a different document
@@ -426,9 +431,7 @@ function buildSingleRoute<TNode>(
       // never run its own bound at all. A cache key has to name every input the
       // cached value depends on, and this is now one of them.
       keyParts: ["nextly-single", config.slug, config.locale ?? "", trustedKey],
-      ...(config.revalidate === undefined
-        ? {}
-        : { revalidate: config.revalidate }),
+      revalidate: cacheSeconds,
     });
   }
 

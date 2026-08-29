@@ -234,6 +234,20 @@
   min-height: 2.5rem;
   align-items: start;
   padding-block: 0.375rem;
+  /*
+   * Reserve the sideways gesture, so a row can be DRAGGED onto the canvas.
+   *
+   * Left at the default, a touch browser owns direct manipulation from the
+   * moment it classifies the movement as panning, and it announces that by
+   * sending `pointercancel` — which this engine correctly treats as the
+   * gesture being withdrawn. The drag would abandon itself partway across, and
+   * only on touch.
+   *
+   * `pan-y` rather than `none`: the palette is a scrolling list, and taking
+   * vertical panning as well would trade a broken drag for a list a finger
+   * cannot scroll.
+   */
+  touch-action: pan-y;
 }
 
 /*
@@ -2079,4 +2093,49 @@
   color: var(--nx-foreground);
   font-family: var(--font-mono, ui-monospace, monospace);
   white-space: nowrap;
+}
+
+/*
+ * The canvas zoom trigger.
+ *
+ * Styled here because it is a bare Radix trigger: Preflight strips a button's
+ * border and background, so without this the percentage renders as plain text
+ * and reads as a status readout rather than something to press. It sits in the
+ * top bar beside the breakpoint switcher, so it borrows that furniture's
+ * proportions rather than introducing its own.
+ */
+.nx-zoom-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 3.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+  /* The digits change as the canvas resizes, and a proportional face makes the
+     control shift width while an author is reading it. */
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.nx-zoom-control:hover {
+  background: var(--nx-muted);
+}
+
+/* Open is a STATE, not a hover: the menu can be opened from the keyboard, and
+   a trigger that looks unpressed while its menu is up reads as a stray popup. */
+.nx-zoom-control[data-state="open"] {
+  background: var(--nx-muted);
+  border-color: var(--nx-ring);
+}
+
+.nx-zoom-control:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
 }

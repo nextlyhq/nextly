@@ -176,6 +176,23 @@ export interface StyleInspectorPanelProps {
    * omitting it does not mean "allow" — it means the question was never asked.
    */
   policy?: StylePolicy;
+  /**
+   * The element the selected node is DRAWN as, or `undefined` when nobody can
+   * say.
+   *
+   * Only the typographic baseline needs it: those rules land on `h1` itself, so
+   * nothing in the document says whether one reaches this node — `core/heading`
+   * takes its tag from a prop, and `core/rich-text` renders a `div` with its
+   * headings inside.
+   *
+   * Resolved by the caller rather than read here, the same way `cascade` and
+   * `liveBreakpoints` are. Reading it needs a subscription to the canvas, and
+   * the reader that decides which control shows a value should not also own
+   * one. Omitted, a heading's baseline is reported as reaching nothing, which
+   * is the quiet answer a host that cannot supply a canvas should get rather
+   * than a guess.
+   */
+  renderedTag?: string;
   /** The interaction state being edited. `base` when the host says nothing. */
   state?: StyleState;
   /** The breakpoint being edited. The unconditional one when the host says nothing. */
@@ -452,6 +469,7 @@ function SelectedNodeClasses({
 
 export function StyleInspectorPanel({
   editor,
+  renderedTag,
   policy,
   tokens,
   state,
@@ -543,7 +561,7 @@ export function StyleInspectorPanel({
    * is: both are only valid against the document they were read from, and an
    * edit anywhere changes the document and the values shown together.
    */
-  const subject = selectedSubject(editor, cascade);
+  const subject = selectedSubject(editor, cascade, renderedTag);
   /*
    * What the panel is editing, so an inherited label can say what DIFFERS from
    * it. Built once beside the subject for the same reason: every control is
@@ -1237,13 +1255,20 @@ function StyleControlField({
  */
 function selectedSubject(
   editor: EditorState,
-  cascade: PageStyleCascade | undefined
+  cascade: PageStyleCascade | undefined,
+  tag: string | undefined
 ): StyleSubject | undefined {
   if (editor.selectedId === null) return undefined;
-  return styleSubjectFor(
+  const subject = styleSubjectFor(
     cascade?.nodes ?? editor.document.nodes,
     editor.selectedId
   );
+  // Spread only when there is one, so a host with no canvas leaves the field
+  // ABSENT rather than present-and-undefined. `styleOrigin` reads it as "the
+  // caller cannot say" either way, and an absent key says that more plainly to
+  // anyone reading a logged subject.
+  if (subject === undefined || tag === undefined) return subject;
+  return { ...subject, tag };
 }
 
 /**
@@ -2228,6 +2253,12 @@ function originSubject(
         : "an enclosing block's defaults";
     case "page":
       return "the page";
+    // Named for what an author can act on. "the `h1` baseline" rather than the
+    // tier's internal name, because the next thing they do is either override
+    // it on this block or replace the baseline for the whole site, and both
+    // start from knowing which element it keys on.
+    case "element":
+      return `the ${origin.tag} typography baseline`;
     case "node":
       if (origin.id !== editing.nodeId) return "an enclosing block";
       return control ?? "this block";

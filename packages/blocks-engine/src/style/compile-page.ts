@@ -60,6 +60,7 @@ import {
 import {
   blockTypeClassName,
   nodeClassNames,
+  PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,
 } from "./node-class";
 import { serializeRules } from "./serialize";
@@ -124,6 +125,27 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+
+  /**
+   * Typographic defaults per HTML element, keyed by tag name.
+   *
+   * A tier below {@link PageStyleContext.blockBases}, and it exists because a
+   * block type cannot express one. A heading's LEVEL is a prop, so every
+   * `core/heading` shares one block-type class and one default with it — which
+   * would give `h1` and `h3` the same size, the defect rather than the fix.
+   * The element is the only thing that distinguishes them.
+   *
+   * Emitted at zero specificity like block defaults, and BEFORE them, so at
+   * equal weight a block's own default wins on source order. Both lose to a
+   * named class and to a node's own value.
+   *
+   * A provisional layer, not a design system. Gutenberg — the closest peer that
+   * both ships blocks and renders pages — keeps metric defaults out of block
+   * CSS and defers to a theme; Nextly has no populated typography scale yet, so
+   * this bridges the gap until the fonts manager fills it, and is shaped so
+   * that manager can supply the same record later.
+   */
+  elementBases?: Readonly<Partial<Record<TypographicElement, NodeStyles>>>;
 
   /**
    * Whether a node's block declares that these props draw nothing.
@@ -311,6 +333,36 @@ export interface CompiledPageCss {
  * users who never asked for one, which is why authors historically removed focus
  * styling altogether and broke keyboard navigation.
  */
+/**
+ * The elements a typographic default may be written for.
+ *
+ * Closed and ordered: closed because a tag is interpolated into a selector and
+ * a caller-supplied one would be an injection surface of exactly the kind the
+ * block-type check below refuses; ordered because two defaults at equal
+ * specificity are separated by source order, so the order they are emitted in
+ * is part of the contract rather than an artifact of iteration.
+ */
+export const TYPOGRAPHIC_ELEMENTS = [
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "p",
+] as const;
+
+/**
+ * An element a typographic default may be written for.
+ *
+ * The type is the allow-list rather than a widening of it, so a tag the
+ * compiler does not emit — a typo, or `blockquote` before anyone decides it
+ * belongs — is refused where it is written instead of silently contributing
+ * nothing. A caller reading `Record<string, …>` has no way to learn which keys
+ * are honoured except by trying one.
+ */
+export type TypographicElement = (typeof TYPOGRAPHIC_ELEMENTS)[number];
+
 const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
   base: "",
   hover: ":where(:hover)",
@@ -1035,6 +1087,43 @@ interface EnvelopeContext {
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
   mayFetchUrl?: MayFetchUrl;
+  /**
+   * The selector part kept OUTSIDE `:where()` when this envelope's rules are
+   * written as defaults, with everything else wrapped.
+   *
+   * Set for the two DEFAULT tiers — a block type's and the typographic baseline
+   * keyed by element — and for nothing else. The page-root prefix
+   * is doubled so an AUTHOR's values beat ordinary host CSS, and defaults
+   * inherited that contract without it ever being argued for them — but a
+   * default nobody can override is not a default. Builder.io shipped
+   * compound-class component defaults and answered the resulting complaints
+   * with a global opt-out; every low-friction precedent that ships
+   * rendered-block typography keeps it at the floor instead, Webflow on bare
+   * tags and Tailwind Typography inside `:where()`.
+   *
+   * It also orders the three tiers by CONSTRUCTION rather than by emission
+   * order: a type's default loses to a named class and to a node's own value
+   * because it weighs nothing, not because it happens to be written first.
+   *
+   * **It is an anchor rather than a flag because zero is the wrong weight.**
+   * Wrapping the WHOLE selector gives `0-0-0`, and an ordinary unlayered reset
+   * — `h1, h2, … { font-size: inherit; margin: 0 }`, which is the shape
+   * Tailwind's preflight ships — is `0-0-1` and beats it. A default written
+   * that way loses to the very reset it exists to answer. Measured in a
+   * browser: with the reset present, the fully wrapped rule left an `h1` at
+   * 16px and the anchored one at its declared 36px.
+   *
+   * One class outside and the rest inside gives `0-1-0`, which is what
+   * Tailwind Typography emits and what the two ends of the contract need: it
+   * beats a bare element reset, and it still loses to a host's own
+   * `.content h1` at `0-1-1`. The anchor is the SINGLE page-root class rather
+   * than the doubled one, because doubling is how an author's values are made
+   * to outrank host CSS and a default must not borrow that.
+   *
+   * `:where()` changes what a match WEIGHS and never what it selects, so the
+   * same elements are styled either way.
+   */
+  weightlessAnchor?: string;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -1058,7 +1147,7 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl } = about;
+  const { origin, trace, mayFetchUrl, weightlessAnchor } = about;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1143,7 +1232,15 @@ function envelopeRules(
       for (const rule of groupByDescendant(compiled.declarations)) {
         rules.push({
           ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-          selector: `${selector}${STATE_SELECTORS[state]}${rule.descendant}`,
+          // Everything after the anchor is wrapped, state and descendant
+          // included: `${anchor} :where(x) a` leaves the `a` outside carrying
+          // weight of its own, so a default that styles something inside
+          // itself would outrank a host rule of the same shape. The anchor is
+          // the only part that weighs.
+          selector:
+            weightlessAnchor === undefined
+              ? `${selector}${STATE_SELECTORS[state]}${rule.descendant}`
+              : `${weightlessAnchor} :where(${selector}${STATE_SELECTORS[state]}${rule.descendant})`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1512,6 +1609,21 @@ export function compilePageCss(
   // selectors do not carry.
   const effectiveScope = scope === "" ? undefined : ctx.scope;
   const pageRoot = `${PAGE_ROOT_SELECTOR}${scope}`;
+  // The SINGLE page-root class, for the tiers that must not borrow the
+  // doubling. `PAGE_ROOT_SELECTOR` repeats the class so an author's values
+  // outrank host CSS; a default anchored to one class weighs `0-1-0`, which
+  // clears a bare element reset and still yields to a host's own class rule.
+  //
+  // A scope CONSTRAINS this anchor without adding to it. Appended plainly the
+  // pair weighs `0-2-0`, and a default that outranks a host's `.content h1`
+  // (`0-1-1`) is no longer something the site can override — so a scoped
+  // document would keep defaults precisely where an unscoped one yields, which
+  // is the opposite of what scoping means. Inside `:where()` the class still
+  // has to match and contributes nothing, so both documents weigh the same.
+  const defaultsAnchor =
+    scope === ""
+      ? `.${PAGE_ROOT_CLASS}`
+      : `.${PAGE_ROOT_CLASS}:where(${scope})`;
 
   const nodes = documentNodes(
     doc,
@@ -1569,6 +1681,35 @@ export function compilePageCss(
     )
   );
 
+  // Element defaults, below block defaults and above nothing. A tag reaches a
+  // SELECTOR exactly as a block type does, so it is held to a closed list
+  // rather than escaped: these are the elements the block library renders text
+  // as, and a caller naming anything else is not describing this document's
+  // typography. An allow-list rather than a grammar, because the set is small,
+  // known, and has no reason to grow without someone deciding it should.
+  const elements = ctx.elementBases ?? {};
+  for (const tag of TYPOGRAPHIC_ELEMENTS) {
+    if (!Object.hasOwn(elements, tag)) continue;
+    rules.push(
+      ...envelopeRules(
+        elements[tag],
+        tag,
+        pointer("/elementBases", tag),
+        contexts,
+        tokenPrefix,
+        warnings,
+        budget,
+        warningAllowance,
+        {
+          origin: { kind: "element", tag },
+          trace,
+          mayFetchUrl,
+          weightlessAnchor: defaultsAnchor,
+        }
+      )
+    );
+  }
+
   // One rule per block type present, not per node using it.
   const usedTypes = new Set<string>();
   for (const { node } of nodes) {
@@ -1604,14 +1745,19 @@ export function compilePageCss(
         // escaping is what keeps it safe if the check is ever loosened, and it
         // changes nothing for a type that passed, whose characters are all
         // legal in a class already.
-        `${pageRoot} .${escapeIdentifier(blockTypeClassName(type))}`,
+        `.${escapeIdentifier(blockTypeClassName(type))}`,
         pointer("/blockBases", type),
         contexts,
         tokenPrefix,
         warnings,
         budget,
         warningAllowance,
-        { origin: { kind: "blockType", type }, trace, mayFetchUrl }
+        {
+          origin: { kind: "blockType", type },
+          trace,
+          mayFetchUrl,
+          weightlessAnchor: defaultsAnchor,
+        }
       )
     );
   }

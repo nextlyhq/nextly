@@ -29,7 +29,7 @@ import { isFieldLocalized } from "../../i18n/classify-fields";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
   COMPANION_KEY_COLUMNS,
-  COMPANION_STATUS_COLUMN,
+  COMPANION_OPTIONAL_STRUCTURAL_COLUMNS,
   COMPANION_STRUCTURAL_COLUMNS,
 } from "../../i18n/migration/generate-up";
 import { buildDesiredTableFromComponentFields } from "../../schema/pipeline/diff/build-from-fields";
@@ -450,14 +450,22 @@ function structuralBlockers(
     const liveCompanionColumns = new Set(
       liveCompanion.columns.map(c => c.name)
     );
-    // 🔴 `_status` is subtracted rather than required. The structural set describes companions in
-    // general and is right for its own purpose — subtracting it from a table leaves the translated
-    // columns — but a FIELD GROUP is never Draft/Published, so its companion is built with
-    // `status: false` and never has that column. Requiring the whole set refuses every localized
-    // field group. Derived by exclusion rather than by listing the two that remain, so a genuinely
-    // unconditional column added to the set later is required here without this being touched.
+    // 🔴 The exempt columns are subtracted rather than required. The structural set describes
+    // companions in general and is right for its own purpose — subtracting it from a table leaves
+    // the translated columns — but not every column in it is one a healthy companion must
+    // physically have. `COMPANION_OPTIONAL_STRUCTURAL_COLUMNS` carries the reason for each
+    // exemption beside the column itself: `_status` because a FIELD GROUP is never
+    // Draft/Published, so its companion is built with `status: false` and never has that column;
+    // `_updated_at` because it is added to existing companions by migration, so a companion
+    // predating it is healthy-but-unstamped and its absence already means UNKNOWN to the only
+    // thing that reads it.
+    //
+    // Still derived by exclusion rather than by listing what remains, which keeps the property
+    // this was written for: a genuinely unconditional column added to the structural set later is
+    // required here without this being touched. What changed is only that exempting one is now a
+    // stated decision at the definition rather than a hard-coded name at the use.
     const requiredCompanionColumns = [...COMPANION_STRUCTURAL_COLUMNS].filter(
-      column => column !== COMPANION_STATUS_COLUMN
+      column => !COMPANION_OPTIONAL_STRUCTURAL_COLUMNS.has(column)
     );
     for (const required of requiredCompanionColumns) {
       if (liveCompanionColumns.has(required)) continue;

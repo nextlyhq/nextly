@@ -25,9 +25,49 @@ export const SYSTEM_RESOURCES = [
   "email-templates",
   "api-keys",
   "webhooks",
+  // NOT "releases". Registering a system resource RESERVES its name, and
+  // "releases" is a word real sites use for content — "press releases" is one
+  // of the most common collections on a corporate site. The other reserved
+  // names read as system concepts; this one reads as content, which is exactly
+  // why it would collide. An existing collection called `releases` would fail
+  // slug validation at boot, and a Schema-Builder one would have its
+  // permissions reclassified as system permissions, silently costing preset
+  // roles their access.
+  "content-releases",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];
+
+/**
+ * Why a name that was legal in an earlier version is reserved in this one.
+ *
+ * A reserved slug is only ever a nuisance to somebody writing a NEW collection
+ * — they pick another name. It is an upgrade failing at boot for somebody who
+ * already has one, and to them "slug 'content-releases' is reserved" is a true
+ * sentence that explains nothing: the config they are being refused is the
+ * config that worked yesterday, and nothing on screen says the rule changed
+ * rather than their collection.
+ *
+ * So a name added to {@link SYSTEM_RESOURCES} after 0.0.1 carries the sentence
+ * an operator needs to act. Kept beside the list rather than in either
+ * validator: collections and Singles both reject the slug, and a note that
+ * lived in one of them would be missing from whichever half an operator hit.
+ *
+ * Nothing is grandfathered, deliberately. Letting a content collection keep the
+ * name would leave two things answering to one resource, and permission seeding
+ * would have to guess which — a rename is the only outcome that stays
+ * unambiguous, so the error asks for one plainly instead of degrading quietly.
+ */
+export const NEWLY_RESERVED_SLUG_NOTES: ReadonlyMap<string, string> = new Map([
+  [
+    "content-releases",
+    "This name became a reserved system resource when scheduled content releases were added. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the read-, create- and publish-content-releases permissions are seeded under this name, " +
+      "so a content entity sharing it would have its own permissions treated as system-owned " +
+      "and preset roles would silently lose access to it.",
+  ],
+]);
 
 /**
  * Check if a resource is a built-in system resource.

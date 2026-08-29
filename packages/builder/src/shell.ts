@@ -146,6 +146,19 @@ export type { BreakpointManagerProps } from "./breakpoint-manager";
  */
 export { BreakpointSwitcher } from "./breakpoint-switcher";
 export type { BreakpointSwitcherProps } from "./breakpoint-switcher";
+
+/**
+ * The canvas zoom, and the control that names it.
+ *
+ * The control is a client component and belongs here; the model beside it is
+ * pure and is exported from the root entry as well, so a host can read a stored
+ * preference without pulling a component into a server render.
+ */
+export { CanvasZoomControl } from "./canvas-zoom-control";
+export type { CanvasZoomControlProps } from "./canvas-zoom-control";
+// The type alone: a host threading a zoom through this entry should not have
+// to import the model from a second one.
+export type { CanvasZoom } from "./canvas-zoom";
 export {
   breakpointsAtWidth,
   editedBreakpointAtWidth,

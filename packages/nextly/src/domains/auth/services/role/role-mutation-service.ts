@@ -15,6 +15,7 @@ import { toDbError } from "../../../../database/errors";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
+import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 
 import { toDialectBool, validateRoleId } from "./utils";
 
@@ -191,7 +192,7 @@ export class RoleMutationService extends BaseService {
 
       // Check if role with same slug already exists
       const existingSlug = await this.db.query.roles.findFirst({
-        where: { slug: input.slug },
+        where: { slug: requireFilterValue(input.slug, "slug") },
         columns: { id: true, slug: true },
       });
 

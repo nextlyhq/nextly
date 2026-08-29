@@ -907,8 +907,8 @@ describe("the label the stamp is taken over", () => {
     // Both surfaces, because they can disagree — the label is what the stamp is
     // taken over, so a version reaching one and not the other would key
     // artifacts on a value the label never carried.
-    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v2");
-    expect(sharedStyleInputsId(inputs())).toMatch(/^v2:[0-9a-z]+$/);
+    expect(JSON.parse(sharedStyleInputsLabel(inputs()))[0]).toBe("v3");
+    expect(sharedStyleInputsId(inputs())).toMatch(/^v3:[0-9a-z]+$/);
   });
 
   it("omits the label a breakpoint carries", () => {

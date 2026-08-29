@@ -85,6 +85,20 @@ export type {
  * that guesses.
  */
 export { sharedStyleInputs, type ReconciledStyleInputs } from "./page-renderer";
+/**
+ * The typographic baseline, and the one way to apply it.
+ *
+ * Both are public because a host replacing the baseline needs to read what it
+ * is replacing, and because a host assembling its own compile context must
+ * reach the same answer the renderer does. Spreading the record in by hand is
+ * the second implementation that would drift: `withTypographyDefaults` leaves a
+ * context that states its own `elementBases` alone, and a caller open-coding
+ * that check is one `??` away from overwriting a host's deliberate choice.
+ */
+export {
+  TYPOGRAPHY_DEFAULTS,
+  withTypographyDefaults,
+} from "./blocks/typography-defaults";
 
 export { BlockBoundary, BlockList } from "./block-boundary";
 // `NODE_ID_ATTRIBUTE` is published deliberately: an editor hit-testing on the

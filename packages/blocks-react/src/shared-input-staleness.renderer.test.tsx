@@ -25,6 +25,7 @@ import { PageRenderer } from "./page-renderer";
 import { createBlockResolver } from "./resolver";
 import { sharedStyleInputsId } from "./shared-style-inputs";
 import { blockBasesFor, type PageStyles } from "./styles";
+import { withTypographyDefaults } from "./blocks/typography-defaults";
 
 const document: BlockDocument = {
   formatVersion: 1,
@@ -72,10 +73,12 @@ function render(styles: PageStyles, namedClasses: readonly NamedClass[]) {
 
 /** What `effectiveCompile` will derive for the render above. */
 const stampFor = (namedClasses: readonly NamedClass[]) =>
-  sharedStyleInputsId({
-    breakpoints: { viewport: [], container: [] },
-    namedClasses,
-  });
+  sharedStyleInputsId(
+    withTypographyDefaults({
+      breakpoints: { viewport: [], container: [] },
+      namedClasses,
+    })
+  );
 
 describe("a page rendered through PageRenderer", () => {
   it("REUSES a stored sheet whose stamp still describes the render", () => {
@@ -130,11 +133,13 @@ describe("a page rendered from stored site styles, with no compile context", () 
 
   /** What this render derives, with no context of its own to take it from. */
   const stampFromSite = (slug: string) =>
-    sharedStyleInputsId({
-      breakpoints: { viewport: [], container: [] },
-      namedClasses: library(slug),
-      blockBases: blockBasesFor(document, createBlockResolver(coreBlocks)),
-    });
+    sharedStyleInputsId(
+      withTypographyDefaults({
+        breakpoints: { viewport: [], container: [] },
+        namedClasses: library(slug),
+        blockBases: blockBasesFor(document, createBlockResolver(coreBlocks)),
+      })
+    );
 
   it("REUSES a stored sheet whose stamp still describes the site", () => {
     // The control. Every refusal below would also pass against a render that
@@ -245,14 +250,16 @@ describe("a stored artifact that covers a node its type no longer draws", () => 
       // Empty on purpose: a recorded entry is what accounts for the node, and an
       // empty one appends nothing, so the assertion reads reuse and not delivery.
       gated: { n2: "" },
-      sharedInputsId: sharedStyleInputsId({
-        breakpoints: { viewport: [], container: [] },
-        namedClasses: [],
-        // From the WHOLE document — the tree the artifact was compiled from, and
-        // the assertion itself. Taking it from what this render styles would
-        // agree with a pruned derivation and prove nothing.
-        blockBases: blockBasesFor(withGhost, blocks),
-      }),
+      sharedInputsId: sharedStyleInputsId(
+        withTypographyDefaults({
+          breakpoints: { viewport: [], container: [] },
+          namedClasses: [],
+          // From the WHOLE document — the tree the artifact was compiled from, and
+          // the assertion itself. Taking it from what this render styles would
+          // agree with a pruned derivation and prove nothing.
+          blockBases: blockBasesFor(withGhost, blocks),
+        })
+      ),
     };
 
     expect(
@@ -299,15 +306,17 @@ describe("a site library carrying block defaults this page never draws", () => {
   const artifact: PageStyles = {
     css: ".nx-n1{color:rebeccapurple}",
     classes: { n1: "nx-n1" },
-    sharedInputsId: sharedStyleInputsId({
-      breakpoints: { viewport: [], container: [] },
-      namedClasses: [],
-      // The types this document draws from, which is the answer the compiler
-      // itself uses. Taken through the same helper rather than written out, so
-      // what this asserts is WHICH record the render stamps, not how the
-      // narrowing is spelled.
-      blockBases: blockBasesFor(onePage, blocks, site("#040404").blockBases),
-    }),
+    sharedInputsId: sharedStyleInputsId(
+      withTypographyDefaults({
+        breakpoints: { viewport: [], container: [] },
+        namedClasses: [],
+        // The types this document draws from, which is the answer the compiler
+        // itself uses. Taken through the same helper rather than written out, so
+        // what this asserts is WHICH record the render stamps, not how the
+        // narrowing is spelled.
+        blockBases: blockBasesFor(onePage, blocks, site("#040404").blockBases),
+      })
+    ),
   };
 
   const render = (unusedColour: string) =>

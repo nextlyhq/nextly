@@ -2,49 +2,63 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { TableSpec } from "../../schema/pipeline/diff/types";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
+import {
+  COMPANION_DEFAULT_STATUS,
+  COMPANION_KEY_COLUMNS,
+  COMPANION_STATUS_COLUMN,
+  COMPANION_UPDATED_AT_COLUMN,
+} from "../companion-columns";
 
 import { ddlType, lit, q } from "./ddl-types";
-import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
+import type {
+  CompanionCopyRef,
+  CompanionMigrationSpec,
+  LocalizedColumnSpec,
+} from "./types";
 
 /** The `CREATE TABLE <companion> (...)` statement (no trailing `;`). Shared by the
  *  enable UP and the create-only path so the companion shape stays identical. */
 
 /**
- * The status a companion row takes when one is created without an explicit
- * `_status` — the DDL default below. Exported so write paths that need to know
- * what a freshly-upserted locale row holds read it from the definition rather
- * than repeating the literal.
- */
-export const COMPANION_DEFAULT_STATUS = "draft";
-
-/** Per-locale draft/publish state; present only when the entity has one. */
-export const COMPANION_STATUS_COLUMN = "_status";
-
-/**
- * The columns a companion has by virtue of BEING a companion, rather than
- * because a field is localized.
+ * Companion column NAMES are defined in the `companion-columns` leaf and re-exported here.
  *
- * Exported so a reader looking at an existing companion can subtract them and
- * be left with exactly the translated columns. Kept beside the statement that
- * writes them: a reader that decided this set for itself would misread the
- * table the moment either side gained a column.
+ * They moved so the runtime WRITE path can import a column name without pulling this module's
+ * DDL/diff graph behind it — `generate-up` is reached by dynamic `import()` from the runtime for
+ * exactly that reason, and naming a column is not a reason to load a DDL pipeline. Re-exported
+ * rather than relocated outright because this is the path every existing reader already imports
+ * them from, and moving their import site is not a change any of them asked for.
  */
-export const COMPANION_STRUCTURAL_COLUMNS: ReadonlySet<string> = new Set([
-  "_parent",
-  "_locale",
+export {
+  COMPANION_DEFAULT_STATUS,
+  COMPANION_KEY_COLUMNS,
+  COMPANION_OPTIONAL_STRUCTURAL_COLUMNS,
   COMPANION_STATUS_COLUMN,
-]);
+  COMPANION_STRUCTURAL_COLUMNS,
+  COMPANION_UPDATED_AT_COLUMN,
+} from "../companion-columns";
 
 /**
- * The columns of a companion's composite PRIMARY KEY, in key order.
+ * The logical kind {@link COMPANION_UPDATED_AT_COLUMN} is rendered from.
  *
- * Stated once and rendered into the `CREATE TABLE` below, because this pair is load-bearing at
- * RUNTIME rather than merely structural: `upsertCompanionRow` names it as its conflict target, so a
- * companion that lost the key fails every localized write on PostgreSQL and SQLite and silently
- * accepts duplicate locale rows on MySQL. Anything checking that a live companion still has its key
- * reads this rather than restating the pair.
+ * Routed through `ddlType` rather than hand-spelled beside `_status` so this
+ * column is, per dialect, exactly what every other timestamp in a companion
+ * would be: `TIMESTAMPTZ` / `DATETIME(3)` / `INTEGER`.
+ *
+ * That is also what makes the back-fill safe. `nextly_versions.created_at` has
+ * the SAME type on all three dialects, so seeding this column from version
+ * history is a plain `MAX(created_at)` copy with no per-dialect conversion —
+ * and a conversion expression is precisely where a back-fill would go wrong
+ * silently, writing plausible timestamps that produce confident wrong answers.
  */
-export const COMPANION_KEY_COLUMNS: readonly string[] = ["_parent", "_locale"];
+const COMPANION_UPDATED_AT_SPEC: LocalizedColumnSpec = {
+  name: COMPANION_UPDATED_AT_COLUMN,
+  kind: "timestamp",
+};
+
+/** The `_updated_at` column definition for a `CREATE TABLE`/`ADD COLUMN`. */
+export function companionUpdatedAtDdl(dialect: SupportedDialect): string {
+  return `${q(COMPANION_UPDATED_AT_COLUMN, dialect)} ${ddlType(COMPANION_UPDATED_AT_SPEC, dialect)}`;
+}
 
 function buildCompanionCreateStatement(
   spec: CompanionMigrationSpec,
@@ -58,6 +72,13 @@ function buildCompanionCreateStatement(
   const statusDef = spec.status
     ? `  ${q(COMPANION_STATUS_COLUMN, dialect)} VARCHAR(20) NOT NULL DEFAULT '${COMPANION_DEFAULT_STATUS}',\n`
     : "";
+  // i18n B2: when this locale was last written. Unconditional — every companion
+  // gets it, unlike `_status` — and deliberately nullable with no DEFAULT: a
+  // freshly created companion has no rows to mis-seed, and keeping the shape
+  // identical to the one `reconcileCompanionColumns` ADDs to an existing table
+  // means a table created today and a table migrated into today are the same
+  // table. A DEFAULT here would be the one place the two could diverge.
+  const updatedAtDef = `  ${companionUpdatedAtDdl(dialect)},\n`;
   // 🔴 `IF NOT EXISTS` is OPT-IN, and only an emitted migration FILE may ask for it.
   //
   // A file reaches a database that very often already has the companion: `ensureCompanionTable`
@@ -78,6 +99,7 @@ function buildCompanionCreateStatement(
     `  ${q("_parent", dialect)} ${parentIdType} NOT NULL,\n` +
     `  ${q("_locale", dialect)} VARCHAR(20) NOT NULL,\n` +
     statusDef +
+    updatedAtDef +
     `${colDefs},\n` +
     `  PRIMARY KEY (${COMPANION_KEY_COLUMNS.map(c => q(c, dialect)).join(", ")}),\n` +
     `  FOREIGN KEY (${q("_parent", dialect)}) REFERENCES ${q(mainTable, dialect)} (${q("id", dialect)}) ON DELETE CASCADE\n` +

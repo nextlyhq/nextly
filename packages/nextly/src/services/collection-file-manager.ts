@@ -6,6 +6,7 @@ import { sql } from "drizzle-orm";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
+import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
@@ -49,20 +50,20 @@ export type CollectionMetadataFetcher = (
 } | null>;
 
 /** The companion `_locales` runtime schema for a localized collection. */
-export interface CompanionSchema {
-  /** The queryable Drizzle table object for `<mainTable>_locales`. */
-  table: unknown;
-  /** Physical companion table name (e.g. `dc_pages_locales`). */
-  companionTableName: string;
-  /**
-   * The collection's translatable fields (they live on the companion). Each carries both the
-   * camelCase field name (row key) and the snake_case companion column, because the two differ
-   * for camelCase fields (`metaTitle` → `meta_title`).
-   */
-  localizedFields: LocalizedFieldRef[];
-  /** Whether the companion has a per-locale `_status` column (collection has Draft/Published). */
-  hasStatus: boolean;
-}
+/**
+ * The companion `_locales` runtime schema, re-exported from the module that OWNS it.
+ *
+ * 🔴 This was a verbatim second declaration of the same four fields until i18n B2, and B2 is
+ * exactly the drift event a duplicated shape invites: `_updated_at` was added to the i18n
+ * definition, this copy silently did not have it, and the reader here went on compiling while
+ * describing a companion that no longer matched the one being created. The two never disagreed
+ * for as long as neither changed, which is what makes this shape of duplication expensive rather
+ * than merely untidy.
+ *
+ * A type-only re-export, so nothing about the module graph changes at runtime: importers of this
+ * path keep their import, and there is one definition to keep correct.
+ */
+export type { CompanionSchema };
 
 export class CollectionFileManager {
   private migrationsDir: string;
@@ -340,8 +341,19 @@ export class CollectionFileManager {
     ).map(name => ({ name, column: toSnakeCase(name) }));
     if (localizedFields.length === 0) return null;
     const hasStatus = metadata.status === true; // i18n M6: per-locale `_status` column
+    // i18n B2: unconditional, unlike `_status` -- every companion's declared shape carries
+    // `_updated_at`, so there is no metadata flag to read it from. Stated at each
+    // construction rather than defaulted in the type, so adding a further structural column
+    // stops these compiling instead of leaving them describing a companion that has moved on.
+    const hasUpdatedAt = true;
     if (cached) {
-      return { table: cached, companionTableName, localizedFields, hasStatus };
+      return {
+        table: cached,
+        companionTableName,
+        localizedFields,
+        hasStatus,
+        hasUpdatedAt,
+      };
     }
 
     const companion = buildCompanionRuntimeTable({
@@ -360,6 +372,7 @@ export class CollectionFileManager {
       companionTableName,
       localizedFields,
       hasStatus,
+      hasUpdatedAt,
     };
   }
 }
