@@ -52,7 +52,6 @@ import {
 } from "../domains/i18n/services/translation-worklist-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
-import type { CollectionFileManager } from "../services/collection-file-manager";
 import type { CollectionsHandler } from "../services/collections-handler";
 
 import {
@@ -225,6 +224,7 @@ async function localizedCollections(): Promise<
   (LocalizedCollectionRef & {
     useAsTitle: string | undefined;
     hasStatus: boolean;
+    tableName: string;
   })[]
 > {
   const registry = container.get<CollectionRegistryService>(
@@ -238,6 +238,9 @@ async function localizedCollections(): Promise<
       label: c.labels?.plural ?? c.slug,
       useAsTitle: c.admin?.useAsTitle,
       hasStatus: c.status === true,
+      // The physical main table, carried so the staleness probe can name the companion without
+      // loading a schema. Required on the record, so there is nothing to fall back to.
+      tableName: c.tableName,
     }));
 }
 
@@ -268,7 +271,9 @@ const STALENESS_PROBE_CONCURRENCY = 3;
  * one bad catalogue read; letting it read as `false` would tell the operator to migrate a table
  * that is already migrated.
  */
-async function resolveStalenessCapability<T extends LocalizedCollectionRef>(
+async function resolveStalenessCapability<
+  T extends LocalizedCollectionRef & { tableName: string },
+>(
   collections: readonly T[],
   readable: ReadonlySet<string> | undefined
 ): Promise<{
@@ -288,9 +293,6 @@ async function resolveStalenessCapability<T extends LocalizedCollectionRef>(
       probeFailed: [],
     };
   }
-  const fileManager = container.get<CollectionFileManager>(
-    "collectionFileManager"
-  );
 
   const resolved: (T & { canAnswerStaleness: boolean })[] = [];
   const probeFailed: string[] = [];
@@ -299,17 +301,18 @@ async function resolveStalenessCapability<T extends LocalizedCollectionRef>(
     while (cursor < asked.length) {
       const c = asked[cursor++];
       try {
-        const companion = await fileManager.loadCompanionSchema(c.slug);
         resolved.push({
           ...c,
-          canAnswerStaleness:
-            companion === null
-              ? false
-              : await resolveCompanionColumn(
-                  adapter,
-                  companion.companionTableName,
-                  COMPANION_UPDATED_AT_COLUMN
-                ),
+          canAnswerStaleness: await resolveCompanionColumn(
+            adapter,
+            // Spelled as the twenty-two other sites that build this name spell it. A constant
+            // introduced here would be read by one caller while the rest kept their own literal,
+            // which states a rule the code does not follow — and the rule has two directions,
+            // since five further sites strip the suffix back off with a regex that would mangle a
+            // main table legitimately ending in it. Both belong in one helper or neither does.
+            `${c.tableName}_locales`,
+            COMPANION_UPDATED_AT_COLUMN
+          ),
         });
       } catch {
         probeFailed.push(c.slug);
