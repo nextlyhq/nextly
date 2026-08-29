@@ -699,6 +699,15 @@ function isMissingTableError(error: unknown): boolean {
  * failure (transient, connection, permission) is rethrown, so a caller gating a
  * write on this never mistakes an unavailable database for an absent table and
  * silently skips the write.
+ *
+ * Stays a plan-only probe while its column-level sibling reads the catalog, and the difference
+ * is the call frequency rather than a preference. This one backs the cached readiness verdict
+ * that every localized write consults, so it runs once per entity per cache window on the
+ * request path; a catalog read there would reintroduce exactly the per-write introspection cost
+ * `companion-readiness` exists to remove. The column probes run on schema changes and
+ * migrations, where one extra round trip is not measurable. It is also already safe in the way
+ * a bare `catch` is not: {@link isMissingTableError} verifies the dialect's own wording for an
+ * absent RELATION, and everything else propagates.
  */
 export async function companionTableExists(
   adapter: CompanionWriteAdapter,
@@ -720,10 +729,10 @@ export async function companionTableExists(
 /**
  * Whether an EXISTING companion physically has the per-locale `_status` column. Used by the
  * runtime reconcile to decide whether a later Draft/Published toggle must ADD/DROP `_status`
- * on an already-provisioned companion. A missing column throws on the probe select → false.
+ * on an already-provisioned companion.
  */
 export async function companionHasStatusColumn(
-  adapter: CompanionWriteAdapter,
+  adapter: CompanionIntrospectAdapter,
   companionTableName: string
 ): Promise<boolean> {
   return companionHasColumn(adapter, companionTableName, "_status");
@@ -732,30 +741,48 @@ export async function companionHasStatusColumn(
 /**
  * Whether an EXISTING companion physically carries `column`.
  *
- * A plan-only `SELECT … LIMIT 0`, so the server parses the statement and returns no rows: the
- * cheapest question that still gets its answer from the database rather than from what a
- * configuration says should be there.
+ * Answered by reading the table's column list, through the same introspection the companion
+ * reconcile uses. The alternative — a plan-only `SELECT … LIMIT 0` and a `catch` — is cheaper by
+ * one round trip and wrong in two ways that matter here.
  *
- * 🔴 MUST NOT be called inside an open transaction. A query against a missing column marks the
- * whole PostgreSQL transaction aborted, after which the real statement dies with
- * `current transaction is aborted` and the error names an innocent one. That is the same hazard
- * `companion-readiness` documents, and it is why callers probe BEFORE they open one.
+ * 🔴 A `catch` cannot tell ABSENT from UNREACHABLE, and the two want opposite behaviour. A
+ * transient connection failure, or a role that may write but not select, would answer `false` —
+ * "this companion has no such column" — and every caller treats that as a fact about the schema.
+ * The archive replay is where it bites: `false` makes it choose `"omit"` over `"clear"`, so an
+ * existing locale row keeps its NEWER timestamp while its content is replaced with OLDER archived
+ * material, and the translation reads as current when it is not. A column list has no such
+ * ambiguity — the column is in it or it is not — and anything that stops the question being
+ * answered at all propagates instead of being flattened into a schema claim.
+ *
+ * The second reason is the repository's: database access is Drizzle only, and this was the last
+ * hand-built statement on the localization write path.
+ *
+ * 🔴 MUST NOT be called inside an open transaction. A failed query marks the whole PostgreSQL
+ * transaction aborted, after which the real statement dies with `current transaction is aborted`
+ * and the error names an innocent one. That is the same hazard `companion-readiness` documents,
+ * and it is why callers probe BEFORE they open one.
+ *
+ * A companion that does not exist has no columns, so it answers `false` — unchanged from the
+ * probe this replaces, where the statement failed on the missing relation.
  */
 export async function companionHasColumn(
-  adapter: CompanionWriteAdapter,
+  adapter: CompanionIntrospectAdapter,
   companionTableName: string,
   column: string
 ): Promise<boolean> {
-  const isMysql = adapter.dialect === "mysql";
-  const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-  try {
-    await adapter.executeQuery(
-      `SELECT ${q(column)} FROM ${q(companionTableName)} LIMIT 0`
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [companionTableName]
+  );
+  return (
+    snapshot.tables
+      .find(t => t.name === companionTableName)
+      ?.columns.some(c => c.name === column) ?? false
+  );
 }
 
 /**

@@ -1127,7 +1127,11 @@ describe("dispatchCollections, i18n request flag", () => {
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),
         run: vi.fn().mockResolvedValue(undefined),
-        execute: vi.fn().mockResolvedValue([]),
+        // `{ rows }` because this fake is postgres and node-postgres returns a QueryResult, not
+        // an array. The companion capability probe introspects through this handle and reads
+        // `.rows`, so a bare `[]` here is not "no columns" -- it is a shape the reader cannot
+        // walk, and it fails the whole apply with an opaque internal error.
+        execute: vi.fn().mockResolvedValue({ rows: [] }),
       }),
       execute: vi.fn().mockResolvedValue(undefined),
       executeQuery: vi.fn().mockResolvedValue([]),
@@ -1297,7 +1301,11 @@ describe("dispatchCollections, localized persistence failure", () => {
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),
         run: vi.fn().mockResolvedValue(undefined),
-        execute: vi.fn().mockResolvedValue([]),
+        // `{ rows }` because this fake is postgres and node-postgres returns a QueryResult, not
+        // an array. The companion capability probe introspects through this handle and reads
+        // `.rows`, so a bare `[]` here is not "no columns" -- it is a shape the reader cannot
+        // walk, and it fails the whole apply with an opaque internal error.
+        execute: vi.fn().mockResolvedValue({ rows: [] }),
       }),
       execute: vi.fn().mockResolvedValue(undefined),
       executeQuery: vi.fn().mockResolvedValue([]),
