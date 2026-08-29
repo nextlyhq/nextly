@@ -1259,6 +1259,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
          * the desktop tier live while the box paints the tablet one.
          */
         ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
+        /*
+         * Unconditional, unlike the container above. A page cannot force a
+         * pseudo-class on itself, so the sheet has to carry a class alternative
+         * beside each one before the canvas can show an author the hover
+         * appearance they are editing — and whether they are editing one is not
+         * known when the sheet is compiled.
+         *
+         * It costs a few bytes per state rule in a sheet only the editor sees,
+         * and nothing at all in weight: the marker sits inside the `:where()`
+         * that already wrapped the pseudo-class, which contributes nothing. The
+         * published sheet is compiled elsewhere and never asks for this.
+         */
+        previewStates: true,
       },
       ...(remotePatterns === undefined
         ? {}
