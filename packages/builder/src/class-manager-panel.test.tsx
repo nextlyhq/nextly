@@ -662,56 +662,67 @@ describe("a library far larger than a screen", () => {
 });
 
 describe("reaching a class past the row cap", () => {
-  const many = Array.from({ length: 260 }, (_, index) => ({
+  /*
+   * Six classes against a page size of two, rather than 260 against the
+   * default 200. The property is the same and the render is cheap: mounting
+   * two hundred rows and their inputs took eighteen seconds locally and
+   * exceeded thirty on CI, which turned a correct test into a red `main`.
+   *
+   * The page size is a real prop rather than a test hook — a host embedding
+   * the manager in a narrow column has the same reason to want fewer.
+   */
+  const many = Array.from({ length: 6 }, (_, index) => ({
     id: `id-${index}`,
     slug: `class-${index}`,
     orderIndex: index,
     styles: {},
   }));
 
-  it(
-    "finds one by NAME that no filter could have selected",
-    { timeout: 30000 },
-    () => {
-      /*
-       * The cap keeps a large library from mounting two thousand inputs, and
-       * without a name search it is a wall: the chips narrow by index state and
-       * by the open page, so a class past the cap that neither selects could
-       * never be shown or renamed. `class-259` is the last row, on no page, and
-       * in an index that was never read — nothing else can reach it.
-       */
-      draw({ library: many, usage: undefined, documentClassIds: [] });
-      expect(screen.queryByLabelText("Name of class-259")).toBeNull();
+  it("finds one by NAME that no filter could have selected", () => {
+    /*
+     * The chips narrow by index state and by the open page, so a class past
+     * the cap that neither selects could never be shown or renamed. `class-5`
+     * is the last row, on no page, and in an index that was never read —
+     * nothing but a name search can reach it.
+     */
+    draw({
+      library: many,
+      usage: undefined,
+      documentClassIds: [],
+      pageSize: 2,
+    });
+    expect(screen.queryByLabelText("Name of class-5")).toBeNull();
 
-      fireEvent.change(screen.getByLabelText("Search classes"), {
-        target: { value: "class-259" },
-      });
-      expect(screen.getByLabelText("Name of class-259")).toBeTruthy();
-    }
-  );
+    fireEvent.change(screen.getByLabelText("Search classes"), {
+      target: { value: "class-5" },
+    });
+    expect(screen.getByLabelText("Name of class-5")).toBeTruthy();
+  });
 
-  it(
-    "offers a control that reaches the tail whatever the names are",
-    { timeout: 30000 },
-    () => {
-      /*
-       * Search alone is not enough and the note must not imply it is: a library
-       * of `class-0` to `class-259` matches every query an author would think to
-       * type, so the last sixty stay unreachable however the message is worded.
-       * Raising the mounted count is what cannot depend on the naming.
-       */
-      draw({ library: many, usage: undefined, documentClassIds: [] });
-      expect(screen.getByText("Showing 200 of 260.")).toBeTruthy();
-      expect(screen.queryByLabelText("Name of class-259")).toBeNull();
+  it("offers a control that reaches the tail whatever the names are", () => {
+    /*
+     * Search alone is not enough: a library of `class-0` to `class-5` matches
+     * every query an author would think to type, so the tail stays unreachable
+     * however the note is worded. Raising the mounted count is what cannot
+     * depend on the naming.
+     */
+    draw({
+      library: many,
+      usage: undefined,
+      documentClassIds: [],
+      pageSize: 2,
+    });
+    expect(screen.getByText("Showing 2 of 6.")).toBeTruthy();
+    expect(screen.queryByLabelText("Name of class-5")).toBeNull();
 
-      fireEvent.click(screen.getByRole("button", { name: "Show 60 more" }));
-      expect(screen.getByLabelText("Name of class-259")).toBeTruthy();
-      // Nothing left to reach, so nothing left to offer.
-      expect(
-        screen.queryByRole("button", { name: /Show \d+ more/ })
-      ).toBeNull();
-    }
-  );
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    expect(screen.getByText("Showing 4 of 6.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+
+    expect(screen.getByLabelText("Name of class-5")).toBeTruthy();
+    // Nothing left to reach, so nothing left to offer.
+    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).toBeNull();
+  });
 
   it("blames the FILTER, not a search that is not set", () => {
     // With the box blank, "no classes match this search" sends an author to
@@ -720,9 +731,19 @@ describe("reaching a class past the row cap", () => {
       library: many,
       usage: undefined,
       documentClassIds: [],
+      pageSize: 2,
     });
     fireEvent.click(screen.getByRole("button", { name: "On this page" }));
     expect(screen.getByText("No classes match this filter.")).toBeTruthy();
+  });
+
+  it("defaults to a page size that bounds a library near its ceiling", () => {
+    // The default must still CAP, or the bound this exists for is gone. Seven
+    // rows with no `pageSize` are all mounted, which is the correct behaviour
+    // below the default and the control that the default is not tiny.
+    draw({ library: many, usage: undefined, documentClassIds: [] });
+    expect(screen.getByLabelText("Name of class-5")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).toBeNull();
   });
 });
 

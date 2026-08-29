@@ -190,6 +190,15 @@ export interface ClassManagerPanelProps {
    */
   pendingSlugs?: Readonly<Record<string, string>>;
   /**
+   * How many rows to mount at once, and how many each "show more" adds.
+   *
+   * A host embedding the manager in a narrower column has a legitimate reason
+   * to want fewer, so the page size is stated rather than fixed. Omitted, it is
+   * {@link DEFAULT_PAGE_SIZE} — a bound that exists so a library near its
+   * ceiling does not mount two thousand text inputs at once.
+   */
+  pageSize?: number;
+  /**
    * The classes something ELSE supplies, which the stored library layers over.
    *
    * Needed because these two are not equally editable, exactly as the tokens
@@ -229,6 +238,7 @@ export function ClassManagerPanel({
   absence,
   documentScan,
   pendingSlugs,
+  pageSize,
   usage,
   documentClassIds,
   suppliedClassIds,
@@ -312,6 +322,7 @@ export function ClassManagerPanel({
         rows={rows}
         searching={query.trim() !== ""}
         pendingSlugs={pendingSlugs}
+        pageSize={pageSize}
         library={library}
         supplied={new Set(suppliedClassIds ?? [])}
         usageKnown={usageKnown}
@@ -392,12 +403,13 @@ function FilterChips({
  * stops is a list an author believes is complete, and this one is the surface
  * they would use to decide a class is safe to delete.
  */
-const MAX_MANAGED_ROWS = 200;
+const DEFAULT_PAGE_SIZE = 200;
 
 function ClassList({
   rows,
   searching,
   pendingSlugs,
+  pageSize,
   library,
   supplied,
   usageKnown,
@@ -408,6 +420,7 @@ function ClassList({
   /** Whether a search is narrowing them, for the empty-list wording. */
   searching: boolean;
   pendingSlugs?: Readonly<Record<string, string>>;
+  pageSize?: number;
   library: readonly NamedClass[];
   supplied: ReadonlySet<string>;
   usageKnown: boolean;
@@ -421,7 +434,8 @@ function ClassList({
    * likely to type, and the last sixty would stay unreachable however the
    * message was worded.
    */
-  const [limit, setLimit] = React.useState(MAX_MANAGED_ROWS);
+  const page = pageSize ?? DEFAULT_PAGE_SIZE;
+  const [limit, setLimit] = React.useState(page);
   if (rows.length === 0) {
     return (
       <p className="nx-inspector__note">
@@ -463,12 +477,12 @@ function ClassList({
       {hidden > 0 ? (
         <Button
           className="nx-classman__more"
-          onClick={() => setLimit(current => current + MAX_MANAGED_ROWS)}
+          onClick={() => setLimit(current => current + page)}
           size="sm"
           type="button"
           variant="ghost"
         >
-          {`Show ${Math.min(hidden, MAX_MANAGED_ROWS)} more`}
+          {`Show ${Math.min(hidden, page)} more`}
         </Button>
       ) : null}
     </>
