@@ -188,6 +188,12 @@ export function ColorPicker<TValue = string>({
   /** Undoes a touch press that is waiting to see whether it becomes a tap. */
   const pendingTap = React.useRef<(() => void) | null>(null);
   /**
+   * The current way to finish a draft, for a deferred tap whose wait may span a
+   * render. Refreshed where the listeners are registered, at layout timing, so
+   * it is settled before any later native event can read it.
+   */
+  const latestCommit = React.useRef<() => void>(() => undefined);
+  /**
    * The saturation area, whose BOX is what turns a pointer position into a
    * saturation and brightness pair — the mapping needs the rectangle, not the
    * element.
@@ -323,6 +329,7 @@ export function ColorPicker<TValue = string>({
   useIsomorphicLayoutEffect(() => {
     const root = rootRef.current;
     if (root === null) return;
+    latestCommit.current = commitDraft;
     const onPointerDown = (event: Event): void => {
       /*
        * Any new press ENDS whatever the last one was waiting for. A touch that
@@ -381,7 +388,13 @@ export function ColorPicker<TValue = string>({
       if (pointerType === "touch") {
         const onClick = (): void => {
           owner.removeEventListener("click", onClick, true);
-          commitDraft();
+          pendingTap.current = null;
+          // The CURRENT commit, not this render's: a wait that spans a rerender
+          // would otherwise report through the closure it was created in — an
+          // old alpha, or a consumer no longer current. The ref is refreshed in
+          // the same layout effect that registers these listeners, so it is
+          // settled before any later native event.
+          latestCommit.current();
         };
         owner.addEventListener("click", onClick, true);
         pendingTap.current = () => {
@@ -412,10 +425,26 @@ export function ColorPicker<TValue = string>({
     return () => {
       owner.removeEventListener("pointerdown", onPointerDown, true);
       owner.removeEventListener("pointercancel", onPointerCancel, true);
-      pendingTap.current?.();
-      pendingTap.current = null;
     };
   });
+
+  /*
+   * A pending tap outlives an ordinary RERENDER and dies with the component.
+   *
+   * The effect above re-runs on every render so its closures stay current, and
+   * ending the wait in its cleanup killed a legitimate one: an outside target
+   * that sets state from its own `pointerdown` rerenders this picker before the
+   * click arrives, so the completion was removed and a finished colour never
+   * reached the host. What ends a wait is a new press, a cancelled gesture, or
+   * this component going away — never a render.
+   */
+  useIsomorphicLayoutEffect(
+    () => () => {
+      pendingTap.current?.();
+      pendingTap.current = null;
+    },
+    []
+  );
 
   const commit = (next: Hsva): void => {
     setHsva(next);

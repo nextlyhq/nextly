@@ -9,7 +9,13 @@
  * nothing would report the loss. The colour and the meaning are different
  * things, and only the host knows the second.
  */
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -597,6 +603,44 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange).not.toHaveBeenCalled();
   });
 
+  it("finishes a TOUCH tap whose wait spans a RERENDER", () => {
+    /*
+     * An outside target that sets state from its own `pointerdown` rerenders
+     * this picker before the click arrives. The listeners are re-registered on
+     * every render so their closures stay current, and ending the wait in that
+     * cleanup killed a legitimate one — the completion was removed and a
+     * finished colour never reached the host.
+     *
+     * A render is not an abandoned gesture. What ends a wait is a new press, a
+     * cancelled gesture, or the picker going away.
+     */
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+
+    // The rerender the outside handler's own state change would cause.
+    view.rerender(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    outside.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
   it("finishes a TOUCH tap that completes outside", () => {
     /*
      * The control for the case above: without it, a picker that had simply
@@ -647,7 +691,7 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange).toHaveBeenCalledWith("#123456");
   });
 
-  it("keeps a draft when the EYEDROPPER is cancelled", () => {
+  it("keeps a draft when the EYEDROPPER is cancelled", async () => {
     /*
      * The eyedropper's button is inside the picker, so pressing it is not a
      * dismissal — but it is not a replacement either until sampling succeeds.
@@ -675,6 +719,14 @@ describe("a colour typed one character at a time", () => {
     field.dispatchEvent(
       new FocusEvent("focusout", { bubbles: true, relatedTarget: eyedropper })
     );
+    /*
+     * CLICKED and awaited, so the sampling actually runs and rejects. Pressing
+     * alone never calls it, and the case would then pass against a version that
+     * cleared the draft before awaiting or inside the cancellation handler —
+     * which is the whole of what it exists to check.
+     */
+    fireEvent.click(eyedropper);
+    await act(async () => undefined);
 
     // Still there to be finished, rather than silently gone.
     fireEvent.keyDown(field, { key: "Enter" });
