@@ -106,6 +106,19 @@ An earlier collection on the same build, on a less busy machine, scored mobile
 performance 90–91 with LCP 3.4 s. The desktop figure did not move between those
 collections. That difference is the reason the mobile number is not gated.
 
+### On a GitHub-hosted runner
+
+The figures above come from a laptop. The same harness on `ubuntu-latest`:
+
+|                  | result                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| desktop, gated   | every assertion passed — performance, the three category floors, and the script/byte ceilings |
+| mobile, recorded | median **0.84** (runs: 0.77, 0.84, 0.82)                                                      |
+
+So the desktop floor is reachable on the runner the nightly actually uses, and
+the mobile figure is lower there than on any local collection — which is the
+second reason it is recorded rather than gated.
+
 ### Payload
 
 | resource   | requests | transferred       |

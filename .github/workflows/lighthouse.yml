@@ -125,14 +125,18 @@ jobs:
         run: npx --yes @lhci/cli@0.15.1 autorun --config=scripts/lighthouse/lighthouserc.mobile.json
 
       # `always()`, because the reports are most wanted on the run that failed.
+      #
+      # The reports are written to a directory whose name does not begin with a
+      # dot. `upload-artifact` treats a dotted path as hidden and skips it by
+      # default, so a run can write every report, report success on both
+      # Lighthouse steps, and still upload an empty artifact — a failure that
+      # looks like the measurement never happened rather than like a path.
       - name: Upload the reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lighthouse-reports-${{ github.run_id }}
-          path: |
-            .lighthouseci-report/
-            .lighthouseci-report-mobile/
+          path: lighthouse-reports/
           retention-days: 30
           if-no-files-found: error
 

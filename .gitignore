@@ -150,5 +150,4 @@ tsup.*.config.bundled_*.cjs
 # Working directory and dumped reports from the nightly Lighthouse run; the run
 # uploads them as an artifact rather than committing them.
 .lighthouseci/
-.lighthouseci-report/
-.lighthouseci-report-mobile/
+lighthouse-reports/

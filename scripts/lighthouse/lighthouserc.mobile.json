@@ -15,7 +15,7 @@
     },
     "upload": {
       "target": "filesystem",
-      "outputDir": ".lighthouseci-report-mobile",
+      "outputDir": "lighthouse-reports/mobile",
       "reportFilenamePattern": "mobile-%%DATETIME%%-report.%%EXTENSION%%"
     }
   }

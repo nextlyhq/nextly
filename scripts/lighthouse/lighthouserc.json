@@ -43,7 +43,7 @@
     },
     "upload": {
       "target": "filesystem",
-      "outputDir": ".lighthouseci-report",
+      "outputDir": "lighthouse-reports/desktop",
       "reportFilenamePattern": "%%PATHNAME%%-%%DATETIME%%-report.%%EXTENSION%%"
     }
   }
