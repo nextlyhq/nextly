@@ -2005,6 +2005,35 @@ function parseApiKeyRoutes(
   return null;
 }
 
+/**
+ * GET or POST /api/jobs/run → run one background job pass.
+ *
+ * `run` is the only path under `jobs`, and it is an operation rather than an
+ * id: there is no per-job REST surface yet, so nothing can collide with it.
+ * GET is accepted because Vercel Cron triggers with a GET; the pass is
+ * idempotent under its lease, and the route authorizes either method.
+ */
+function parseJobRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (id !== "run" || subresource) return null;
+  if (httpMethod !== "POST" && httpMethod !== "GET") return null;
+  // Running the queue is not a CRUD OperationType, but the dispatch guard
+  // rejects a route with no operation before the direct-dispatch jobs branch
+  // runs, so a truthy value is required. The handler does its own
+  // authorization and this value is otherwise unused — the same accommodation
+  // the webhook drain makes one function below.
+  return {
+    service: "jobs",
+    operation: "single",
+    method: "runJobs",
+    routeParams,
+  };
+}
+
 function parseWebhookRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -2596,6 +2625,12 @@ export function parseRestRoute(
       httpMethod,
       routeParams
     );
+    if (result) return result;
+  }
+
+  // Handle the background job trigger
+  if (resource === "jobs") {
+    const result = parseJobRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
   }
 

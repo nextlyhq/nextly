@@ -45,6 +45,14 @@ function executorOf(db: UsersReadDb): unknown {
     : undefined;
 }
 
+/**
+ * The database surface one pass needs: the jobs table plus the users read the
+ * identity resolver performs. Named as the minimal intersection, rather than the
+ * concrete adapter type, so a caller resolves it from the DI container as
+ * exactly what a pass uses — the same reason `WebhookDrainDatabase` exists.
+ */
+export type JobsPassDatabase = JobsDatabase & UsersReadDb;
+
 /** How long a finished job row is kept before a pass may remove it. */
 export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -82,6 +90,8 @@ export interface RunJobsPassOptions {
   retentionMs?: number | null;
   /** Rows one pass may remove. */
   pruneLimit?: number;
+  /** Told when a sweep could not be queued; the pass proceeds regardless. */
+  onSweepError?: (error: unknown, slug: string) => void;
 }
 
 /**
@@ -142,12 +152,75 @@ export function databaseRunAs(
  * Returns once nothing further is immediately actionable or the wall-clock
  * budget is spent; jobs scheduled for a future retry are left for a later pass.
  */
+/**
+ * The dedupe key that keeps exactly one of a sweep outstanding.
+ *
+ * Stable, so a second trigger firing while the first sweep is still queued or
+ * running is refused as a duplicate rather than queueing a second copy. It stops
+ * being a duplicate the moment the row goes terminal: `finalize` clears
+ * `dedupe_key` for precisely this reason, so the next trigger queues a fresh
+ * sweep instead of finding the key held forever by a job that has been and gone.
+ */
+export function sweepDedupeKey(slug: string): string {
+  return `sweep:${slug}`;
+}
+
+/**
+ * Make sure every sweep this installation registered has a row waiting.
+ *
+ * Without this, a registered sweep is a handler nobody enqueues. `releases:drain`
+ * is the case that proves it: a release comes due at an instant with no request
+ * attached, so no code path is ever in a position to queue the work, and the
+ * queue stays empty while looking exactly like a queue with nothing to do.
+ *
+ * Failures here do not fail the pass. The jobs already in the table are real
+ * work, and refusing to run them because a housekeeping insert failed would turn
+ * a recoverable hiccup into a stalled queue.
+ */
+async function queueSweeps(
+  repository: JobsRepository,
+  registry: JobRegistry,
+  now: Date,
+  logger?: (error: unknown, slug: string) => void
+): Promise<void> {
+  for (const definition of registry.sweeps()) {
+    try {
+      await repository.enqueue({
+        slug: definition.slug,
+        input: null,
+        // Due immediately: the trigger firing IS the schedule. A future `runAt`
+        // would make the sweep wait for a tick after the one that queued it.
+        runAt: null,
+        // No principal. A sweep acts as nobody and resolves each item's own
+        // identity when it performs it; a user here would be an authority the
+        // sweep could lend to work that never asked for it.
+        runAsUserId: null,
+        dedupeKey: sweepDedupeKey(definition.slug),
+        now,
+      });
+    } catch (error) {
+      logger?.(error, definition.slug);
+    }
+  }
+}
+
 export async function runJobsPass(
-  adapter: JobsDatabase & UsersReadDb,
+  adapter: JobsPassDatabase,
   registry: JobRegistry,
   options?: RunJobsPassOptions
 ): Promise<RunJobsResult> {
   const repository = new JobsRepository(adapter);
+
+  // BEFORE the drain, so the pass that queues a sweep is also the pass that
+  // runs it. Queueing afterwards would leave every sweep waiting for the NEXT
+  // trigger, doubling the latency of everything that depends on one.
+  await queueSweeps(
+    repository,
+    registry,
+    (options?.now ?? (() => new Date()))(),
+    options?.onSweepError
+  );
+
   const result = await runJobs({
     store: repository,
     registry,

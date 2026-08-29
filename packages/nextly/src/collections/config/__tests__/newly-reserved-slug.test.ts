@@ -66,10 +66,27 @@ describe("a slug that became reserved in this version", () => {
     );
   });
 
+  it("tells a `background-jobs` owner the rule changed too", () => {
+    // The list entry alone is not the guarantee: a note nothing reads is
+    // indistinguishable from a missing one, so each newly reserved name is
+    // checked where an operator actually meets it.
+    const result = validateCollectionConfig({
+      slug: "background-jobs",
+      fields: [{ name: "title", type: "text" }],
+    } as unknown as CollectionConfig);
+
+    const message = reservedError(result.errors.map(e => e.message));
+    expect(message).toContain("became a reserved system resource");
+    expect(message).toContain("must rename it");
+  });
+
   it("carries a note for every name added to the reserved list since 0.0.1", () => {
     // The list and its explanations drift apart silently: adding a name to
     // SYSTEM_RESOURCES is one line, and nothing about that line fails when the
     // sentence an operator needs is missing.
-    expect([...NEWLY_RESERVED_SLUG_NOTES.keys()]).toEqual(["content-releases"]);
+    expect([...NEWLY_RESERVED_SLUG_NOTES.keys()]).toEqual([
+      "content-releases",
+      "background-jobs",
+    ]);
   });
 });
