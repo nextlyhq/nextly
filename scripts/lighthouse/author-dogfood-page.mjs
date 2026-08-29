@@ -143,6 +143,68 @@ function resolveMedia(node, media) {
   return { ...node, props, ...(slots === undefined ? {} : { slots }) };
 }
 
+/**
+ * Undoes the escaping the renderer applies, so a marker is compared against the
+ * text a reader sees rather than against its markup spelling.
+ *
+ * Authored copy reaches the page escaped: an ampersand becomes `&amp;`, an
+ * apostrophe in an attribute becomes `&#x27;`. Comparing raw fixture text
+ * against raw HTML therefore reports a missing marker for an element that
+ * rendered perfectly — a false failure whose message points at the page when
+ * the fault is in the comparison. Attributes and text nodes also escape
+ * different sets, so decoding the page is the one operation that covers both.
+ *
+ * `&amp;` is decoded last. Doing it first would turn `&amp;lt;` — an escaped
+ * ampersand followed by the letters — into `&lt;`, which the next pass would
+ * then read as a character it never was.
+ */
+function decodeEntities(html) {
+  return html
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&amp;", "&");
+}
+
+/**
+ * The strings the rendered page must contain, read out of the document rather
+ * than written down beside it.
+ *
+ * Every heading and every image's alt text, so the check fails if any of them
+ * stops rendering. The images are the half a headline check cannot stand in
+ * for: the image block returns nothing at all when media resolution or URL
+ * filtering rejects an asset, and a page that quietly drops both images still
+ * renders its prose, still answers 200, and then scores BETTER, because every
+ * budget in the assertion set is a maximum. A run like that would report a
+ * healthier number for a page that had lost its largest element.
+ *
+ * Derived rather than listed so the two cannot drift: editing the fixture's
+ * copy changes what is required, with nothing here to keep in step.
+ */
+function expectedMarkers(node) {
+  const markers = [];
+  const visit = current => {
+    const props = current.props ?? {};
+    if (current.type === "core/heading" && typeof props.text === "string") {
+      markers.push(props.text);
+    }
+    if (
+      current.type === "core/image" &&
+      typeof props.alt === "string" &&
+      props.decorative !== true
+    ) {
+      markers.push(props.alt);
+    }
+    for (const children of Object.values(current.slots ?? {})) {
+      for (const child of children) visit(child);
+    }
+  };
+  for (const top of node.nodes) visit(top);
+  return markers;
+}
+
 async function main() {
   const csrf = await signIn();
   const media = await mediaByFilename();
@@ -181,11 +243,16 @@ async function main() {
   // step reported success.
   const visitor = await fetch(`${BASE_URL}/`, { headers: { cookie: "" } });
   const html = await visitor.text();
-  const headline = "Build pages, not pipelines";
-  if (!html.includes(headline)) {
+
+  const rendered = decodeEntities(html);
+  const missing = expectedMarkers(document).filter(
+    marker => !rendered.includes(marker)
+  );
+  if (missing.length > 0) {
     throw new Error(
-      `the authored page is not being served to an anonymous visitor: ` +
-        `GET / returned ${visitor.status} without "${headline}"`
+      `the authored page is not being served to an anonymous visitor as ` +
+        `written: GET / returned ${visitor.status} without ` +
+        missing.map(marker => JSON.stringify(marker)).join(", ")
     );
   }
 

@@ -30,6 +30,11 @@ pnpm --filter playground exec tsx scripts/seed.ts
 pnpm --filter playground exec next build
 PORT=3111 pnpm --filter playground exec next start &
 
+# Wait for the server, as the workflow does. Authoring immediately races a cold
+# start, and the first CSRF fetch then fails on a refused connection rather than
+# on anything about the page.
+until curl -sf http://localhost:3111/api/health > /dev/null; do sleep 1; done
+
 node scripts/lighthouse/author-dogfood-page.mjs
 npx @lhci/cli@0.15.1 autorun --config=scripts/lighthouse/lighthouserc.json
 npx @lhci/cli@0.15.1 autorun --config=scripts/lighthouse/lighthouserc.mobile.json
@@ -37,6 +42,11 @@ npx @lhci/cli@0.15.1 autorun --config=scripts/lighthouse/lighthouserc.mobile.jso
 
 On macOS, point Lighthouse at a browser first:
 `export CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"`.
+
+Start from a fresh database file rather than reseeding an existing one. The seed
+exits early when the dev user already exists — `seed skipped (users-exist)` —
+so it will not restore media, or anything else, into a database that has been
+partly emptied. The workflow gets this for free by running on a clean checkout.
 
 ## Why desktop gates and mobile only records
 
