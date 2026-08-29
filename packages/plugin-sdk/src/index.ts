@@ -402,3 +402,24 @@ export type {
   ProviderAvailability,
   RegisteredEmailProvider,
 } from "nextly";
+
+/**
+ * @experimental Background jobs.
+ *
+ * A plugin declares a job type with `defineJob` and asks for one to happen with
+ * `nextly.jobs.queue`. Held experimental per D55 until a first-party plugin
+ * ships one — the release drain is core's, not a plugin's, so nothing has yet
+ * exercised this from the outside.
+ */
+export { defineJob, MAX_JOB_SLUG_LENGTH } from "nextly";
+/** @experimental See `defineJob`. */
+export type {
+  JobContext,
+  JobDefinition,
+  JobDefinitionInput,
+  JobInputFor,
+  JobRetryPolicy,
+  JobSlug,
+  QueueJobArgs,
+  QueueJobResult,
+} from "nextly";
