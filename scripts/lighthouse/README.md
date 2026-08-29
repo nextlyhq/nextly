@@ -118,16 +118,26 @@ collections. That difference is the reason the mobile number is not gated.
 
 ### On a GitHub-hosted runner
 
-The figures above come from a laptop. The same harness on `ubuntu-latest`:
+The figures above come from a laptop. The same harness on `ubuntu-latest`,
+Lighthouse 12.6.1, HeadlessChrome 151, read from the uploaded reports:
 
-|                  | result                                                                                        |
-| ---------------- | --------------------------------------------------------------------------------------------- |
-| desktop, gated   | every assertion passed — performance, the three category floors, and the script/byte ceilings |
-| mobile, recorded | median **0.84** (runs: 0.77, 0.84, 0.82)                                                      |
+| metric                               | desktop (5 runs)  | mobile (3 runs)     |
+| ------------------------------------ | ----------------- | ------------------- |
+| Performance                          | **100** (98-100)  | **68** (67-88)      |
+| Accessibility / Best Practices / SEO | 100               | 100                 |
+| FCP                                  | 260 ms            | 917 ms              |
+| LCP                                  | 768 ms (679-1085) | 5284 ms (1743-5826) |
+| TBT                                  | 60 ms             | 472 ms              |
+| CLS                                  | 0                 | 0                   |
 
-So the desktop floor is reachable on the runner the nightly actually uses, and
-the mobile figure is lower there than on any local collection — which is the
-second reason it is recorded rather than gated.
+Every desktop assertion passed, so the floor is reachable on the machine the
+nightly actually uses.
+
+The mobile column is the second reason that profile is recorded rather than
+gated, and a stronger reason than the local numbers were. Across three runs of
+one build on one machine, mobile performance ranged 67-88 and LCP ranged
+1743-5826 ms - a 21-point swing with nothing changing but the run. Gated, that
+is a coin toss; recorded, it is a number worth watching.
 
 ### Payload
 
