@@ -22,14 +22,17 @@ import {
 } from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { container } from "../di";
+import { getAdapterFromDI } from "../dispatcher/helpers/di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
 import type { UserContext } from "../domains/collections/services/collection-types";
+import { COMPANION_UPDATED_AT_COLUMN } from "../domains/i18n/companion-columns";
 import {
   TRANSLATION_FILTER_STATES,
   type TranslationFilterState,
 } from "../domains/i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
+import { resolveCompanionColumn } from "../domains/i18n/runtime/companion-readiness";
 import {
   authorizationGroups,
   countIsTrustworthy,
@@ -38,6 +41,7 @@ import {
   hasTranslatableFields,
   notConsultedSources,
   planWorklistFanOut,
+  unanswerableCollections,
   translatedFilter,
   worklistTotal,
   worklistTotalPages,
@@ -49,6 +53,7 @@ import {
 } from "../domains/i18n/services/translation-worklist-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import type { CollectionFileManager } from "../services/collection-file-manager";
 import type { CollectionsHandler } from "../services/collections-handler";
 
 import {
@@ -238,6 +243,44 @@ async function localizedCollections(): Promise<
 }
 
 /**
+ * Ask each collection's translations table whether it physically records when a language was
+ * written, which is what the staleness question compares.
+ *
+ * Resolved per collection rather than once, because the column arrives with a migration and a site
+ * mid-upgrade genuinely has both kinds. Resolved on the pool before any transaction opens, and
+ * concurrently — the fan-out below already issues one query per collection, so serialising these
+ * would make the screen slower than the work it is preparing for.
+ */
+async function resolveStalenessCapability<T extends LocalizedCollectionRef>(
+  collections: readonly T[]
+): Promise<(T & { canAnswerStaleness: boolean })[]> {
+  const adapter = getAdapterFromDI();
+  // No connection, no question. Reporting every collection as unable to answer is the honest
+  // reading and the conservative one: the alternative is claiming they can, which would emit SQL
+  // naming a column nothing has checked for.
+  if (!adapter) {
+    return collections.map(c => ({ ...c, canAnswerStaleness: false }));
+  }
+  const fileManager = container.get<CollectionFileManager>(
+    "collectionFileManager"
+  );
+  return Promise.all(
+    collections.map(async c => {
+      const companion = await fileManager.loadCompanionSchema(c.slug);
+      if (!companion) return { ...c, canAnswerStaleness: false };
+      return {
+        ...c,
+        canAnswerStaleness: await resolveCompanionColumn(
+          adapter,
+          companion.companionTableName,
+          COMPANION_UPDATED_AT_COLUMN
+        ),
+      };
+    })
+  );
+}
+
+/**
  * GET /api/translations
  *
  * Query params:
@@ -287,7 +330,22 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
     caller,
     localized.map(c => c.slug)
   );
-  const eligible = eligibleCollections(localized, state, readable);
+  // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a negative verdict is
+  // deliberately not remembered, so asking for every state would put one catalogue read per
+  // collection on every worklist request for a capability four of the five states never consult.
+  //
+  // For `stale` it is unavoidable and the cost is accepted: this is an admin screen that already
+  // fans out one query per collection, a collection that CAN answer is remembered and costs
+  // nothing after the first ask, and the cost ends when the operator migrates.
+  const withStaleCapability =
+    state === "stale" ? await resolveStalenessCapability(localized) : localized;
+
+  const eligible = eligibleCollections(withStaleCapability, state, readable);
+  const unanswerable = unanswerableCollections(
+    withStaleCapability,
+    state,
+    readable
+  );
   const { queried, skippedCollections } = planWorklistFanOut(eligible);
   const bySlug = new Map(eligible.map(c => [c.slug, c]));
 
@@ -426,6 +484,10 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // Named, so the screen can say WHICH. Omitted entirely when the answer
       // covered everything, so the field's presence is itself the signal.
       ...(notConsulted.length === 0 ? {} : { notConsulted }),
+      // Kept apart from `notConsulted` on the wire for the same reason the service keeps them
+      // apart: this is the one with a remedy. A screen that merges them tells an operator to
+      // look again when what they need to do is migrate.
+      ...(unanswerable.length === 0 ? {} : { unanswerable }),
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

@@ -79,18 +79,18 @@ export const WORKLIST_STATES: readonly {
     value,
     label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
   })),
-  // 🔴 No tab for `stale`, and its absence from this array is the whole statement.
+  // 🔴 "Needs review", not "Stale" or "Outdated", and the wording is the decision. The wire value
+  // says what the system MEASURED — a source written after its translation — while the label says
+  // what a person should DO about it. A translation whose source moved may well still be correct,
+  // so naming the state after the measurement would tell an author their work is wrong when all
+  // that is known is that it is worth a look.
   //
-  // The server answers that state with "nothing is known to be stale", because nothing can
-  // establish whether a given companion physically carries the timestamp the answer depends on. A
-  // tab that is always empty is worse than no tab: it reads as "this site has no stale
-  // translations", which is a claim, and the wrong one.
-  //
-  // The absence reaches the URL as well, and that is deliberate rather than a gap:
-  // `worklistStateFrom` resolves only what this array offers, so a saved link naming `stale`
-  // falls back to the question this page leads with. A page filtered by a state whose tab is not
-  // shown would highlight nothing while listing a subset the reader cannot account for, which is
-  // worse than answering a different question visibly.
+  // Offered now because the server can answer it honestly per collection: a translations table
+  // that physically records when each language was written participates, and one that does not is
+  // excluded AND NAMED in `unanswerable`. An always-empty tab would read as "this site has no
+  // stale translations", which is a claim and the wrong one — the naming is what stops the empty
+  // case making it.
+  { value: "stale", label: "Needs review" },
 ];
 
 /**
@@ -179,6 +179,18 @@ export type TranslationWorklistMeta = PaginationMeta & {
    * would invite a reader to check it and conclude something from its absence.
    */
   notConsulted?: string[];
+  /**
+   * Collections that cannot answer the question this tab asks, named separately.
+   *
+   * Kept apart from {@link notConsulted} because the remedy differs, and that is the only reason
+   * two lists are better than one here. A collection the fan-out did not reach wants a narrower
+   * search; one whose translations table predates the timestamp this tab compares wants
+   * `nextly migrate`. Merged, the actionable case hides among the unactionable ones.
+   *
+   * Only ever populated for the review tab — every other state answers from data every
+   * translations table has. Absent when nothing was excluded, so its PRESENCE is the signal.
+   */
+  unanswerable?: string[];
 };
 
 /** The canonical list envelope, carrying this read's own meta. */

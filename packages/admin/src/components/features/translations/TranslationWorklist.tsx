@@ -301,6 +301,34 @@ function NotConsultedNotice({ collections }: { collections: string[] }) {
   );
 }
 
+/**
+ * Collections that could not answer the question this tab asks, and what to do about it.
+ *
+ * 🔴 A SECOND notice rather than more names in the first, and the reason is the remedy. The one
+ * above ends with "Reload to see whether it was temporary", which is right for a fan-out cap and
+ * for a collection that could not be read — and wrong here, where reloading changes nothing and
+ * the operator would loop. This case has one specific fix and says it.
+ *
+ * 🔴 It also has to appear at all. A collection that cannot compare timestamps contributes no rows
+ * to this tab, and no rows is indistinguishable from "nothing here needs review" — the reassuring
+ * direction, and the exact claim this whole signal exists not to make by accident.
+ */
+function CannotAnswerNotice({ collections }: { collections: string[] }) {
+  if (collections.length === 0) return null;
+  return (
+    <Alert>
+      <AlertTitle>Some collections can&rsquo;t be checked yet</AlertTitle>
+      <AlertDescription>
+        These collections don&rsquo;t record when each language was last
+        written, so nothing can tell whether their translations have fallen
+        behind: {collections.join(", ")}. Run <code>nextly migrate</code> to add
+        it — after that their languages are compared like everything else.
+        Existing translations keep working in the meantime.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /** Loading, failed, or the list itself — the three a read can be in. */
 function WorklistResult({
   query,
@@ -416,6 +444,7 @@ export function TranslationWorklist({
   const stateLabel =
     WORKLIST_STATES.find(t => t.value === state)?.label ?? "outstanding";
   const notConsulted = query.data?.meta.notConsulted ?? [];
+  const unanswerable = query.data?.meta.unanswerable ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -434,6 +463,7 @@ export function TranslationWorklist({
       />
 
       <NotConsultedNotice collections={notConsulted} />
+      <CannotAnswerNotice collections={unanswerable} />
 
       <div className="rounded-md border border-border">
         <WorklistResult
@@ -441,7 +471,7 @@ export function TranslationWorklist({
           active={active}
           source={source}
           stateLabel={stateLabel}
-          complete={notConsulted.length === 0}
+          complete={notConsulted.length === 0 && unanswerable.length === 0}
         />
       </div>
 

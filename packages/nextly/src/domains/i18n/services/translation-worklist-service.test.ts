@@ -10,6 +10,7 @@ import {
   hasTranslatableFields,
   notConsultedSources,
   planWorklistFanOut,
+  unanswerableCollections,
   translatedFilter,
   worklistId,
   worklistTitle,
@@ -456,5 +457,90 @@ describe("authorizationGroups — a step that cannot advance", () => {
       ["b"],
       ["c"],
     ]);
+  });
+});
+
+describe("a collection that cannot answer the staleness question", () => {
+  const coll = (slug: string, canAnswerStaleness?: boolean) => ({
+    slug,
+    label: slug,
+    hasStatus: true,
+    ...(canAnswerStaleness === undefined ? {} : { canAnswerStaleness }),
+  });
+
+  it("is left out of the stale fan-out rather than contributing zero", () => {
+    // 🔴 The filter answers `1=0` for a companion that has no timestamp column, so querying it
+    // returns nothing — and nothing is indistinguishable from "this collection has no stale
+    // translations". Excluding it is what makes the difference reportable at all.
+    const eligible = eligibleCollections(
+      [coll("posts", true), coll("legacy", false)],
+      "stale",
+      undefined
+    );
+    expect(eligible.map(c => c.slug)).toEqual(["posts"]);
+  });
+
+  it("is NOT left out of the other four states, which never ask", () => {
+    // The capability is only consulted for `stale`; the flag is absent for every other state
+    // because the probe that fills it is not run. A filter that excluded on an unasked question
+    // would silently shrink every other tab.
+    for (const state of [
+      "missing",
+      "translated",
+      "draft",
+      "published",
+    ] as const) {
+      const eligible = eligibleCollections(
+        [coll("posts"), coll("legacy")],
+        state,
+        undefined
+      );
+      expect(eligible.map(c => c.slug)).toEqual(["posts", "legacy"]);
+    }
+  });
+
+  it("is NAMED, so a zero is never mistaken for good news", () => {
+    expect(
+      unanswerableCollections(
+        [coll("posts", true), coll("legacy", false)],
+        "stale",
+        undefined
+      )
+    ).toEqual(["legacy"]);
+  });
+
+  it("names nobody for a state that does not ask the question", () => {
+    expect(
+      unanswerableCollections(
+        [coll("posts", true), coll("legacy", false)],
+        "missing",
+        undefined
+      )
+    ).toEqual([]);
+  });
+
+  it("🔴 never names a collection the caller cannot read", () => {
+    // Same rule the fan-out already keeps: a slug reported back is a statement that the collection
+    // EXISTS. Someone with no right to know that must not learn it from a coverage notice, which
+    // is the softest-looking place for it to leak.
+    expect(
+      unanswerableCollections(
+        [coll("posts", false), coll("secret", false)],
+        "stale",
+        new Set(["posts"])
+      )
+    ).toEqual(["posts"]);
+  });
+
+  it("treats an unresolved capability as answerable, not as unanswerable", () => {
+    // `undefined` means the question was never asked — which is every state but `stale`, and also
+    // a collection the probe never reached. Excluding on it would turn "not asked" into "cannot",
+    // and quietly empty the tab.
+    expect(
+      eligibleCollections([coll("posts")], "stale", undefined).map(c => c.slug)
+    ).toEqual(["posts"]);
+    expect(
+      unanswerableCollections([coll("posts")], "stale", undefined)
+    ).toEqual([]);
   });
 });
