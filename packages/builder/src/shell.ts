@@ -400,6 +400,19 @@ export type { SelectionBreadcrumbProps } from "./breadcrumb";
  */
 export { ClassSelector } from "./class-selector";
 export type { ClassSelectorProps } from "./class-selector";
+/*
+ * The notice surface is deliberately NOT exported.
+ *
+ * `BuilderShell` owns its queue and renders the region itself, and it offers no
+ * way to supply a queue or to suppress the built-in region — so a host calling
+ * `useNoticeQueue` would build a SECOND, empty queue and place a region that
+ * can never receive anything, while the shell's own went on reporting. An
+ * export whose documented use cannot work is worse than its absence, because
+ * the failure is silent and looks like a wiring mistake at the call site.
+ *
+ * Publishing it needs the shell to accept a queue first. That is a contract
+ * change rather than an export, so it waits for a host that wants it.
+ */
 export { ClassManagerPanel } from "./class-manager-panel";
 export type { ClassManagerPanelProps } from "./class-manager-panel";
 export {

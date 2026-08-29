@@ -1639,3 +1639,25 @@ describe("telling the host which zoom the shell is holding", () => {
     expect(reports).toHaveLength(settled);
   });
 });
+
+describe("where the notice region sits", () => {
+  it("renders it INSIDE the chrome, so its tokens resolve", () => {
+    /*
+     * Every `--nx-builder-*` token is declared on `.nx-builder-chrome`, and
+     * custom properties inherit down but never across. A region rendered as a
+     * sibling of the regions resolved its border, background and text to
+     * nothing — a transparent box with host-default text, which in dark mode
+     * is a failure message the author cannot read.
+     *
+     * The region is always mounted so a polite live region exists before its
+     * content changes, which is what makes this assertable without provoking a
+     * failure first.
+     */
+    render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
+    const chrome = document.querySelector(".nx-builder-chrome");
+    expect(chrome).not.toBeNull();
+    const region = document.querySelector(".nx-notices");
+    expect(region).not.toBeNull();
+    expect(chrome?.contains(region ?? null)).toBe(true);
+  });
+});

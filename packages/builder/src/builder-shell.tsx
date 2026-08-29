@@ -27,6 +27,11 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import {
+  BuilderNoticeRegion,
+  NoticeSinkProvider,
+  useNoticeQueue,
+} from "./builder-notices";
 import type { CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
@@ -755,6 +760,7 @@ function useSeparatorRegionEscape(
 }
 
 function ShellRegions({
+  notices,
   appliedScale = 1,
   onZoomPick,
   renderPanel,
@@ -771,6 +777,14 @@ function ShellRegions({
   active,
   loadCount,
 }: Omit<BuilderShellProps, "store"> & {
+  /**
+   * The shell's notice region, rendered inside the chrome.
+   *
+   * Passed in rather than built here so this component keeps owning LAYOUT and
+   * nothing else — and so the queue behind it stays with the shell, which is
+   * what outlives every per-node key below it.
+   */
+  notices?: React.ReactNode;
   /** The zoom picker, or absent where the host wired none. */
   onZoomPick: ((next: CanvasZoom) => void) | undefined;
   preferences: ShellPreferences;
@@ -871,6 +885,11 @@ function ShellRegions({
         ? {}
         : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
+      {/* First child of the chrome, so it inherits the `--nx-builder-*`
+          tokens declared on this element. It is `position: fixed`, so being
+          inside a `flex` column that clips adds nothing to the layout and the
+          overflow rule cannot cut it off. */}
+      {notices}
       <header
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
         aria-label="Editor actions"
@@ -1326,6 +1345,12 @@ export function BuilderShell({
   const [overlayHost, setOverlayHost] = React.useState<HTMLDivElement | null>(
     null
   );
+  /*
+   * Reports from controls that could not make one themselves. Owned at this
+   * level because it must survive everything below it being unmounted, which
+   * is exactly what the inspector's per-node keys do on every selection change.
+   */
+  const notices = useNoticeQueue();
 
   return (
     <ShortcutProvider>
@@ -1477,22 +1502,43 @@ export function BuilderShell({
                * rather than a crash, and no overlay can be open that early.
                */}
               <PortalProvider container={overlayHost}>
-                <ShellRegions
-                  appliedScale={appliedScale}
-                  onZoomPick={onZoomPick}
-                  {...props}
-                  preferences={preferences}
-                  update={update}
-                  active={shellFits}
-                  loadCount={loadCount}
-                  /*
-                   * The caller's `className` stops here: the measuring wrapper
-                   * above carries it. Passing it on would apply the host's grid
-                   * area, height or border a second time, on a box nested inside
-                   * the one already carrying it.
-                   */
-                  className={undefined}
-                />
+                {/* Wraps the regions rather than sitting beside them: the
+                    inspector and the panels are `ReactNode` props, so they
+                    become descendants of this provider by being RENDERED here,
+                    wherever the host created them. */}
+                <NoticeSinkProvider raise={notices.raise}>
+                  <ShellRegions
+                    /*
+                     * Failures raised by a control that has since been
+                     * unmounted. Handed to the regions rather than rendered
+                     * beside them, so it lands INSIDE the element carrying the
+                     * builder's chrome: every `--nx-builder-*` token is
+                     * declared there, and custom properties inherit down but
+                     * never across. It is taken out of flow once inside, so it
+                     * adds no box to the layout the regions measure.
+                     */
+                    notices={
+                      <BuilderNoticeRegion
+                        notices={notices.notices}
+                        onDismiss={notices.dismiss}
+                      />
+                    }
+                    appliedScale={appliedScale}
+                    onZoomPick={onZoomPick}
+                    {...props}
+                    preferences={preferences}
+                    update={update}
+                    active={shellFits}
+                    loadCount={loadCount}
+                    /*
+                     * The caller's `className` stops here: the measuring wrapper
+                     * above carries it. Passing it on would apply the host's grid
+                     * area, height or border a second time, on a box nested inside
+                     * the one already carrying it.
+                     */
+                    className={undefined}
+                  />
+                </NoticeSinkProvider>
               </PortalProvider>
             </ShellActiveContext.Provider>
           </div>

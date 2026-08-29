@@ -157,6 +157,23 @@ describe("reading a font-family value against the faces a site loads", () => {
     });
   });
 
+  it("matches a face whose OWN name carries the edge spaces", () => {
+    // `emitFontFaces` writes the family verbatim, so a face called `" Brand "`
+    // declares a family whose name holds those spaces and a token quoting them
+    // selects it. Both sides have to normalise the same way or a face the
+    // browser matches is reported as one the site never loads.
+    expect(readStack('" Brand "', [face(" Brand ")]).families[0]).toEqual({
+      family: " Brand ",
+      source: "hosted",
+    });
+    // The control, in the other direction: the padded face does NOT answer for
+    // the unpadded name.
+    expect(readStack("Brand", [face(" Brand ")]).families[0]).toEqual({
+      family: "Brand",
+      source: "not-provided",
+    });
+  });
+
   it("reports only tokens the compiler actually writes", () => {
     // `emitTokenBlocks` refuses a token whose name is not a token name, so it
     // reaches no page. Reporting on it would describe a typeface the site never

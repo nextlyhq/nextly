@@ -39,6 +39,7 @@ import type { NamedClass } from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useNoticeSink } from "./builder-notices";
 import {
   appliedClasses,
   nodeHasRoom,
@@ -239,6 +240,27 @@ export function ClassSelector({
   // In flight, so a second Enter cannot queue a duplicate class while the
   // first save is still on the network.
   const [saving, setSaving] = React.useState(false);
+  /*
+   * Where a refusal goes when this component is no longer there to show one.
+   *
+   * The style inspector keys this by node, so changing selection unmounts it
+   * while a save is still on the network. `setFailure` then runs on a dead
+   * instance and reaches nothing, which is silence about a class that was not
+   * created. The shell outlives the key and can still speak.
+   */
+  const raiseNotice = useNoticeSink();
+  /*
+   * Whether this instance can still draw. A ref rather than state because
+   * nothing renders from it and setting it must schedule no work: it is read
+   * inside a callback that has already outlived the render it came from.
+   */
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const listId = React.useId();
   /*
    * What the node holds RIGHT NOW, for the callback that runs after a save.
@@ -271,6 +293,30 @@ export function ClassSelector({
    */
   const currentQuery = React.useRef(query);
   currentQuery.current = query;
+
+  /**
+   * Tell the author a class was not created, wherever they can still be told.
+   *
+   * Inline while this component is on screen and still showing the node the
+   * request was made against, because a message beside the control that raised
+   * it needs no explanation of what it refers to. Otherwise through the shell,
+   * which no selection change unmounts.
+   *
+   * The two are exclusive on purpose: raising both would print one refusal
+   * twice, and a region that repeats what is already on screen is one authors
+   * learn to stop reading.
+   */
+  const reportRefusal = (about: string, reason: string): void => {
+    if (mounted.current && currentNodeId.current === about) {
+      setFailure({
+        about,
+        whenIds: currentIds.current,
+        issue: { kind: "not-created", reason },
+      });
+      return;
+    }
+    raiseNotice(reason);
+  };
 
   /*
    * Cleared, not merely hidden. Hiding leaves the refusal stored, so a node
@@ -344,20 +390,24 @@ export function ClassSelector({
       void onCreateClass(option.slug)
         .then(created => {
           /*
+           * A refusal is reported first, and is NOT gated on the node still
+           * being selected. Nothing was created, so the news is about the
+           * site's class library rather than about the element that happened to
+           * be in hand when the author asked — and gating it meant an author
+           * who clicked elsewhere while the write was in flight was told
+           * nothing at all.
+           */
+          if (!created.ok) {
+            reportRefusal(startedOn, created.reason);
+            return;
+          }
+          /*
            * The element moved on. The class was created and is in the library,
            * but applying it now would put it on a node the author did not ask
            * about — the request's own node is no longer selected, and there is
            * nothing here that could write to it safely.
            */
           if (currentNodeId.current !== startedOn) return;
-          if (!created.ok) {
-            setFailure({
-              about: nodeId,
-              whenIds: nodeClassIds,
-              issue: { kind: "not-created", reason: created.reason },
-            });
-            return;
-          }
           // Applied through the ordinary path, so a node already at its limit
           // refuses here exactly as it would for an existing class rather than
           // being special-cased into a second rule — and against the node as
@@ -376,14 +426,7 @@ export function ClassSelector({
          * as the editor stays open. Silent, and unrecoverable without a reload.
          */
         .catch(() => {
-          setFailure({
-            about: nodeId,
-            whenIds: nodeClassIds,
-            issue: {
-              kind: "not-created",
-              reason: "This class could not be created.",
-            },
-          });
+          reportRefusal(startedOn, "This class could not be created.");
         })
         // In `finally`, so neither path can leave the field guarded.
         .finally(() => {

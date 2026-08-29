@@ -664,6 +664,12 @@ export type {
 
 export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
 
+// The projection that makes the line above USABLE from its documented
+// producer. `getCollection()` is declared to return `Collection`, which has no
+// root-level `fields`, `status` or `versions`, so its result is not assignable
+// to `ResolvedDraftSplitCollection` however faithfully the record carries them.
+export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
+
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {
   EventBus,

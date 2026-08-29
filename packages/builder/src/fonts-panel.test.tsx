@@ -170,6 +170,119 @@ describe("the panel over a site that has been read", () => {
     ).toBeTruthy();
   });
 
+  it("expands a WILDCARD range rather than reading its leading digits", () => {
+    // `U+4??` is `U+0400-04FF`. Read as a plain hex run it captures `4` alone,
+    // which lands three orders of magnitude below the block it names and hands
+    // a Cyrillic face the Latin sentence it cannot draw.
+    const cyrillic: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-cyrillic.woff2", format: "woff2" }],
+      unicodeRange: "U+4??",
+    };
+    render(<FontsPanel faces={[cyrillic]} tokens={{ tokens: [] }} />);
+    expect(screen.getByText(/Почти/)).toBeTruthy();
+    expect(
+      screen.queryByText("Almost before we knew it, we had left the ground")
+    ).toBeNull();
+  });
+
+  it("refuses a sentence the range only PARTLY covers", () => {
+    // A range opening in the Cyrillic block does not mean it reaches across it.
+    // Two codepoints cannot draw a sentence, so the row falls back to glyphs
+    // taken from the range itself rather than demonstrating a fallback font.
+    const sliver: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-sliver.woff2", format: "woff2" }],
+      unicodeRange: "U+0400-0401",
+    };
+    render(<FontsPanel faces={[sliver]} tokens={{ tokens: [] }} />);
+    expect(screen.queryByText(/Почти/)).toBeNull();
+    expect(
+      screen.queryByText("Almost before we knew it, we had left the ground")
+    ).toBeNull();
+    expect(screen.getByText("\u0400\u0401")).toBeTruthy();
+  });
+
+  it("reads a comma-separated range as the union of its intervals", () => {
+    /*
+     * Split so that NEITHER interval covers the sentence alone: the Cyrillic
+     * specimen opens with a capital, which lives in the first, and every other
+     * letter lives in the second. A test whose first interval already covered
+     * the whole sentence would pass while the parser silently discarded the
+     * rest, which is the reading it exists to rule out.
+     */
+    const split: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-cyrillic.woff2", format: "woff2" }],
+      unicodeRange: "U+0410-042F, U+0430-044F",
+    };
+    render(<FontsPanel faces={[split]} tokens={{ tokens: [] }} />);
+    expect(screen.getByText(/Почти/)).toBeTruthy();
+  });
+
+  it("samples glyphs that DRAW, not the C1 controls", () => {
+    /*
+     * `U+0080-00FF` covers no canned sentence, so the sampler starts at
+     * U+0080 — and the thirty-two invisible C1 controls fill the whole budget
+     * before reaching a single accented letter, leaving a specimen that
+     * renders as nothing.
+     */
+    const latin1: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-latin1.woff2", format: "woff2" }],
+      unicodeRange: "U+0080-00FF",
+    };
+    render(<FontsPanel faces={[latin1]} tokens={{ tokens: [] }} />);
+    // Accented letters the face can actually demonstrate, rather than the
+    // symbols the front of the interval opens with.
+    expect(screen.getByText(/Æ/)).toBeTruthy();
+    expect(screen.getByText(/Ð/)).toBeTruthy();
+  });
+
+  it("draws NOTHING for a face subset entirely to control characters", () => {
+    /*
+     * Separate from the case above, because striding alone already reaches the
+     * letters in a wide interval — so that test cannot tell whether controls
+     * are skipped. Here the whole interval is the C1 block: every codepoint is
+     * non-printing, and the honest specimen is an empty one rather than a
+     * string of invisible characters that merely LOOKS empty.
+     */
+    const controlsOnly: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-c1.woff2", format: "woff2" }],
+      unicodeRange: "U+0080-009F",
+    };
+    const { container } = render(
+      <FontsPanel faces={[controlsOnly]} tokens={{ tokens: [] }} />
+    );
+    const specimens = Array.from(
+      container.querySelectorAll(".nx-fonts__specimen")
+    );
+    // The control: a selector matching nothing would satisfy the loop below
+    // without ever reading a specimen.
+    expect(specimens.length).toBeGreaterThan(0);
+    for (const specimen of specimens) {
+      expect(specimen.textContent).toBe("");
+    }
+  });
+
+  it("refuses a range reaching past the end of Unicode", () => {
+    // `validateFontFace` accepts `U+110000-110010` — it checks the characters,
+    // not the numbers — and `String.fromCodePoint` throws above U+10FFFF, which
+    // took the whole panel down rather than the one row.
+    const impossible: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand.woff2", format: "woff2" }],
+      unicodeRange: "U+110000-110010",
+    };
+    render(<FontsPanel faces={[impossible]} tokens={{ tokens: [] }} />);
+    // It renders at all, and falls back to the sentence rather than sampling a
+    // codepoint that does not exist.
+    expect(
+      screen.getByText("Almost before we knew it, we had left the ground")
+    ).toBeTruthy();
+  });
+
   it("says a site with no faces has none, rather than staying silent", () => {
     render(<FontsPanel faces={[]} tokens={{ tokens: [] }} />);
     expect(screen.getByText(/loads no font files of its own/)).toBeTruthy();
