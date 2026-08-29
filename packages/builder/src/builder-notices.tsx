@@ -84,6 +84,47 @@ export function useNoticeSink(): RaiseNotice {
   return React.useMemo(() => sink ?? (() => undefined), [sink]);
 }
 
+/**
+ * Report a failure that may outlive the control raising it.
+ *
+ * Two surfaces need this and they had a copy each: the class selector, keyed by
+ * node, and the class manager, mounted only while its panel is the open one.
+ * Both dispatch a site-style write, both can be unmounted before it answers,
+ * and both must still tell the author.
+ *
+ * WHERE is the shared question and is answered here; WHETHER the caller can
+ * still show it is not, so that stays with the caller. The selector's inline
+ * message is scoped to the node the request was made against and must be
+ * withheld when the author has moved to another one — a rule the manager has no
+ * equivalent of. So `showInline` answers whether it took responsibility, and
+ * the notice is raised only when nothing did.
+ *
+ * The two are exclusive on purpose: a region repeating what is already on
+ * screen is one an author learns to stop reading.
+ */
+export function useSurvivingReport(): (
+  reason: string,
+  showInline: () => boolean
+) => void {
+  const raiseNotice = useNoticeSink();
+  /*
+   * Whether the caller can still draw. A ref rather than state because nothing
+   * renders from it and setting it must schedule no work: it is read inside a
+   * callback that has already outlived the render it came from.
+   */
+  const mounted = React.useRef(true);
+  React.useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  return (reason, showInline) => {
+    if (mounted.current && showInline()) return;
+    raiseNotice(reason);
+  };
+}
+
 /** Put a sink in reach of everything the shell renders. */
 export function NoticeSinkProvider({
   raise,

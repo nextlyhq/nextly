@@ -39,6 +39,7 @@ import type { NamedClass } from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useSurvivingReport } from "./builder-notices";
 import {
   classRows,
   deletionWarning,
@@ -93,19 +94,46 @@ export type ClassRenameOutcome =
   | { readonly ok: false; readonly reason: string };
 
 /**
- * What a rename may answer with, including answering nothing.
+ * What a rename may answer with, which is ANYTHING.
  *
- * `Promise<void>` is in the union deliberately. A host whose handler is merely
- * `async` already satisfied the older `void` contract — TypeScript accepts any
- * return type where `void` is declared — so narrowing to the outcome alone
- * would stop those callers compiling. The runtime cost is worse than the
- * compile one: a resolved `Promise<void>` read as `result.ok` throws, the throw
- * is caught, and a rename that SUCCEEDED is reported to the author as failed.
+ * `unknown` rather than a union, because the contract this replaced was
+ * `=> void` and TypeScript accepts every return type where `void` is declared.
+ * `onRename={() => map.set(id, slug)}` and an async helper resolving to some
+ * mutation result both satisfied it, so any narrower union stops existing
+ * callers compiling — and a union that merely ADDS `Promise<void>` still
+ * rejects them.
  *
- * So an `undefined` resolution means the host is not reporting, which is the
- * same silence the synchronous form has always meant.
+ * The runtime cost of narrowing was the worse half. A synchronous non-undefined
+ * return reaching `.then` throws out of the event handler, and a resolved
+ * `Promise<void>` read as `result.ok` threw and was caught — reporting a rename
+ * that SUCCEEDED as failed.
+ *
+ * So nothing is assumed about the answer. It is interpreted only once it has
+ * been shown to be a promise, and its resolution only once it has been shown to
+ * be an outcome; anything else is a host that does not report, which is the
+ * silence the `void` form always meant.
  */
-export type ClassRenameAnswer = void | Promise<ClassRenameOutcome | void>;
+export type ClassRenameAnswer = unknown;
+
+/** Whether a value can be awaited, without assuming it is a native promise. */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof value.then === "function"
+  );
+}
+
+/** Whether a resolution is an outcome this panel can report, or something else. */
+function isRenameOutcome(value: unknown): value is ClassRenameOutcome {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    typeof value.ok === "boolean"
+  );
+}
 
 export interface ClassManagerPanelProps {
   /**
@@ -495,6 +523,21 @@ function NameField({
    * with the name it already had.
    */
   const requested = React.useRef<string | null>(null);
+  /*
+   * Where a refusal goes when this row is no longer on screen.
+   *
+   * `BuilderShell` keys its content by the open panel, so switching panels or
+   * leaving the editor unmounts this field while a save is still on the
+   * network, and `setRefused` then reaches nothing. This row can always show
+   * one while it exists, so it always takes responsibility.
+   */
+  const survive = useSurvivingReport();
+  const report = (reason: string): void => {
+    survive(reason, () => {
+      setRefused(reason);
+      return true;
+    });
+  };
   const id = React.useId();
   const outcome =
     draft === null ? null : renamedClassName(draft, row.id, library);
@@ -537,7 +580,7 @@ function NameField({
     } catch {
       setDraft(null);
       requested.current = null;
-      setRefused("This class could not be renamed.");
+      report("This class could not be renamed.");
       return;
     }
     /*
@@ -549,21 +592,23 @@ function NameField({
      */
     setDraft(null);
     setRefused(null);
-    if (answered === undefined) return;
-    void answered
+    // A host that answered with something un-awaitable is one that does not
+    // report. Reaching for `.then` on it threw out of this event handler.
+    if (!isPromiseLike(answered)) return;
+    void Promise.resolve(answered)
       .then(result => {
         // Superseded: a newer rename on this row is the one being awaited, and
         // this answer describes a name the author has already moved past.
         if (attempt.current !== mine) return;
-        // `undefined` is a host that does not report, which is silence rather
-        // than refusal — reading `.ok` off it would throw, and the catch below
-        // would then present a SUCCESSFUL rename as a failed one.
-        if (result === undefined || result.ok) {
+        // Anything that is not an outcome is silence rather than refusal —
+        // reading `.ok` off it would throw, and the catch below would then
+        // present a SUCCESSFUL rename as a failed one.
+        if (!isRenameOutcome(result) || result.ok) {
           setRefused(null);
           return;
         }
         requested.current = null;
-        setRefused(result.reason);
+        report(result.reason);
       })
       /*
        * A REJECTED promise is a refusal too. The contract is to answer, but a
@@ -574,7 +619,7 @@ function NameField({
       .catch(() => {
         if (attempt.current !== mine) return;
         requested.current = null;
-        setRefused("This class could not be renamed.");
+        report("This class could not be renamed.");
       });
   };
 

@@ -759,3 +759,76 @@ describe("a revert typed while the first rename is still in flight", () => {
     expect(onRename).not.toHaveBeenCalled();
   });
 });
+
+describe("a host whose rename handler returns something else entirely", () => {
+  it("accepts a SYNCHRONOUS value without throwing out of the handler", async () => {
+    /*
+     * The contract this replaced was `=> void`, which TypeScript satisfies with
+     * any return type — `onRename={() => map.set(id, slug)}` was legal and
+     * common. Reaching for `.then` on that Map threw out of the event handler,
+     * so a working host broke on an internal detail of this panel.
+     */
+    const store = new Map<string, string>();
+    const onRename = vi.fn((classId: string, slug: string) =>
+      store.set(classId, slug)
+    );
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    /*
+     * The throw has to be OBSERVED rather than awaited. jsdom dispatches an
+     * event listener's exception to the virtual console instead of rethrowing
+     * to the caller, so `fireEvent` returns normally and the assertions below
+     * pass whether or not the handler blew up — measured: reaching for `.then`
+     * on the Map again left this test green.
+     */
+    const failures: unknown[] = [];
+    const onError = (event: ErrorEvent): void => {
+      failures.push(event.error);
+    };
+    window.addEventListener("error", onError);
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    window.removeEventListener("error", onError);
+
+    expect(failures).toEqual([]);
+    // The host was called and its value ignored, rather than interpreted.
+    expect(store.get("id-hero")).toBe("renamed");
+    expect(screen.queryByText(/could not be renamed/i)).toBeNull();
+  });
+
+  it("ignores a resolution that is not an outcome", async () => {
+    // An async helper resolving to some mutation result is equally legal, and
+    // reading `.ok` off it reported a SUCCESSFUL rename as failed.
+    const onRename = vi.fn(async () => ({ rowsAffected: 1 }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onRename).toHaveBeenCalled();
+    expect(screen.queryByText(/could not be renamed/i)).toBeNull();
+  });
+});
