@@ -2329,3 +2329,52 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 2px;
 }
+
+/*
+ * Notices about work the builder could not finish.
+ *
+ * Fixed rather than placed in the shell's flow. The shell sizes every region
+ * against the caller's container through a wrapper that is `display: contents`,
+ * so a box added to that flow would change what those regions measure — to
+ * carry a surface that renders nothing at all most of the time.
+ *
+ * Centred at the top because that is where the shell has no chrome of its own:
+ * the rail is left, the bars are bottom, and an author's attention after
+ * pressing Enter in the inspector is on the right. This crosses that path.
+ */
+.nx-notices {
+  position: fixed;
+  top: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-width: min(32rem, calc(100vw - var(--space-6)));
+}
+
+.nx-notices__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--nx-builder-border);
+  border-radius: var(--radius-md);
+  /* The shell's own surface, not a red panel. These report a refused write —
+     something to read and act on, not an error state of the editor itself. */
+  background: var(--nx-builder-surface);
+  color: var(--nx-builder-text);
+  box-shadow: var(--shadow-lg);
+}
+
+.nx-notices__text {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.nx-notices__dismiss {
+  flex: 0 0 auto;
+}

@@ -400,6 +400,8 @@ export type { SelectionBreadcrumbProps } from "./breadcrumb";
  */
 export { ClassSelector } from "./class-selector";
 export type { ClassSelectorProps } from "./class-selector";
+export { BuilderNoticeRegion, useNoticeQueue } from "./builder-notices";
+export type { BuilderNotice } from "./builder-notices";
 export { ClassManagerPanel } from "./class-manager-panel";
 export type { ClassManagerPanelProps } from "./class-manager-panel";
 export {

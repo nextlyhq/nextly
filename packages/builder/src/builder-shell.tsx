@@ -27,6 +27,11 @@ import {
 } from "lucide-react";
 import * as React from "react";
 
+import {
+  BuilderNoticeRegion,
+  NoticeSinkProvider,
+  useNoticeQueue,
+} from "./builder-notices";
 import type { CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
@@ -1326,6 +1331,12 @@ export function BuilderShell({
   const [overlayHost, setOverlayHost] = React.useState<HTMLDivElement | null>(
     null
   );
+  /*
+   * Reports from controls that could not make one themselves. Owned at this
+   * level because it must survive everything below it being unmounted, which
+   * is exactly what the inspector's per-node keys do on every selection change.
+   */
+  const notices = useNoticeQueue();
 
   return (
     <ShortcutProvider>
@@ -1477,22 +1488,47 @@ export function BuilderShell({
                * rather than a crash, and no overlay can be open that early.
                */}
               <PortalProvider container={overlayHost}>
-                <ShellRegions
-                  appliedScale={appliedScale}
-                  onZoomPick={onZoomPick}
-                  {...props}
-                  preferences={preferences}
-                  update={update}
-                  active={shellFits}
-                  loadCount={loadCount}
-                  /*
-                   * The caller's `className` stops here: the measuring wrapper
-                   * above carries it. Passing it on would apply the host's grid
-                   * area, height or border a second time, on a box nested inside
-                   * the one already carrying it.
-                   */
-                  className={undefined}
+                {/*
+                 * Failures raised by a control that has since been unmounted.
+                 *
+                 * Held HERE because nothing in the shell is keyed by the
+                 * selected node, while the style inspector's class selector is
+                 * — so a site-style write that fails after the author clicks
+                 * another block resolves into a component that no longer
+                 * exists. This one outlives every such key.
+                 *
+                 * Taken out of flow rather than placed above the regions. The
+                 * layout above sizes the editor against the caller's container
+                 * and the wrapper between is `display: contents`; a new box in
+                 * that flow would change what every region measures, to carry a
+                 * surface that is empty almost always.
+                 */}
+                <BuilderNoticeRegion
+                  notices={notices.notices}
+                  onDismiss={notices.dismiss}
                 />
+                {/* Wraps the regions rather than sitting beside them: the
+                    inspector and the panels are `ReactNode` props, so they
+                    become descendants of this provider by being RENDERED here,
+                    wherever the host created them. */}
+                <NoticeSinkProvider raise={notices.raise}>
+                  <ShellRegions
+                    appliedScale={appliedScale}
+                    onZoomPick={onZoomPick}
+                    {...props}
+                    preferences={preferences}
+                    update={update}
+                    active={shellFits}
+                    loadCount={loadCount}
+                    /*
+                     * The caller's `className` stops here: the measuring wrapper
+                     * above carries it. Passing it on would apply the host's grid
+                     * area, height or border a second time, on a box nested inside
+                     * the one already carrying it.
+                     */
+                    className={undefined}
+                  />
+                </NoticeSinkProvider>
               </PortalProvider>
             </ShellActiveContext.Provider>
           </div>
