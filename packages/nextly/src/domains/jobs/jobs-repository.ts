@@ -37,10 +37,11 @@ import { NextlyError } from "../../errors";
 import type { JobState } from "../../schemas/jobs/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
+import { MAX_PORTABLE_KEY_LENGTH } from "./portable-key";
+
 const JOBS = "nextly_jobs";
 
 /** The longest value every supported dialect can store in an indexed column. */
-const MAX_PORTABLE_KEY_LENGTH = 191;
 
 /**
  * The transaction surface the lease claim needs (subset of the adapter tx).

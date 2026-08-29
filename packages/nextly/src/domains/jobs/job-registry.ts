@@ -26,6 +26,7 @@ import { NextlyError } from "../../errors";
 import type { UserContext } from "../collections/services/collection-types";
 
 import type { JobContentApi } from "./job-content-api";
+import { MAX_PORTABLE_KEY_LENGTH, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 
 /** Attempts a job gets before it is given up on. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
@@ -39,7 +40,9 @@ export const DEFAULT_MAX_ATTEMPTS = 5;
  * dialect, rather than accepted at definition and failing only at enqueue time
  * and only on MySQL.
  */
-export const MAX_JOB_SLUG_LENGTH = 191;
+export const MAX_JOB_SLUG_LENGTH = MAX_PORTABLE_KEY_LENGTH;
+
+export { SWEEP_KEY_PREFIX, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 
 /** What a handler is told about the run it is in. */
 export interface JobContext {
@@ -68,6 +71,29 @@ export interface JobContext {
    * default.
    */
   content: JobContentApi;
+  /**
+   * The instant the pass running this job intends to stop.
+   *
+   * The runner cannot enforce it. `maxDurationMs` is checked before each CLAIM,
+   * so it bounds how many jobs a pass STARTS and nothing more: once a handler is
+   * running, nothing here can interrupt a promise mid-flight, and a cancellation
+   * the handler did not cooperate with would abandon whatever it had half-done
+   * outside the database.
+   *
+   * So `run-jobs` names two things that bound a running handler — the lease, and
+   * "the handler itself being written to fit a tick". This is what makes the
+   * second one possible. Without it the runner asks handlers to fit a budget it
+   * never tells them, and every handler that wants to comply has to be handed
+   * one out of band, which is a second description of the same number.
+   *
+   * A handler that ignores it is not wrong; most jobs are short. A handler that
+   * walks an unbounded set — every due release, every stale entry — should stop
+   * when this passes and leave the rest, because the queue is durable and the
+   * next tick continues. **Stopping early must DEFER the remainder, never
+   * discharge it:** work that was never attempted produces no failure, and an
+   * absent failure reads as success.
+   */
+  deadline: Date;
 }
 
 export interface JobRetryPolicy {
@@ -123,6 +149,16 @@ export function defineJob<TInput = unknown>(
   if (slug.length > MAX_JOB_SLUG_LENGTH) {
     throw NextlyError.invalidInput({
       message: `A job slug may be at most ${MAX_JOB_SLUG_LENGTH} characters.`,
+      logContext: { slug, length: slug.length },
+    });
+  }
+
+  // A sweep is charged for its own dedupe key here, where the slug is refused
+  // with a message naming the real budget — rather than at enqueue, which runs
+  // on a scheduler tick with nobody watching.
+  if (input.sweep && slug.length > MAX_SWEEP_SLUG_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `A sweep's slug may be at most ${MAX_SWEEP_SLUG_LENGTH} characters, because its dedupe key is derived from it.`,
       logContext: { slug, length: slug.length },
     });
   }

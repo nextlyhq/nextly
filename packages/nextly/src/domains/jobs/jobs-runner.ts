@@ -16,6 +16,7 @@ import type { RunAsDeps, RunAsUser } from "../../shared/lib/resolve-run-as";
 
 import type { JobRegistry } from "./job-registry";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
+import { SWEEP_KEY_PREFIX } from "./portable-key";
 import { runJobs, type RunJobsResult } from "./run-jobs";
 
 /**
@@ -162,7 +163,7 @@ export function databaseRunAs(
  * sweep instead of finding the key held forever by a job that has been and gone.
  */
 export function sweepDedupeKey(slug: string): string {
-  return `sweep:${slug}`;
+  return `${SWEEP_KEY_PREFIX}${slug}`;
 }
 
 /**
