@@ -29,9 +29,15 @@
 Record when each language of a document was last written, so a later change can
 tell a finished translation from one whose source has moved on since.
 
-This release is the groundwork only: the timestamp is recorded on every write
-and seeded, where version history allows, for documents that already exist.
-Nothing surfaces it yet.
+This release is the groundwork only: the timestamp is recorded on every write,
+for every kind of localized content, and nothing surfaces it yet.
+
+Collections that already exist are seeded from their version history, so their
+languages carry a timestamp from the moment this lands. Singles are not seeded,
+even though they keep history that would allow it: nothing reads the signal for
+a Single today, and seeding one would commit every future reader to whatever
+this release happened to write. Their languages are stamped from their next
+save onward, like any language whose history is unknown.
 
 A database created before this keeps no history of when each language was
 written, so the value is seeded from version history where that exists and left
