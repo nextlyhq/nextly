@@ -87,7 +87,9 @@ import {
   useInlineEditing,
   documentAfter,
   type InlineEditOutcome,
+  ClassManagerPanel,
   FontsPanel,
+  type ClassRenameOutcome,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -122,6 +124,7 @@ import {
   type Path,
 } from "react-hook-form";
 
+import { classUsageOf } from "../class-usage";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
@@ -178,7 +181,13 @@ export interface BlocksFieldProps<
  * and shrink the canvas to show it, which is why this grows one entry at a time
  * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers", "tokens", "fonts"] as const;
+const AVAILABLE_PANELS = [
+  "insert",
+  "layers",
+  "tokens",
+  "fonts",
+  "classes",
+] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -613,6 +622,35 @@ function TokensStudio({
  * just created and applied wins over the ones already there rather than being
  * silently overridden by them.
  */
+/**
+ * Whether a read has FAILED rather than merely not finished yet.
+ *
+ * A separate function because "not arrived" and "will never arrive" are
+ * different states with different wording, and reading them from one
+ * expression inside the hook made the hook answer two questions at once.
+ */
+function classReadFailed(pending: boolean, error: unknown): boolean {
+  return !pending && error !== null && error !== undefined;
+}
+
+/**
+ * The library to show, or `undefined` while it is not known.
+ *
+ * `undefined` while the read is in flight, and the resolved list once it is
+ * not — including an empty one. `useSiteStyle` names `pending` as a real third
+ * state for exactly this reason: the defaults alone are a legitimate answer, so
+ * a surface cannot tell "nothing is stored" from "the read has not come back"
+ * by looking at the value.
+ */
+function readableClassLibrary(
+  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  pending: boolean,
+  failed: boolean
+): readonly NamedClass[] | undefined {
+  if (pending || failed) return undefined;
+  return siteStyle?.classes ?? [];
+}
+
 function useClassSurface(
   siteStyle: { classes?: readonly NamedClass[] } | undefined,
   pending: boolean,
@@ -620,16 +658,12 @@ function useClassSurface(
   /** The site's own config, whose classes storage layers over. */
   config: { classes?: readonly NamedClass[] } | undefined
 ) {
-  /*
-   * `undefined` while the read is in flight, and the resolved list once it is
-   * not — including an empty one. `useSiteStyle` names `pending` as a real
-   * third state for exactly this reason: the defaults alone are a legitimate
-   * answer, so a surface cannot tell "nothing is stored" from "the read has
-   * not come back" by looking at the value. Decided here rather than in the
-   * markup, so the component that renders the inspector holds no branch.
-   */
-  const failed = !pending && error !== null && error !== undefined;
-  const library = pending || failed ? undefined : (siteStyle?.classes ?? []);
+  // Derived outside the hook, so this decides nothing and only distributes what
+  // was decided — which is what keeps the component rendering the inspector
+  // free of the branch.
+  const failed = classReadFailed(pending, error);
+  const library = readableClassLibrary(siteStyle, pending, failed);
+  const configured = config?.classes;
   return {
     library,
     /*
@@ -644,7 +678,13 @@ function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useCreateClass(library, config?.classes),
+    create: useCreateClass(library, configured),
+    /*
+     * Withheld the same way and for the same reason: renaming against a
+     * library missing everything stored would save that partial list, which
+     * deletes the classes it could not see rather than renaming one.
+     */
+    rename: useRenameClass(library, configured),
   };
 }
 
@@ -693,6 +733,58 @@ function useCreateClass(
           reasons.length > 0
             ? reasons.join(" ")
             : "This class could not be saved.",
+      };
+    },
+    [library, configured, saveSection]
+  );
+}
+
+/**
+ * Rename one class, through the same section write that creates one.
+ *
+ * Answers the OUTCOME rather than reporting success by staying quiet. A site
+ * style save is a network write and the panel clears its field as soon as the
+ * author finishes typing, so a refusal that returned nothing would leave the
+ * row reading as renamed until the next read contradicted it.
+ */
+function useRenameClass(
+  library: readonly NamedClass[] | undefined,
+  configured: readonly NamedClass[] | undefined
+) {
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
+      if (library === undefined) {
+        return {
+          ok: false,
+          reason:
+            "This site's classes could not be read, so none can be renamed.",
+        };
+      }
+      const next = library.map(entry =>
+        entry.id === classId ? { ...entry, slug } : entry
+      );
+      /*
+       * Only what DIFFERS from the site's own config classes, exactly as
+       * creating one does. Saving the merged library whole would copy every
+       * config class into the database and mask the site's own code from then
+       * on — and a rename is the operation where that is easiest to miss,
+       * because the visible result looks identical either way.
+       */
+      const result = await saveSection(
+        "classes",
+        classOverrideOf(configured, next)
+      );
+      if (result.saved) return { ok: true };
+      const reasons = Object.values(result.issues);
+      // An empty `issues` is still a refusal — the transport could not describe
+      // it. Reporting it as saved is the one outcome that must never be silent.
+      return {
+        ok: false,
+        reason:
+          reasons.length > 0
+            ? reasons.join(" ")
+            : "This class could not be renamed.",
       };
     },
     [library, configured, saveSection]
@@ -1429,6 +1521,27 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   useCheckpoints({ name, control, document: editor.document });
 
   /*
+   * Which classes the OPEN document renders, for the manager's on-this-page
+   * filter.
+   *
+   * `classUsageOf` rather than a walk written here: it is the same traversal
+   * the style compiler and the usage index already share, and two walks with
+   * equal limits reached by different routes select different nodes — a class
+   * on a node one walk reaches and the other does not would be reported as
+   * absent from a page that renders it.
+   *
+   * `complete` is deliberately unread. It says whether the walk hit the
+   * document's node ceiling, which bounds what this could CLAIM about usage —
+   * and this claims nothing about usage. It answers one question, "does the
+   * open page apply this class", and a truncated walk answers that for fewer
+   * nodes rather than answering it wrongly.
+   */
+  const documentClassIds = useMemo(
+    () => classUsageOf(editor.document).ids,
+    [editor.document]
+  );
+
+  /*
    * Tell the form this editor holds work its values do not contain, so the
    * navigation guard warns and the save shortcut works while the canvas is
    * open. `undoDepth` rather than comparing documents: an edit and its undo
@@ -1773,6 +1886,25 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 )}
                 supplied={configSiteStyle?.tokens}
                 pending={siteStylePending}
+              />
+            ),
+            classes: () => (
+              <ClassManagerPanel
+                documentClassIds={documentClassIds}
+                library={classes.library}
+                onRename={classes.rename}
+                /*
+                  No `usage`, and no `onDelete`. The usage index is a
+                  collection and this surface has no read for one, so the panel
+                  reports that nothing was read rather than reporting an empty
+                  index — which would say every class is unused. Deleting needs
+                  that same reach plus a write stripping the class from every
+                  document holding it, so it is withheld entirely rather than
+                  offered as a control that cannot keep its promise.
+                */
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
               />
             ),
             fonts: () => (

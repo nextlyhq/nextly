@@ -414,7 +414,10 @@ export type { ClassSelectorProps } from "./class-selector";
  * change rather than an export, so it waits for a host that wants it.
  */
 export { ClassManagerPanel } from "./class-manager-panel";
-export type { ClassManagerPanelProps } from "./class-manager-panel";
+export type {
+  ClassManagerPanelProps,
+  ClassRenameOutcome,
+} from "./class-manager-panel";
 export {
   classRows,
   filterClassRows,

@@ -357,3 +357,84 @@ describe("deleting", () => {
     expect(onDelete).toHaveBeenCalledWith("id-card");
   });
 });
+
+describe("a host that could not read the usage index", () => {
+  it("says the reading is absent rather than reporting an empty index", () => {
+    // An empty map and an unread index are different facts, and only one of
+    // them is a statement about the site. Printing "Not in index" against
+    // every class from a read that never happened is the direction that reads
+    // as permission to delete.
+    draw({ usage: undefined });
+    expect(screen.getAllByText(/Usage not read/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Not in index")).toBeNull();
+  });
+
+  it("withdraws the filter it can no longer answer", () => {
+    draw({ usage: undefined });
+    expect(screen.queryByRole("button", { name: "Not in index" })).toBeNull();
+    // The control: the filters it CAN answer are still offered, so this is a
+    // withdrawal rather than the chips having failed to render at all.
+    expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "On this page" })).toBeTruthy();
+  });
+
+  it("still answers on-this-page, which the open document decides", () => {
+    // That question never went through the index, so losing the index must
+    // not cost it.
+    draw({ usage: undefined });
+    expect(screen.getByText(/on this page/)).toBeTruthy();
+  });
+});
+
+describe("a host with no way to carry out a delete", () => {
+  it("offers no Delete at all rather than a disabled one", () => {
+    draw({ onDelete: undefined });
+    // The control first: an absent button is also what a panel that rendered
+    // nothing looks like.
+    expect(nameField("hero")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete hero" })).toBeNull();
+  });
+});
+
+describe("a rename the host refuses", () => {
+  it("shows the reason rather than clearing as though it landed", async () => {
+    const onRename = vi.fn(async () => ({
+      ok: false as const,
+      reason: "The site style is locked.",
+    }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    expect(await screen.findByText("The site style is locked.")).toBeTruthy();
+  });
+
+  it("treats a REJECTED write as a refusal too", async () => {
+    // The contract is to answer, but a thrown error arrives all the same, and
+    // without handling it the row clears and says nothing.
+    const onRename = vi.fn(async () => {
+      throw new Error("network");
+    });
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    expect(await screen.findByText(/could not be renamed/i)).toBeTruthy();
+  });
+});

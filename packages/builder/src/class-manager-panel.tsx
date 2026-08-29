@@ -62,6 +62,35 @@ const FILTERS: ReadonlyArray<{ value: ClassFilter; label: string }> = [
   { value: "on-this-page", label: "On this page" },
 ];
 
+/**
+ * The filters that can be answered from what the host supplied.
+ *
+ * "Not in index" is withheld when no usage was read, rather than answered from
+ * the empty map that stands in for one. Every class would satisfy it, which
+ * reads as a site where nothing is used — the most alarming possible reading,
+ * produced entirely by not having asked.
+ */
+function offerableFilters(
+  usageKnown: boolean
+): ReadonlyArray<{ value: ClassFilter; label: string }> {
+  return usageKnown
+    ? FILTERS
+    : FILTERS.filter(filter => filter.value !== "not-in-index");
+}
+
+/**
+ * What a host answers a rename with, when it answers at all.
+ *
+ * A persisted rename is a network write and can be refused. A host that returns
+ * nothing is taken at its word and the row simply clears, which keeps every
+ * existing caller working; one that returns this gets its refusal SHOWN rather
+ * than swallowed, which is the difference between a rename that failed and a
+ * rename that appears to have worked until the next read.
+ */
+export type ClassRenameOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
 export interface ClassManagerPanelProps {
   /**
    * The site's class library, or `undefined` while the host has not read it.
@@ -71,8 +100,15 @@ export interface ClassManagerPanelProps {
    * and an author must not be shown "no classes" for a library still loading.
    */
   library: readonly NamedClass[] | undefined;
-  /** Documents known to reference each class, keyed by id. A floor. */
-  usage: ClassUsageCounts;
+  /**
+   * Documents known to reference each class, keyed by id. A floor.
+   *
+   * `undefined` is a THIRD state, not an empty index: a host that cannot read
+   * the usage index has not established that nothing uses these classes, and
+   * an empty map would say exactly that. The rows then report the absence of
+   * the reading rather than an absence of usage.
+   */
+  usage?: ClassUsageCounts;
   /** The class ids the open document applies, for the on-this-page filter. */
   documentClassIds: readonly string[];
   /**
@@ -90,10 +126,26 @@ export interface ClassManagerPanelProps {
    * one, so it is withheld and the row says why.
    */
   suppliedClassIds?: readonly string[];
-  /** Rename a class. The slug has already passed the engine's grammar. */
-  onRename: (classId: string, slug: string) => void;
-  /** Delete a class, removing it from every document that references it. */
-  onDelete: (classId: string) => void;
+  /**
+   * Rename a class. The slug has already passed the engine's grammar.
+   *
+   * May answer with the outcome. A host that persists asynchronously and stays
+   * silent leaves the row looking renamed whatever happened, so returning a
+   * {@link ClassRenameOutcome} is how a refusal reaches the author.
+   */
+  onRename: (
+    classId: string,
+    slug: string
+  ) => void | Promise<ClassRenameOutcome>;
+  /**
+   * Delete a class, removing it from every document that references it.
+   *
+   * Optional, because that removal is a site-wide write and a host without one
+   * cannot honour what the word promises. Absent, no Delete is offered at all:
+   * a disabled one invites an author to hunt for the permission that would
+   * enable it, and there is none to find.
+   */
+  onDelete?: (classId: string) => void;
 }
 
 /** Every class the site renders, filtered, renameable and deletable. */
@@ -106,6 +158,16 @@ export function ClassManagerPanel({
   onDelete,
 }: ClassManagerPanelProps): React.ReactElement {
   const [filter, setFilter] = React.useState<ClassFilter>("all");
+  /*
+   * A filter the panel no longer offers cannot stay selected. `usage` is a
+   * host prop and can go from read to unread between renders, which would
+   * otherwise leave the list narrowed by a chip that is no longer on screen —
+   * an empty panel with nothing to explain it.
+   */
+  const offerable = offerableFilters(usage !== undefined);
+  const active = offerable.some(entry => entry.value === filter)
+    ? filter
+    : "all";
 
   if (library === undefined) {
     return (
@@ -115,9 +177,10 @@ export function ClassManagerPanel({
     );
   }
 
+  const usageKnown = usage !== undefined;
   const rows = filterClassRows(
-    classRows(library, usage, documentClassIds),
-    filter
+    classRows(library, usage ?? {}, documentClassIds),
+    active
   );
 
   return (
@@ -125,11 +188,19 @@ export function ClassManagerPanel({
       <div className="nx-classman__head">
         <h2 className="nx-classman__title">Classes</h2>
       </div>
-      <FilterChips active={filter} onChange={setFilter} />
+      {usageKnown ? null : (
+        // Stated once, at the top, rather than on every row. It is a property
+        // of this reading of the site, not of any one class.
+        <p className="nx-inspector__note">
+          Where these classes are used has not been read.
+        </p>
+      )}
+      <FilterChips active={active} filters={offerable} onChange={setFilter} />
       <ClassList
         rows={rows}
         library={library}
         supplied={new Set(suppliedClassIds ?? [])}
+        usageKnown={usageKnown}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -139,14 +210,16 @@ export function ClassManagerPanel({
 
 function FilterChips({
   active,
+  filters,
   onChange,
 }: {
   active: ClassFilter;
+  filters: ReadonlyArray<{ value: ClassFilter; label: string }>;
   onChange: (filter: ClassFilter) => void;
 }): React.ReactElement {
   return (
     <div className="nx-classman__filters" role="group" aria-label="Filter">
-      {FILTERS.map(({ value, label }) => (
+      {filters.map(({ value, label }) => (
         <Button
           key={value}
           type="button"
@@ -166,14 +239,16 @@ function ClassList({
   rows,
   library,
   supplied,
+  usageKnown,
   onRename,
   onDelete,
 }: {
   rows: readonly ClassRow[];
   library: readonly NamedClass[];
   supplied: ReadonlySet<string>;
-  onRename: (classId: string, slug: string) => void;
-  onDelete: (classId: string) => void;
+  usageKnown: boolean;
+  onRename: ClassManagerPanelProps["onRename"];
+  onDelete?: (classId: string) => void;
 }): React.ReactElement {
   if (rows.length === 0) {
     return <p className="nx-inspector__note">No classes match this filter.</p>;
@@ -186,6 +261,7 @@ function ClassList({
             row={row}
             library={library}
             isSupplied={supplied.has(row.id)}
+            usageKnown={usageKnown}
             onRename={onRename}
             onDelete={onDelete}
           />
@@ -199,14 +275,16 @@ function ClassRowView({
   row,
   library,
   isSupplied,
+  usageKnown,
   onRename,
   onDelete,
 }: {
   row: ClassRow;
   library: readonly NamedClass[];
   isSupplied: boolean;
-  onRename: (classId: string, slug: string) => void;
-  onDelete: (classId: string) => void;
+  usageKnown: boolean;
+  onRename: ClassManagerPanelProps["onRename"];
+  onDelete?: (classId: string) => void;
 }): React.ReactElement {
   const [confirming, setConfirming] = React.useState(false);
 
@@ -214,13 +292,13 @@ function ClassRowView({
     <>
       <div className="nx-classman__fields">
         <NameField row={row} library={library} onRename={onRename} />
-        <UsageNote row={row} />
+        <UsageNote row={row} usageKnown={usageKnown} />
         {isSupplied ? (
           // Named rather than shown disabled. A greyed button invites an
           // author to hunt for the permission that would enable it, and there
           // is none — the class comes from the site's own configuration.
           <span className="nx-classman__origin">Default</span>
-        ) : (
+        ) : onDelete === undefined ? null : (
           <Button
             type="button"
             size="sm"
@@ -232,7 +310,7 @@ function ClassRowView({
           </Button>
         )}
       </div>
-      {confirming ? (
+      {confirming && onDelete !== undefined ? (
         <DeleteConfirm
           row={row}
           onCancel={() => setConfirming(false)}
@@ -261,9 +339,16 @@ function NameField({
 }: {
   row: ClassRow;
   library: readonly NamedClass[];
-  onRename: (classId: string, slug: string) => void;
+  onRename: ClassManagerPanelProps["onRename"];
 }): React.ReactElement {
   const [draft, setDraft] = React.useState<string | null>(null);
+  /*
+   * A refusal from the HOST, which is a different failure from a name the
+   * grammar rejects: the name was fine and the write did not land. Held apart
+   * so the two cannot overwrite one another, and cleared on the next edit
+   * because a stale reason beside a fresh draft describes neither.
+   */
+  const [refused, setRefused] = React.useState<string | null>(null);
   const id = React.useId();
   const outcome =
     draft === null ? null : renamedClassName(draft, row.id, library);
@@ -278,8 +363,34 @@ function NameField({
      * write a revision whose rendered output is identical to the one before it.
      * The draft still clears, because the author did finish editing.
      */
-    if (outcome.slug !== row.slug) onRename(row.id, outcome.slug);
+    if (outcome.slug === row.slug) {
+      setDraft(null);
+      return;
+    }
+    const answered = onRename(row.id, outcome.slug);
+    /*
+     * The draft clears immediately, because the author DID finish editing and
+     * a field that holds their text hostage until the network answers reads as
+     * frozen. A refusal arrives beside the row instead, naming the class it is
+     * about — the row is still there to name it, which is why this needs no
+     * shell-level surface the way an unmounting control does.
+     */
     setDraft(null);
+    setRefused(null);
+    if (answered === undefined) return;
+    void answered
+      .then(result => {
+        if (!result.ok) setRefused(result.reason);
+      })
+      /*
+       * A REJECTED promise is a refusal too. The contract is to answer, but a
+       * thrown error or a rejected write arrives here all the same, and without
+       * this the row clears and says nothing — the exact silence the outcome
+       * was added to remove.
+       */
+      .catch(() => {
+        setRefused("This class could not be renamed.");
+      });
   };
 
   return (
@@ -294,7 +405,10 @@ function NameField({
         aria-describedby={
           outcome !== null && !outcome.ok ? `${id}-why` : undefined
         }
-        onChange={event => setDraft(event.target.value)}
+        onChange={event => {
+          setDraft(event.target.value);
+          setRefused(null);
+        }}
         onBlur={commit}
         onKeyDown={event => {
           if (commitOnEnter(event, commit)) return;
@@ -304,6 +418,11 @@ function NameField({
       {outcome !== null && !outcome.ok ? (
         <p className="nx-classman__issue" id={`${id}-why`} role="alert">
           {REFUSALS[outcome.refusal]}
+        </p>
+      ) : null}
+      {refused !== null ? (
+        <p className="nx-classman__issue" role="alert">
+          {refused}
         </p>
       ) : null}
     </div>
@@ -326,10 +445,25 @@ const REFUSALS = {
  * thing beside a confirmation saying another is two uncertainty policies for
  * one number, and the row is the one an author reads far more often.
  */
-function UsageNote({ row }: { row: ClassRow }): React.ReactElement {
+function UsageNote({
+  row,
+  usageKnown,
+}: {
+  row: ClassRow;
+  usageKnown: boolean;
+}): React.ReactElement {
   return (
     <span className="nx-classman__usage">
-      {usageSummary(row)}
+      {/*
+        `usageSummary` answers about the INDEX, and with no index read there is
+        nothing for it to answer about. Letting it run on the empty map that
+        stands in for one would print "Not in index" against every class — a
+        statement about the site, made from never having looked.
+
+        "On this page" survives, because it is answered by the open document
+        rather than by the index and is just as true either way.
+      */}
+      {usageKnown ? usageSummary(row) : "Usage not read"}
       {row.onThisPage ? " · on this page" : ""}
     </span>
   );
