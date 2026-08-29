@@ -51,12 +51,28 @@ describe("the typographic baseline", () => {
     }
   });
 
-  it("gives a paragraph rhythm without a size, so body text stays the reader's", () => {
-    // The control on the case above: if every element carried a size, the
-    // baseline would be picking a body size for the whole site rather than a
-    // scale for its headings.
+  it("gives a paragraph MARGINS only, so an author's typography can reach it", () => {
+    // The control on the case above, and the reason `p` carries neither size
+    // nor leading. Both INHERIT, and this tier emits a rule on the `p` itself —
+    // so either one declared here beats what an author set on a containing
+    // block, and `core/rich-text` renders its paragraphs below a styled `div`.
+    // The heading scale escaped that with `em`; leading has no equivalent, so
+    // it is left out rather than made uncontrollable.
     expect(base("p", "fontSize")).toBeUndefined();
-    expect(base("p", "lineHeight")).toBe(1.6);
+    expect(base("p", "lineHeight")).toBeUndefined();
+    // Margins stay, and they are safe for the same reason the others are not:
+    // margin does NOT inherit, so declaring one here overrides nothing an
+    // author expressed on a container.
+    expect(base("p", "margin")).toEqual({ blockStart: "0", blockEnd: "1em" });
+  });
+
+  it("keeps a heading's own leading, which is the deliberate asymmetry", () => {
+    // Large text needs proportionally tighter leading than body text, so one
+    // inherited value cannot serve both. An author changing a heading's leading
+    // does it on the heading block — a rule on the same element at a higher
+    // weight, which wins.
+    expect(base("h1", "lineHeight")).toBe(1.15);
+    expect(base("h6", "lineHeight")).toBe(1.5);
   });
 
   it("leaves a context that states its own bases alone", () => {

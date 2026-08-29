@@ -107,11 +107,31 @@ export const TYPOGRAPHY_DEFAULTS: NonNullable<
    * `marginBlockStart: 0` so a paragraph following a heading keeps the
    * heading's own `0.5em` rather than adding to it — the adjacent-margin
    * collapse Tailwind Typography spells as `h2 + * { margin-top: 0 }`.
+   *
+   * **No `line-height` either, and that is the harder call.** A comfortable
+   * default reads better out of the box, but line-height INHERITS and this tier
+   * emits a rule on the `p` ITSELF — so a declaration here beats whatever an
+   * author set on a containing block, and `core/rich-text` puts its paragraphs
+   * below a styled `div`. An author setting the leading of a passage would see
+   * nothing happen, with no control anywhere that could fix it.
+   *
+   * `em` rescued the heading scale because a size can be a multiple of what it
+   * inherited. Leading has no such form: `1.6em` resolves against the
+   * element's OWN font size and stops descendants inheriting a ratio, which is
+   * worse than either. So the choice is a nicer default or a working control,
+   * and the control wins — a paragraph now inherits the leading from wherever
+   * the author set one, and falls back to the reader's browser default when
+   * nobody has.
+   *
+   * Headings keep theirs, and the asymmetry is deliberate: large text needs
+   * proportionally tighter leading than body text, so a single inherited value
+   * cannot serve both. An author changing a heading's leading does it on the
+   * heading block, which is a rule on the same element at a higher weight and
+   * wins.
    */
   p: {
     base: {
       base: {
-        lineHeight: 1.6,
         margin: { blockStart: "0", blockEnd: "1em" },
       },
     },
