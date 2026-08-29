@@ -13,6 +13,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import { normalizePermissions } from "@admin/lib/permissions/normalize";
 
 import { PAGINATION } from "../constants/pagination";
+import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { ROUTES } from "../constants/routes";
 import { apiErrorMessage } from "../lib/api/parseApiError";
 import { protectedApi } from "../lib/api/protectedApi";
@@ -34,23 +35,12 @@ interface LoadingState {
 /** The one role nothing may be built on; see the base-role filter below. */
 const SUPER_ADMIN_SLUG = "super-admin";
 
-export const SYSTEM_RESOURCE_SLUGS = new Set([
-  "users",
-  "roles",
-  "permissions",
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-  "api-keys",
-  "webhooks",
-  // NOT "releases". The name is `content-releases` because registering a system
-  // resource RESERVES its name against collections and Singles, and a
-  // press-releases collection is one of the most common on a corporate site.
-  // See the note beside SYSTEM_RESOURCES in
-  // packages/nextly/src/schemas/_zod/rbac.ts before renaming it here.
-  "content-releases",
-]);
+/**
+ * Built-in resources, derived from the single admin definition.
+ *
+ * Was a hand-kept copy; see `constants/permissions` for why there is now one.
+ */
+export const SYSTEM_RESOURCE_SLUGS: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
 
 // Helper function to fetch and process inherited permissions (robust per-id fetch)
 const fetchInheritedPermissions = async (childIds: string[]) => {
