@@ -319,32 +319,39 @@ async function applyOne(
     return { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
   }
 
+  return writeAndConfirm(deps, action, identity.user, base);
+}
+
+/**
+ * The write, and the read-back that decides whether it counted.
+ *
+ * Extracted from {@link applyOne} because it is a different question: that one
+ * decides whether this action may be attempted at all, this one decides what
+ * actually happened when it was. Keeping them together also put the access
+ * refusals, the cancel fence and two rounds of confirmation in one function of
+ * a dozen branches, which no reader can hold at once.
+ */
+async function writeAndConfirm(
+  deps: ApplyDueReleasesDeps,
+  action: MaterialisationAction,
+  user: UserContext,
+  base: Omit<MaterialisationOutcome, "failure">
+): Promise<MaterialisationOutcome> {
   try {
     // Called ON the object rather than through an extracted reference: a
     // mutations implementation that is a class method would lose `this` and
     // fail at a point that looks like the write being refused.
-    const input = { ref: action.ref, user: identity.user };
+    const input = { ref: action.ref, user };
     await (action.effect === "publish"
       ? deps.mutations.publish(input)
       : deps.mutations.unpublish(input));
   } catch (error) {
-    // A rejection is not proof the write did not land. Ask the document.
-    try {
-      if (
-        await deps.mutations.applied({
-          ref: action.ref,
-          effect: action.effect,
-          user: identity.user,
-        })
-      ) {
-        return { ...base, failure: null, detail: messageOf(error) };
-      }
-    } catch {
-      // The read-back itself failed, which says nothing either way. Fall
-      // through and report the write as failed, which is the safe direction:
-      // a retry of an applied action is a no-op, while treating an unapplied
-      // one as done loses it silently.
-    }
+    // A rejection is not proof the write did not land. Ask the document — and
+    // if THAT cannot be answered, report the failure, which is the safe
+    // direction: a retry of an applied action is a no-op, while treating an
+    // unapplied one as done loses it silently.
+    const landed = await confirmApplied(deps, action, user, false);
+    if (landed) return { ...base, failure: null, detail: messageOf(error) };
     return { ...base, failure: "WRITE_FAILED", detail: messageOf(error) };
   }
 
@@ -355,30 +362,45 @@ async function applyOne(
   // read-time projection, and loses the scheduled action permanently — the one
   // failure here that leaves no trace at all.
   //
-  // So success is confirmed the same way a rejection is: by asking the
-  // document. A read-back that itself fails says nothing either way, and is
-  // treated as applied rather than inventing a failure for a write that did
-  // resolve.
-  try {
-    if (
-      !(await deps.mutations.applied({
-        ref: action.ref,
-        effect: action.effect,
-        user: identity.user,
-      }))
-    ) {
-      return {
-        ...base,
-        failure: "WRITE_FAILED",
-        detail: "the mutation resolved without applying the intended status",
-      };
-    }
-  } catch {
-    // The verification could not run. The write resolved, so the safe reading
-    // is that it landed; a retry of an applied action is a no-op anyway.
+  // So success is confirmed the same way a rejection is. An unanswerable
+  // read-back is treated as applied here, because the write did resolve;
+  // inventing a failure for it would be the direction that loses nothing but
+  // replays the hooks and outbox events of a write that already happened.
+  if (!(await confirmApplied(deps, action, user, true))) {
+    return {
+      ...base,
+      failure: "WRITE_FAILED",
+      detail: "the mutation resolved without applying the intended status",
+    };
   }
 
   return { ...base, failure: null };
+}
+
+/**
+ * Whether the document now carries the effect the action intended.
+ *
+ * @param whenUnverifiable what to answer when the read-back ITSELF fails, which
+ *   says nothing either way. Both callers need that answer and they need
+ *   opposite ones — a caller whose write rejected must not assume it landed, and
+ *   a caller whose write resolved must not invent a failure for it — so it is a
+ *   parameter rather than a policy this function picks.
+ */
+async function confirmApplied(
+  deps: ApplyDueReleasesDeps,
+  action: MaterialisationAction,
+  user: UserContext,
+  whenUnverifiable: boolean
+): Promise<boolean> {
+  try {
+    return await deps.mutations.applied({
+      ref: action.ref,
+      effect: action.effect,
+      user,
+    });
+  } catch {
+    return whenUnverifiable;
+  }
 }
 
 /**
