@@ -12,7 +12,13 @@
  * @module class-manager-panel.test
  */
 import type { NamedClass } from "@nextlyhq/blocks-engine";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -355,5 +361,517 @@ describe("deleting", () => {
       screen.getByRole("button", { name: "Confirm deleting card" })
     );
     expect(onDelete).toHaveBeenCalledWith("id-card");
+  });
+});
+
+describe("a host that could not read the usage index", () => {
+  it("says the reading is absent rather than reporting an empty index", () => {
+    // An empty map and an unread index are different facts, and only one of
+    // them is a statement about the site. Printing "Not in index" against
+    // every class from a read that never happened is the direction that reads
+    // as permission to delete.
+    draw({ usage: undefined });
+    expect(screen.getAllByText(/Usage not read/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Not in index")).toBeNull();
+  });
+
+  it("withdraws the filter it can no longer answer", () => {
+    draw({ usage: undefined });
+    expect(screen.queryByRole("button", { name: "Not in index" })).toBeNull();
+    // The control: the filters it CAN answer are still offered, so this is a
+    // withdrawal rather than the chips having failed to render at all.
+    expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "On this page" })).toBeTruthy();
+  });
+
+  it("still answers on-this-page, which the open document decides", () => {
+    // That question never went through the index, so losing the index must
+    // not cost it.
+    draw({ usage: undefined });
+    expect(screen.getByText(/on this page/)).toBeTruthy();
+  });
+});
+
+describe("a host with no way to carry out a delete", () => {
+  it("offers no Delete at all rather than a disabled one", () => {
+    draw({ onDelete: undefined });
+    // The control first: an absent button is also what a panel that rendered
+    // nothing looks like.
+    expect(nameField("hero")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Delete hero" })).toBeNull();
+  });
+});
+
+describe("a rename the host refuses", () => {
+  it("shows the reason rather than clearing as though it landed", async () => {
+    const onRename = vi.fn(async () => ({
+      ok: false as const,
+      reason: "The site style is locked.",
+    }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    expect(await screen.findByText("The site style is locked.")).toBeTruthy();
+  });
+
+  it("treats a REJECTED write as a refusal too", async () => {
+    // The contract is to answer, but a thrown error arrives all the same, and
+    // without handling it the row clears and says nothing.
+    const onRename = vi.fn(async () => {
+      throw new Error("network");
+    });
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    expect(await screen.findByText(/could not be renamed/i)).toBeTruthy();
+  });
+});
+
+describe("a host that answers a rename with nothing", () => {
+  it("treats an undefined resolution as silence, not as failure", async () => {
+    /*
+     * A merely `async` handler already satisfied the older `void` contract, so
+     * these callers exist. Reading `.ok` off a resolved `Promise<void>` throws,
+     * the throw is caught, and a rename that SUCCEEDED is then reported to the
+     * author as having failed — the worst direction for this to go wrong in.
+     */
+    const onRename = vi.fn(async () => undefined);
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    await act(async () => {
+      fireEvent.change(field, { target: { value: "renamed" } });
+      fireEvent.blur(field);
+    });
+    /*
+     * The chain has to SETTLE before absence means anything. Asserting straight
+     * after the blur passes whether or not the guard is there, because the
+     * message it is looking for could not have been rendered yet — measured:
+     * removing the guard left this test green.
+     */
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onRename).toHaveBeenCalled();
+    expect(screen.queryByText(/could not be renamed/i)).toBeNull();
+  });
+});
+
+describe("two renames on one row, answered out of order", () => {
+  it("ignores a refusal the author has already moved past", async () => {
+    // The superseded attempt's answer describes a name that is no longer being
+    // asked for, so reporting it points at an edit that no longer exists.
+    let settleFirst: ((v: { ok: false; reason: string }) => void) | undefined;
+    const first = new Promise<{ ok: false; reason: string }>(resolve => {
+      settleFirst = resolve;
+    });
+    const onRename = vi
+      .fn()
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce({ ok: true as const });
+
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "second" } });
+    fireEvent.blur(field);
+    fireEvent.change(nameField("hero"), { target: { value: "third" } });
+    fireEvent.blur(nameField("hero"));
+    await vi.waitFor(() => expect(onRename).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      settleFirst?.({ ok: false, reason: "The first one was refused." });
+      await first.catch(() => undefined);
+    });
+    expect(screen.queryByText("The first one was refused.")).toBeNull();
+  });
+});
+
+describe("a rename handler that fails before it returns", () => {
+  it("reports a SYNCHRONOUS throw like any other refusal", async () => {
+    // A permission or storage check that throws is a legitimate handler. The
+    // exception escaped the event handler, so the draft stayed and the author
+    // was told nothing.
+    const onRename = vi.fn(() => {
+      throw new Error("not allowed");
+    });
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    expect(await screen.findByText(/could not be renamed/i)).toBeTruthy();
+  });
+});
+
+describe("a filter whose backing data disappears", () => {
+  it("CLEARS the selection rather than masking it", () => {
+    /*
+     * Deriving a display value while the stored one stayed selected left two
+     * answers to "which filter is active", and the hidden one came back the
+     * moment usage was readable again — narrowing a list the author had last
+     * seen showing everything.
+     */
+    const view = render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Not in index" })
+        .getAttribute("aria-pressed")
+    ).toBe("true");
+
+    // Usage goes away, then comes back.
+    view.rerender(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    view.rerender(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole("button", { name: "All" }).getAttribute("aria-pressed")
+    ).toBe("true");
+  });
+});
+
+describe("deleting while the index was never read", () => {
+  it("does not claim the index knows of no document using it", () => {
+    // Rows are built from a placeholder empty map, so the usual wording would
+    // be reassurance derived from never having asked — offered immediately
+    // before an irreversible site-wide write.
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
+    // Addressed through the confirm button rather than by role: the filter
+    // chips are a `group` too, and matching both would assert about whichever
+    // came first.
+    const confirm = screen
+      .getByRole("button", { name: "Confirm deleting hero" })
+      .closest("div");
+    expect(confirm?.textContent).toContain("has not been read");
+    expect(confirm?.textContent).not.toContain("knows of no document");
+  });
+});
+
+describe("a library far larger than a screen", () => {
+  const many = Array.from({ length: 260 }, (_, index) => ({
+    id: `id-${index}`,
+    slug: `class-${index}`,
+    orderIndex: index,
+    styles: {},
+  }));
+
+  /*
+   * An explicit timeout, in the OPTIONS form. Mounting two hundred rows and
+   * their inputs costs the better part of a second on an idle machine, and the
+   * default five seconds is reached on a loaded one — this test timed out in a
+   * parallel run having passed in isolation. The number form (`it(name, ms,
+   * fn)`) is silently ignored by vitest, so it has to be this shape.
+   */
+  it(
+    "bounds what it mounts, and says how much it did not show",
+    { timeout: 30000 },
+    () => {
+      /*
+       * The `All` filter matches the whole library, so an unbounded list mounts
+       * a text input per class — two thousand of them on a site near the limit.
+       * The remainder is NAMED rather than dropped quietly: this is the surface
+       * an author uses to decide a class is unused, so a list that silently
+       * stops is one they would read as complete.
+       */
+      render(
+        <ClassManagerPanel
+          library={many}
+          usage={{}}
+          documentClassIds={[]}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      );
+      const fields = screen.getAllByRole("textbox");
+      expect(fields.length).toBeLessThan(many.length);
+      expect(screen.getByText(/Showing \d+ of 260/)).toBeTruthy();
+    }
+  );
+});
+
+describe("reaching a class past the row cap", () => {
+  const many = Array.from({ length: 260 }, (_, index) => ({
+    id: `id-${index}`,
+    slug: `class-${index}`,
+    orderIndex: index,
+    styles: {},
+  }));
+
+  it(
+    "finds one by NAME that no filter could have selected",
+    { timeout: 30000 },
+    () => {
+      /*
+       * The cap keeps a large library from mounting two thousand inputs, and
+       * without a name search it is a wall: the chips narrow by index state and
+       * by the open page, so a class past the cap that neither selects could
+       * never be shown or renamed. `class-259` is the last row, on no page, and
+       * in an index that was never read — nothing else can reach it.
+       */
+      draw({ library: many, usage: undefined, documentClassIds: [] });
+      expect(screen.queryByLabelText("Name of class-259")).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Search classes"), {
+        target: { value: "class-259" },
+      });
+      expect(screen.getByLabelText("Name of class-259")).toBeTruthy();
+    }
+  );
+
+  it(
+    "offers a control that reaches the tail whatever the names are",
+    { timeout: 30000 },
+    () => {
+      /*
+       * Search alone is not enough and the note must not imply it is: a library
+       * of `class-0` to `class-259` matches every query an author would think to
+       * type, so the last sixty stay unreachable however the message is worded.
+       * Raising the mounted count is what cannot depend on the naming.
+       */
+      draw({ library: many, usage: undefined, documentClassIds: [] });
+      expect(screen.getByText("Showing 200 of 260.")).toBeTruthy();
+      expect(screen.queryByLabelText("Name of class-259")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Show 60 more" }));
+      expect(screen.getByLabelText("Name of class-259")).toBeTruthy();
+      // Nothing left to reach, so nothing left to offer.
+      expect(
+        screen.queryByRole("button", { name: /Show \d+ more/ })
+      ).toBeNull();
+    }
+  );
+
+  it("blames the FILTER, not a search that is not set", () => {
+    // With the box blank, "no classes match this search" sends an author to
+    // clear something they never typed and hides the chip that emptied the list.
+    draw({
+      library: many,
+      usage: undefined,
+      documentClassIds: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "On this page" }));
+    expect(screen.getByText("No classes match this filter.")).toBeTruthy();
+  });
+});
+
+describe("a revert typed while the first rename is still in flight", () => {
+  it("is DISPATCHED rather than read as a no-op", async () => {
+    /*
+     * `row.slug` is the stored name and does not move until a save comes back.
+     * An author who renames `hero` to `promo` and then types `hero` again
+     * inside that window is reverting, but the rendered slug still says `hero`
+     * — so comparing against it discarded the edit and the pending first write
+     * went on to persist `promo`.
+     */
+    const onRename = vi.fn(
+      () => new Promise<{ ok: true }>(() => undefined) // never settles
+    );
+    const view = render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "promo" } });
+    fireEvent.blur(field);
+    expect(onRename).toHaveBeenCalledTimes(1);
+
+    /*
+     * The host now says this class is heading for `promo`, which is what it
+     * knows and the panel cannot: the write lives in the host's queue and
+     * outlives this panel.
+     */
+    view.rerender(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+        pendingSlugs={{ "id-hero": "promo" }}
+      />
+    );
+
+    /*
+     * The row still renders `hero`, because nothing has come back — so typing
+     * `hero` has to arrive as a real DOM change. React's `onChange` does not
+     * fire when the value it is given equals the one already there, and the
+     * field reverted to `hero` when the draft cleared, so a single change to
+     * `hero` sets no draft at all and this would assert nothing.
+     */
+    fireEvent.change(nameField("hero"), { target: { value: "her" } });
+    fireEvent.change(nameField("hero"), { target: { value: "hero" } });
+    fireEvent.blur(nameField("hero"));
+
+    expect(onRename).toHaveBeenCalledTimes(2);
+    expect(onRename).toHaveBeenLastCalledWith("id-hero", "hero");
+  });
+
+  it("still treats a genuine no-op as one when nothing is pending", () => {
+    // The control: without this the fix would simply dispatch every commit,
+    // which writes a revision whose rendered output is identical to the last.
+    const onRename = vi.fn();
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+    expect(onRename).not.toHaveBeenCalled();
+  });
+});
+
+describe("a host whose rename handler returns something else entirely", () => {
+  it("accepts a SYNCHRONOUS value without throwing out of the handler", async () => {
+    /*
+     * The contract this replaced was `=> void`, which TypeScript satisfies with
+     * any return type — `onRename={() => map.set(id, slug)}` was legal and
+     * common. Reaching for `.then` on that Map threw out of the event handler,
+     * so a working host broke on an internal detail of this panel.
+     */
+    const store = new Map<string, string>();
+    const onRename = vi.fn((classId: string, slug: string) =>
+      store.set(classId, slug)
+    );
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    /*
+     * The throw has to be OBSERVED rather than awaited. jsdom dispatches an
+     * event listener's exception to the virtual console instead of rethrowing
+     * to the caller, so `fireEvent` returns normally and the assertions below
+     * pass whether or not the handler blew up — measured: reaching for `.then`
+     * on the Map again left this test green.
+     */
+    const failures: unknown[] = [];
+    const onError = (event: ErrorEvent): void => {
+      failures.push(event.error);
+    };
+    window.addEventListener("error", onError);
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    window.removeEventListener("error", onError);
+
+    expect(failures).toEqual([]);
+    // The host was called and its value ignored, rather than interpreted.
+    expect(store.get("id-hero")).toBe("renamed");
+    expect(screen.queryByText(/could not be renamed/i)).toBeNull();
+  });
+
+  it("ignores a resolution that is not an outcome", async () => {
+    // An async helper resolving to some mutation result is equally legal, and
+    // reading `.ok` off it reported a SUCCESSFUL rename as failed.
+    const onRename = vi.fn(async () => ({ rowsAffected: 1 }));
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "renamed" } });
+    fireEvent.blur(field);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onRename).toHaveBeenCalled();
+    expect(screen.queryByText(/could not be renamed/i)).toBeNull();
   });
 });

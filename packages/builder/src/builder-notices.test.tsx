@@ -31,6 +31,7 @@ import {
   NoticeSinkProvider,
   useNoticeQueue,
 } from "./builder-notices";
+import { ClassManagerPanel } from "./class-manager-panel";
 import { ClassSelector } from "./class-selector";
 
 afterEach(cleanup);
@@ -218,5 +219,88 @@ describe("the queue", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     fireEvent.click(raise);
     expect(screen.getByText("Same news")).toBeTruthy();
+  });
+});
+
+describe("a rename refused after the panel is gone", () => {
+  /**
+   * The manager in the shell's arrangement: the region above, and the panel
+   * mounted only while its own rail item is the open one.
+   *
+   * `BuilderShell` keys its content by the open panel, so switching away
+   * unmounts the whole manager — which is a coarser unmount than the class
+   * selector's per-node key and reaches the same dead `setState`.
+   */
+  function Manager({
+    open,
+    onRename,
+  }: {
+    open: boolean;
+    onRename: () => Promise<{ ok: false; reason: string }>;
+  }): React.ReactElement {
+    const notices = useNoticeQueue();
+    return (
+      <>
+        <BuilderNoticeRegion
+          notices={notices.notices}
+          onDismiss={notices.dismiss}
+        />
+        <NoticeSinkProvider raise={notices.raise}>
+          {open ? (
+            <ClassManagerPanel
+              documentClassIds={[]}
+              library={LIBRARY}
+              onRename={onRename}
+              usage={{}}
+            />
+          ) : null}
+        </NoticeSinkProvider>
+      </>
+    );
+  }
+
+  it("is still reported, from the surface the switch did not unmount", async () => {
+    let settle: ((v: { ok: false; reason: string }) => void) | undefined;
+    const pending = new Promise<{ ok: false; reason: string }>(resolve => {
+      settle = resolve;
+    });
+    const onRename = vi.fn(() => pending);
+
+    const view = render(<Manager onRename={onRename} open />);
+    const field = screen.getByLabelText("Name of hero");
+    fireEvent.change(field, { target: { value: "promo" } });
+    fireEvent.blur(field);
+    expect(onRename).toHaveBeenCalled();
+
+    // The author switches panels while the write is still on the network.
+    view.rerender(<Manager onRename={onRename} open={false} />);
+
+    await act(async () => {
+      settle?.({ ok: false, reason: "The site style is locked." });
+      await pending;
+    });
+
+    expect(screen.getByText("The site style is locked.")).toBeTruthy();
+  });
+
+  it("stays inline while the panel is still open", async () => {
+    // One refusal, one place to read it — the row can speak for itself here.
+    const onRename = vi.fn(async () => ({
+      ok: false as const,
+      reason: "The site style is locked.",
+    }));
+    render(<Manager onRename={onRename} open />);
+    const field = screen.getByLabelText("Name of hero");
+    fireEvent.change(field, { target: { value: "promo" } });
+    fireEvent.blur(field);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /site style is locked/
+    );
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 });

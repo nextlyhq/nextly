@@ -39,10 +39,12 @@ import type { NamedClass } from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useSurvivingReport } from "./builder-notices";
 import {
   classRows,
   deletionWarning,
   filterClassRows,
+  searchClassRows,
   renamedClassName,
   usageSummary,
   type ClassFilter,
@@ -62,6 +64,77 @@ const FILTERS: ReadonlyArray<{ value: ClassFilter; label: string }> = [
   { value: "on-this-page", label: "On this page" },
 ];
 
+/**
+ * The filters that can be answered from what the host supplied.
+ *
+ * "Not in index" is withheld when no usage was read, rather than answered from
+ * the empty map that stands in for one. Every class would satisfy it, which
+ * reads as a site where nothing is used — the most alarming possible reading,
+ * produced entirely by not having asked.
+ */
+function offerableFilters(
+  usageKnown: boolean
+): ReadonlyArray<{ value: ClassFilter; label: string }> {
+  return usageKnown
+    ? FILTERS
+    : FILTERS.filter(filter => filter.value !== "not-in-index");
+}
+
+/**
+ * What a host answers a rename with, when it answers at all.
+ *
+ * A persisted rename is a network write and can be refused. A host that returns
+ * nothing is taken at its word and the row simply clears, which keeps every
+ * existing caller working; one that returns this gets its refusal SHOWN rather
+ * than swallowed, which is the difference between a rename that failed and a
+ * rename that appears to have worked until the next read.
+ */
+export type ClassRenameOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * What a rename may answer with, which is ANYTHING.
+ *
+ * `unknown` rather than a union, because the contract this replaced was
+ * `=> void` and TypeScript accepts every return type where `void` is declared.
+ * `onRename={() => map.set(id, slug)}` and an async helper resolving to some
+ * mutation result both satisfied it, so any narrower union stops existing
+ * callers compiling — and a union that merely ADDS `Promise<void>` still
+ * rejects them.
+ *
+ * The runtime cost of narrowing was the worse half. A synchronous non-undefined
+ * return reaching `.then` throws out of the event handler, and a resolved
+ * `Promise<void>` read as `result.ok` threw and was caught — reporting a rename
+ * that SUCCEEDED as failed.
+ *
+ * So nothing is assumed about the answer. It is interpreted only once it has
+ * been shown to be a promise, and its resolution only once it has been shown to
+ * be an outcome; anything else is a host that does not report, which is the
+ * silence the `void` form always meant.
+ */
+export type ClassRenameAnswer = unknown;
+
+/** Whether a value can be awaited, without assuming it is a native promise. */
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof value.then === "function"
+  );
+}
+
+/** Whether a resolution is an outcome this panel can report, or something else. */
+function isRenameOutcome(value: unknown): value is ClassRenameOutcome {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "ok" in value &&
+    typeof value.ok === "boolean"
+  );
+}
+
 export interface ClassManagerPanelProps {
   /**
    * The site's class library, or `undefined` while the host has not read it.
@@ -71,10 +144,51 @@ export interface ClassManagerPanelProps {
    * and an author must not be shown "no classes" for a library still loading.
    */
   library: readonly NamedClass[] | undefined;
-  /** Documents known to reference each class, keyed by id. A floor. */
-  usage: ClassUsageCounts;
+  /**
+   * Why the library is absent, when it is.
+   *
+   * A read that FAILED will not finish, and a surface that goes on saying
+   * "loading" describes a state the site is not in — the author waits for
+   * something that is never coming rather than retrying or reporting it. The
+   * selector and the fonts panel already draw this distinction; the manager
+   * discarded it and showed one wording for both.
+   */
+  absence?: "pending" | "failed";
+  /**
+   * Documents known to reference each class, keyed by id. A floor.
+   *
+   * `undefined` is a THIRD state, not an empty index: a host that cannot read
+   * the usage index has not established that nothing uses these classes, and
+   * an empty map would say exactly that. The rows then report the absence of
+   * the reading rather than an absence of usage.
+   */
+  usage?: ClassUsageCounts;
   /** The class ids the open document applies, for the on-this-page filter. */
   documentClassIds: readonly string[];
+  /**
+   * Whether that list covers the whole document.
+   *
+   * The walk producing it stops at the document's node ceiling, so a class
+   * applied past that bound is missing from the list — and its absence must
+   * not be read as "not on this page". `"partial"` says so on the surface
+   * rather than leaving the filter to make a claim it cannot support.
+   */
+  documentScan?: "complete" | "partial";
+  /**
+   * The name each class is currently being RENAMED to, keyed by id.
+   *
+   * A rename is a network write and `library` does not move until it comes
+   * back, so the rendered slug is stale for as long as it is in flight. An
+   * author who renames `hero` to `promo` and types `hero` again inside that
+   * window is reverting — and comparing against the rendered name reads it as
+   * a no-op and lets the first write land.
+   *
+   * Supplied by the HOST rather than remembered here, because the host owns the
+   * write queue and this panel does not survive a switch to another rail panel.
+   * A field holding it locally lost it on exactly the switch that makes the
+   * window long enough to matter.
+   */
+  pendingSlugs?: Readonly<Record<string, string>>;
   /**
    * The classes something ELSE supplies, which the stored library layers over.
    *
@@ -90,15 +204,31 @@ export interface ClassManagerPanelProps {
    * one, so it is withheld and the row says why.
    */
   suppliedClassIds?: readonly string[];
-  /** Rename a class. The slug has already passed the engine's grammar. */
-  onRename: (classId: string, slug: string) => void;
-  /** Delete a class, removing it from every document that references it. */
-  onDelete: (classId: string) => void;
+  /**
+   * Rename a class. The slug has already passed the engine's grammar.
+   *
+   * May answer with the outcome. A host that persists asynchronously and stays
+   * silent leaves the row looking renamed whatever happened, so returning a
+   * {@link ClassRenameOutcome} is how a refusal reaches the author.
+   */
+  onRename: (classId: string, slug: string) => ClassRenameAnswer;
+  /**
+   * Delete a class, removing it from every document that references it.
+   *
+   * Optional, because that removal is a site-wide write and a host without one
+   * cannot honour what the word promises. Absent, no Delete is offered at all:
+   * a disabled one invites an author to hunt for the permission that would
+   * enable it, and there is none to find.
+   */
+  onDelete?: (classId: string) => void;
 }
 
 /** Every class the site renders, filtered, renameable and deletable. */
 export function ClassManagerPanel({
   library,
+  absence,
+  documentScan,
+  pendingSlugs,
   usage,
   documentClassIds,
   suppliedClassIds,
@@ -106,18 +236,53 @@ export function ClassManagerPanel({
   onDelete,
 }: ClassManagerPanelProps): React.ReactElement {
   const [filter, setFilter] = React.useState<ClassFilter>("all");
+  /*
+   * The name search, which is what makes every class REACHABLE.
+   *
+   * The list is capped so a library near its ceiling does not mount two
+   * thousand rows and their inputs at once. Without a search that cap is a
+   * wall: the chips narrow by index state and by the open page, so a class
+   * past the cap that no filter happens to select could never be shown or
+   * renamed — and the note under the cap said to filter, which was advice the
+   * surface could not honour.
+   */
+  const [query, setQuery] = React.useState("");
+  /*
+   * A filter the panel no longer offers cannot stay selected. `usage` is a
+   * host prop and can go from read to unread between renders, which would
+   * otherwise leave the list narrowed by a chip that is no longer on screen —
+   * an empty panel with nothing to explain it.
+   */
+  const offerable = offerableFilters(usage !== undefined);
+  const stillOffered = offerable.some(entry => entry.value === filter);
+  /*
+   * CLEARED rather than masked. Deriving a display value while the stored one
+   * stayed `"not-in-index"` left two answers to "which filter is active", and
+   * the hidden one came back the moment usage was readable again — narrowing a
+   * list the author had last seen showing everything, with no chip to explain
+   * why.
+   */
+  React.useEffect(() => {
+    if (!stillOffered) setFilter("all");
+  }, [stillOffered]);
+  const active = stillOffered ? filter : "all";
 
   if (library === undefined) {
     return (
       <div className="nx-classman">
-        <p className="nx-inspector__note">Loading classes…</p>
+        <p className="nx-inspector__note">
+          {absence === "failed"
+            ? "This site's classes could not be read."
+            : "Loading classes…"}
+        </p>
       </div>
     );
   }
 
-  const rows = filterClassRows(
-    classRows(library, usage, documentClassIds),
-    filter
+  const usageKnown = usage !== undefined;
+  const rows = searchClassRows(
+    filterClassRows(classRows(library, usage ?? {}, documentClassIds), active),
+    query
   );
 
   return (
@@ -125,11 +290,31 @@ export function ClassManagerPanel({
       <div className="nx-classman__head">
         <h2 className="nx-classman__title">Classes</h2>
       </div>
-      <FilterChips active={filter} onChange={setFilter} />
+      {documentScan === "partial" ? (
+        // Stated rather than silently narrowing: the page filter and the row
+        // marks are still TRUE where they appear, and it is their absence that
+        // cannot be trusted.
+        <p className="nx-inspector__note">
+          This page has more blocks than can be read at once, so a class it uses
+          may not be marked here.
+        </p>
+      ) : null}
+      {usageKnown ? null : (
+        // Stated once, at the top, rather than on every row. It is a property
+        // of this reading of the site, not of any one class.
+        <p className="nx-inspector__note">
+          Where these classes are used has not been read.
+        </p>
+      )}
+      <FilterChips active={active} filters={offerable} onChange={setFilter} />
+      <ClassSearch query={query} onChange={setQuery} />
       <ClassList
         rows={rows}
+        searching={query.trim() !== ""}
+        pendingSlugs={pendingSlugs}
         library={library}
         supplied={new Set(suppliedClassIds ?? [])}
+        usageKnown={usageKnown}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -137,16 +322,48 @@ export function ClassManagerPanel({
   );
 }
 
+/**
+ * The name search.
+ *
+ * Uncontrolled by the filter chips: narrowing by name and narrowing by index
+ * state are separate choices, and clearing one must not clear the other.
+ */
+function ClassSearch({
+  query,
+  onChange,
+}: {
+  query: string;
+  onChange: (next: string) => void;
+}): React.ReactElement {
+  const id = React.useId();
+  return (
+    <div className="nx-classman__search">
+      <label className="sr-only" htmlFor={id}>
+        Search classes
+      </label>
+      <Input
+        id={id}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Search classes"
+        type="search"
+        value={query}
+      />
+    </div>
+  );
+}
+
 function FilterChips({
   active,
+  filters,
   onChange,
 }: {
   active: ClassFilter;
+  filters: ReadonlyArray<{ value: ClassFilter; label: string }>;
   onChange: (filter: ClassFilter) => void;
 }): React.ReactElement {
   return (
     <div className="nx-classman__filters" role="group" aria-label="Filter">
-      {FILTERS.map(({ value, label }) => (
+      {filters.map(({ value, label }) => (
         <Button
           key={value}
           type="button"
@@ -162,65 +379,138 @@ function FilterChips({
   );
 }
 
+/**
+ * How many rows the manager mounts at once.
+ *
+ * A library may hold `MAX_NAMED_CLASSES`, and the `All` filter matches every
+ * one — so opening the panel on a large site would mount two thousand rows and
+ * two thousand text inputs synchronously. The selector caps its own results at
+ * fifty for exactly this reason; the manager needs a bound of the same kind,
+ * and a larger one because reading a list IS what this surface is for.
+ *
+ * The remainder is REPORTED rather than dropped quietly: a list that silently
+ * stops is a list an author believes is complete, and this one is the surface
+ * they would use to decide a class is safe to delete.
+ */
+const MAX_MANAGED_ROWS = 200;
+
 function ClassList({
   rows,
+  searching,
+  pendingSlugs,
   library,
   supplied,
+  usageKnown,
   onRename,
   onDelete,
 }: {
   rows: readonly ClassRow[];
+  /** Whether a search is narrowing them, for the empty-list wording. */
+  searching: boolean;
+  pendingSlugs?: Readonly<Record<string, string>>;
   library: readonly NamedClass[];
   supplied: ReadonlySet<string>;
-  onRename: (classId: string, slug: string) => void;
-  onDelete: (classId: string) => void;
+  usageKnown: boolean;
+  onRename: ClassManagerPanelProps["onRename"];
+  onDelete?: (classId: string) => void;
 }): React.ReactElement {
+  /*
+   * How many rows are mounted right now. Raised by the control below rather
+   * than fixed, because a search cannot be relied on to reach the tail: a
+   * library of `class-0` to `class-259` matches every query an author is
+   * likely to type, and the last sixty would stay unreachable however the
+   * message was worded.
+   */
+  const [limit, setLimit] = React.useState(MAX_MANAGED_ROWS);
   if (rows.length === 0) {
-    return <p className="nx-inspector__note">No classes match this filter.</p>;
+    return (
+      <p className="nx-inspector__note">
+        {/*
+          Which narrowing produced the empty list. Blaming the search when the
+          box is blank sends an author to clear something that is not set, and
+          hides the filter that actually did it.
+        */}
+        {searching
+          ? "No classes match this search."
+          : "No classes match this filter."}
+      </p>
+    );
   }
+  const shown = rows.slice(0, limit);
+  const hidden = rows.length - shown.length;
   return (
-    <ul className="nx-classman__list">
-      {rows.map(row => (
-        <li key={row.id} className="nx-classman__row">
-          <ClassRowView
-            row={row}
-            library={library}
-            isSupplied={supplied.has(row.id)}
-            onRename={onRename}
-            onDelete={onDelete}
-          />
-        </li>
-      ))}
-    </ul>
+    <>
+      {hidden > 0 ? (
+        <p className="nx-inspector__note">
+          {`Showing ${shown.length} of ${rows.length}.`}
+        </p>
+      ) : null}
+      <ul className="nx-classman__list">
+        {shown.map(row => (
+          <li key={row.id} className="nx-classman__row">
+            <ClassRowView
+              row={row}
+              pendingSlug={pendingSlugs?.[row.id]}
+              library={library}
+              isSupplied={supplied.has(row.id)}
+              usageKnown={usageKnown}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
+          </li>
+        ))}
+      </ul>
+      {hidden > 0 ? (
+        <Button
+          className="nx-classman__more"
+          onClick={() => setLimit(current => current + MAX_MANAGED_ROWS)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          {`Show ${Math.min(hidden, MAX_MANAGED_ROWS)} more`}
+        </Button>
+      ) : null}
+    </>
   );
 }
 
 function ClassRowView({
   row,
+  pendingSlug,
   library,
   isSupplied,
+  usageKnown,
   onRename,
   onDelete,
 }: {
   row: ClassRow;
+  /** The name this class is being renamed to, when a write is in flight. */
+  pendingSlug?: string;
   library: readonly NamedClass[];
   isSupplied: boolean;
-  onRename: (classId: string, slug: string) => void;
-  onDelete: (classId: string) => void;
+  usageKnown: boolean;
+  onRename: ClassManagerPanelProps["onRename"];
+  onDelete?: (classId: string) => void;
 }): React.ReactElement {
   const [confirming, setConfirming] = React.useState(false);
 
   return (
     <>
       <div className="nx-classman__fields">
-        <NameField row={row} library={library} onRename={onRename} />
-        <UsageNote row={row} />
+        <NameField
+          library={library}
+          onRename={onRename}
+          pendingSlug={pendingSlug}
+          row={row}
+        />
+        <UsageNote row={row} usageKnown={usageKnown} />
         {isSupplied ? (
           // Named rather than shown disabled. A greyed button invites an
           // author to hunt for the permission that would enable it, and there
           // is none — the class comes from the site's own configuration.
           <span className="nx-classman__origin">Default</span>
-        ) : (
+        ) : onDelete === undefined ? null : (
           <Button
             type="button"
             size="sm"
@@ -232,9 +522,10 @@ function ClassRowView({
           </Button>
         )}
       </div>
-      {confirming ? (
+      {confirming && onDelete !== undefined ? (
         <DeleteConfirm
           row={row}
+          usageKnown={usageKnown}
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
             setConfirming(false);
@@ -256,14 +547,48 @@ function ClassRowView({
  */
 function NameField({
   row,
+  pendingSlug,
   library,
   onRename,
 }: {
   row: ClassRow;
+  pendingSlug?: string;
   library: readonly NamedClass[];
-  onRename: (classId: string, slug: string) => void;
+  onRename: ClassManagerPanelProps["onRename"];
 }): React.ReactElement {
   const [draft, setDraft] = React.useState<string | null>(null);
+  /*
+   * A refusal from the HOST, which is a different failure from a name the
+   * grammar rejects: the name was fine and the write did not land. Held apart
+   * so the two cannot overwrite one another, and cleared on the next edit
+   * because a stale reason beside a fresh draft describes neither.
+   */
+  const [refused, setRefused] = React.useState<string | null>(null);
+  /*
+   * Which rename this row is currently waiting on.
+   *
+   * An author can commit a second rename while the first is still in flight,
+   * and the answers can arrive in either order. Without this, a refusal from
+   * the superseded attempt lands after the newer edit cleared it, and the row
+   * reports a failure for a rename that is no longer being attempted — or,
+   * with the orders reversed, keeps reporting one the retry already fixed.
+   */
+  const attempt = React.useRef(0);
+  /*
+   * Where a refusal goes when this row is no longer on screen.
+   *
+   * `BuilderShell` keys its content by the open panel, so switching panels or
+   * leaving the editor unmounts this field while a save is still on the
+   * network, and `setRefused` then reaches nothing. This row can always show
+   * one while it exists, so it always takes responsibility.
+   */
+  const survive = useSurvivingReport();
+  const report = (reason: string): void => {
+    survive(reason, () => {
+      setRefused(reason);
+      return true;
+    });
+  };
   const id = React.useId();
   const outcome =
     draft === null ? null : renamedClassName(draft, row.id, library);
@@ -278,8 +603,75 @@ function NameField({
      * write a revision whose rendered output is identical to the one before it.
      * The draft still clears, because the author did finish editing.
      */
-    if (outcome.slug !== row.slug) onRename(row.id, outcome.slug);
+    /*
+     * Compared against the name this class is HEADING FOR, which is the
+     * pending one while a write is in flight and the stored one otherwise.
+     * Comparing against the rendered slug read a revert as a no-op and let the
+     * superseded write land.
+     */
+    if (outcome.slug === (pendingSlug ?? row.slug)) {
+      setDraft(null);
+      return;
+    }
+    /*
+     * Called inside a boundary that catches a SYNCHRONOUS throw, so a handler
+     * failing before it returns is treated exactly as one that rejects. A
+     * permission or storage check that throws is a legitimate implementation
+     * of the contract, and letting it escape the event handler left the draft
+     * uncleared and the author told nothing at all.
+     */
+    /*
+     * Superseded BEFORE the call, not after it. Advancing only once a promise
+     * came back meant a newer rename that returned synchronous `void`, or that
+     * threw, never took the number — so an older pending promise could resolve
+     * afterwards and overwrite or clear what the newer attempt had said.
+     */
+    attempt.current += 1;
+    const mine = attempt.current;
+    let answered: ClassRenameAnswer;
+    try {
+      answered = onRename(row.id, outcome.slug);
+    } catch {
+      setDraft(null);
+      report("This class could not be renamed.");
+      return;
+    }
+    /*
+     * The draft clears immediately, because the author DID finish editing and
+     * a field that holds their text hostage until the network answers reads as
+     * frozen. A refusal arrives beside the row instead, naming the class it is
+     * about — the row is still there to name it, which is why this needs no
+     * shell-level surface the way an unmounting control does.
+     */
     setDraft(null);
+    setRefused(null);
+    // A host that answered with something un-awaitable is one that does not
+    // report. Reaching for `.then` on it threw out of this event handler.
+    if (!isPromiseLike(answered)) return;
+    void Promise.resolve(answered)
+      .then(result => {
+        // Superseded: a newer rename on this row is the one being awaited, and
+        // this answer describes a name the author has already moved past.
+        if (attempt.current !== mine) return;
+        // Anything that is not an outcome is silence rather than refusal —
+        // reading `.ok` off it would throw, and the catch below would then
+        // present a SUCCESSFUL rename as a failed one.
+        if (!isRenameOutcome(result) || result.ok) {
+          setRefused(null);
+          return;
+        }
+        report(result.reason);
+      })
+      /*
+       * A REJECTED promise is a refusal too. The contract is to answer, but a
+       * thrown error or a rejected write arrives here all the same, and without
+       * this the row clears and says nothing — the exact silence the outcome
+       * was added to remove.
+       */
+      .catch(() => {
+        if (attempt.current !== mine) return;
+        report("This class could not be renamed.");
+      });
   };
 
   return (
@@ -294,7 +686,10 @@ function NameField({
         aria-describedby={
           outcome !== null && !outcome.ok ? `${id}-why` : undefined
         }
-        onChange={event => setDraft(event.target.value)}
+        onChange={event => {
+          setDraft(event.target.value);
+          setRefused(null);
+        }}
         onBlur={commit}
         onKeyDown={event => {
           if (commitOnEnter(event, commit)) return;
@@ -304,6 +699,11 @@ function NameField({
       {outcome !== null && !outcome.ok ? (
         <p className="nx-classman__issue" id={`${id}-why`} role="alert">
           {REFUSALS[outcome.refusal]}
+        </p>
+      ) : null}
+      {refused !== null ? (
+        <p className="nx-classman__issue" role="alert">
+          {refused}
         </p>
       ) : null}
     </div>
@@ -326,10 +726,25 @@ const REFUSALS = {
  * thing beside a confirmation saying another is two uncertainty policies for
  * one number, and the row is the one an author reads far more often.
  */
-function UsageNote({ row }: { row: ClassRow }): React.ReactElement {
+function UsageNote({
+  row,
+  usageKnown,
+}: {
+  row: ClassRow;
+  usageKnown: boolean;
+}): React.ReactElement {
   return (
     <span className="nx-classman__usage">
-      {usageSummary(row)}
+      {/*
+        `usageSummary` answers about the INDEX, and with no index read there is
+        nothing for it to answer about. Letting it run on the empty map that
+        stands in for one would print "Not in index" against every class — a
+        statement about the site, made from never having looked.
+
+        "On this page" survives, because it is answered by the open document
+        rather than by the index and is just as true either way.
+      */}
+      {usageKnown ? usageSummary(row) : "Usage not read"}
       {row.onThisPage ? " · on this page" : ""}
     </span>
   );
@@ -348,10 +763,12 @@ function UsageNote({ row }: { row: ClassRow }): React.ReactElement {
  */
 function DeleteConfirm({
   row,
+  usageKnown,
   onCancel,
   onConfirm,
 }: {
   row: ClassRow;
+  usageKnown: boolean;
   onCancel: () => void;
   onConfirm: () => void;
 }): React.ReactElement {
@@ -359,9 +776,18 @@ function DeleteConfirm({
   return (
     <div className="nx-classman__confirm" role="group">
       <p className="nx-classman__issue">
-        {warning.hasIndexedUsage
-          ? `Delete “${row.slug}”? The index has it on ${warning.indexedDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
-          : `Delete “${row.slug}”? The index knows of no document using it, but it cannot rule one out.`}
+        {/*
+          Three wordings, because there are three states and the middle one is
+          the dangerous one to collapse. Rows are built from an empty map when
+          no index was read, so "knows of no document using it" would be
+          reassurance derived entirely from never having asked — offered
+          immediately before an irreversible site-wide write.
+        */}
+        {!usageKnown
+          ? `Delete “${row.slug}”? Where this class is used has not been read, so there is no telling how many documents carry it. Deleting removes it from every one of them.`
+          : warning.hasIndexedUsage
+            ? `Delete “${row.slug}”? The index has it on ${warning.indexedDocuments} document(s), and deleting removes it from every document that carries it. That number is what the index recorded, and it can be wrong in either direction.`
+            : `Delete “${row.slug}”? The index knows of no document using it, but it cannot rule one out.`}
       </p>
       <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
         Cancel

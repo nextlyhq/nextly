@@ -257,6 +257,27 @@ export interface PageBuilderOptions {
  * The Page Builder plugin factory. Call it in a host app's
  * `defineConfig({ plugins: [pageBuilder()] })`.
  */
+/**
+ * Document limits in a form that survives the client-config round trip.
+ *
+ * `clientConfig` is refused at BOOT unless it is delivered unchanged through
+ * JSON, and `Infinity` is not a JSON value — it round-trips to `null`, so
+ * publishing it raw takes the whole plugin down. An infinite bound is
+ * deliberately supported by the engine, whose byte measurement refuses to
+ * reject one, so it has to be carried rather than dropped.
+ *
+ * `null` is the wire spelling for "no bound", and the admin reads it back as
+ * `Infinity`. Encoded here because this is where the value crosses into JSON.
+ */
+function jsonSafeLimits(limits: DocumentLimits): Record<string, number | null> {
+  return Object.fromEntries(
+    Object.entries(limits).map(([key, value]) => [
+      key,
+      Number.isFinite(value) ? value : null,
+    ])
+  );
+}
+
 export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   // Resolved once, with no stored tier: at config time there is no database to
   // read, so what the factory can wire into the validator and the canvas is
@@ -412,6 +433,7 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // key already says.
         ...(opts.remotePatterns !== undefined ||
         opts.checklist !== undefined ||
+        opts.limits !== undefined ||
         opts.siteStyle !== undefined
           ? {
               clientConfig: {
@@ -428,6 +450,17 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
                 ...(opts.siteStyle === undefined
                   ? {}
                   : { siteStyle: configStyle }),
+                /*
+                 * The bounds the renderer draws under, so the admin asks the
+                 * same question the page answers. The classes manager walks the
+                 * open document to say which classes a page applies, and a walk
+                 * under different limits selects different nodes — reporting a
+                 * class as absent from a page that renders it. Plain numbers,
+                 * and nothing secret: the published page is drawn under them.
+                 */
+                ...(opts.limits === undefined
+                  ? {}
+                  : { limits: jsonSafeLimits(opts.limits) }),
               },
             }
           : {}),

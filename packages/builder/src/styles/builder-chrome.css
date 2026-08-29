@@ -2015,6 +2015,16 @@
   font-weight: 600;
 }
 
+/*
+ * The name search. Full width because it is the only control that can reach a
+ * class past the row cap, and a narrow box beside the chips reads as an
+ * afterthought rather than as the way through a long library.
+ */
+.nx-classman__search {
+  display: flex;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
 .nx-classman__filters {
   display: flex;
   flex-wrap: wrap;

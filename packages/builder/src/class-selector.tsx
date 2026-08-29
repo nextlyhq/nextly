@@ -39,7 +39,7 @@ import type { NamedClass } from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { useNoticeSink } from "./builder-notices";
+import { useSurvivingReport } from "./builder-notices";
 import {
   appliedClasses,
   nodeHasRoom,
@@ -248,19 +248,7 @@ export function ClassSelector({
    * instance and reaches nothing, which is silence about a class that was not
    * created. The shell outlives the key and can still speak.
    */
-  const raiseNotice = useNoticeSink();
-  /*
-   * Whether this instance can still draw. A ref rather than state because
-   * nothing renders from it and setting it must schedule no work: it is read
-   * inside a callback that has already outlived the render it came from.
-   */
-  const mounted = React.useRef(true);
-  React.useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
+  const survive = useSurvivingReport();
   const listId = React.useId();
   /*
    * What the node holds RIGHT NOW, for the callback that runs after a save.
@@ -307,15 +295,18 @@ export function ClassSelector({
    * learn to stop reading.
    */
   const reportRefusal = (about: string, reason: string): void => {
-    if (mounted.current && currentNodeId.current === about) {
+    survive(reason, () => {
+      // Withheld when the author has moved to another block: the inline message
+      // is scoped to the node the request was made against, and shown beside a
+      // different one it describes an element that is not selected.
+      if (currentNodeId.current !== about) return false;
       setFailure({
         about,
         whenIds: currentIds.current,
         issue: { kind: "not-created", reason },
       });
-      return;
-    }
-    raiseNotice(reason);
+      return true;
+    });
   };
 
   /*
