@@ -125,7 +125,7 @@ export function createWebhookDrainJob(
    * break a caller to add a diagnostic. The registration supplies a real one.
    */
   onOutcome?: (result: RunDrainResult) => void | Promise<void>
-): JobDefinition<unknown> {
+): JobDefinition {
   return defineJob({
     slug: WEBHOOK_DRAIN_JOB,
     // A sweep: an event reaches the outbox on a content write, but the DRAIN

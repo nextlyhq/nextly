@@ -17,7 +17,10 @@
  */
 
 import type { NextlyServiceConfig } from "../../di/register";
-import type { JobDefinition } from "../../domains/jobs/job-registry";
+import {
+  normalizeJobSlug,
+  type JobDefinition,
+} from "../../domains/jobs/job-registry";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -40,11 +43,15 @@ const RESERVED_JOB_PREFIXES = ["releases:", "webhooks:", "nextly:"];
 /**
  * Fold `config.jobs` and every plugin's `contributes.jobs` into one list.
  *
- * Pure — no database access, no registry. Runs over ALL plugins including
- * disabled ones, so which job types exist does not change with an environment
- * flag; a job queued while a plugin was enabled must still find its handler
- * after the flag flips, or the row is deferred forever exactly as if the plugin
- * had never declared it.
+ * Pure — no database access, no registry.
+ *
+ * A DISABLED plugin contributes nothing. `initializePlugins` skips a disabled
+ * plugin's init, services, hooks and events, so registering its handler anyway
+ * would run code whose setup deliberately never happened, against whatever it
+ * depends on being absent. That is worse than the alternative: a row queued
+ * while the plugin was enabled is deferred while it is off and runs when it is
+ * turned back on, because both the row and its dedupe key survive. Deferring is
+ * recoverable; executing without initialization is not.
  *
  * Throws on a duplicate slug and on a slug in a reserved namespace. Both are
  * boot failures rather than warnings, for the reason the roles fold gives: which
@@ -59,7 +66,13 @@ export function collectJobs(
   const out: CollectedJob[] = [];
 
   const consider = (definition: JobDefinition<never>, owner: string): void => {
-    const { slug } = definition;
+    // Normalised on the way in. `JobDefinition` is a public structural type, so
+    // a definition can reach here without passing through `defineJob`, carrying
+    // `" acme:export "` — which the registry would key verbatim while an enqueue
+    // stores the trimmed form, leaving the row unable to find its own handler.
+    // Two definitions differing only in whitespace would also both pass a
+    // collision check that compared them raw.
+    const slug = normalizeJobSlug(definition.slug);
 
     const previous = seen.get(slug);
     if (previous !== undefined) {
@@ -80,13 +93,22 @@ export function collectJobs(
     }
 
     seen.set(slug, owner);
-    out.push({ definition, owner });
+    out.push({
+      // Copied only when normalisation changed the slug; a well-formed
+      // definition is collected as the object the plugin declared.
+      definition:
+        slug === definition.slug ? definition : { ...definition, slug },
+      owner,
+    });
   };
 
   for (const definition of config.jobs ?? []) {
     consider(definition, "app");
   }
   for (const plugin of plugins) {
+    // `enabled` is optional and absent means enabled, so this tests for an
+    // explicit `false` rather than for a truthy value.
+    if (plugin.enabled === false) continue;
     for (const definition of plugin.contributes?.jobs ?? []) {
       consider(definition, plugin.name);
     }

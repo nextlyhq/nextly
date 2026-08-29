@@ -83,7 +83,12 @@ export type JobInputFor<TTask extends JobSlug> = GeneratedTypes extends {
   jobs: infer J;
 }
   ? TTask extends keyof J
-    ? J[TTask]
+    ? // Intersected with `JobInput` rather than returned verbatim. A project can
+      // declare `jobs: { report: Date }`, and returning `J[TTask]` unchanged
+      // would type-check a value the JSON column cannot hold — the same
+      // corruption this type exists to prevent, reintroduced by the
+      // augmentation that was meant to make it safer.
+      J[TTask] & JobInput
     : JobInput
   : JobInput;
 

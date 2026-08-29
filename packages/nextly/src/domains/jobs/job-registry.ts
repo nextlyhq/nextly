@@ -22,6 +22,7 @@
  * @module domains/jobs/job-registry
  */
 
+import type { JobInput } from "../../direct-api/types/jobs";
 import { NextlyError } from "../../errors";
 import type { UserContext } from "../collections/services/collection-types";
 
@@ -100,7 +101,7 @@ export interface JobRetryPolicy {
   maxAttempts: number;
 }
 
-export interface JobDefinition<TInput = unknown> {
+export interface JobDefinition<TInput extends JobInput = JobInput> {
   slug: string;
   handler: (input: TInput, context: JobContext) => Promise<void>;
   retry: JobRetryPolicy;
@@ -116,13 +117,22 @@ export interface JobDefinition<TInput = unknown> {
   sweep: boolean;
 }
 
-export interface JobDefinitionInput<TInput = unknown> {
+export interface JobDefinitionInput<TInput extends JobInput = JobInput> {
   slug: string;
   handler: (input: TInput, context: JobContext) => Promise<void>;
   /** Defaults to {@link DEFAULT_MAX_ATTEMPTS} attempts. */
   retry?: Partial<JobRetryPolicy>;
-  /** Keep one queued at all times; see {@link JobDefinition.sweep}. */
-  sweep?: boolean;
+  /**
+   * Keep one queued at all times; see {@link JobDefinition.sweep}.
+   *
+   * Available only when the handler accepts `null`. A trigger queues a sweep on
+   * its own initiative and has nothing to construct an input from, so it records
+   * `input: null` — and a handler declared to receive `{ cursor: string }` would
+   * be invoked with `null` on every tick, fail, retry and eventually give up. The
+   * conditional type turns that into a compile error at the definition instead of
+   * a job that quietly never succeeds.
+   */
+  sweep?: null extends TInput ? boolean : false;
 }
 
 /**
@@ -164,7 +174,7 @@ export function normalizeJobSlug(slug: string): string {
   return normalized;
 }
 
-export function defineJob<TInput = unknown>(
+export function defineJob<TInput extends JobInput = JobInput>(
   input: JobDefinitionInput<TInput>
 ): JobDefinition<TInput> {
   const slug = normalizeJobSlug(input.slug);
@@ -207,7 +217,16 @@ export function defineJob<TInput = unknown>(
 export class JobRegistry {
   private readonly definitions = new Map<string, JobDefinition<never>>();
 
-  register<TInput>(definition: JobDefinition<TInput>): void {
+  register<TInput extends JobInput>(definition: JobDefinition<TInput>): void {
+    // Keyed by the NORMALISED slug. `JobDefinition` is structural, so a
+    // definition can arrive without having passed through `defineJob`; keying it
+    // verbatim would admit `" acme:export "` under a key no enqueue — which
+    // normalises — could ever look up.
+    const slug = normalizeJobSlug(definition.slug);
+    // Copied only when normalisation actually changed the slug, so a
+    // well-formed definition is stored as the very object handed in and
+    // `get(slug)` returns it unchanged.
+    if (slug !== definition.slug) definition = { ...definition, slug };
     if (this.definitions.has(definition.slug)) {
       throw NextlyError.invalidInput({
         message: `A job type is already registered for "${definition.slug}".`,

@@ -64,10 +64,12 @@ describe("collectJobs", () => {
     ).toThrow(/reserved for built-in job types/);
   });
 
-  it("collects from a DISABLED plugin too", () => {
-    // Which job types exist must not change with an environment flag. A job
-    // queued while a plugin was enabled has to find its handler after the flag
-    // flips, or the row is deferred forever exactly as if it never existed.
+  it("ignores a DISABLED plugin's jobs", () => {
+    // `initializePlugins` skips a disabled plugin's init, services and hooks, so
+    // registering its handler would make runnable code whose setup deliberately
+    // never happened. A row queued while the plugin was on stays queued and runs
+    // when it is turned back on — deferring is recoverable, running against
+    // missing initialization is not.
     const collected = collectJobs(config(), [
       {
         name: "acme",
@@ -76,7 +78,30 @@ describe("collectJobs", () => {
       } as never,
     ]);
 
-    expect(collected.map(c => c.definition.slug)).toEqual(["acme:x"]);
+    expect(collected).toEqual([]);
+  });
+
+  it("normalises a slug that never passed through defineJob", () => {
+    // `JobDefinition` is structural, so a hand-built definition can carry
+    // padding. The registry would key it verbatim while an enqueue stores the
+    // trimmed form, leaving the row unable to find its own handler.
+    const collected = collectJobs(config(), [
+      {
+        name: "acme",
+        contributes: {
+          jobs: [
+            {
+              slug: "  acme:pad  ",
+              handler: async () => {},
+              retry: { maxAttempts: 3 },
+              sweep: false,
+            },
+          ],
+        },
+      } as never,
+    ]);
+
+    expect(collected.map(c => c.definition.slug)).toEqual(["acme:pad"]);
   });
 
   it("returns nothing when nobody declares a job", () => {

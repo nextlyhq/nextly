@@ -132,6 +132,13 @@ export function buildServiceConfig(
       }
     }
 
+    // App-declared job types, forwarded like plugins. Without this the field is
+    // accepted by the public config and never reaches the collector that
+    // registers it — an option that validates and does nothing.
+    if (!serviceConfig.jobs && nextlyConfig?.jobs) {
+      serviceConfig.jobs = nextlyConfig.jobs;
+    }
+
     // If plugins not explicitly provided, use from nextly.config.ts
     if (!serviceConfig.plugins && nextlyConfig?.plugins) {
       serviceConfig.plugins = nextlyConfig.plugins;

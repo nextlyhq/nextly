@@ -85,6 +85,7 @@ describe("createPluginContext (P1 reshape)", () => {
     expect(Object.keys(ctx.services).sort()).toEqual([
       "collections",
       "email",
+      "jobs",
       "media",
       "plugins",
       "singles",

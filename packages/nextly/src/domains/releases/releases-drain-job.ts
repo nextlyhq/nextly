@@ -83,7 +83,7 @@ export function createReleasesDrainJob(deps: {
    * site knows.
    */
   budgetMs: number;
-}): JobDefinition<unknown> {
+}): JobDefinition {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
     // A sweep: a release comes due at an instant with no request attached, so
