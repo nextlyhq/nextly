@@ -93,9 +93,30 @@ describe("the registered job types", () => {
     registerJobServices({
       adapter: { select: async () => [] },
       logger: logger(),
+      config: {
+        plugins: [
+          {
+            name: "acme",
+            contributes: {
+              jobs: [
+                (await import("../../domains/jobs/job-registry")).defineJob({
+                  slug: "acme:export",
+                  handler: async () => {},
+                }),
+              ],
+            },
+          },
+        ],
+      },
     } as never);
 
     const registry = singletons.get("jobRegistry") as JobRegistry;
+
+    // THE assertion this whole seam exists for. `defineJob` works in isolation
+    // forever; what was missing was any path from a plugin's definition into the
+    // registry a drain actually reads. Asserting the definition exists would
+    // have passed the entire time the feature was broken.
+    expect(registry.get("acme:export")).toBeDefined();
     expect(registry.get(RELEASES_DRAIN_JOB)).toBeDefined();
 
     // And registered as a SWEEP. Being in the registry only means the runner
@@ -148,6 +169,9 @@ describe("the registered job types", () => {
     registerJobServices({
       adapter: { select: async () => [] },
       logger: logger(),
+      // `config` is required by RegistrationContext and is always present in
+      // production; a fixture omitting it tests a context that cannot occur.
+      config: { plugins: [] },
     } as never);
 
     expect(singletons.get("jobsRepository")).toBeInstanceOf(JobsRepository);

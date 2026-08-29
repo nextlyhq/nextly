@@ -33,6 +33,7 @@ import {
 import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
 import type { RunDrainResult } from "../../domains/webhooks/run-drain";
 import { createWebhookDrainJob } from "../../domains/webhooks/webhook-drain-job";
+import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
 
@@ -211,6 +212,17 @@ export function registerJobServices(ctx: RegistrationContext): void {
         result => reportWebhookDrainOutcome(logger, result)
       )
     );
+    // Job types the application and its plugins declared. Registered AFTER the
+    // built-ins so a plugin cannot shadow one: `collectJobs` already refuses a
+    // reserved namespace, and `JobRegistry.register` refuses a duplicate slug
+    // outright rather than replacing the incumbent — which would make the
+    // winner depend on load order and leave the loser silently unrun.
+    for (const { definition } of collectJobs(
+      ctx.config,
+      ctx.config.plugins ?? []
+    )) {
+      registry.register(definition);
+    }
 
     return registry;
   });

@@ -89,6 +89,28 @@ describe("nextly.jobs.queue", () => {
     expect(enqueued().runAsUserId).toBe("u9");
   });
 
+  it("refuses an empty task slug rather than storing an unrunnable row", async () => {
+    // `defineJob` trims and refuses a blank slug; `enqueue` used to check only
+    // the MAXIMUM length. The gap did not produce a rejected write, it produced
+    // an accepted one — a row whose slug no registry lookup can match, deferred
+    // by every drain forever while looking pending.
+    const { JobsRepository } = await import(
+      "../../../domains/jobs/jobs-repository"
+    );
+    const repo = new JobsRepository({} as never);
+
+    await expect(
+      repo.enqueue({
+        slug: "   ",
+        input: null,
+        runAt: null,
+        runAsUserId: null,
+        dedupeKey: null,
+        now: new Date(),
+      })
+    ).rejects.toThrow(/non-empty slug/);
+  });
+
   it("refuses rather than silently dropping work before the runtime is up", async () => {
     // A queue call that resolved without a row would be the worst outcome: the
     // caller believes the work is scheduled and nothing ever runs it.

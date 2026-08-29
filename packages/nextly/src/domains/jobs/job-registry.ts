@@ -134,24 +134,40 @@ export interface JobDefinitionInput<TInput = unknown> {
  * and the natural reading of "no budget" — retry forever — turns a permanently
  * failing job into an infinite loop.
  */
-export function defineJob<TInput = unknown>(
-  input: JobDefinitionInput<TInput>
-): JobDefinition<TInput> {
-  const slug = input.slug.trim();
-  if (slug.length === 0) {
+/**
+ * The one place a job slug is checked, for every path that writes one.
+ *
+ * `defineJob` and `JobsRepository.enqueue` both accept a slug and had drifted:
+ * the definition trimmed and refused an empty one, while the enqueue checked
+ * only the maximum length. So `queue({ task: "" })` wrote a row that no registry
+ * lookup could ever match, and every drain deferred it forever — a queue growing
+ * rows that look pending and are unrunnable.
+ *
+ * Returns the normalised slug rather than a boolean, so a caller cannot validate
+ * one string and then store a different one.
+ */
+export function normalizeJobSlug(slug: string): string {
+  const normalized = slug.trim();
+  if (normalized.length === 0) {
     // The slug is the join between a stored row and the code that runs it, so a
     // blank one stores rows nothing can ever claim.
     throw NextlyError.invalidInput({
       message: "A job type needs a non-empty slug.",
     });
   }
-
-  if (slug.length > MAX_JOB_SLUG_LENGTH) {
+  if (normalized.length > MAX_JOB_SLUG_LENGTH) {
     throw NextlyError.invalidInput({
       message: `A job slug may be at most ${MAX_JOB_SLUG_LENGTH} characters.`,
-      logContext: { slug, length: slug.length },
+      logContext: { slug: normalized, length: normalized.length },
     });
   }
+  return normalized;
+}
+
+export function defineJob<TInput = unknown>(
+  input: JobDefinitionInput<TInput>
+): JobDefinition<TInput> {
+  const slug = normalizeJobSlug(input.slug);
 
   // A sweep is charged for its own dedupe key here, where the slug is refused
   // with a message naming the real budget — rather than at enqueue, which runs

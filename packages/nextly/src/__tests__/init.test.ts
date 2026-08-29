@@ -174,6 +174,7 @@ describe("init - Nextly API", () => {
       "findSingles",
       "forgotPassword",
       "forms",
+      "jobs",
       "login",
       "logout",
       "me",

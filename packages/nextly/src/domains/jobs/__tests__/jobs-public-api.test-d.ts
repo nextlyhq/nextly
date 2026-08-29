@@ -14,6 +14,7 @@
 import { expectTypeOf } from "vitest";
 
 import type {
+  JobInput,
   JobInputFor,
   JobSlug,
   QueueJobArgs,
@@ -30,9 +31,23 @@ import { defineJob } from "../job-registry";
 // before codegen or augmentation exists.
 expectTypeOf<JobSlug>().toEqualTypeOf<string>();
 
-// And the input is unconstrained rather than `never`, which would refuse every
-// call rather than accepting any.
-expectTypeOf<JobInputFor<"anything">>().toEqualTypeOf<unknown>();
+// The input is an OBJECT or null — not `unknown`, and not `never`.
+//
+// `never` would refuse every call. `unknown` accepted values the storage cannot
+// hold: `nextly_jobs.input` is a JSON column, so a `Date` returns as a string, a
+// `Map` as `{}`, and a bare string that happens to be valid JSON text — "123",
+// "true", "{}" — is PARSED by the adapter and delivered as a number, boolean or
+// object while the handler stays typed `string`. An object-or-null input makes
+// all of that unrepresentable rather than caught later.
+expectTypeOf<JobInputFor<"anything">>().toEqualTypeOf<JobInput>();
+
+// Concretely: an object is fine, and the values that do not survive the round
+// trip are refused where they are written.
+expectTypeOf<{ userId: string }>().toMatchTypeOf<JobInput>();
+expectTypeOf<null>().toMatchTypeOf<JobInput>();
+expectTypeOf<Date>().not.toMatchTypeOf<JobInput>();
+expectTypeOf<string>().not.toMatchTypeOf<JobInput>();
+expectTypeOf<Map<string, string>>().not.toMatchTypeOf<JobInput>();
 
 // ---------------------------------------------------------------------------
 // The argument shape the design fixed.
@@ -40,7 +55,7 @@ expectTypeOf<JobInputFor<"anything">>().toEqualTypeOf<unknown>();
 
 expectTypeOf<QueueJobArgs>().toMatchTypeOf<{
   task: string;
-  input: unknown;
+  input: JobInput;
 }>();
 
 // `runAt`, NOT Payload's `waitUntil`: the field names a START time, and

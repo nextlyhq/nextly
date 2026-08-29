@@ -11,6 +11,41 @@
 import type { GeneratedTypes } from "./shared";
 
 /**
+ * A value that survives the round trip through `nextly_jobs.input`.
+ *
+ * The column is JSON, so a job's input is stored by serialising it and read back
+ * by parsing it. Anything whose identity does not survive that is a type saying
+ * one thing while the handler receives another: a `Date` comes back a string, a
+ * `Map` comes back `{}`, `undefined` comes back `null`, and a `bigint` or a
+ * cycle refuses the write outright.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+/**
+ * What a job's input may be: a JSON OBJECT, or nothing.
+ *
+ * Narrower than "any JSON value", and deliberately. Two reasons, one of them a
+ * bug this shape makes unrepresentable:
+ *
+ * 1. The adapter parses a STRING bound for a JSON column rather than storing it,
+ *    to avoid double-encoding. So a genuine string payload that happens to be
+ *    valid JSON text — `"123"`, `"true"`, `"{}"` — is stored and delivered as a
+ *    number, a boolean or an object, while the handler stays typed `string`.
+ *    Refusing bare scalars at the type level removes the case rather than
+ *    patching it downstream, which is the only fix that cannot be forgotten.
+ * 2. It is what every durable queue converges on. A payload is a named bag of
+ *    fields, and an object is the shape that can gain one without breaking every
+ *    existing handler — a scalar input has nowhere to grow.
+ */
+export type JobInput = { [key: string]: JsonValue } | null;
+
+/**
  * A registered job type's slug.
  *
  * Resolved through the SAME `GeneratedTypes` interface that gives
@@ -49,8 +84,8 @@ export type JobInputFor<TTask extends JobSlug> = GeneratedTypes extends {
 }
   ? TTask extends keyof J
     ? J[TTask]
-    : unknown
-  : unknown;
+    : JobInput
+  : JobInput;
 
 export interface QueueJobArgs<TTask extends JobSlug = JobSlug> {
   /** Which registered job type to run. */
@@ -64,6 +99,9 @@ export interface QueueJobArgs<TTask extends JobSlug = JobSlug> {
    * compute produce the same row.
    */
   input: JobInputFor<TTask>;
+  // NOTE: unaugmented this is `JobInput` — an object or null — rather than
+  // `unknown`. `unknown` accepted a `Date`, a `Map` and a bare string, none of
+  // which survive the JSON column they are stored in.
   /**
    * When the job becomes eligible to run. `null` or omitted means "as soon as a
    * trigger sees it".
