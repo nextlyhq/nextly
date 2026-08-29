@@ -524,6 +524,53 @@ describe("applyDueReleases", () => {
     expect(marked).toEqual(["r1"]);
   });
 
+  it("does not let a failing component starve the healthy ones", async () => {
+    // Head-of-line blocking, and it needs no process kill. The first component
+    // is exempt from the deadline — something must run — so with a stable order
+    // a component whose action FAILS holds itself open and consumes the budget
+    // on every tick, while the healthy releases behind it are deferred forever.
+    // Each pass reports success.
+    //
+    // Two passes at instants one rotation apart. The first component differs
+    // between them, so the healthy release runs on the second even though the
+    // failing one is still there.
+    const publish = vi.fn(async (input: { ref: { entryId: string } }) => {
+      if (input.ref.entryId === "broken") throw new Error("refused");
+    });
+    const seen: string[][] = [];
+    for (const at of [
+      new Date(NOW.getTime()),
+      new Date(NOW.getTime() + 1000),
+    ]) {
+      publish.mockClear();
+      const d = deps({
+        releases: [release({ id: "rBad" }), release({ id: "rGood" })],
+        members: [
+          member({ id: "x", releaseId: "rBad", entryId: "broken" }),
+          member({ id: "y", releaseId: "rGood", entryId: "healthy" }),
+        ],
+        mutations: {
+          publish:
+            publish as unknown as ApplyDueReleasesDeps["mutations"]["publish"],
+          // The read-back must not rescue the failed write, or the failure
+          // never reaches the outcome and there is nothing to starve behind.
+          applied: async () => false,
+        },
+      });
+      await applyDueReleases({
+        ...d,
+        now: () => at,
+        // Already spent, so only the exempt first component runs.
+        deadline: new Date(at.getTime() - 60_000),
+      });
+      seen.push(publish.mock.calls.map(c => c[0].ref.entryId));
+    }
+
+    // The healthy document is reached on one of the two passes. With a stable
+    // order it would be reached on neither, forever.
+    expect(seen.flat()).toContain("healthy");
+  });
+
   it("bounds an INTERLEAVED backlog to one release's work, not all of it", async () => {
     // The shape this guard is for, and the one it silently failed to bound. The
     // planner groups by DOCUMENT and emits in first-seen order, so members
