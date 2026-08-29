@@ -81,6 +81,29 @@ export interface JobContext {
    * default.
    */
   content: JobContentApi;
+  /**
+   * The instant the pass running this job intends to stop.
+   *
+   * The runner cannot enforce it. `maxDurationMs` is checked before each CLAIM,
+   * so it bounds how many jobs a pass STARTS and nothing more: once a handler is
+   * running, nothing here can interrupt a promise mid-flight, and a cancellation
+   * the handler did not cooperate with would abandon whatever it had half-done
+   * outside the database.
+   *
+   * So `run-jobs` names two things that bound a running handler — the lease, and
+   * "the handler itself being written to fit a tick". This is what makes the
+   * second one possible. Without it the runner asks handlers to fit a budget it
+   * never tells them, and every handler that wants to comply has to be handed
+   * one out of band, which is a second description of the same number.
+   *
+   * A handler that ignores it is not wrong; most jobs are short. A handler that
+   * walks an unbounded set — every due release, every stale entry — should stop
+   * when this passes and leave the rest, because the queue is durable and the
+   * next tick continues. **Stopping early must DEFER the remainder, never
+   * discharge it:** work that was never attempted produces no failure, and an
+   * absent failure reads as success.
+   */
+  deadline: Date;
 }
 
 export interface JobRetryPolicy {
