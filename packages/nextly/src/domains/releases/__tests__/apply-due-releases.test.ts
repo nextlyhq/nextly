@@ -465,6 +465,35 @@ describe("applyDueReleases", () => {
     expect(publish).toHaveBeenCalledTimes(1);
   });
 
+  it("FINISHES a release it has started, even once the deadline has passed", async () => {
+    // The starvation case, and the reason the budget bounds RELEASES rather than
+    // actions. Bounded by action, a release with more actions than fit the
+    // budget replays the same prefix on every tick — repeating its mutations,
+    // hooks and outbox events — and never reaches the suffix, because the plan
+    // is rebuilt from members each time and the order is stable. "One action
+    // runs" is not progress.
+    const publish = vi.fn(async () => {});
+    let tick = 0;
+    const d = deps({
+      releases: [release({ id: "r1" })],
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r1", entryId: "e2" }),
+        member({ id: "c", releaseId: "r1", entryId: "e3" }),
+      ],
+      mutations: { publish },
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    // All three, despite the deadline passing after the first.
+    expect(publish).toHaveBeenCalledTimes(3);
+    expect(result.deferred).toBe(0);
+  });
+
   it("does NOT discharge a release whose actions it never started", async () => {
     // The trap a naive cap walks into. An unattempted action leaves NO outcome,
     // and the discharge test reads outcomes — so without holding it open, the

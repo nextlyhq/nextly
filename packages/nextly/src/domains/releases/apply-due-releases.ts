@@ -241,16 +241,29 @@ export async function applyDueReleases(
   // permanently. That is the same discharge-what-did-not-happen failure this
   // module already refuses for a failed member.
   const unfinished = new Set<string>();
+  // The budget stops the pass STARTING A NEW RELEASE, and never abandons one
+  // part-way. Bounding by ACTION instead starves: a release with more actions
+  // than fit the budget would replay the same prefix on every tick — repeating
+  // its mutations, hooks and outbox events — and never reach the suffix, because
+  // the plan is rebuilt from members each time and the order is stable.
+  // Guaranteeing "one action runs" is not the same as guaranteeing progress.
+  //
+  // Finishing a release once started is what makes progress durable without a
+  // per-action record, which this domain does not have — that is the same schema
+  // change the crash-between-mutations gap needs. The residual cost is stated
+  // rather than hidden: a SINGLE release larger than a tick still overruns it.
+  const started = new Set<string>();
   for (let i = 0; i < plan.actions.length; i += 1) {
     const action = plan.actions[i];
     // Checked BEFORE starting, never mid-action: nothing here can interrupt a
     // content mutation, and abandoning one half-done outside the database is
-    // worse than being late. `outcomes.length > 0` guarantees progress — a
-    // budget too small for even one action must still move, or a backlog stalls
+    // worse than being late. `started.size > 0` guarantees progress — a budget
+    // too small for even one release must still move, or a backlog stalls
     // forever while every pass reports success.
     if (
       deps.deadline !== undefined &&
-      outcomes.length > 0 &&
+      !started.has(action.releaseId) &&
+      started.size > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
       for (let j = i; j < plan.actions.length; j += 1) {
@@ -258,6 +271,7 @@ export async function applyDueReleases(
       }
       break;
     }
+    started.add(action.releaseId);
     outcomes.push(await applyOne(deps, action));
   }
   const deferred = plan.actions.length - outcomes.length;
@@ -289,6 +303,19 @@ export async function applyDueReleases(
   let published = 0;
   for (const id of plan.releaseIds) {
     if (heldOpen.has(id)) continue;
+    // The deadline again. Discharging is one write per due release, and the
+    // action loop can pass its check while leaving hundreds of these — a backlog
+    // of empty releases, or many releases collapsing onto few document actions,
+    // overruns the tick here having satisfied every check above. A release left
+    // undischarged stays scheduled and is settled next pass, which is the state
+    // it was already in.
+    if (
+      deps.deadline !== undefined &&
+      published > 0 &&
+      now().getTime() >= deps.deadline.getTime()
+    ) {
+      break;
+    }
     // A FRESH clock, not the pass's start. `publishedAt` is defined as the
     // moment materialisation completed, and `at` was captured before members
     // were loaded, identities resolved and every content mutation run — on a

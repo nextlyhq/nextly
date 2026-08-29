@@ -75,8 +75,14 @@ export function createReleasesDrainJob(deps: {
    * nothing about how long one is. Wiring a budget per job is the smaller
    * change; giving every handler its run's deadline is the better one, and it
    * belongs to the jobs domain rather than here.
+   *
+   * REQUIRED, for the same reason `onOutcome` is: optional, every existing
+   * wiring site keeps the unbounded behaviour this exists to remove, and the
+   * fix is opt-in for exactly the callers who do not know they need it. A
+   * default would be a number invented here for a tick length only the wiring
+   * site knows.
    */
-  budgetMs?: number;
+  budgetMs: number;
 }): JobDefinition<unknown> {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
@@ -86,13 +92,20 @@ export function createReleasesDrainJob(deps: {
     // exactly like a site with no releases due.
     sweep: true,
     handler: async (_input, context) => {
+      const startedAt = Date.now();
       const result = await applyDueReleases({
-        // Derived from the runner's own clock, not wall time, so a pass is as
-        // testable as the rest of the job.
-        deadline:
-          deps.budgetMs === undefined
-            ? undefined
-            : new Date(context.now.getTime() + deps.budgetMs),
+        // ONE clock for both halves. The deadline is derived from the runner's
+        // `context.now`, so the comparison has to read the same source — left to
+        // its default, `applyDueReleases` compares a virtual deadline against
+        // real wall time, and a runner clock behind wall time stops after the
+        // first release while one ahead never stops at all.
+        //
+        // `context.now` is the instant the runner is treating as now, so it does
+        // not advance during the pass; elapsed time comes from the real clock
+        // offset by the difference. That keeps a virtual clock authoritative for
+        // WHEN the pass thinks it is, without making the budget unmeasurable.
+        now: () => new Date(context.now.getTime() + (Date.now() - startedAt)),
+        deadline: new Date(context.now.getTime() + deps.budgetMs),
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({ contentApi: deps.contentApi }),
         runAs: deps.runAs,
