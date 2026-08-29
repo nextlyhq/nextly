@@ -17,6 +17,13 @@ import type { EditorState } from "./editor-state";
 import { renderedTagOf } from "./style-subject";
 
 /**
+ * Takes the ELEMENT rather than a ref, which is what makes the dependency list
+ * honest. A ref is not reactive: the canvas mounts only once styles have loaded
+ * while the inspector stays mounted throughout, so an effect listing a ref reads
+ * `null` on its first run and is never told otherwise — the tag would stay
+ * unknown for the rest of the session, and a heading would report its size as
+ * unset exactly as it did before any of this existed.
+ *
  * Read AFTER a commit rather than during a render.
  *
  * The canvas and the inspector re-render together, so while a render body runs
@@ -28,15 +35,15 @@ import { renderedTagOf } from "./style-subject";
  * node is selected.
  */
 export function useRenderedTag(
-  canvasRoot: { readonly current: HTMLElement | null } | undefined,
+  canvasRoot: HTMLElement | null | undefined,
   selectedId: string | null,
   document: EditorState["document"]
 ): string | undefined {
   const [tag, setTag] = React.useState<string | undefined>(undefined);
   React.useEffect(() => {
-    const next = renderedTagOf(canvasRoot?.current, selectedId);
-    // Compared before setting, or an effect that runs on every commit and sets
-    // unconditionally re-renders on every commit.
+    const next = renderedTagOf(canvasRoot, selectedId);
+    // Compared before setting, or an effect that runs whenever the document
+    // changes and sets unconditionally re-renders on every edit.
     setTag(current => (current === next ? current : next));
   }, [canvasRoot, selectedId, document]);
   return tag;
