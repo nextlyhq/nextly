@@ -243,41 +243,87 @@ async function localizedCollections(): Promise<
 }
 
 /**
+ * How many capability probes run at once.
+ *
+ * Each probe is a live-schema introspection — several catalogue queries per table — and this runs
+ * once per collection. `Promise.all` over every collection is the shape `drift-check` already had
+ * to abandon: against a pool of five, ten collections saturated it and queued requests behind the
+ * connection timeout. Three keeps the wall-time win over serial without competing with the
+ * fan-out's own reads, which follow immediately after.
+ */
+const STALENESS_PROBE_CONCURRENCY = 3;
+
+/**
  * Ask each collection's translations table whether it physically records when a language was
  * written, which is what the staleness question compares.
  *
- * Resolved per collection rather than once, because the column arrives with a migration and a site
- * mid-upgrade genuinely has both kinds. Resolved on the pool before any transaction opens, and
- * concurrently — the fan-out below already issues one query per collection, so serialising these
- * would make the screen slower than the work it is preparing for.
+ * 🔴 Scoped to collections the caller can READ before anything reaches the database. A probe for a
+ * collection whose rows this caller may never see is work whose answer is discarded, and on a site
+ * with many collections that is the difference between a handful of introspections and one per
+ * collection.
+ *
+ * 🔴 A failed probe is NOT an absent column. `resolveCompanionColumn` propagates rather than
+ * swallowing, precisely so a transient fault cannot be mistaken for a schema fact — so the failure
+ * is caught HERE, at the collection boundary, and the slug is reported as one this answer did not
+ * cover. Letting it reject the whole fan-out would discard every healthy collection's rows over
+ * one bad catalogue read; letting it read as `false` would tell the operator to migrate a table
+ * that is already migrated.
  */
 async function resolveStalenessCapability<T extends LocalizedCollectionRef>(
-  collections: readonly T[]
-): Promise<(T & { canAnswerStaleness: boolean })[]> {
+  collections: readonly T[],
+  readable: ReadonlySet<string> | undefined
+): Promise<{
+  collections: (T & { canAnswerStaleness: boolean })[];
+  probeFailed: string[];
+}> {
+  const asked = collections.filter(
+    c => readable === undefined || readable.has(c.slug)
+  );
   const adapter = getAdapterFromDI();
   // No connection, no question. Reporting every collection as unable to answer is the honest
   // reading and the conservative one: the alternative is claiming they can, which would emit SQL
   // naming a column nothing has checked for.
   if (!adapter) {
-    return collections.map(c => ({ ...c, canAnswerStaleness: false }));
+    return {
+      collections: asked.map(c => ({ ...c, canAnswerStaleness: false })),
+      probeFailed: [],
+    };
   }
   const fileManager = container.get<CollectionFileManager>(
     "collectionFileManager"
   );
-  return Promise.all(
-    collections.map(async c => {
-      const companion = await fileManager.loadCompanionSchema(c.slug);
-      if (!companion) return { ...c, canAnswerStaleness: false };
-      return {
-        ...c,
-        canAnswerStaleness: await resolveCompanionColumn(
-          adapter,
-          companion.companionTableName,
-          COMPANION_UPDATED_AT_COLUMN
-        ),
-      };
-    })
+
+  const resolved: (T & { canAnswerStaleness: boolean })[] = [];
+  const probeFailed: string[] = [];
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < asked.length) {
+      const c = asked[cursor++];
+      try {
+        const companion = await fileManager.loadCompanionSchema(c.slug);
+        resolved.push({
+          ...c,
+          canAnswerStaleness:
+            companion === null
+              ? false
+              : await resolveCompanionColumn(
+                  adapter,
+                  companion.companionTableName,
+                  COMPANION_UPDATED_AT_COLUMN
+                ),
+        });
+      } catch {
+        probeFailed.push(c.slug);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(STALENESS_PROBE_CONCURRENCY, asked.length) },
+      worker
+    )
   );
+  return { collections: resolved, probeFailed };
 }
 
 /**
@@ -337,8 +383,11 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   // For `stale` it is unavoidable and the cost is accepted: this is an admin screen that already
   // fans out one query per collection, a collection that CAN answer is remembered and costs
   // nothing after the first ask, and the cost ends when the operator migrates.
-  const withStaleCapability =
-    state === "stale" ? await resolveStalenessCapability(localized) : localized;
+  const staleCapability =
+    state === "stale"
+      ? await resolveStalenessCapability(localized, readable)
+      : null;
+  const withStaleCapability = staleCapability?.collections ?? localized;
 
   const eligible = eligibleCollections(withStaleCapability, state, readable);
   const unanswerable = unanswerableCollections(
@@ -446,7 +495,14 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const unreadable = perCollection
     .map(r => r.slug)
     .filter((slug): slug is string => slug !== null);
-  const notConsulted = notConsultedSources(skippedCollections, unreadable);
+  // A collection whose capability probe failed belongs HERE and not in `unanswerable`: nothing
+  // was learned about its schema, so "run the migration" would be advice about a table that may
+  // already be migrated. "This answer did not cover it, look again" is the whole of what is known.
+  const notConsulted = notConsultedSources(
+    skippedCollections,
+    unreadable,
+    staleCapability?.probeFailed ?? []
+  );
 
   // Merged BEFORE the slice, which is the whole reason this fans out on the
   // server: ordered across collections rather than within each one.
@@ -487,7 +543,24 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // Kept apart from `notConsulted` on the wire for the same reason the service keeps them
       // apart: this is the one with a remedy. A screen that merges them tells an operator to
       // look again when what they need to do is migrate.
-      ...(unanswerable.length === 0 ? {} : { unanswerable }),
+      ...(unanswerable.length === 0
+        ? {}
+        : {
+            unanswerable,
+            // 🔴 WHICH remedy, decided where the environment is known. `nextly migrate` applies
+            // migration FILES, and a development database managed by the sync/HMR loop has no
+            // migration history containing this column — so that advice can leave the notice
+            // unchanged after the developer follows it. Core already makes this exact split in
+            // `companionNotReadyMessage`; this carries the same distinction to a screen that
+            // cannot see `NODE_ENV`.
+            //
+            // A discriminator rather than a sentence: the wording is an admin string and belongs
+            // with the other admin strings, while which case applies is a server fact.
+            unanswerableRemedy:
+              process.env.NODE_ENV === "production"
+                ? ("migrate" as const)
+                : ("sync" as const),
+          }),
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

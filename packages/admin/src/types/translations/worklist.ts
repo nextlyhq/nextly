@@ -191,6 +191,16 @@ export type TranslationWorklistMeta = PaginationMeta & {
    * translations table has. Absent when nothing was excluded, so its PRESENCE is the signal.
    */
   unanswerable?: string[];
+  /**
+   * Which remedy applies to {@link unanswerable}, decided by the server.
+   *
+   * `nextly migrate` applies migration FILES. A development database kept in step by the sync and
+   * reload loop has no migration history carrying this column, so that advice can leave the notice
+   * unchanged after a developer follows it — the same distinction core makes when it explains an
+   * absent translations table. The wording lives here with the other admin strings; only the
+   * choice between them comes from the server, which is the side that knows.
+   */
+  unanswerableRemedy?: "migrate" | "sync";
 };
 
 /** The canonical list envelope, carrying this read's own meta. */
