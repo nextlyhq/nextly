@@ -17,7 +17,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { seedLiveAuthor } from "./helpers/live-author";
+import { deactivate, seedLiveAuthor } from "./helpers/live-author";
 
 import { defineCollection, text } from "../../../config";
 import {
@@ -581,6 +581,106 @@ describe.each(getConfiguredTestDialects())(
             now: new Date(),
           })
         ).toMatchObject({ reveal: [] });
+      });
+
+      it("does NOT project a release whose author was DEACTIVATED", async () => {
+        // The property the write path already enforces and this seam did not.
+        // Materialisation runs every action as the member's author precisely so
+        // that scheduling cannot become a privilege escalation with a delay on
+        // it. Withdrawing that authority has to stop the projection too —
+        // otherwise the write is refused while the read goes on showing the
+        // effect, and because a refused member holds its release open, it shows
+        // it forever.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const author = await seedLiveAuthor(app);
+        const release = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+          createdBy: author,
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        // Live author: the effect IS projected. Without this the case below
+        // could pass because the release was never projected for some other
+        // reason entirely.
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: ["e1"] });
+
+        await deactivate(app, author);
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: [], hide: [] });
+      });
+
+      it("does NOT project a member with no recorded author", async () => {
+        // The same verdict the materialiser reaches: there is nobody to act as,
+        // and the only fallback is the privileged principal it refuses. So a
+        // member like this describes an effect no write could ever perform.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: [], hide: [] });
+      });
+
+      it("does NOT project a TAKEDOWN whose author was deactivated either", async () => {
+        // Both directions, because they fail in opposite ways. A publish that
+        // still projects shows content the author may no longer publish; a
+        // takedown that still projects HIDES content on the say-so of somebody
+        // whose authority was withdrawn.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const author = await seedLiveAuthor(app);
+        const release = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "unpublish",
+          createdBy: author,
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ hide: ["e1"] });
+
+        await deactivate(app, author);
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: [], hide: [] });
       });
 
       it("names a document whose due release WITHDRAWS it", async () => {
