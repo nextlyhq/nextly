@@ -232,76 +232,12 @@ export async function applyDueReleases(
     now: at,
   });
 
-  const outcomes: MaterialisationOutcome[] = [];
-  // Releases this pass could not finish. Kept separately from the failures
-  // below because an unattempted action leaves NO outcome, and the discharge
-  // test reads outcomes — so a release whose remaining members were never
-  // started would otherwise look like one whose members all succeeded, be
-  // marked published, lose its read-time projection, and lose those members
-  // permanently. That is the same discharge-what-did-not-happen failure this
-  // module already refuses for a failed member.
-  const unfinished = new Set<string>();
-  // The budget's unit is an OVERLAP COMPONENT, and every other unit is wrong.
-  //
-  // Not the action: `applyOne` cannot be interrupted, and stopping between two
-  // actions of one release leaves it started and unfinished, so the next tick
-  // rebuilds the same plan and repeats the same prefix forever.
-  //
-  // Not the release either, for two reasons that only appear together. The
-  // planner groups by DOCUMENT and emits in first-seen document order, so an
-  // interleaved backlog yields `[r1, r2, r3, r1, r2, r3]` — starting each
-  // release costs one action, every release is started within the first pass
-  // over the documents, and a release-level guard then never fires again. And
-  // the discharge rule treats an overlap component as inseparable: deferring one
-  // member of a component holds the whole component open, so nothing in it is
-  // finalized and every tick repeats the members it did reach.
-  //
-  // A component is what can be started and finished as a unit. `plan.overlapping
-  // Releases` is a complete partition — a release touching nothing else appears
-  // in a set of one — so this bounds ordinary backlogs by release and joined
-  // ones by the set that must settle together.
-  const componentOf = new Map<string, number>();
-  plan.overlappingReleases.forEach((group, index) => {
-    for (const id of group) componentOf.set(id, index);
-  });
-  // Ordered so a component's actions are contiguous. The planner's own order is
-  // by document and provides no such grouping; without this the guard has
-  // nothing left to defer by the time it first fires.
-  const ordered = [...plan.actions].sort(
-    (a, b) =>
-      (componentOf.get(a.releaseId) ?? 0) - (componentOf.get(b.releaseId) ?? 0)
-  );
-  const startedComponents = new Set<number>();
-  for (const action of ordered) {
-    const component = componentOf.get(action.releaseId) ?? -1;
-    // Checked only when entering a NEW component, and never mid-component:
-    // nothing here can interrupt a content mutation, and a half-applied
-    // component is the reversal this module already refuses. At least one
-    // component always runs, or a budget too small for one stalls a backlog
-    // forever while every pass reports success.
-    if (
-      deps.deadline !== undefined &&
-      !startedComponents.has(component) &&
-      startedComponents.size > 0 &&
-      now().getTime() >= deps.deadline.getTime()
-    ) {
-      unfinished.add(action.releaseId);
-      continue;
-    }
-    startedComponents.add(component);
-    outcomes.push(await applyOne(deps, action));
-  }
-  const deferred = plan.actions.length - outcomes.length;
+  const { outcomes, unfinished } = await applyWithinBudget(deps, plan, now);
 
   // A release is discharged only when nothing attributed to it failed — AND
-  // nothing failed in any release it shares a document with.
-  //
-  // The second half is what stops a partial pass from reversing itself.
-  // Discharging the winner of an overlapping pair while the loser stays
-  // scheduled removes the winner from the next pass entirely, so the loser
-  // becomes the winner for their shared document and undoes it. Holding the
-  // whole overlapping set open keeps every member of that argument present
-  // until all of them can be settled together.
+  // nothing failed in any release it shares a document with. Holding the whole
+  // overlapping set open keeps every member of that argument present until all
+  // of them can be settled together.
   const brokenReleases = new Set([
     ...outcomes.filter(o => o.failure !== null).map(o => o.releaseId),
     // Not started is not succeeded. Folded in here rather than checked
@@ -317,40 +253,9 @@ export async function applyDueReleases(
     }
   }
 
-  let published = 0;
-  // Discharged by COMPONENT, for the reason the planner states: splitting one
-  // reverses work. If the deadline fell between two members of a component, the
-  // later winner could be marked published while the earlier stayed scheduled —
-  // and the next tick, seeing only the earlier, would make it the winner and
-  // republish what was correctly withdrawn.
-  //
-  // Counted by ATTEMPT, not by success: `markReleasePublished` answers `false`
-  // for a release an overlapping drain already settled, so gating on successes
-  // leaves the counter at zero and every row gets a serial write with the budget
-  // long gone.
-  let finalizedComponents = 0;
-  for (const group of plan.overlappingReleases) {
-    const settleable = group.filter(
-      id => !heldOpen.has(id) && plan.releaseIds.includes(id)
-    );
-    if (settleable.length === 0) continue;
-    if (
-      deps.deadline !== undefined &&
-      finalizedComponents > 0 &&
-      now().getTime() >= deps.deadline.getTime()
-    ) {
-      break;
-    }
-    finalizedComponents += 1;
-    for (const id of settleable) {
-      // A FRESH clock, not the pass's start. `publishedAt` is defined as the
-      // moment materialisation completed, and `at` was captured before members
-      // were loaded, identities resolved and every content mutation run — on a
-      // slow pass or a large due set that difference is substantial.
-      if (await deps.repository.markReleasePublished(id, now())) published += 1;
-    }
-  }
+  const published = await dischargeSettledComponents(deps, plan, heldOpen, now);
 
+  const deferred = plan.actions.length - outcomes.length;
   const failed = outcomes.filter(o => o.failure !== null).length;
   return {
     due: releases.length,
@@ -560,4 +465,117 @@ async function resolveActionAuthor(
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Perform the plan's actions until the budget runs out, a COMPONENT at a time.
+ *
+ * Extracted because it is a separate decision from what the pass then does with
+ * the outcomes: this one answers "how much of the plan can this tick afford",
+ * and the caller answers "what may now be discharged". Holding both at once is
+ * what pushed `applyDueReleases` past what a reader can follow.
+ */
+async function applyWithinBudget(
+  deps: ApplyDueReleasesDeps,
+  plan: ReturnType<typeof planReleaseMaterialisation>,
+  now: () => Date
+): Promise<{ outcomes: MaterialisationOutcome[]; unfinished: Set<string> }> {
+  const outcomes: MaterialisationOutcome[] = [];
+  // Releases this pass could not finish. Kept separately from the failures the
+  // caller reads, because an unattempted action leaves NO outcome — so a release
+  // whose remaining members were never started would otherwise look like one
+  // whose members all succeeded, be marked published, lose its read-time
+  // projection, and lose those members permanently.
+  const unfinished = new Set<string>();
+  const componentOf = new Map<string, number>();
+  plan.overlappingReleases.forEach((group, index) => {
+    for (const id of group) componentOf.set(id, index);
+  });
+  // Ordered so a component's actions are contiguous. The planner's own order is
+  // by document and provides no such grouping; without this the guard has
+  // nothing left to defer by the time it first fires.
+  const ordered = [...plan.actions].sort(
+    (a, b) =>
+      (componentOf.get(a.releaseId) ?? 0) - (componentOf.get(b.releaseId) ?? 0)
+  );
+  const startedComponents = new Set<number>();
+  for (const action of ordered) {
+    const component = componentOf.get(action.releaseId) ?? -1;
+    // Checked only when entering a NEW component, and never mid-component:
+    // nothing here can interrupt a content mutation, and a half-applied
+    // component is the reversal this module already refuses. At least one
+    // component always runs, or a budget too small for one stalls a backlog
+    // forever while every pass reports success.
+    if (
+      deps.deadline !== undefined &&
+      !startedComponents.has(component) &&
+      startedComponents.size > 0 &&
+      now().getTime() >= deps.deadline.getTime()
+    ) {
+      unfinished.add(action.releaseId);
+      continue;
+    }
+    startedComponents.add(component);
+    outcomes.push(await applyOne(deps, action));
+  }
+
+  // A release is discharged only when nothing attributed to it failed — AND
+  // nothing failed in any release it shares a document with.
+  //
+  // The second half is what stops a partial pass from reversing itself.
+  // Discharging the winner of an overlapping pair while the loser stays
+  // scheduled removes the winner from the next pass entirely, so the loser
+  // becomes the winner for their shared document and undoes it. Holding the
+  // whole overlapping set open keeps every member of that argument present
+  return { outcomes, unfinished };
+}
+
+/**
+ * Mark every settleable component published, until the budget runs out.
+ *
+ * Separate from the loop above because it is bounded for a different reason:
+ * that one is bounded by content mutations, this one by one write per due
+ * release — and a plan can finish its actions well inside budget while leaving
+ * hundreds of these.
+ */
+async function dischargeSettledComponents(
+  deps: ApplyDueReleasesDeps,
+  plan: ReturnType<typeof planReleaseMaterialisation>,
+  heldOpen: ReadonlySet<string>,
+  now: () => Date
+): Promise<number> {
+  let published = 0;
+  // Discharged by COMPONENT, for the reason the planner states: splitting one
+  // reverses work. If the deadline fell between two members of a component, the
+  // later winner could be marked published while the earlier stayed scheduled —
+  // and the next tick, seeing only the earlier, would make it the winner and
+  // republish what was correctly withdrawn.
+  //
+  // Counted by ATTEMPT, not by success: `markReleasePublished` answers `false`
+  // for a release an overlapping drain already settled, so gating on successes
+  // leaves the counter at zero and every row gets a serial write with the budget
+  // long gone.
+  let finalizedComponents = 0;
+  for (const group of plan.overlappingReleases) {
+    const settleable = group.filter(
+      id => !heldOpen.has(id) && plan.releaseIds.includes(id)
+    );
+    if (settleable.length === 0) continue;
+    if (
+      deps.deadline !== undefined &&
+      finalizedComponents > 0 &&
+      now().getTime() >= deps.deadline.getTime()
+    ) {
+      break;
+    }
+    finalizedComponents += 1;
+    for (const id of settleable) {
+      // A FRESH clock, not the pass's start. `publishedAt` is defined as the
+      // moment materialisation completed, and `at` was captured before members
+      // were loaded, identities resolved and every content mutation run — on a
+      // slow pass or a large due set that difference is substantial.
+      if (await deps.repository.markReleasePublished(id, now())) published += 1;
+    }
+  }
+  return published;
 }
