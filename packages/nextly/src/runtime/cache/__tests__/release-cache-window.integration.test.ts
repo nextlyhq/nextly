@@ -13,6 +13,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { DEFAULT_TTL_MS } from "../../../domains/releases/pending-transition-cache";
 import { ReleasesRepository } from "../../../domains/releases/releases-repository";
 import {
   createTestNextly,
@@ -32,6 +33,19 @@ afterEach(async () => {
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 const at = (ms: number): Date => new Date(NOW.getTime() + ms);
 
+/**
+ * The longest any answer may be, because the memo behind it may be that stale.
+ *
+ * Every case below schedules INSIDE this window, so the schedule is what binds
+ * and each assertion still discriminates. A two-hour release — what these cases
+ * used before the ceiling existed — now yields the ceiling in every one of
+ * them, which would make them pass against wiring that ignored the schedule
+ * entirely. One case deliberately schedules outside it, to assert the cap.
+ */
+const CEILING_SECONDS = DEFAULT_TTL_MS / 1000;
+const SOON_MS = 10_000;
+const SOON_SECONDS = SOON_MS / 1000;
+
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({ dialect });
   return current;
@@ -46,20 +60,38 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
+      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
 
       await expect(releaseBoundedRevalidate(undefined, NOW)).resolves.toBe(
-        2 * 60 * 60
+        SOON_SECONDS
       );
     });
 
-    it("is tag-only when nothing is scheduled", async () => {
-      // The control. A wiring that always returned a number would satisfy the
-      // case above while making every site pay a lifetime it never needed.
+    it("caps a DISTANT release at the staleness ceiling", async () => {
+      // The schedule is not the only thing that can shorten a page's life. This
+      // server's view of the schedule may be a memo-window old, so a release
+      // another server scheduled for five minutes from now is invisible here —
+      // and a two-hour page would outlive it.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring launch" });
+      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
+
+      await expect(releaseBoundedRevalidate(undefined, NOW)).resolves.toBe(
+        CEILING_SECONDS
+      );
+    });
+
+    it("is bounded by the ceiling — NOT tag-only — when nothing is scheduled", async () => {
+      // Deliberately a behaviour change, and the defect it closes. `false` means
+      // "cache until something flushes this"; on a multi-instance deployment the
+      // flush has already happened, on the server that wrote the schedule. This
+      // server then caches a page with no expiry at all, on the strength of a
+      // memo saying nothing is due, and nothing re-renders it to ask again.
       await boot(dialect);
 
       await expect(releaseBoundedRevalidate(undefined, NOW)).resolves.toBe(
-        false
+        CEILING_SECONDS
       );
     });
 
@@ -70,14 +102,18 @@ describe.each(getConfiguredTestDialects())(
       // cached tag-only again against a release the schedule already knows
       // about, and stays stale until materialisation finally writes.
       const t = await boot(dialect);
-      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(false);
+      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(
+        CEILING_SECONDS
+      );
 
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
+      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
 
-      // No waiting for the TTL: scheduling invalidated the shared memo.
-      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(2 * 60 * 60);
+      // No waiting for the TTL: scheduling invalidated the shared memo. The
+      // release is nearer than the ceiling, so the answer MOVES — a schedule
+      // beyond the ceiling would read the same either way and prove nothing.
+      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(SOON_SECONDS);
     });
 
     it("goes quiet again once the release is CANCELLED", async () => {
@@ -86,12 +122,14 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Called off" });
-      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
-      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(2 * 60 * 60);
+      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
+      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(SOON_SECONDS);
 
       await repo.cancelRelease(release.id);
 
-      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(false);
+      expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(
+        CEILING_SECONDS
+      );
     });
 
     it("keeps a caller's SHORTER window", async () => {
@@ -100,21 +138,21 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
+      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
 
-      await expect(releaseBoundedRevalidate(60, NOW)).resolves.toBe(60);
+      await expect(releaseBoundedRevalidate(5, NOW)).resolves.toBe(5);
     });
 
     it("overrides a caller's LONGER window", async () => {
       // The control for the case above, and the reason the bound exists: a
-      // route asking for a day must not outlive a release due in two hours.
+      // route asking for a day must not outlive a release due in ten seconds.
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
+      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
 
       await expect(releaseBoundedRevalidate(24 * 60 * 60, NOW)).resolves.toBe(
-        2 * 60 * 60
+        SOON_SECONDS
       );
     });
   }
