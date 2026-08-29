@@ -691,6 +691,72 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange).toHaveBeenCalledWith("#123456");
   });
 
+  it("leaves Enter to a legacy IME reporting only keyCode 229", () => {
+    // Older engines report the composition as `keyCode` 229 with `isComposing`
+    // false, so reading one signal blocks candidate acceptance on exactly the
+    // engines that need the guard most.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter", keyCode: 229 });
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("does not finish on a blur with NO destination during an inside press", () => {
+    /*
+     * Some engines do not focus a button when it is pressed, so the field's
+     * `focusout` arrives with a null `relatedTarget` and reads as focus leaving
+     * the picker — finishing the draft before the swatch click can supersede
+     * it, which is the double report the whole arrangement avoids.
+     *
+     * The control is the same blur with NO press in progress, below, which must
+     * still finish: without it this case would pass on a picker that ignored
+     * every null-destination blur.
+     */
+    const onColorChange = vi.fn();
+    const onSwatchSelect = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        onSwatchSelect={onSwatchSelect}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const preset = screen.getByRole("button", { name: "Primary" });
+    preset.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+    fireEvent.click(preset);
+
+    expect(onColorChange).not.toHaveBeenCalled();
+    expect(onSwatchSelect).toHaveBeenCalled();
+  });
+
+  it("DOES finish on a blur with no destination when no press is in progress", () => {
+    // The control for the case above: focus leaving to nowhere — a window
+    // losing focus, say — is still a finish.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
   it("keeps a draft when the EYEDROPPER is cancelled", async () => {
     /*
      * The eyedropper's button is inside the picker, so pressing it is not a

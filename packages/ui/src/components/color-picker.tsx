@@ -185,6 +185,11 @@ export function ColorPicker<TValue = string>({
   const fieldId = React.useId();
   /** The picker's own subtree, for telling a press inside it from a dismissal. */
   const rootRef = React.useRef<HTMLDivElement>(null);
+  /**
+   * Whether a press that began INSIDE this picker is still in progress, so a
+   * blur carrying no destination can be told from focus genuinely leaving.
+   */
+  const insidePress = React.useRef(false);
   /** Undoes a touch press that is waiting to see whether it becomes a tap. */
   const pendingTap = React.useRef<(() => void) | null>(null);
   /**
@@ -362,6 +367,15 @@ export function ColorPicker<TValue = string>({
       const inside =
         path.includes(root) ||
         (isNode(event.target) && root.contains(event.target));
+      /*
+       * RECORDED, because a blur cannot always tell where focus went. Some
+       * engines do not focus a button on press, so the field's `focusout`
+       * arrives with a null `relatedTarget` and reads as focus leaving the
+       * picker entirely — finishing the draft before the swatch or eyedropper
+       * click can supersede it, which is the double report this all exists to
+       * avoid. Cleared when the press ends.
+       */
+      insidePress.current = true;
       // A press inside decides NOTHING about the draft. Whether it becomes a
       // replacement is not knowable here — the eyedropper's button is inside
       // and its sampling can be cancelled, leaving nothing to replace with —
@@ -417,14 +431,22 @@ export function ColorPicker<TValue = string>({
      * gives when a press becomes a scroll rather than a tap.
      */
     const onPointerCancel = (): void => {
+      insidePress.current = false;
       pendingTap.current?.();
       pendingTap.current = null;
     };
+    // The press ENDING is what releases the blur above, whether or not it
+    // became a click.
+    const onPointerUp = (): void => {
+      insidePress.current = false;
+    };
     owner.addEventListener("pointerdown", onPointerDown, true);
     owner.addEventListener("pointercancel", onPointerCancel, true);
+    owner.addEventListener("pointerup", onPointerUp, true);
     return () => {
       owner.removeEventListener("pointerdown", onPointerDown, true);
       owner.removeEventListener("pointercancel", onPointerCancel, true);
+      owner.removeEventListener("pointerup", onPointerUp, true);
     };
   });
 
@@ -543,6 +565,10 @@ export function ColorPicker<TValue = string>({
         const next = event.relatedTarget;
         const root = rootRef.current;
         if (root !== null && isNode(next) && root.contains(next)) return;
+        // A blur with NO destination during a press that began inside is that
+        // press, not a departure: some engines do not focus a button when it is
+        // pressed, and finishing here would beat the click that supersedes it.
+        if (next === null && insidePress.current) return;
         commitDraft();
       }}
     >
@@ -658,11 +684,12 @@ export function ColorPicker<TValue = string>({
             /*
              * An Enter that ACCEPTS AN IME CANDIDATE is not a finish. Consuming
              * it blocks the acceptance and reports whatever was in the field
-             * before the composition resolved. The shortcut manager in this
-             * package treats composing keystrokes as the IME's for the same
+             * before the composition resolved. Both signals are read because
+             * older engines report the composition only as `keyCode` 229, and
+             * this repository's other IME guards check the pair for that
              * reason.
              */
-            if (event.nativeEvent.isComposing) return;
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
             // Kept off the surrounding form, which may have a submit of its own:
             // finishing a colour is not submitting whatever contains it.
             event.preventDefault();
