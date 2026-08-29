@@ -43,6 +43,7 @@ import {
   classRows,
   deletionWarning,
   filterClassRows,
+  searchClassRows,
   renamedClassName,
   usageSummary,
   type ClassFilter,
@@ -192,6 +193,17 @@ export function ClassManagerPanel({
 }: ClassManagerPanelProps): React.ReactElement {
   const [filter, setFilter] = React.useState<ClassFilter>("all");
   /*
+   * The name search, which is what makes every class REACHABLE.
+   *
+   * The list is capped so a library near its ceiling does not mount two
+   * thousand rows and their inputs at once. Without a search that cap is a
+   * wall: the chips narrow by index state and by the open page, so a class
+   * past the cap that no filter happens to select could never be shown or
+   * renamed — and the note under the cap said to filter, which was advice the
+   * surface could not honour.
+   */
+  const [query, setQuery] = React.useState("");
+  /*
    * A filter the panel no longer offers cannot stay selected. `usage` is a
    * host prop and can go from read to unread between renders, which would
    * otherwise leave the list narrowed by a chip that is no longer on screen —
@@ -224,9 +236,9 @@ export function ClassManagerPanel({
   }
 
   const usageKnown = usage !== undefined;
-  const rows = filterClassRows(
-    classRows(library, usage ?? {}, documentClassIds),
-    active
+  const rows = searchClassRows(
+    filterClassRows(classRows(library, usage ?? {}, documentClassIds), active),
+    query
   );
 
   return (
@@ -251,6 +263,7 @@ export function ClassManagerPanel({
         </p>
       )}
       <FilterChips active={active} filters={offerable} onChange={setFilter} />
+      <ClassSearch query={query} onChange={setQuery} />
       <ClassList
         rows={rows}
         library={library}
@@ -258,6 +271,36 @@ export function ClassManagerPanel({
         usageKnown={usageKnown}
         onRename={onRename}
         onDelete={onDelete}
+      />
+    </div>
+  );
+}
+
+/**
+ * The name search.
+ *
+ * Uncontrolled by the filter chips: narrowing by name and narrowing by index
+ * state are separate choices, and clearing one must not clear the other.
+ */
+function ClassSearch({
+  query,
+  onChange,
+}: {
+  query: string;
+  onChange: (next: string) => void;
+}): React.ReactElement {
+  const id = React.useId();
+  return (
+    <div className="nx-classman__search">
+      <label className="sr-only" htmlFor={id}>
+        Search classes
+      </label>
+      <Input
+        id={id}
+        onChange={event => onChange(event.target.value)}
+        placeholder="Search classes"
+        type="search"
+        value={query}
       />
     </div>
   );
@@ -321,7 +364,7 @@ function ClassList({
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
   if (rows.length === 0) {
-    return <p className="nx-inspector__note">No classes match this filter.</p>;
+    return <p className="nx-inspector__note">No classes match this search.</p>;
   }
   const shown = rows.slice(0, MAX_MANAGED_ROWS);
   const hidden = rows.length - shown.length;
@@ -329,7 +372,7 @@ function ClassList({
     <>
       {hidden > 0 ? (
         <p className="nx-inspector__note">
-          {`Showing ${shown.length} of ${rows.length}. Filter to reach the rest.`}
+          {`Showing ${shown.length} of ${rows.length}. Search by name to reach the rest.`}
         </p>
       ) : null}
       <ul className="nx-classman__list">
@@ -439,6 +482,19 @@ function NameField({
    * with the orders reversed, keeps reporting one the retry already fixed.
    */
   const attempt = React.useRef(0);
+  /*
+   * The name this row was last ASKED to take, which is not what it renders.
+   *
+   * `row.slug` is the STORED name and does not move until a save comes back
+   * through the cache. An author who renames `old` to `new` and then types
+   * `old` again inside that window is making a real edit — a revert — but the
+   * rendered slug still says `old`, so the no-op branch below discarded it and
+   * the pending first write went on to persist `new`.
+   *
+   * Cleared on refusal, because a write that did not land leaves the class
+   * with the name it already had.
+   */
+  const requested = React.useRef<string | null>(null);
   const id = React.useId();
   const outcome =
     draft === null ? null : renamedClassName(draft, row.id, library);
@@ -453,7 +509,9 @@ function NameField({
      * write a revision whose rendered output is identical to the one before it.
      * The draft still clears, because the author did finish editing.
      */
-    if (outcome.slug === row.slug) {
+    // Compared against what this row was last asked to become, falling back to
+    // the stored name when nothing is in flight.
+    if (outcome.slug === (requested.current ?? row.slug)) {
       setDraft(null);
       return;
     }
@@ -472,11 +530,13 @@ function NameField({
      */
     attempt.current += 1;
     const mine = attempt.current;
+    requested.current = outcome.slug;
     let answered: ClassRenameAnswer;
     try {
       answered = onRename(row.id, outcome.slug);
     } catch {
       setDraft(null);
+      requested.current = null;
       setRefused("This class could not be renamed.");
       return;
     }
@@ -502,6 +562,7 @@ function NameField({
           setRefused(null);
           return;
         }
+        requested.current = null;
         setRefused(result.reason);
       })
       /*
@@ -512,6 +573,7 @@ function NameField({
        */
       .catch(() => {
         if (attempt.current !== mine) return;
+        requested.current = null;
         setRefused("This class could not be renamed.");
       });
   };

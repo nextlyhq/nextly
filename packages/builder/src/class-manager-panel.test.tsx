@@ -660,3 +660,102 @@ describe("a library far larger than a screen", () => {
     }
   );
 });
+
+describe("reaching a class past the row cap", () => {
+  const many = Array.from({ length: 260 }, (_, index) => ({
+    id: `id-${index}`,
+    slug: `class-${index}`,
+    orderIndex: index,
+    styles: {},
+  }));
+
+  it(
+    "finds one by NAME that no filter could have selected",
+    { timeout: 30000 },
+    () => {
+      /*
+       * The cap keeps a large library from mounting two thousand inputs, and
+       * without a name search it is a wall: the chips narrow by index state and
+       * by the open page, so a class past the cap that neither selects could
+       * never be shown or renamed. `class-259` is the last row, on no page, and
+       * in an index that was never read — nothing else can reach it.
+       */
+      draw({ library: many, usage: undefined, documentClassIds: [] });
+      expect(screen.queryByLabelText("Name of class-259")).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Search classes"), {
+        target: { value: "class-259" },
+      });
+      expect(screen.getByLabelText("Name of class-259")).toBeTruthy();
+    }
+  );
+
+  it("says search is the way through, rather than naming the filters", () => {
+    // The note used to say to filter, which the surface could not honour once
+    // `usage` was absent and only "On this page" remained.
+    draw({ library: many, usage: undefined, documentClassIds: [] });
+    expect(screen.getByText(/Search by name to reach the rest/)).toBeTruthy();
+  });
+});
+
+describe("a revert typed while the first rename is still in flight", () => {
+  it("is DISPATCHED rather than read as a no-op", async () => {
+    /*
+     * `row.slug` is the stored name and does not move until a save comes back.
+     * An author who renames `hero` to `promo` and then types `hero` again
+     * inside that window is reverting, but the rendered slug still says `hero`
+     * — so comparing against it discarded the edit and the pending first write
+     * went on to persist `promo`.
+     */
+    const onRename = vi.fn(
+      () => new Promise<{ ok: true }>(() => undefined) // never settles
+    );
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "promo" } });
+    fireEvent.blur(field);
+    expect(onRename).toHaveBeenCalledTimes(1);
+
+    /*
+     * The row still renders `hero`, because nothing has come back — so typing
+     * `hero` has to arrive as a real DOM change. React's `onChange` does not
+     * fire when the value it is given equals the one already there, and the
+     * field reverted to `hero` when the draft cleared, so a single change to
+     * `hero` sets no draft at all and this would assert nothing.
+     */
+    fireEvent.change(nameField("hero"), { target: { value: "her" } });
+    fireEvent.change(nameField("hero"), { target: { value: "hero" } });
+    fireEvent.blur(nameField("hero"));
+
+    expect(onRename).toHaveBeenCalledTimes(2);
+    expect(onRename).toHaveBeenLastCalledWith("id-hero", "hero");
+  });
+
+  it("still treats a genuine no-op as one when nothing is pending", () => {
+    // The control: without this the fix would simply dispatch every commit,
+    // which writes a revision whose rendered output is identical to the last.
+    const onRename = vi.fn();
+    render(
+      <ClassManagerPanel
+        library={LIBRARY}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={onRename}
+        onDelete={vi.fn()}
+      />
+    );
+    const field = nameField("hero");
+    fireEvent.change(field, { target: { value: "hero" } });
+    fireEvent.blur(field);
+    expect(onRename).not.toHaveBeenCalled();
+  });
+});
