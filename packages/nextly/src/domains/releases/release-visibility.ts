@@ -26,12 +26,12 @@
 
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
-import { PendingTransitionCache } from "./pending-transition-cache";
 import type { DueCheck } from "./release-read";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
+import { transitionCacheFor } from "./transition-cache-registry";
 
 export interface RevealQuery {
   scopeKind: VersionScopeKind;
@@ -94,10 +94,11 @@ export function createReleaseVisibility(deps: {
  */
 export function releaseVisibilityFor(db: ReleasesDbApi): ReleaseVisibility {
   const repository = new ReleasesRepository(db);
+  // The SHARED memo, not a second one. Two independent windows over one
+  // schedule let this seam and the cache bound disagree about whether anything
+  // is due, and a page cached during that disagreement outlives the release.
   return createReleaseVisibility({
-    cache: new PendingTransitionCache(() =>
-      repository.findEarliestScheduledTransition()
-    ),
+    cache: transitionCacheFor(db, () => repository.findScheduledTransitions()),
     repository,
   });
 }

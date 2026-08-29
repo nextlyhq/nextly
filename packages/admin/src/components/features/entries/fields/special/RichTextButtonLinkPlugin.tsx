@@ -12,13 +12,11 @@
 
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
 import {
-  Button,
   Checkbox,
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
   DialogDescription,
   Input,
   Label,
@@ -41,13 +39,7 @@ import {
 } from "lexical";
 import { useState, useCallback, useEffect } from "react";
 
-import {
-  MousePointerClick,
-  AlertCircle,
-  AlignLeft,
-  AlignCenter,
-  AlignRight,
-} from "@admin/components/icons";
+import { MousePointerClick } from "@admin/components/icons";
 
 import {
   $createButtonLinkNode,
@@ -57,6 +49,11 @@ import {
   type ButtonLinkSize,
   type ButtonAlignment,
 } from "./ButtonLinkNode";
+import {
+  useInsertDialogState,
+  InsertDialogFooter,
+  ButtonAlignmentControl,
+} from "./RichTextInsertDialog";
 
 // ============================================================
 // Commands
@@ -76,11 +73,124 @@ export interface RichTextButtonLinkPluginProps {
   disabled?: boolean;
 }
 
+// ============================================================
+// Dialog body pieces — each one self-contained styling decision
+// ============================================================
+
+/**
+ * The dialog's color fields: background (offered only for the filled variant,
+ * whose background the color paints) and text color.
+ */
+function ButtonLinkColorFields({
+  variant,
+  bgColor,
+  onBgColorChange,
+  textColor,
+  onTextColorChange,
+}: {
+  variant: ButtonLinkVariant;
+  bgColor: string;
+  onBgColorChange: (value: string) => void;
+  textColor: string;
+  onTextColorChange: (value: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {variant === "filled" && (
+        <div className="space-y-2">
+          <Label htmlFor="button-bg-color">Background Color</Label>
+          <div className="flex items-center gap-2">
+            <input
+              id="button-bg-color"
+              type="color"
+              value={bgColor}
+              onChange={e => onBgColorChange(e.target.value)}
+              className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
+            />
+            <Input
+              value={bgColor}
+              onChange={e => onBgColorChange(e.target.value)}
+              className="flex-1"
+              placeholder="#000000"
+            />
+          </div>
+        </div>
+      )}
+      <div className="space-y-2">
+        <Label htmlFor="button-text-color">Text Color</Label>
+        <div className="flex items-center gap-2">
+          <input
+            id="button-text-color"
+            type="color"
+            value={textColor}
+            onChange={e => onTextColorChange(e.target.value)}
+            className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
+          />
+          <Input
+            value={textColor}
+            onChange={e => onTextColorChange(e.target.value)}
+            className="flex-1"
+            placeholder="#ffffff"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The live preview: renders the button text with the chosen variant, size and
+ * colors so the styling is visible before inserting.
+ */
+function ButtonLinkPreview({
+  text,
+  variant,
+  size,
+  bgColor,
+  textColor,
+}: {
+  text: string;
+  variant: ButtonLinkVariant;
+  size: ButtonLinkSize;
+  bgColor: string;
+  textColor: string;
+}) {
+  return (
+    <div className="p-4 rounded-lg bg-primary/5">
+      <p className="text-xs text-muted-foreground mb-2">Preview:</p>
+      <div className="flex justify-center">
+        <span
+          className={`inline-flex items-center justify-center rounded-md font-medium transition-colors ${
+            variant === "outline" ? "border border-border bg-background" : ""
+          } ${
+            size === "sm"
+              ? "px-3 py-1.5 text-sm"
+              : size === "lg"
+                ? "px-6 py-3 text-base"
+                : "px-4 py-2 text-sm"
+          }`}
+          style={{
+            ...(variant === "filled" && {
+              backgroundColor: bgColor,
+              color: textColor,
+            }),
+            ...(variant === "outline" && {
+              color: textColor,
+              borderColor: textColor,
+            }),
+          }}
+        >
+          {text}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function RichTextButtonLinkPlugin({
   disabled = false,
 }: RichTextButtonLinkPluginProps) {
   const [editor] = useLexicalComposerContext();
-  const [isOpen, setIsOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [text, setText] = useState("");
   const [openInNewTab, setOpenInNewTab] = useState(true);
@@ -105,12 +215,6 @@ export function RichTextButtonLinkPlugin({
     setEditingNodeKey(null);
   }, []);
 
-  const openDialog = useCallback(() => {
-    if (disabled) return;
-    resetState();
-    setIsOpen(true);
-  }, [disabled, resetState]);
-
   const isValidUrl = useCallback((url: string): boolean => {
     if (!url.trim()) return false;
     // Allow relative URLs starting with /
@@ -122,6 +226,15 @@ export function RichTextButtonLinkPlugin({
       return false;
     }
   }, []);
+
+  // Shared dialog shell: open/close lifecycle with reset-on-close and
+  // Enter-to-submit, so this dialog cannot drift from the other three.
+  const { isOpen, setIsOpen, openDialog, handleOpenChange, handleKeyDown } =
+    useInsertDialogState({
+      resetState,
+      onSubmit: () => insertButtonLink(),
+      disabled,
+    });
 
   const insertButtonLink = useCallback(() => {
     if (!text.trim()) {
@@ -203,29 +316,10 @@ export function RichTextButtonLinkPlugin({
     textColor,
     alignment,
     isValidUrl,
+    setIsOpen,
     resetState,
     editingNodeKey,
   ]);
-
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (!open) {
-        resetState();
-      }
-      setIsOpen(open);
-    },
-    [resetState]
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        insertButtonLink();
-      }
-    },
-    [insertButtonLink]
-  );
 
   // Register commands
   useEffect(() => {
@@ -288,7 +382,7 @@ export function RichTextButtonLinkPlugin({
     return () => {
       window.removeEventListener("edit-button-link", handleEditEvent);
     };
-  }, []);
+  }, [setIsOpen]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
@@ -375,83 +469,20 @@ export function RichTextButtonLinkPlugin({
           </div>
 
           {/* Alignment */}
-          <div className="space-y-2">
-            <Label>Alignment</Label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={alignment === "left" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("left")}
-              >
-                <AlignLeft className="h-4 w-4" />
-                Left
-              </Button>
-              <Button
-                type="button"
-                variant={alignment === "center" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("center")}
-              >
-                <AlignCenter className="h-4 w-4" />
-                Center
-              </Button>
-              <Button
-                type="button"
-                variant={alignment === "right" ? "default" : "outline"}
-                size="md"
-                className="flex-1"
-                onClick={() => setAlignment("right")}
-              >
-                <AlignRight className="h-4 w-4" />
-                Right
-              </Button>
-            </div>
-          </div>
+          <ButtonAlignmentControl
+            value={alignment}
+            onChange={setAlignment}
+            disabled={disabled}
+          />
 
           {/* Colors */}
-          <div className="grid grid-cols-2 gap-4">
-            {variant === "filled" && (
-              <div className="space-y-2">
-                <Label htmlFor="button-bg-color">Background Color</Label>
-                <div className="flex items-center gap-2">
-                  <input
-                    id="button-bg-color"
-                    type="color"
-                    value={bgColor}
-                    onChange={e => setBgColor(e.target.value)}
-                    className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
-                  />
-                  <Input
-                    value={bgColor}
-                    onChange={e => setBgColor(e.target.value)}
-                    className="flex-1"
-                    placeholder="#000000"
-                  />
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="button-text-color">Text Color</Label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="button-text-color"
-                  type="color"
-                  value={textColor}
-                  onChange={e => setTextColor(e.target.value)}
-                  className="w-9 rounded-md  border border-input cursor-pointer p-0.5"
-                />
-                <Input
-                  value={textColor}
-                  onChange={e => setTextColor(e.target.value)}
-                  className="flex-1"
-                  placeholder="#ffffff"
-                />
-              </div>
-            </div>
-          </div>
+          <ButtonLinkColorFields
+            variant={variant}
+            bgColor={bgColor}
+            onBgColorChange={setBgColor}
+            textColor={textColor}
+            onTextColorChange={setTextColor}
+          />
 
           {/* Open in new tab */}
           <label className="flex items-center gap-2 cursor-pointer">
@@ -464,63 +495,26 @@ export function RichTextButtonLinkPlugin({
 
           {/* Preview */}
           {text.trim() && (
-            <div className="p-4 rounded-lg bg-primary/5">
-              <p className="text-xs text-muted-foreground mb-2">Preview:</p>
-              <div className="flex justify-center">
-                <span
-                  className={`inline-flex items-center justify-center rounded-md font-medium transition-colors ${
-                    variant === "outline"
-                      ? "border border-border bg-background"
-                      : ""
-                  } ${
-                    size === "sm"
-                      ? "px-3 py-1.5 text-sm"
-                      : size === "lg"
-                        ? "px-6 py-3 text-base"
-                        : "px-4 py-2 text-sm"
-                  }`}
-                  style={{
-                    ...(variant === "filled" && {
-                      backgroundColor: bgColor,
-                      color: textColor,
-                    }),
-                    ...(variant === "outline" && {
-                      color: textColor,
-                      borderColor: textColor,
-                    }),
-                  }}
-                >
-                  {text}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Error */}
-          {error && (
-            <div className="flex items-center gap-2 text-destructive text-sm">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
+            <ButtonLinkPreview
+              text={text}
+              variant={variant}
+              size={size}
+              bgColor={bgColor}
+              textColor={textColor}
+            />
           )}
         </div>
 
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => handleOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            onClick={insertButtonLink}
-            disabled={!text.trim() || !url.trim()}
-          >
-            {editingNodeKey ? "Update Button" : "Insert Button"}
-          </Button>
-        </DialogFooter>
+        {/* Shared footer: the error banner and Cancel/Confirm row every
+            insert dialog renders. Only emptiness gates the confirm here so a
+            non-empty but invalid URL still submits and surfaces the banner. */}
+        <InsertDialogFooter
+          error={error}
+          onCancel={() => handleOpenChange(false)}
+          onConfirm={insertButtonLink}
+          confirmLabel={editingNodeKey ? "Update Button" : "Insert Button"}
+          confirmDisabled={!text.trim() || !url.trim()}
+        />
       </DialogContent>
     </Dialog>
   );

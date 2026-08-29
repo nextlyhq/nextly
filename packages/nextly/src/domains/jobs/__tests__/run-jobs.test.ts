@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildUserContext } from "../../../auth/user-context";
 import type { JobRow } from "../jobs-repository";
 import { JobRegistry, defineJob } from "../job-registry";
-import type { RunAsDeps } from "../resolve-run-as";
+import type { RunAsDeps } from "../../../shared/lib/resolve-run-as";
 import { runJobs, type JobsStore } from "../run-jobs";
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");

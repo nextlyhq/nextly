@@ -12,10 +12,10 @@
 
 import { nextly } from "../../direct-api/nextly";
 import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
+import type { RunAsDeps, RunAsUser } from "../../shared/lib/resolve-run-as";
 
 import type { JobRegistry } from "./job-registry";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
-import type { RunAsDeps, RunAsUser } from "./resolve-run-as";
 import { runJobs, type RunJobsResult } from "./run-jobs";
 
 /**

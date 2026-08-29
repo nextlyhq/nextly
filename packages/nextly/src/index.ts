@@ -648,6 +648,20 @@ export { runJobsPass } from "./domains/jobs/jobs-runner";
 export type { RunJobsPassOptions } from "./domains/jobs/jobs-runner";
 export type { RunJobsResult } from "./domains/jobs/run-jobs";
 
+// The release materialiser, as a job definition. Exported so an application can
+// register it with the runner today: the periodic trigger that would register it
+// automatically is separate work, and until it lands a definition nobody can
+// reach is a definition that never runs.
+export {
+  RELEASES_DRAIN_JOB,
+  createReleasesDrainJob,
+} from "./domains/releases/releases-drain-job";
+export { applyDueReleases } from "./domains/releases/apply-due-releases";
+export type {
+  ApplyDueReleasesResult,
+  MaterialisationFailure,
+} from "./domains/releases/apply-due-releases";
+
 export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.

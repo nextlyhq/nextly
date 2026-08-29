@@ -323,7 +323,14 @@ export function createJobContentApi(
     // the call is made untyped here and the assembled object is asserted to
     // `JobContentApi` once. The types callers see are the Direct API's own; the
     // erasure is confined to these two lines.
-    const operation = source[name] as (args: unknown) => unknown;
+    // Called ON `source`, never through an extracted reference. The module-level
+    // `nextly` facade is arrow functions and survives extraction, but a real
+    // `Nextly` INSTANCE reaches its context through `this` — extracting the
+    // method there loses it, and the call fails inside `mergeConfig` reading
+    // `ctx.defaultConfig` of undefined. A wrapper that only works against one
+    // of the two shapes its own type admits is not bound to anything.
+    const operation = (args: unknown): unknown =>
+      (source[name] as (a: unknown) => unknown).call(source, args);
     bound[name] = (args: unknown) => {
       // CLEARED to `undefined`, not deleted. Every operation begins with
       // `mergeConfig(ctx.defaultConfig, args)`, which is `{ ...defaultConfig,

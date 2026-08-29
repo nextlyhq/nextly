@@ -265,6 +265,45 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "webhooks",
     description: "Permission to delete webhook endpoints",
   },
+  // Content releases. Three authorities, not a CRUD set: a release is
+  // assembled and then COMMITTED, and those are different powers.
+  //
+  // The resource is `content-releases` rather than `releases` because
+  // registering one RESERVES the name, and "press releases" is a collection
+  // real sites already have.
+  //
+  // `publish-releases` is separate from `create-releases` on purpose. Creating
+  // a release and choosing what goes in it changes nothing a reader can see;
+  // scheduling it is the act that puts content live later, and it is the one
+  // that needs holding back. That is the same split the content lifecycle
+  // already makes, where `publish` and `unpublish` are distinct from `update`.
+  //
+  // `update` and `delete` are deliberately NOT seeded. A permission nothing
+  // enforces teaches the admin a vocabulary the server ignores; they arrive
+  // with the surfaces that check them.
+  {
+    name: "Read Releases",
+    slug: "read-content-releases",
+    action: "read",
+    resource: "content-releases",
+    description: "Permission to view content releases and their members",
+  },
+  {
+    name: "Create Releases",
+    slug: "create-content-releases",
+    action: "create",
+    resource: "content-releases",
+    description:
+      "Permission to create a content release and choose its members",
+  },
+  {
+    name: "Publish Releases",
+    slug: "publish-content-releases",
+    action: "publish",
+    resource: "content-releases",
+    description:
+      "Permission to schedule or cancel a content release, which is what makes its content go live",
+  },
 ];
 
 /**

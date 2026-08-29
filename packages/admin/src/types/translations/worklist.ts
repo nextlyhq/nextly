@@ -45,10 +45,10 @@ const WORKLIST_ORDER = [
 ] as const satisfies readonly LanguageState[];
 
 /**
- * The one tab that is NOT a language state (i18n B2 — "changed since translated").
+ * The one worklist state that is NOT a language state: "changed since translated".
  *
- * 🔴 Deliberately not added to `LANGUAGE_STATES`, and this is the load-bearing decision of B2's
- * vocabulary. `languageState()` is a mutually exclusive classifier — missing, then published, then
+ * 🔴 Deliberately not added to `LANGUAGE_STATES`, and this is the load-bearing decision of the
+ * staleness vocabulary. `languageState()` is a mutually exclusive classifier — missing, then published, then
  * draft, then translated, first match wins — and staleness is ORTHOGONAL to every one of them: a
  * stale translation is still translated, and still published if it was published. A fifth member
  * would make the classifier return "stale" INSTEAD of "published", so the entry list's dots and
@@ -61,8 +61,9 @@ const WORKLIST_ORDER = [
  * replacing it.
  *
  * A FILTER, though, is a question rather than a classification, and "which documents need review"
- * is as legitimate a question as "which are drafts". So the worklist's tab list is one entry wider
- * than the state catalog, and that difference is the honest one rather than an oversight.
+ * is as legitimate a question as "which are drafts". So {@link WorklistState} carries a member
+ * the language-state catalog does not, and {@link WORKLIST_STATES} offers a tab for each of the
+ * four states alone.
  */
 
 /** Sentence wording into a button label: "not translated" -> "Not translated". */
@@ -78,27 +79,30 @@ export const WORKLIST_STATES: readonly {
     value,
     label: asTabLabel(LANGUAGE_STATE_LABEL[value]),
   })),
-  // 🔴 The "Needs review" tab is NOT offered yet, and the entry is kept here rather than deleted
-  // because the vocabulary decision it carries is the durable part.
+  // 🔴 No tab for `stale`, and its absence from this array is the whole statement.
   //
-  // The server currently answers this state with "nothing is known to be stale" — deliberately,
-  // because nothing can yet establish whether a given companion physically carries the timestamp
-  // the answer depends on. A tab that is always empty is worse than no tab: it reads as "this site
-  // has no stale translations", which is a claim, and the wrong one.
+  // The server answers that state with "nothing is known to be stale", because nothing can
+  // establish whether a given companion physically carries the timestamp the answer depends on. A
+  // tab that is always empty is worse than no tab: it reads as "this site has no stale
+  // translations", which is a claim, and the wrong one.
   //
-  // Restored alongside the capability check that lets the server answer it. When it is,
-  // "Needs review" is the label — not "Stale" or "Outdated": the wire value says what the system
-  // measured, the label says what the translator should DO, and a translation whose source moved
-  // may well still be correct.
+  // The absence reaches the URL as well, and that is deliberate rather than a gap:
+  // `worklistStateFrom` resolves only what this array offers, so a saved link naming `stale`
+  // falls back to the question this page leads with. A page filtered by a state whose tab is not
+  // shown would highlight nothing while listing a subset the reader cannot account for, which is
+  // worse than answering a different question visibly.
 ];
 
 /**
- * A state the worklist can show: any language state, plus staleness.
+ * A state the worklist may ASK FOR: any language state, plus staleness.
+ *
+ * This is the value that goes on the wire — `useTranslationWorklist` puts it in
+ * `/translations?state=` — so it mirrors the set the server accepts, which carries `stale`
+ * alongside the four language states. The tab strip offers a subset of it, not the whole of it,
+ * and that is the direction the two differ in.
  *
  * The language half is an ALIAS rather than a restatement, so a state added or removed there is a
- * compile error here rather than a tab that quietly stops matching. The union's second member is
- * the deliberate widening documented above: a FILTER is a question, and "which documents need
- * review" is as legitimate a question as "which are drafts", even while no tab asks it.
+ * compile error here rather than a tab that quietly stops matching.
  */
 export type WorklistState = LanguageState | "stale";
 

@@ -5,7 +5,7 @@
  * queue is a job that did not run; this one is a job that runs with the wrong
  * authority, which is a different class of problem.
  *
- * @module domains/jobs/__tests__/resolve-run-as.test
+ * @module shared/lib/__tests__/resolve-run-as.test
  */
 import { describe, expect, it } from "vitest";
 

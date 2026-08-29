@@ -26,14 +26,24 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Report a translation whose source language changed after it was written, so a
-stale translation stops looking like a finished one. Each language now records
-when it was last written, the translation worklist gains a "Needs review" tab,
-and the language panel marks a translation whose source has moved on -- while
-still reporting it as published, because it is.
+Record when each language of a document was last written, so a later change can
+tell a finished translation from one whose source has moved on since.
 
-Databases created before this keep no history of when each language was
-written, so the column is seeded from version history where that exists and
-left unknown where it does not. Unknown is never reported as up to date: a
-translation the system cannot vouch for is left alone rather than being
-described as current.
+This release is the groundwork only: a language's timestamp moves when that
+language's CONTENT is written, for every kind of localized content, and nothing
+surfaces it yet. Publishing or unpublishing a language changes no words, so it
+leaves the timestamp alone -- otherwise a lifecycle change on the source
+language would report every translation as needing review on an edit nobody
+made.
+
+Collections that already exist are seeded from their version history, so their
+languages carry a timestamp from the moment this lands. Singles are not seeded,
+even though they keep history that would allow it: nothing reads the signal for
+a Single today, and seeding one would commit every future reader to whatever
+this release happened to write. Their languages are stamped from their next
+save onward, like any language whose history is unknown.
+
+A database created before this keeps no history of when each language was
+written, so the value is seeded from version history where that exists and left
+unknown where it does not. Unknown is never treated as up to date: a language
+the system cannot vouch for is left alone rather than described as current.
