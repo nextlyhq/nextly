@@ -338,6 +338,20 @@ function valuesAt(
  * state whose last declaration was cleared leaves the keys behind — so a
  * presence test reports a state as styled when it carries nothing, which is
  * precisely the false reassurance the marker exists to remove.
+ *
+ * REFUSED IS NOT UNSET, and this is the one boundary here that is a judgement
+ * rather than a fact about the shape. A declaration the current policy rejects
+ * emits no CSS, so validating here would make the marker agree with the sheet
+ * in that case too. It is deliberately not done: a policy is a HOST SETTING
+ * that changes without the document changing, so a value refused today is
+ * still the author's, still deliberate, and restored by a policy change. A
+ * marker that vanished for it would report their work as ABSENT rather than as
+ * refused — and refusal already has a better channel, the control that shows
+ * the value and says why it did not apply.
+ *
+ * So this answers "you have set something here that this site can express",
+ * and the tiers and shapes above are the part of that question decided by the
+ * document rather than by configuration.
  */
 export function stateHasOwnValues(
   styles: NodeStyles | undefined,
