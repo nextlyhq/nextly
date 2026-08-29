@@ -220,6 +220,52 @@ describe("the panel over a site that has been read", () => {
     expect(screen.getByText(/Почти/)).toBeTruthy();
   });
 
+  it("samples glyphs that DRAW, not the C1 controls", () => {
+    /*
+     * `U+0080-00FF` covers no canned sentence, so the sampler starts at
+     * U+0080 — and the thirty-two invisible C1 controls fill the whole budget
+     * before reaching a single accented letter, leaving a specimen that
+     * renders as nothing.
+     */
+    const latin1: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-latin1.woff2", format: "woff2" }],
+      unicodeRange: "U+0080-00FF",
+    };
+    render(<FontsPanel faces={[latin1]} tokens={{ tokens: [] }} />);
+    // Accented letters the face can actually demonstrate, rather than the
+    // symbols the front of the interval opens with.
+    expect(screen.getByText(/Æ/)).toBeTruthy();
+    expect(screen.getByText(/Ð/)).toBeTruthy();
+  });
+
+  it("draws NOTHING for a face subset entirely to control characters", () => {
+    /*
+     * Separate from the case above, because striding alone already reaches the
+     * letters in a wide interval — so that test cannot tell whether controls
+     * are skipped. Here the whole interval is the C1 block: every codepoint is
+     * non-printing, and the honest specimen is an empty one rather than a
+     * string of invisible characters that merely LOOKS empty.
+     */
+    const controlsOnly: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-c1.woff2", format: "woff2" }],
+      unicodeRange: "U+0080-009F",
+    };
+    const { container } = render(
+      <FontsPanel faces={[controlsOnly]} tokens={{ tokens: [] }} />
+    );
+    const specimens = Array.from(
+      container.querySelectorAll(".nx-fonts__specimen")
+    );
+    // The control: a selector matching nothing would satisfy the loop below
+    // without ever reading a specimen.
+    expect(specimens.length).toBeGreaterThan(0);
+    for (const specimen of specimens) {
+      expect(specimen.textContent).toBe("");
+    }
+  });
+
   it("refuses a range reaching past the end of Unicode", () => {
     // `validateFontFace` accepts `U+110000-110010` — it checks the characters,
     // not the numbers — and `String.fromCodePoint` throws above U+10FFFF, which

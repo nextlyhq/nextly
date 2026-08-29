@@ -760,6 +760,7 @@ function useSeparatorRegionEscape(
 }
 
 function ShellRegions({
+  notices,
   appliedScale = 1,
   onZoomPick,
   renderPanel,
@@ -776,6 +777,14 @@ function ShellRegions({
   active,
   loadCount,
 }: Omit<BuilderShellProps, "store"> & {
+  /**
+   * The shell's notice region, rendered inside the chrome.
+   *
+   * Passed in rather than built here so this component keeps owning LAYOUT and
+   * nothing else — and so the queue behind it stays with the shell, which is
+   * what outlives every per-node key below it.
+   */
+  notices?: React.ReactNode;
   /** The zoom picker, or absent where the host wired none. */
   onZoomPick: ((next: CanvasZoom) => void) | undefined;
   preferences: ShellPreferences;
@@ -876,6 +885,11 @@ function ShellRegions({
         ? {}
         : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
+      {/* First child of the chrome, so it inherits the `--nx-builder-*`
+          tokens declared on this element. It is `position: fixed`, so being
+          inside a `flex` column that clips adds nothing to the layout and the
+          overflow rule cannot cut it off. */}
+      {notices}
       <header
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
         aria-label="Editor actions"
@@ -1488,31 +1502,27 @@ export function BuilderShell({
                * rather than a crash, and no overlay can be open that early.
                */}
               <PortalProvider container={overlayHost}>
-                {/*
-                 * Failures raised by a control that has since been unmounted.
-                 *
-                 * Held HERE because nothing in the shell is keyed by the
-                 * selected node, while the style inspector's class selector is
-                 * — so a site-style write that fails after the author clicks
-                 * another block resolves into a component that no longer
-                 * exists. This one outlives every such key.
-                 *
-                 * Taken out of flow rather than placed above the regions. The
-                 * layout above sizes the editor against the caller's container
-                 * and the wrapper between is `display: contents`; a new box in
-                 * that flow would change what every region measures, to carry a
-                 * surface that is empty almost always.
-                 */}
-                <BuilderNoticeRegion
-                  notices={notices.notices}
-                  onDismiss={notices.dismiss}
-                />
                 {/* Wraps the regions rather than sitting beside them: the
                     inspector and the panels are `ReactNode` props, so they
                     become descendants of this provider by being RENDERED here,
                     wherever the host created them. */}
                 <NoticeSinkProvider raise={notices.raise}>
                   <ShellRegions
+                    /*
+                     * Failures raised by a control that has since been
+                     * unmounted. Handed to the regions rather than rendered
+                     * beside them, so it lands INSIDE the element carrying the
+                     * builder's chrome: every `--nx-builder-*` token is
+                     * declared there, and custom properties inherit down but
+                     * never across. It is taken out of flow once inside, so it
+                     * adds no box to the layout the regions measure.
+                     */
+                    notices={
+                      <BuilderNoticeRegion
+                        notices={notices.notices}
+                        onDismiss={notices.dismiss}
+                      />
+                    }
                     appliedScale={appliedScale}
                     onZoomPick={onZoomPick}
                     {...props}

@@ -679,7 +679,22 @@ export function familyPartKind(part: FamilyPart): FamilyPartKind {
   // through to the next family. Reading every `var(` as dynamic gave that an
   // all-clear, which is the same shape as reading a dropped declaration as a
   // working keyword.
-  if (hasVarCall(part.name)) {
+  /*
+   * Detection and validation read the SAME text, which is the raw spelling.
+   *
+   * Reading one from the decoded name and the other from the raw text made
+   * them answer about different sets of calls: a function name written with an
+   * escape — `v\61 r(foo)` — is a `var(` to the decoded reader and nothing at
+   * all to the raw one, so every call went unvalidated and the value was
+   * certified as a working substitution.
+   *
+   * The cost of choosing raw is stated rather than hidden: a var() whose own
+   * NAME is escaped is read as invalid instead of dynamic. It is still refused
+   * for the right reason — the grammar below rejects the parentheses — and a
+   * function name spelled with escapes is not a value this format can express
+   * either way.
+   */
+  if (hasVarCall(part.raw)) {
     return varCallsWellFormed(part.raw) ? "dynamic" : "invalid";
   }
   if (CSS_WIDE_KEYWORDS.has(lower)) return "keyword";

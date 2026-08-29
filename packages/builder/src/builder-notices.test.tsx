@@ -32,7 +32,6 @@ import {
   useNoticeQueue,
 } from "./builder-notices";
 import { ClassSelector } from "./class-selector";
-import { BUILDER_CHROME_CLASS } from "./shell-state";
 
 afterEach(cleanup);
 
@@ -131,7 +130,10 @@ describe("a refusal that arrives after the author has moved on", () => {
     await refuse("This class could not be saved.");
 
     expect(screen.getByRole("alert").textContent).toMatch(/could not be saved/);
-    expect(screen.queryByRole("status")).toBeNull();
+    // The region stays mounted so it can announce later reports, and is EMPTY
+    // — a region repeating what is already on screen is one an author learns
+    // to ignore.
+    expect(screen.getByRole("status").textContent).toBe("");
   });
 });
 
@@ -154,21 +156,12 @@ describe("the queue", () => {
     );
   }
 
-  it("carries the builder theme class, so its tokens resolve", () => {
-    /*
-     * The region is a SIBLING of the shell's regions, and every `--nx-builder-*`
-     * token is defined on `.nx-builder-chrome`, which sits on the regions rather
-     * than on a common ancestor. Custom properties inherit down, never across,
-     * so without this the border, background and text declarations resolve to
-     * nothing — a transparent box with host-default text, unreadable in dark
-     * mode. jsdom computes no cascade, so the CLASS is what can be asserted.
-     */
-    render(<Queue />);
-    fireEvent.click(screen.getByRole("button", { name: "raise" }));
-    expect(screen.getByRole("status").className).toContain(
-      BUILDER_CHROME_CLASS
-    );
-  });
+  /*
+   * Where the region SITS is asserted in `builder-shell.test`, not here: it
+   * inherits the `--nx-builder-*` tokens by being rendered inside the chrome
+   * element, and that structure exists only in the shell. Asserting it against
+   * this file's own harness would have been asserting the harness.
+   */
 
   it("does not re-announce every notice when one is added", () => {
     // `role="status"` is atomic by default, so a second notice makes a screen
@@ -180,9 +173,18 @@ describe("the queue", () => {
     );
   });
 
-  it("draws nothing at all while it is empty", () => {
+  it("keeps the live region MOUNTED while it is empty", () => {
+    /*
+     * A polite live region has to exist before its content changes. One
+     * inserted already carrying its message is not reliably announced — unlike
+     * `role="alert"` — so a screen-reader user could miss the only report that
+     * a class was not created. Empty it holds no rows.
+     */
     render(<Queue />);
-    expect(screen.queryByRole("status")).toBeNull();
+    const region = screen.getByRole("status");
+    expect(region).toBeTruthy();
+    expect(region.textContent).toBe("");
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
   });
 
   it("does not stack one sentence twice", () => {

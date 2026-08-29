@@ -1351,6 +1351,17 @@ describe("a var() substitution CSS will actually make", () => {
     expect(readFamilyList(escaped).kind).toBe("dynamic");
   });
 
+  it("refuses a call whose FUNCTION NAME is written with an escape", () => {
+    /*
+     * `v\61 r(foo)` decodes to `var(foo)`, which a browser tokenises as a
+     * var() call and then rejects for its non-custom-property argument.
+     * Detection and validation now read the same raw text, so this is refused
+     * once rather than being detected by one reader and skipped by the other.
+     */
+    const escapedName = `v${String.fromCharCode(92)}61 r(foo)`;
+    expect(readFamilyList(escapedName).kind).toBe("invalid");
+  });
+
   it("lets one malformed call spoil the list it sits in", () => {
     // A declaration is dropped whole, so a good call beside a bad one does not
     // rescue it.

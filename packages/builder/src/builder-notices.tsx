@@ -32,21 +32,24 @@
  * teaches them to ignore the region, so a control still mounted reports for
  * itself and stays silent here.
  *
- * ## It carries the builder's own theme class
+ * ## It must render INSIDE the builder's chrome
  *
- * The region is a SIBLING of the shell's regions, and every `--nx-builder-*`
- * token is defined on `.nx-builder-chrome`, which sits on the regions rather
- * than on a common ancestor. Custom properties inherit down, never across, so
- * without the class here the border, background and text declarations resolve
- * to nothing — leaving a transparent box with host-default text, which in dark
- * mode is a failure message the author cannot read.
+ * Every `--nx-builder-*` token is defined on `.nx-builder-chrome`, which sits
+ * on the shell's regions rather than on a common ancestor. Custom properties
+ * inherit down, never across, so a region rendered as a SIBLING of the regions
+ * resolves every border, background and text declaration to nothing — a
+ * transparent box with host-default text, which in dark mode is a failure
+ * message the author cannot read.
+ *
+ * Taking the chrome class instead was the other way round and worse: that class
+ * paints a background and a colour as well as declaring the tokens, so a
+ * floating region claiming it is claiming the frame, and a styling class stops
+ * identifying one element for anything that selects by it.
  *
  * @module builder-notices
  */
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
-
-import { BUILDER_CHROME_CLASS } from "./shell-state";
 
 /** One thing that failed, in the words an author reads. */
 export interface BuilderNotice {
@@ -137,9 +140,12 @@ export function useNoticeQueue(): NoticeQueue {
 /**
  * The notices, or nothing at all.
  *
- * Renders no element when the list is empty rather than an empty container, so
- * the shell's layout does not carry a permanent gap for a surface that is
- * usually silent.
+ * The container is ALWAYS mounted, and only its rows come and go. A polite
+ * live region has to exist before its content changes: unlike `role="alert"`,
+ * one inserted already carrying its message is not reliably announced, so a
+ * screen-reader user could miss the only report that a class was not created.
+ * Empty it holds no rows and has no box of its own, so the layout carries no
+ * permanent gap for a surface that is silent almost always.
  *
  * `role="status"` rather than `role="alert"`: these are reports about an action
  * the author already took, and `alert` interrupts a screen reader mid-sentence
@@ -153,10 +159,9 @@ export function BuilderNoticeRegion({
   notices: readonly BuilderNotice[];
   onDismiss: (id: string) => void;
 }): React.ReactElement | null {
-  if (notices.length === 0) return null;
   return (
     <div
-      className={`${BUILDER_CHROME_CLASS} nx-notices`}
+      className="nx-notices"
       role="status"
       aria-live="polite"
       /*

@@ -216,7 +216,16 @@ function rangesCover(ranges: readonly CodepointRange[], text: string): boolean {
 function sampleFromRanges(ranges: readonly CodepointRange[]): string {
   const sampled: string[] = [];
   for (const range of ranges) {
-    for (let point = range.from; point <= range.to; point += 1) {
+    /*
+     * Stepped ACROSS the interval rather than taken from its start. A range
+     * opens on its least interesting characters — `U+0080-00FF` begins with
+     * thirty-two invisible controls and then a run of symbols — so a walk from
+     * the front spends the whole budget before reaching a letter the face can
+     * actually demonstrate. Striding shows what the interval holds.
+     */
+    const span = range.to - range.from + 1;
+    const stride = Math.max(1, Math.floor(span / SAMPLE_LENGTH));
+    for (let point = range.from; point <= range.to; point += stride) {
       if (sampled.length >= SAMPLE_LENGTH) return sampled.join("");
       if (renderableCodepoint(point)) sampled.push(String.fromCodePoint(point));
     }
@@ -227,9 +236,20 @@ function sampleFromRanges(ranges: readonly CodepointRange[]): string {
 /** How many glyphs a sampled specimen shows. Enough to read the shapes. */
 const SAMPLE_LENGTH = 12;
 
-/** Whether a codepoint draws anything: not a control, not half a pair. */
+/**
+ * Whether a codepoint draws anything: not a control, not half a pair.
+ *
+ * The C1 block is the one that bites. A face subset to `U+0080-00FF` covers no
+ * canned sentence, so sampling starts at `U+0080` — and thirty-two invisible
+ * controls fill the twelve-glyph budget before reaching a single accented
+ * letter, leaving a specimen that renders as nothing at all.
+ */
 function renderableCodepoint(point: number): boolean {
-  return point >= 0x20 && !(point >= 0xd800 && point <= 0xdfff);
+  if (point < 0x20) return false;
+  // DEL, then the C1 controls.
+  if (point === 0x7f) return false;
+  if (point >= 0x80 && point <= 0x9f) return false;
+  return !(point >= 0xd800 && point <= 0xdfff);
 }
 
 /** What to draw for one face, so the row demonstrates the file it names. */
