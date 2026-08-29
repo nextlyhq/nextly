@@ -1867,11 +1867,21 @@ export class CollectionBulkService extends BaseService {
       // The note names the failing item from the accounting the loop
       // already recorded — its index and its public per-item message —
       // rather than introspecting the abort, whose cause may hold
-      // operational detail the result must not widen.
-      const firstFailure = state.errors[0];
+      // operational detail the result must not widen. Items process in
+      // order, so the ABORTING failure is the highest-index record; an
+      // earlier soft failure the batch continued past must not stand in
+      // for it. The first record at that index is the worker's public
+      // reason; later ones are the thrown wrapper's own accounting.
+      const firstRecord = state.errors[0];
+      let aborting = firstRecord;
+      if (aborting !== undefined) {
+        for (const e of state.errors) {
+          if (e.index > aborting.index) aborting = e;
+        }
+      }
       const abortDetail =
-        firstFailure !== undefined
-          ? `Entry at index ${firstFailure.index} failed: ${firstFailure.error}`
+        aborting !== undefined
+          ? `Entry at index ${aborting.index} failed: ${aborting.error}`
           : batchErrorMessage(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${abortDetail}`;
       rebuildRolledBackDeleteErrors(state, ids, rollbackNote);

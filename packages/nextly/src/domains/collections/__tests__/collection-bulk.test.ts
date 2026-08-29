@@ -1147,5 +1147,55 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         });
       });
     }
+
+    it("the delete rollback note names the failure that aborted the batch, not an earlier soft one", async () => {
+      // Three ids, because the note only fills ids the loop never recorded:
+      // item 0 succeeds, item 1's returned failure is soft-recorded while
+      // the batch continues, and item 2's throw is what aborts and rolls
+      // back — so the note id 0 reads must name item 2, not item 1.
+      const script: Array<
+        CollectionServiceResult<{ deleted: boolean }> | Error
+      > = [
+        {
+          success: true,
+          statusCode: 200,
+          message: "ok",
+          data: { deleted: true },
+        },
+        {
+          success: false,
+          statusCode: 422,
+          message: "early soft failure",
+          data: null,
+        },
+        new Error("late hard failure"),
+      ];
+      let calls = 0;
+      vi.spyOn(
+        CollectionMutationService.prototype,
+        "deleteSingleEntryInTransaction"
+      ).mockImplementation(async () => {
+        const outcome = script[calls];
+        calls += 1;
+        if (outcome instanceof Error) throw outcome;
+        return outcome;
+      });
+
+      const result = await service.deleteEntries({ collectionName: "posts" }, [
+        "id-0",
+        "id-1",
+        "id-2",
+      ]);
+
+      expect(result.failed).toBe(3);
+      expect(result.errors[1]).toMatchObject({
+        index: 1,
+        error: "early soft failure",
+      });
+      expect(result.errors[2].error).toContain("An unexpected error occurred.");
+      expect(result.errors[0].error).toContain("Batch rolled back");
+      expect(result.errors[0].error).toContain("Entry at index 2 failed");
+      expect(result.errors[0].error).not.toContain("index 1");
+    });
   });
 });
