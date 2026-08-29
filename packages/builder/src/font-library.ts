@@ -18,40 +18,14 @@
  * @module font-library
  */
 import {
-  isUsableFamilyList,
-  splitFamilyList,
-  type FamilyPart,
+  readFamilyList,
+  validateFontFace,
+  type FamilyListKind,
   type FontFaceDef,
+  type ReadFamilyPart,
   type SiteToken,
   type SiteTokenSet,
 } from "@nextlyhq/blocks-engine";
-
-/**
- * Families every browser resolves without a face being loaded.
- *
- * The CSS generic families plus the `ui-*` system aliases. A stack ending in
- * one of these always draws something, which is why a stack that ends in a
- * generic is the shape to steer an author toward rather than away from.
- *
- * Held lowercase and compared lowercase: CSS family matching is
- * case-insensitive for these keywords, and an author who typed `Sans-Serif`
- * meant the generic.
- */
-const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
-  "serif",
-  "sans-serif",
-  "monospace",
-  "cursive",
-  "fantasy",
-  "system-ui",
-  "ui-serif",
-  "ui-sans-serif",
-  "ui-monospace",
-  "ui-rounded",
-  "math",
-  "emoji",
-  "fangsong",
-]);
 
 /**
  * Where a family's glyphs would come from.
@@ -61,8 +35,13 @@ const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
  * device — `Georgia` and `Helvetica` are the ordinary cases — so declaring it
  * absent would be a claim about a machine this code cannot see. What IS true is
  * that the site does not provide it, and that is what the word says.
+ *
+ * `dynamic` is a `var()` whose value only exists at render. Reporting it as
+ * provided or not would be a guess either way, and the guess that reads worst
+ * is the confident one: a host wiring a font through a custom property, which
+ * is how `next/font` exposes one, would be told their token is broken.
  */
-export type FamilySource = "hosted" | "generic" | "not-provided";
+export type FamilySource = "hosted" | "generic" | "dynamic" | "not-provided";
 
 /** One family from a stack, and where it would come from. */
 export interface FamilyReading {
@@ -73,96 +52,131 @@ export interface FamilyReading {
 
 /** A whole `font-family` value, read against the faces the site loads. */
 export interface StackReading {
-  /** Each family in the author's order. Empty when the value is unusable. */
+  /**
+   * How CSS reads the value, from the engine's own classification.
+   *
+   * Four states rather than usable/unusable, because the browser has four
+   * answers and collapsing them misdescribes two: a `var()` stack is read
+   * perfectly and cannot be resolved here, and a lone `inherit` is valid while
+   * naming no family at all.
+   */
+  readonly kind: FamilyListKind;
+  /** Each family in the author's order. Empty unless `kind` names families. */
   readonly families: readonly FamilyReading[];
   /**
    * The author's FIRST choice, which is the one they were expressing.
    *
-   * Separated from the rest because a stack is a fallback chain and every
-   * entry after the first is a concession. An author who wrote `Brand, serif`
-   * chose `Brand`; reporting the stack as fine because `serif` resolves would
-   * answer a question they did not ask.
+   * Separated from the rest because a stack is a fallback chain and every entry
+   * after the first is a concession. An author who wrote `Brand, serif` chose
+   * `Brand`; reporting the stack as fine because `serif` resolves would answer
+   * a question they did not ask.
    */
   readonly firstChoice: FamilyReading | undefined;
   /**
+   * Whether a family AFTER the first exists to fall back to.
+   *
+   * What separates "readers see the next family in the list" from "readers see
+   * the browser's default", which are different sentences and only one of them
+   * is true of a single-family stack.
+   */
+  readonly hasFallback: boolean;
+  /**
    * Whether the site guarantees SOMETHING renders.
    *
-   * True when any family in the stack is generic or hosted. A stack of named
-   * families alone can still render — every one of them may be installed — so
-   * this is a floor, not a prediction.
+   * True when any family is generic or hosted. A stack of named families alone
+   * can still render — every one may be installed — so this is a floor, not a
+   * prediction.
    */
   readonly guaranteed: boolean;
-  /**
-   * Whether CSS accepts the value as written.
-   *
-   * A stack carrying `var(--x)`, a bare CSS-wide keyword, or an item the
-   * grammar rejects is not a family list the browser will read, so its families
-   * are not reported: naming them would describe a resolution that never
-   * happens.
-   */
-  readonly usable: boolean;
 }
 
-/** The families a set of faces provides, lowercased for comparison. */
+/**
+ * The families a set of faces provides, lowercased for comparison.
+ *
+ * Only faces the compiler will actually EMIT. `emitFontFaces` drops a face
+ * whose `src` is empty, remote, or carries an unusable descriptor, and the
+ * stored tier deliberately keeps those shaped-but-invalid faces so their issues
+ * can be reported. Counting them here would mark a token healthy against a
+ * `@font-face` the site sheet does not contain.
+ */
 function hostedFamilies(faces: readonly FontFaceDef[]): ReadonlySet<string> {
-  return new Set(faces.map(face => face.family.trim().toLowerCase()));
+  return new Set(
+    faces
+      .filter(face => validateFontFace(face, "fonts").length === 0)
+      .map(face => face.family.trim().toLowerCase())
+  );
 }
 
-function sourceOf(part: FamilyPart, hosted: ReadonlySet<string>): FamilySource {
-  const key = part.name.trim().toLowerCase();
-  // Hosted first: a site may load a face named `serif`, and the face it loads
-  // is what renders. Asking the generic set first would report the site's own
-  // font as a browser default.
-  if (hosted.has(key)) return "hosted";
-  // A QUOTED generic is a family name, not the keyword — `font-family: "serif"`
-  // asks for a font called serif. The same distinction `familyToDtcg` makes.
-  if (!part.quoted && GENERIC_FAMILIES.has(key)) return "generic";
-  return "not-provided";
+function sourceOf(
+  entry: ReadFamilyPart,
+  hosted: ReadonlySet<string>
+): FamilySource {
+  if (entry.kind === "dynamic") return "dynamic";
+  // Generic BEFORE hosted, which is the opposite of what it seems it should be.
+  // The engine emits every face family quoted — `font-family:"serif"` — and an
+  // unquoted `serif` in a stack is the CSS keyword, which no `@font-face` can
+  // claim. So a site loading a face it called `serif` still gets the browser
+  // default from a bare `serif`, and only a quoted value reaches its file.
+  if (entry.kind === "generic") return "generic";
+  const key = entry.part.name.trim().toLowerCase();
+  return hosted.has(key) ? "hosted" : "not-provided";
 }
 
 /**
  * Read one `font-family` value against the faces this site loads.
  *
- * The parser is the engine's, reached through its published export rather than
- * rewritten here: a family list is quoting, comma and escape rules together,
- * and `"ACME, Inc", serif` is two families rather than three. A second parser
- * would agree on the easy cases and diverge exactly where a site's real font
- * name is unusual.
+ * The split and the classification are the engine's, asked through one call.
+ * A family list is quoting, comma, escape and identifier rules together —
+ * `"ACME, Inc", serif` is two families rather than three, and `Brand,` is a
+ * parse error the browser drops the declaration for. A second reading of that
+ * grammar here would agree on the easy values and diverge on the ones a site's
+ * real font name produces.
  */
 export function readStack(
   value: string,
   faces: readonly FontFaceDef[]
 ): StackReading {
-  const parts = splitFamilyList(value);
-  // The engine's own composite, not `part.valid` alone: quoting is half the
-  // grammar, and the half left out is what accepts `var(--x)` as a font name.
-  const usable = isUsableFamilyList(parts);
-  if (!usable) {
+  const reading = readFamilyList(value);
+  if (reading.kind !== "families" && reading.kind !== "dynamic") {
     return {
+      kind: reading.kind,
       families: [],
       firstChoice: undefined,
+      hasFallback: false,
       guaranteed: false,
-      usable: false,
     };
   }
   const hosted = hostedFamilies(faces);
-  const families = parts.map(part => ({
-    family: part.name,
-    source: sourceOf(part, hosted),
+  const families = reading.parts.map(entry => ({
+    family: entry.part.name,
+    source: sourceOf(entry, hosted),
   }));
   return {
+    kind: reading.kind,
     families,
     firstChoice: families[0],
+    hasFallback: families.length > 1,
     guaranteed: families.some(f => f.source !== "not-provided"),
-    usable: true,
   };
 }
+
+/** Which value of a token is being read. */
+export type TokenMode = "light" | "dark";
 
 /** A `fontFamily` token, read against the faces the site loads. */
 export interface FontTokenRow {
   readonly token: SiteToken;
-  /** The light-mode value's reading. Dark is not a separate typeface tier. */
+  /** The light value's reading. Always present: `values.light` is required. */
   readonly reading: StackReading;
+  /**
+   * The dark value's reading, when the token defines one.
+   *
+   * Read because the emitter applies it: a token whose light stack is hosted
+   * and whose dark stack is not would otherwise report an all-clear while every
+   * dark-mode reader gets a substitution. Absent when the token states no dark
+   * value, which is not the same as stating the same value twice.
+   */
+  readonly darkReading: StackReading | undefined;
 }
 
 /**
@@ -179,23 +193,80 @@ export function fontTokenRows(
   const all = tokens?.tokens ?? [];
   return all
     .filter(token => token.kind === "fontFamily")
-    .map(token => ({ token, reading: readStack(token.values.light, faces) }));
+    .map(token => ({
+      token,
+      reading: readStack(token.values.light, faces),
+      darkReading:
+        token.values.dark === undefined
+          ? undefined
+          : readStack(token.values.dark, faces),
+    }));
+}
+
+/** One thing worth saying about one mode of one token. */
+export interface TokenNote {
+  readonly mode: TokenMode;
+  readonly text: string;
+}
+
+/** Whether a single reading is one an author should look at. */
+function needsAttention(reading: StackReading): boolean {
+  if (reading.kind === "invalid") return true;
+  // A lone CSS-wide keyword is a deliberate, working value — `inherit` takes
+  // the parent's font — so it names no typeface and needs no comment.
+  if (reading.kind === "keyword") return false;
+  return reading.firstChoice?.source === "not-provided";
+}
+
+/** What to say about one reading, or nothing when it is working as written. */
+function noteFor(reading: StackReading, value: string): string | undefined {
+  if (reading.kind === "invalid") {
+    return `"${value}" is not a font-family value a browser will read, so this token applies nothing.`;
+  }
+  if (reading.kind === "keyword") return undefined;
+  const first = reading.firstChoice;
+  if (first?.source !== "not-provided") return undefined;
+  // Branching on whether a later family EXISTS. Telling an author of a
+  // single-family stack that readers "see the next family in the list" names an
+  // entry that is not there, and points them at a fallback they never wrote.
+  const consequence = reading.hasFallback
+    ? "Readers without it installed see the next family in the list instead."
+    : "Readers without it installed see the browser's default typeface instead.";
+  return `${first.family} is the typeface this token asks for first, and this site provides no font file for it. ${consequence}`;
 }
 
 /**
- * The rows worth an author's attention, and nothing else.
+ * Everything worth saying about one token, one entry per affected mode.
  *
- * A row is drawn to attention when its FIRST family is not provided by this
- * site — that is the choice the author expressed, and the one that silently
- * does not happen. A stack whose first family is hosted or generic is working
- * as written, whatever its later entries say.
+ * A list rather than a string because a token can be sound in light and not in
+ * dark, and one sentence for both would have to name a mode it did not check.
+ */
+export function tokenNotes(row: FontTokenRow): readonly TokenNote[] {
+  const notes: TokenNote[] = [];
+  const light = noteFor(row.reading, row.token.values.light);
+  if (light !== undefined) notes.push({ mode: "light", text: light });
+  const dark = row.token.values.dark;
+  if (row.darkReading !== undefined && dark !== undefined) {
+    const darkNote = noteFor(row.darkReading, dark);
+    if (darkNote !== undefined) notes.push({ mode: "dark", text: darkNote });
+  }
+  return notes;
+}
+
+/**
+ * The rows worth an author's attention, in EITHER mode.
+ *
+ * A row is drawn to attention when a mode's value cannot be read at all, or
+ * when its FIRST family is one this site does not provide — that is the choice
+ * the author expressed, and the one that silently does not happen.
  */
 export function rowsNeedingAttention(
   rows: readonly FontTokenRow[]
 ): FontTokenRow[] {
   return rows.filter(
     row =>
-      !row.reading.usable || row.reading.firstChoice?.source === "not-provided"
+      needsAttention(row.reading) ||
+      (row.darkReading !== undefined && needsAttention(row.darkReading))
   );
 }
 
@@ -204,10 +275,14 @@ export function rowsNeedingAttention(
  *
  * Wording lives here rather than in the panel for the reason
  * {@link class-library.usageSummary} does: the sentence makes a claim about
- * evidence, and a claim is a rule. A panel composing it inline is a second
- * place for that judgement to drift — and this one has to keep saying
- * "provides no font file for" rather than "missing", which is exactly the kind
- * of distinction that erodes when it lives in JSX.
+ * evidence, and a claim is a rule. It also has to keep saying "provides no font
+ * file for" rather than "missing", which is exactly the kind of distinction
+ * that erodes when it lives in JSX.
+ *
+ * The two failing shapes are counted SEPARATELY. A value the browser will not
+ * read applies nothing at all, while a stack whose first family is unprovided
+ * applies the next one — different outcomes with different remedies, and one
+ * count covering both sends an author to fix the wrong thing.
  *
  * Stated even at zero. An author who reads a count knows the check ran, and
  * silence is also what a panel that never checked would show.
@@ -223,24 +298,20 @@ export function tokenSummary(
     const noun = rows.length === 1 ? "token" : "tokens";
     return `${rows.length} typeface ${noun}, each asking first for a family this site provides.`;
   }
-  return `${attention.length} of ${rows.length} ask first for a typeface this site provides no file for.`;
-}
-
-/**
- * What to say about one token, or nothing when it needs no comment.
- *
- * Returns `undefined` for a row that is working as written, so the caller has a
- * value to branch on rather than a condition to re-derive. The two failing
- * shapes are genuinely different — an unusable value applies nothing at all,
- * while a first choice this site does not provide applies the NEXT family — and
- * collapsing them into one sentence would describe the wrong outcome for one.
- */
-export function tokenNote(row: FontTokenRow): string | undefined {
-  const { token, reading } = row;
-  if (!reading.usable) {
-    return `"${token.values.light}" is not a font-family value a browser will read, so this token applies nothing.`;
+  const unreadable = attention.filter(
+    row => row.reading.kind === "invalid" || row.darkReading?.kind === "invalid"
+  ).length;
+  const unprovided = attention.length - unreadable;
+  const parts: string[] = [];
+  if (unprovided > 0) {
+    parts.push(
+      `${unprovided} ask first for a typeface this site provides no file for`
+    );
   }
-  const first = reading.firstChoice;
-  if (first?.source !== "not-provided") return undefined;
-  return `${first.family} is the typeface this token asks for first, and this site provides no font file for it. Readers without it installed see the next family in the list instead.`;
+  if (unreadable > 0) {
+    parts.push(
+      `${unreadable} hold a value no browser will read, so they apply nothing`
+    );
+  }
+  return `Of ${rows.length} typeface tokens, ${parts.join("; ")}.`;
 }

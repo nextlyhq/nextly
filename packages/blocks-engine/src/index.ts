@@ -369,10 +369,18 @@ export {
   dtcgToTokens,
   isKind,
   tokensToDtcg,
-  isUsableFamilyList,
+  familyPartKind,
+  readFamilyList,
   splitFamilyList,
 } from "./style/dtcg";
-export type { DtcgNode, FamilyPart } from "./style/dtcg";
+export type {
+  DtcgNode,
+  FamilyListKind,
+  FamilyListReading,
+  FamilyPart,
+  FamilyPartKind,
+  ReadFamilyPart,
+} from "./style/dtcg";
 export {
   checkContrast,
   compositeOver,

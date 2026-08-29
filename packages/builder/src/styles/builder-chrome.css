@@ -2139,3 +2139,126 @@
   outline: 2px solid var(--nx-ring);
   outline-offset: 2px;
 }
+
+/* --- fonts panel ----------------------------------------------------------
+   Token-driven throughout, per the admin styling rule: every colour here is an
+   `--nx-*` custom property so the panel works in both modes without a second
+   palette. */
+
+/* One stacking rule for every column in the panel, varying only the gap. Four
+   near-identical flex blocks is the duplication the CSS audit names, and the
+   copies drift: a spacing change made in three of them looks done. */
+.nx-fonts,
+.nx-fonts__faces,
+.nx-fonts__tokens,
+.nx-fonts__face,
+.nx-fonts__token,
+.nx-fonts__families {
+  display: flex;
+  flex-direction: column;
+}
+
+.nx-fonts {
+  gap: 1rem;
+}
+
+.nx-fonts__faces,
+.nx-fonts__tokens {
+  gap: 0.5rem;
+}
+
+.nx-fonts__face,
+.nx-fonts__token {
+  gap: 0.25rem;
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+  padding: 0.5rem;
+}
+
+.nx-fonts__families {
+  gap: 0.125rem;
+}
+
+.nx-fonts__faces,
+.nx-fonts__tokens,
+.nx-fonts__families {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nx-fonts__heading {
+  margin: 0 0 0.375rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-fonts__face-name,
+.nx-fonts__token-name,
+.nx-fonts__family-name {
+  font-family: var(--font-mono, monospace);
+}
+
+.nx-fonts__face-name,
+.nx-fonts__token-name {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+}
+
+/* The specimen is the affordance, so it is given room and never wraps into the
+   chrome around it. `clip` rather than `ellipsis`: a truncated typeface still
+   shows its letterforms, and an ellipsis would sit in the panel's font rather
+   than the specimen's, which is the one place a substitution must not appear. */
+.nx-fonts__specimen {
+  display: block;
+  font-size: var(--text-lg);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__family {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.nx-fonts__family,
+.nx-fonts__family-note,
+.nx-fonts__note {
+  font-size: var(--text-xs);
+}
+
+.nx-fonts__family-note,
+.nx-fonts__note {
+  color: var(--nx-muted-foreground);
+  margin: 0;
+}
+
+/* Attention is carried by a border and the foreground colour rather than by
+   colour alone, so it survives a reader who cannot separate the two. */
+.nx-fonts__note--attention {
+  border-inline-start: 2px solid var(--nx-ring);
+  padding-inline-start: 0.5rem;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__jump {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--nx-ring);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.nx-fonts__jump:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}

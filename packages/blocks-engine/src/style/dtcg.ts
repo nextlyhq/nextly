@@ -374,28 +374,25 @@ function colorToDtcg(css: string): DtcgNode | undefined {
 
 /** A family list as one string or an array, which is what the format takes. */
 function familyToDtcg(css: string): string | string[] | undefined {
-  const parts = splitFamilyList(css);
-  if (parts.length === 0) return undefined;
-  // A family list holding `var(--brand-font)` has no DTCG form: the format
-  // stores NAMES, so exporting the text would describe a font literally called
-  // `var(--brand-font)` to every tool that reads the standard value rather than
-  // this vendor's extension. Reported as unrepresentable instead, which is the
-  // same answer a `clamp()` dimension already gets.
-  if (parts.some(part => !part.valid)) return undefined;
-  // A bare CSS-wide keyword is not a family name: `font-family: inherit` takes
-  // the parent's font, so exporting `"inherit"` as a `$value` would describe a
-  // font by that name to any tool reading the standard value. Quoted, it IS a
-  // name somebody chose.
-  if (
-    parts.some(
-      part =>
-        !part.quoted && FAMILY_KEYWORD_NOT_A_NAME.has(part.name.toLowerCase())
-    )
-  ) {
-    return undefined;
-  }
-  if (!isUsableFamilyList(parts)) return undefined;
-  return parts.length === 1 ? parts[0]?.name : parts.map(part => part.name);
+  const reading = readFamilyList(css);
+  // The format stores NAMES, and three of the four readings are not names.
+  //
+  // `dynamic` — a list holding `var(--brand-font)` has no DTCG form: exporting
+  // the text would describe a font literally called `var(--brand-font)` to
+  // every tool reading the standard value. The same answer a `clamp()`
+  // dimension already gets, and the reason this asks for the READING rather
+  // than a usability boolean: the browser reads that value fine, so a shared
+  // yes/no would have to call it either broken or exportable, and it is
+  // neither.
+  //
+  // `keyword` — `font-family: inherit` takes the parent's font, so exporting
+  // `"inherit"` would name a font nobody has. Quoted, it IS a name somebody
+  // chose, which `familyPartKind` already distinguishes.
+  //
+  // `invalid` — a value no browser reads was never a stack this site rendered.
+  if (reading.kind !== "families") return undefined;
+  const names = reading.parts.map(p => p.part.name);
+  return names.length === 1 ? names[0] : names;
 }
 
 /**
@@ -460,7 +457,12 @@ export function splitFamilyList(css: string): FamilyPart[] {
   }
   parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
 
-  return parts.filter(part => part.name !== "");
+  // Empty items are KEPT, marked invalid by `finishPart`. `Brand,` and
+  // `Brand,, serif` are parse errors — CSS reads `<family-name>#`, which admits
+  // no empty item — and a browser drops the whole declaration. Filtering them
+  // out here reported `Brand,` as the single family `Brand`, which is a value
+  // the page never rendered.
+  return parts;
 }
 
 /** Words that are keywords rather than family names when written bare. */
@@ -497,28 +499,115 @@ function trimCssWhitespace(text: string): string {
 }
 
 /**
- * Whether a split family list is one CSS will read.
+ * The CSS generic families, plus the `ui-*` system aliases.
  *
- * `FamilyPart.valid` answers the QUOTING rule alone — one string per item, and
- * nothing outside it. That is half the grammar. `<family-name>` is one string
- * OR a run of identifiers, so an unquoted item must also be an identifier run
- * carrying no parentheses: `10px, serif` tokenizes as a dimension and
- * `var(--x)` as a function, and a browser drops the whole declaration for
- * either.
- *
- * Exported and shared rather than repeated at each caller, because both halves
- * have to be asked together. Asking only `valid` accepts `var(--x)` as a font
- * called `var(--x)`, which is the answer a caller reading one half gets — and
- * it looks like a family until something tries to render it.
+ * Unquoted, these are KEYWORDS rather than names: `font-family: serif` asks for
+ * the browser's serif default, and no `@font-face` can claim it — the engine
+ * emits every face family quoted, so only a quoted value can name one.
  */
-export function isUsableFamilyList(parts: readonly FamilyPart[]): boolean {
-  if (parts.length === 0) return false;
-  return parts.every(
-    part =>
-      part.valid &&
-      (part.quoted ||
-        (UNQUOTED_FAMILY.test(part.raw) && !/[()]/.test(part.name)))
-  );
+const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace",
+  "ui-rounded",
+  "math",
+  "emoji",
+  "fangsong",
+]);
+
+/**
+ * How CSS reads ONE item of a family list.
+ *
+ * Five outcomes rather than a boolean, because the callers ask different
+ * questions of the same text and a shared yes/no answers neither well. The DTCG
+ * export needs to know whether an item is a NAME it can write down; a surface
+ * reporting on a site needs to know whether the browser will resolve it, and
+ * what to say when it cannot.
+ *
+ * - `name` — a real family: a quoted string, or an unquoted identifier run.
+ * - `generic` — an unquoted generic keyword. Always resolves, names no file.
+ * - `dynamic` — carries a `var()` substitution. Valid CSS whose value is not
+ *   knowable from the text, which is a THIRD state and not a failure.
+ * - `keyword` — an unquoted CSS-wide keyword. Valid alone, and a parse error
+ *   in a list.
+ * - `invalid` — the grammar rejects it: `10px`, `"Bad" "Name"`, or an empty
+ *   item left by a stray comma.
+ */
+export type FamilyPartKind =
+  | "name"
+  | "generic"
+  | "dynamic"
+  | "keyword"
+  | "invalid";
+
+/** Classify one family-list item. */
+export function familyPartKind(part: FamilyPart): FamilyPartKind {
+  if (!part.valid) return "invalid";
+  if (part.quoted) return "name";
+  const lower = part.name.toLowerCase();
+  // `var()` is checked before the grammar, because the grammar rejects the
+  // parentheses and would report a valid, common value as broken.
+  if (/\bvar\(/i.test(part.name)) return "dynamic";
+  if (FAMILY_KEYWORD_NOT_A_NAME.has(lower)) return "keyword";
+  if (GENERIC_FAMILIES.has(lower)) return "generic";
+  if (!UNQUOTED_FAMILY.test(part.raw) || /[()]/.test(part.name))
+    return "invalid";
+  return "name";
+}
+
+/**
+ * How CSS reads a WHOLE family list.
+ *
+ * - `families` — the browser reads it and every item is resolvable from the text.
+ * - `dynamic` — the browser reads it, and at least one item is a `var()` whose
+ *   value this code cannot see. Reportable, but not as a fault.
+ * - `keyword` — a lone CSS-wide keyword. Valid, and names no family at all, so
+ *   there is nothing to resolve rather than something that failed to.
+ * - `invalid` — the browser drops the declaration.
+ */
+export type FamilyListKind = "families" | "dynamic" | "keyword" | "invalid";
+
+/** One classified item of a family list. */
+export interface ReadFamilyPart {
+  readonly part: FamilyPart;
+  readonly kind: FamilyPartKind;
+}
+
+/** A family list, split and classified in one call. */
+export interface FamilyListReading {
+  readonly kind: FamilyListKind;
+  readonly parts: readonly ReadFamilyPart[];
+}
+
+/**
+ * Split a `font-family` value and say how CSS reads it.
+ *
+ * The one place that judgement lives. `familyToDtcg` and any surface reporting
+ * on a site ask this and then apply their own narrower rule to the answer,
+ * rather than each re-deriving the grammar — two derivations of one question
+ * agree on the day they are written and diverge on the values that matter.
+ */
+export function readFamilyList(css: string): FamilyListReading {
+  const split = splitFamilyList(css);
+  const parts = split.map(part => ({ part, kind: familyPartKind(part) }));
+  if (parts.length === 0) return { kind: "invalid", parts };
+  if (parts.some(p => p.kind === "invalid")) return { kind: "invalid", parts };
+  const keywords = parts.filter(p => p.kind === "keyword");
+  if (keywords.length > 0) {
+    // A CSS-wide keyword stands for the WHOLE value. `inherit, serif` is a
+    // parse error, not a stack with a fallback.
+    return parts.length === 1
+      ? { kind: "keyword", parts }
+      : { kind: "invalid", parts };
+  }
+  if (parts.some(p => p.kind === "dynamic")) return { kind: "dynamic", parts };
+  return { kind: "families", parts };
 }
 
 /** One family from a list, how it was written, and whether CSS accepts it. */
@@ -546,9 +635,9 @@ function finishPart(
   raw: string
 ): FamilyPart {
   const name = current.trim();
-  const valid = quoted
-    ? strings === 1 && outsideQuotes.trim() === ""
-    : strings === 0;
+  const valid =
+    name !== "" &&
+    (quoted ? strings === 1 && outsideQuotes.trim() === "" : strings === 0);
   // The raw spelling is kept because the identifier-run check has to read what
   // was WRITTEN. `\\31 0px` is a legal identifier naming the family `10px`;
   // tested after decoding it looks like a dimension and a valid token is lost.

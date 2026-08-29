@@ -15,7 +15,7 @@ import {
   fontTokenRows,
   readStack,
   rowsNeedingAttention,
-  tokenNote,
+  tokenNotes,
   tokenSummary,
 } from "./font-library";
 
@@ -43,10 +43,17 @@ describe("reading a font-family value against the faces a site loads", () => {
     ]);
   });
 
-  it("prefers a HOSTED face over the generic of the same name", () => {
-    // A site may load a face called `serif`. That face is what renders, so
-    // reporting the browser default would name the wrong source.
+  it("keeps a bare generic generic even when a face claims that name", () => {
+    // The engine emits every face family QUOTED — `font-family:"serif"` — and
+    // an unquoted `serif` in a stack is the CSS keyword, which no `@font-face`
+    // can claim. So a site loading a face it called `serif` still gets the
+    // browser default from a bare `serif`, and only a quoted value reaches the
+    // file. Reporting it as hosted would tell an author their file is in use
+    // when the page never loads it.
     expect(readStack("serif", [face("serif")]).families).toEqual([
+      { family: "serif", source: "generic" },
+    ]);
+    expect(readStack('"serif"', [face("serif")]).families).toEqual([
       { family: "serif", source: "hosted" },
     ]);
   });
@@ -82,16 +89,63 @@ describe("reading a font-family value against the faces a site loads", () => {
   it("does not guarantee a stack of named families alone", () => {
     const reading = readStack("Brand, Helvetica", []);
     expect(reading.guaranteed).toBe(false);
-    expect(reading.usable).toBe(true);
+    expect(reading.kind).toBe("families");
   });
 
-  it("reports an unusable value as unusable and names no families", () => {
-    // A stack carrying `var()` is not a family list the browser reads. Naming
-    // its families would describe a resolution that never happens.
-    const reading = readStack("var(--brand-font)", [face("Brand")]);
-    expect(reading.usable).toBe(false);
+  it("reports a value no browser reads as invalid, and names no families", () => {
+    // `10px` tokenizes as a dimension, so the browser drops the declaration.
+    // Naming its families would describe a resolution that never happens.
+    const reading = readStack("10px, serif", [face("Brand")]);
+    expect(reading.kind).toBe("invalid");
     expect(reading.families).toEqual([]);
     expect(reading.firstChoice).toBeUndefined();
+  });
+
+  it("reads a var() stack as DYNAMIC, not as broken", () => {
+    // The regression this file exists to stop. `var(--font-geist), sans-serif`
+    // is valid, common CSS — it is how a host-managed font is wired — and
+    // calling it unreadable tells an author their working token applies
+    // nothing.
+    const reading = readStack("var(--font-geist), sans-serif", []);
+    expect(reading.kind).toBe("dynamic");
+    expect(reading.families[0]).toEqual({
+      family: "var(--font-geist)",
+      source: "dynamic",
+    });
+    expect(reading.guaranteed).toBe(true);
+  });
+
+  it("reads a lone CSS-wide keyword as a keyword, and one in a LIST as invalid", () => {
+    // `inherit` is a working value naming no family; `inherit, serif` is a
+    // parse error. Treating the first as a font called "inherit" invents a
+    // problem, and the second as a stack invents a fallback.
+    expect(readStack("inherit", []).kind).toBe("keyword");
+    expect(readStack("inherit, serif", []).kind).toBe("invalid");
+  });
+
+  it("refuses a list with an empty item, however it was written", () => {
+    // A stray comma is a parse error the browser drops the whole declaration
+    // for. Discarding the empty item reported `Brand,` as the family `Brand` —
+    // a value the page never rendered.
+    for (const value of ["Brand,", ", Brand", "Brand,, serif"]) {
+      expect(readStack(value, [face("Brand")]).kind).toBe("invalid");
+    }
+  });
+
+  it("counts only faces the compiler will actually emit", () => {
+    // A remote src is refused by `validateFontFace`, so no `@font-face` reaches
+    // the sheet. Counting it as hosted marks a token healthy against a file the
+    // site never loads.
+    const remote: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "https://cdn.example.com/brand.woff2", format: "woff2" }],
+    };
+    expect(readStack("Brand", [remote]).families[0]?.source).toBe(
+      "not-provided"
+    );
+    expect(readStack("Brand", [face("Brand")]).families[0]?.source).toBe(
+      "hosted"
+    );
   });
 });
 
@@ -132,14 +186,25 @@ describe("the rows a fonts panel draws", () => {
     expect(rowsNeedingAttention(rows)).toEqual([]);
   });
 
-  it("draws attention to an unusable value too", () => {
+  it("draws attention to a value no browser will read", () => {
     const rows = fontTokenRows(
-      { tokens: [token("brand.body", "var(--x)")] },
+      { tokens: [token("brand.body", "10px, serif")] },
       []
     );
     expect(rowsNeedingAttention(rows).map(r => r.token.name)).toEqual([
       "brand.body",
     ]);
+  });
+
+  it("does NOT draw attention to a var() stack", () => {
+    // The control for the regression: a host-managed font is wired through a
+    // custom property, and flagging it would report working configuration as
+    // broken on the most idiomatic Next.js setup there is.
+    const rows = fontTokenRows(
+      { tokens: [token("brand.body", "var(--font-geist), sans-serif")] },
+      []
+    );
+    expect(rowsNeedingAttention(rows)).toEqual([]);
   });
 });
 
@@ -148,19 +213,22 @@ describe("the sentence the panel draws", () => {
     fontTokenRows({ tokens: stacks.map((v, i) => token(`t${i}`, v)) }, faces);
 
   it("says the check ran even when nothing needs attention", () => {
-    // Silence is also what a panel that never checked would show, so a count of
-    // zero has to be stated rather than left off.
     const rows = rowsFor(["serif"]);
     expect(tokenSummary(rows, rowsNeedingAttention(rows))).toBe(
       "1 typeface token, each asking first for a family this site provides."
     );
   });
 
-  it("counts the rows needing attention against the whole set", () => {
-    const rows = rowsFor(["Brand, serif", "serif"]);
-    expect(tokenSummary(rows, rowsNeedingAttention(rows))).toBe(
-      "1 of 2 ask first for a typeface this site provides no file for."
+  it("counts UNREADABLE and UNPROVIDED separately", () => {
+    // They have different remedies. One count covering both sends an author to
+    // fix the wrong thing: an unreadable value applies nothing at all, while an
+    // unprovided first family applies the next one.
+    const rows = rowsFor(["Brand, serif", "10px, serif", "serif"]);
+    const summary = tokenSummary(rows, rowsNeedingAttention(rows));
+    expect(summary).toContain(
+      "1 ask first for a typeface this site provides no file for"
     );
+    expect(summary).toContain("1 hold a value no browser will read");
   });
 
   it("points at the Tokens panel when there is nothing to report on", () => {
@@ -168,30 +236,57 @@ describe("the sentence the panel draws", () => {
   });
 
   it("never calls a family missing or unavailable", () => {
-    // The wording rule, asserted rather than trusted to review: a family this
-    // site loads no face for may still be installed on the reader's device.
     const rows = rowsFor(["Brand, serif"]);
-    const note = tokenNote(rows[0]!) ?? "";
-    expect(note).toContain("provides no font file for it");
-    expect(note.toLowerCase()).not.toContain("missing");
-    expect(note.toLowerCase()).not.toContain("unavailable");
-    expect(
-      tokenSummary(rows, rowsNeedingAttention(rows)).toLowerCase()
-    ).not.toContain("missing");
+    const text = tokenNotes(rows[0]!)[0]?.text ?? "";
+    expect(text).toContain("provides no font file for it");
+    expect(text.toLowerCase()).not.toContain("missing");
+    expect(text.toLowerCase()).not.toContain("unavailable");
   });
 
-  it("says a DIFFERENT thing for an unusable value than for an unprovided one", () => {
-    // They are different outcomes: one applies nothing at all, the other
-    // applies the next family. One sentence for both would misdescribe one.
-    const unusable = tokenNote(rowsFor(["var(--x)"])[0]!) ?? "";
-    const unprovided = tokenNote(rowsFor(["Brand, serif"])[0]!) ?? "";
-    expect(unusable).toContain("applies nothing");
+  it("says a DIFFERENT thing for an unreadable value than an unprovided one", () => {
+    const unreadable = tokenNotes(rowsFor(["10px, serif"])[0]!)[0]?.text ?? "";
+    const unprovided = tokenNotes(rowsFor(["Brand, serif"])[0]!)[0]?.text ?? "";
+    expect(unreadable).toContain("applies nothing");
     expect(unprovided).toContain("see the next family");
-    expect(unusable).not.toBe(unprovided);
+    expect(unreadable).not.toBe(unprovided);
+  });
+
+  it("does not promise a next family when the stack has none", () => {
+    // `Brand` alone has no later entry, so telling the author readers see "the
+    // next family in the list" names something that is not there.
+    const single = tokenNotes(rowsFor(["Brand"])[0]!)[0]?.text ?? "";
+    expect(single).toContain("the browser's default typeface");
+    expect(single).not.toContain("next family in the list");
   });
 
   it("says nothing about a row that is working as written", () => {
-    expect(tokenNote(rowsFor(["serif"])[0]!)).toBeUndefined();
-    expect(tokenNote(rowsFor(["Brand"], [face("Brand")])[0]!)).toBeUndefined();
+    expect(tokenNotes(rowsFor(["serif"])[0]!)).toEqual([]);
+    expect(tokenNotes(rowsFor(['"Brand"'], [face("Brand")])[0]!)).toEqual([]);
+    // A lone CSS-wide keyword is a deliberate working value, not a fault.
+    expect(tokenNotes(rowsFor(["inherit"])[0]!)).toEqual([]);
+    // And a var() stack is readable; reporting it would be the false claim.
+    expect(tokenNotes(rowsFor(["var(--x), serif"])[0]!)).toEqual([]);
+  });
+
+  it("reads the DARK value too, and names the mode when one is declared", () => {
+    // The emitter applies `values.dark` in dark mode, so a token sound in light
+    // and unprovided in dark would otherwise report an all-clear while every
+    // dark-mode reader gets a substitution.
+    const rows = fontTokenRows(
+      {
+        tokens: [
+          {
+            name: "brand.body",
+            kind: "fontFamily",
+            values: { light: '"Brand", serif', dark: "Ghost, serif" },
+          },
+        ],
+      },
+      [face("Brand")]
+    );
+    const notes = tokenNotes(rows[0]!);
+    expect(notes.map(n => n.mode)).toEqual(["dark"]);
+    expect(notes[0]?.text).toContain("Ghost");
+    expect(rowsNeedingAttention(rows)).toHaveLength(1);
   });
 });
