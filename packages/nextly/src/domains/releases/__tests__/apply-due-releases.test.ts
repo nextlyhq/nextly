@@ -597,62 +597,67 @@ describe("applyDueReleases", () => {
     expect(result.deferred).toBe(1);
   });
 
-  it("bounds discharging by ATTEMPTS, not by successful writes", async () => {
-    // `markReleasePublished` answers `false` for a release an overlapping drain
-    // already settled. Gating the deadline on the SUCCESS count leaves it at
-    // zero, so the check never fires and every component gets its serial writes
-    // with the budget long gone.
+  it("bounds discharging of releases it did NOT apply", async () => {
+    // `plan.releaseIds` carries every due release "whether or not it contributed
+    // a winner", so a release with no due members reaches finalization having
+    // had no work done for it. A backlog of those is one serial write each, and
+    // it is what the budget is for now that applied components are exempt.
+    //
+    // Counted by ATTEMPT, not success: `markReleasePublished` answers `false`
+    // for a release an overlapping drain already settled, so gating on successes
+    // leaves the counter at zero and the check never fires.
     const marked: string[] = [];
     let tick = 0;
     const d = deps({
-      releases: [release({ id: "r1" }), release({ id: "r2" })],
-      members: [
-        member({ id: "a", releaseId: "r1", entryId: "e1" }),
-        member({ id: "b", releaseId: "r2", entryId: "e2" }),
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "empty1" }),
+        release({ id: "empty2" }),
+        release({ id: "empty3" }),
       ],
+      // Only r1 has a due member; the rest contribute no action at all.
+      members: [member({ id: "a", releaseId: "r1", entryId: "e1" })],
       marked,
       markRefuses: true,
     });
     await applyDueReleases({
       ...d,
       now: () => new Date(NOW.getTime() + tick++ * 1000),
-      deadline: new Date(NOW.getTime() + 2500),
+      deadline: new Date(NOW.getTime() + 1500),
     });
 
-    expect(marked).toEqual(["r1"]);
+    // r1 was applied so it is discharged regardless; the empty ones are bounded.
+    expect(marked).toContain("r1");
+    expect(marked.length).toBeLessThan(4);
   });
 
-  it("discharges a whole COMPONENT or none of it", async () => {
-    // r1 and r2 share document e1, so they are ONE component the planner says
-    // must settle together; r3 is its own. Splitting the pair is the reversal
-    // the planner describes — the later winner marked published while the
-    // earlier stays scheduled, so the next tick makes the earlier the winner and
-    // republishes what was correctly withdrawn.
+  it("ALWAYS discharges a component it applied, even past the deadline", async () => {
+    // r1 and r2 share document e1, so they are one component, and this pass
+    // performs its content mutation. Leaving them scheduled because the clock
+    // ran out makes the NEXT tick plan and perform that mutation again —
+    // rerunning hooks and appending outbox events for a write that already
+    // landed — while `deferred` reports zero, because nothing was skipped. A
+    // truncated pass would look clean and do the expensive half twice.
     //
-    // The deadline falls after the first component is discharged, so the second
-    // is left for the next pass — the state it was already in.
+    // Discharging is one write per release, so finishing what was applied can
+    // overrun by that much and no more.
     const marked: string[] = [];
     let tick = 0;
     const d = deps({
-      releases: [
-        release({ id: "r1" }),
-        release({ id: "r2" }),
-        release({ id: "r3" }),
-      ],
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
       members: [
         member({ id: "a", releaseId: "r1", entryId: "e1" }),
         member({ id: "b", releaseId: "r2", entryId: "e1" }),
-        member({ id: "c", releaseId: "r3", entryId: "e2" }),
       ],
       marked,
     });
     await applyDueReleases({
       ...d,
       now: () => new Date(NOW.getTime() + tick++ * 1000),
-      deadline: new Date(NOW.getTime() + 2500),
+      // Already spent before finalization begins.
+      deadline: new Date(NOW.getTime() - 60_000),
     });
 
-    // BOTH members of the first component, never one of them.
     expect(marked).toEqual(["r1", "r2"]);
   });
 

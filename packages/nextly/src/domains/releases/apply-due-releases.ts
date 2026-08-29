@@ -232,7 +232,11 @@ export async function applyDueReleases(
     now: at,
   });
 
-  const { outcomes, unfinished } = await applyWithinBudget(deps, plan, now);
+  const { outcomes, unfinished, applied } = await applyWithinBudget(
+    deps,
+    plan,
+    now
+  );
 
   // A release is discharged only when nothing attributed to it failed — AND
   // nothing failed in any release it shares a document with. Holding the whole
@@ -253,7 +257,13 @@ export async function applyDueReleases(
     }
   }
 
-  const published = await dischargeSettledComponents(deps, plan, heldOpen, now);
+  const published = await dischargeSettledComponents(
+    deps,
+    plan,
+    heldOpen,
+    applied,
+    now
+  );
 
   const deferred = plan.actions.length - outcomes.length;
   const failed = outcomes.filter(o => o.failure !== null).length;
@@ -479,7 +489,12 @@ async function applyWithinBudget(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
   now: () => Date
-): Promise<{ outcomes: MaterialisationOutcome[]; unfinished: Set<string> }> {
+): Promise<{
+  outcomes: MaterialisationOutcome[];
+  unfinished: Set<string>;
+  /** Releases this pass performed at least one action for. */
+  applied: Set<string>;
+}> {
   const outcomes: MaterialisationOutcome[] = [];
   // Releases this pass could not finish. Kept separately from the failures the
   // caller reads, because an unattempted action leaves NO outcome — so a release
@@ -499,6 +514,7 @@ async function applyWithinBudget(
       (componentOf.get(a.releaseId) ?? 0) - (componentOf.get(b.releaseId) ?? 0)
   );
   const startedComponents = new Set<number>();
+  const applied = new Set<string>();
   for (const action of ordered) {
     const component = componentOf.get(action.releaseId) ?? -1;
     // Checked only when entering a NEW component, and never mid-component:
@@ -516,6 +532,7 @@ async function applyWithinBudget(
       continue;
     }
     startedComponents.add(component);
+    applied.add(action.releaseId);
     outcomes.push(await applyOne(deps, action));
   }
 
@@ -527,7 +544,7 @@ async function applyWithinBudget(
   // scheduled removes the winner from the next pass entirely, so the loser
   // becomes the winner for their shared document and undoes it. Holding the
   // whole overlapping set open keeps every member of that argument present
-  return { outcomes, unfinished };
+  return { outcomes, unfinished, applied };
 }
 
 /**
@@ -542,6 +559,7 @@ async function dischargeSettledComponents(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
   heldOpen: ReadonlySet<string>,
+  applied: ReadonlySet<string>,
   now: () => Date
 ): Promise<number> {
   let published = 0;
@@ -561,7 +579,20 @@ async function dischargeSettledComponents(
       id => !heldOpen.has(id) && plan.releaseIds.includes(id)
     );
     if (settleable.length === 0) continue;
+    // A component this pass APPLIED is always discharged, whatever the clock
+    // says. Its content mutations already happened; leaving it scheduled makes
+    // the next tick plan and perform them AGAIN — rerunning hooks and appending
+    // outbox events for writes that already landed — and `deferred` reports
+    // zero, because nothing was skipped. A truncated pass would look clean
+    // while doing the expensive half twice.
+    //
+    // Discharging is one write per release. Finishing what was applied can only
+    // overrun by that much, and it is the cheaper half by a wide margin; the
+    // budget therefore bounds components this pass did NOT touch, which is the
+    // backlog-of-empty-releases case it was added for.
+    const wasApplied = group.some(id => applied.has(id));
     if (
+      !wasApplied &&
       deps.deadline !== undefined &&
       finalizedComponents > 0 &&
       now().getTime() >= deps.deadline.getTime()
