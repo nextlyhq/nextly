@@ -88,6 +88,17 @@ function contractCss(): string {
   return compiled.css.split(nodeClassName("n1")).join(DOC_NODE_CLASS);
 }
 
+/** The shipped contract, read once per caller rather than pathed in three. */
+function readContract(): string {
+  return readFileSync(
+    join(
+      dirname(fileURLToPath(import.meta.url)),
+      "../../docs/override-contract.md"
+    ),
+    "utf8"
+  );
+}
+
 /**
  * What a selector weighs, as the table writes it: `ids-classes-types`.
  *
@@ -130,13 +141,7 @@ export function specificityOf(selector: string): string {
 
 /** The selector and documented weight of each table row, in document order. */
 function documentedRows(): { selector: string; specificity: string }[] {
-  const markdown = readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../docs/override-contract.md"
-    ),
-    "utf8"
-  );
+  const markdown = readContract();
   const rows: { selector: string; specificity: string }[] = [];
   for (const line of markdown.split("\n")) {
     const match =
@@ -148,15 +153,50 @@ function documentedRows(): { selector: string; specificity: string }[] {
   return rows;
 }
 
+/**
+ * Selectors the document shows in a fenced `css` example, in document order.
+ *
+ * The table is not the only place the contract makes a claim. The prose above
+ * it shows worked examples, and one promised for a long time that EVERY rule
+ * carries at least two classes — true before the default tiers existed, and
+ * flatly wrong afterwards, with a correct table sitting directly below it. A
+ * pin that reads only rows cannot see that.
+ */
+function exampleSelectors(): string[] {
+  /*
+   * Scoped to "What the builder emits", because most fences in this document
+   * are deliberately NOT ours: a site's own theme, a rule shown losing a
+   * contest, an `!important` a reader might reach for. Collecting those would
+   * demand the compiler emit `.content .card h1`, which is the opposite of what
+   * that example says.
+   */
+  const markdown = readContract();
+  const start = markdown.indexOf("## What the builder emits");
+  // A section that stopped existing would silently collect nothing, and the
+  // population assertion below is what would then fail — but say why here.
+  expect(
+    start,
+    "override-contract.md has no 'What the builder emits' section"
+  ).toBeGreaterThan(-1);
+  const rest = markdown.slice(start);
+  const end = rest.indexOf("\n---");
+  const section = end === -1 ? rest : rest.slice(0, end);
+
+  const selectors: string[] = [];
+  for (const block of section.matchAll(/```css\n([\s\S]*?)```/g)) {
+    for (const line of (block[1] ?? "").split("\n")) {
+      // A rule's opening line: a selector beginning at the page root and ending
+      // in `{`. Declarations and closing braces have no such shape.
+      const match = /^(\.nx-pb-page[^{]*)\{\s*$/.exec(line.trim());
+      if (match?.[1] !== undefined) selectors.push(match[1].trim());
+    }
+  }
+  return selectors;
+}
+
 /** The selector column of the specificity table, in document order. */
 function documentedSelectors(): string[] {
-  const markdown = readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../docs/override-contract.md"
-    ),
-    "utf8"
-  );
+  const markdown = readContract();
   const rows: string[] = [];
   for (const line of markdown.split("\n")) {
     // A table row whose second cell is a backticked selector beginning at the
@@ -167,6 +207,25 @@ function documentedSelectors(): string[] {
   return rows;
 }
 
+/**
+ * Every whole selector this compile emits.
+ *
+ * A SET of whole selectors rather than a substring search over the sheet:
+ * every documented row begins at `.nx-pb-page`, and the doubled root REPEATS
+ * that class — so `.nx-pb-page.nx-pb-page :where(h1) {` contains
+ * `.nx-pb-page :where(h1) {`, and a default that grew the doubling would be
+ * found verbatim in output that no longer emits it. That is the one regression
+ * this file was written for, so the comparison is anchored.
+ */
+function emittedSelectors(): Set<string> {
+  return new Set(
+    contractCss()
+      .split("\n")
+      .filter(line => line.includes(" {"))
+      .map(line => line.slice(0, line.indexOf(" {")).trim())
+  );
+}
+
 describe("the published override contract", () => {
   it("documents a selector the compiler actually emits, for every row", () => {
     const selectors = documentedSelectors();
@@ -174,19 +233,7 @@ describe("the published override contract", () => {
     // satisfy an empty loop, and the table would be free to say anything.
     expect(selectors.length).toBeGreaterThanOrEqual(8);
 
-    // The emitted selectors, each the whole selector rather than any part of
-    // one. A substring search over the stylesheet cannot do this: every
-    // documented row begins at `.nx-pb-page`, and the doubled root REPEATS that
-    // class — so `.nx-pb-page.nx-pb-page :where(h1) {` contains
-    // `.nx-pb-page :where(h1) {`, and a default that grew the doubling would be
-    // found verbatim in the output that no longer emits it. That is the one
-    // regression this file was written for, so the comparison is anchored.
-    const emitted = new Set(
-      contractCss()
-        .split("\n")
-        .filter(line => line.includes(" {"))
-        .map(line => line.slice(0, line.indexOf(" {")).trim())
-    );
+    const emitted = emittedSelectors();
 
     for (const selector of selectors) {
       expect(
@@ -244,6 +291,32 @@ describe("the published override contract", () => {
         `override-contract.md says \`${row.selector}\` weighs ${row.specificity}.`
       ).toBe(row.specificity);
     }
+  });
+
+  it("shows worked examples the compiler also emits, at the weights it emits", () => {
+    /*
+     * The prose is part of the contract, and it drifted where the table did
+     * not: it promised for a long time that EVERY rule carries at least two
+     * classes, with a correct table directly below saying two of them carry
+     * one. A reader who stopped at the prose planned an override that cannot
+     * win, and a pin over rows alone could not see it.
+     */
+    const examples = exampleSelectors();
+    // Population before the property. A fence that stopped being `css`, or a
+    // rule written on two lines, would empty this and satisfy the loop.
+    expect(examples.length).toBeGreaterThanOrEqual(2);
+
+    const emitted = emittedSelectors();
+    for (const selector of examples) {
+      expect(
+        emitted.has(selector),
+        `override-contract.md shows \`${selector}\`, which this compile does not emit.`
+      ).toBe(true);
+    }
+    // And the examples cover BOTH sides of the distinction they exist to draw,
+    // so one of them going stale cannot leave the pair looking complete.
+    expect(examples.some(one => one.includes(":where("))).toBe(true);
+    expect(examples.some(one => !one.includes(":where("))).toBe(true);
   });
 
   it("keeps every default tier below the doubled root, and every authored tier on it", () => {

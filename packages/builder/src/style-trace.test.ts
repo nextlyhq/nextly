@@ -135,12 +135,16 @@ describe("the cascade fetched for the panel", () => {
     );
 
     expect(rendered.css).toBe(compiled.css);
-    // The baseline is IN what they agreed on, rather than absent from both. A
-    // comparison of two sheets that each lack the tier would pass while the
+    // The baseline is IN what the two agreed on, rather than absent from both:
+    // a comparison of two sheets that each lack the tier would pass while the
     // panel explained a cascade the page does not have.
-    // The baseline is IN what they agreed on, and ANCHORED rather than merely
-    // present. A rule wrapped whole weighs 0-0-0 and loses to a bare element
-    // reset, so "contains `h1`" would pass on a sheet that changes nothing.
+    //
+    // And ANCHORED rather than merely present. The asserted selector weighs
+    // `0-1-0` — `:where(h1)` contributes nothing, the single `.nx-pb-page`
+    // contributes one class — which is what clears a bare `h1` reset at
+    // `0-0-1` while still yielding to a host's own `.content h1` at `0-1-1`.
+    // Wrapping the selector WHOLE would weigh `0-0-0` and lose to that reset,
+    // so asserting "contains `h1`" would pass on a sheet that changes nothing.
     expect(compiled.css).toContain(".nx-pb-page :where(h1)");
     // And the trace belongs to that same compile rather than to a different one.
     expect(

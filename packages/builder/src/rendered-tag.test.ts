@@ -37,6 +37,13 @@ function canvas(): HTMLElement {
   const hostile = document.createElement("span");
   hostile.setAttribute("data-nx-node", 'quote" and \\ backslash');
   root.append(hostile);
+  // A LINE BREAK, which is the case quoting cannot reach: a raw newline is not
+  // representable inside a CSS string at all, so no amount of escaping makes
+  // this id safe to interpolate. The document model imposes no character
+  // grammar on ids, so an imported document can carry one.
+  const broken = document.createElement("em");
+  broken.setAttribute("data-nx-node", "line\nbreak");
+  root.append(broken);
   return root;
 }
 
@@ -49,7 +56,15 @@ describe("the element a node is drawn as", () => {
     expect(renderedTagOf(canvas(), "rich-1")).toBe("div");
   });
 
-  it("escapes a node id before it reaches the selector", () => {
+  it("matches an id no selector could carry, rather than throwing", () => {
+    // The id never reaches a selector — the marked elements are enumerated and
+    // their values compared as strings. Interpolated, this one makes
+    // `querySelector` throw a SyntaxError from inside an effect, which takes
+    // down the whole style inspector rather than losing one indicator.
+    expect(renderedTagOf(canvas(), "line\nbreak")).toBe("em");
+  });
+
+  it("matches an id carrying selector syntax", () => {
     // A node id is author data reaching a SELECTOR. Unescaped, `querySelector`
     // THROWS on invalid syntax rather than returning nothing — so an id an
     // author is free to choose would take down the whole panel rather than lose
