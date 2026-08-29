@@ -122,6 +122,7 @@ import {
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
 import {
+  companionHasStatusColumn,
   companionContentStamp,
   companionWriteVia,
   upsertCompanionRow,
@@ -166,6 +167,12 @@ import type { SensitiveFieldSource } from "../../webhooks/sensitive-fields";
 import { statusEventsFor } from "../../webhooks/status-events";
 import type { WebhookResource } from "../../webhooks/types";
 
+import {
+  PUBLISH_ALL_LOCALES,
+  WITHDRAW_ALL_LOCALES,
+  type AllLocalesLifecycleParams,
+  type LifecycleDirection,
+} from "./all-locales-lifecycle";
 import type { CollectionAccessService } from "./collection-access-service";
 import type {
   CollectionHookService,
@@ -3721,21 +3728,10 @@ export class CollectionMutationService extends BaseService {
    * collection it is a plain publish of the single row. Only touches status columns (no field
    * values), so it needs none of the localized-write machinery.
    */
-  async publishAllLocales(params: {
-    collectionName: string;
-    entryId: string;
-    user?: UserContext;
-    overrideAccess?: boolean;
-    // Set by the REST dispatcher: the route already authorized this POST as
-    // `update`, so the preliminary update gate below skips its redundant RBAC
-    // re-check (its stored rules still run). The publish gate is unaffected.
-    routeAuthorized?: boolean;
-    // A scoped API key is judged on its own `publish-<slug>` grant, not the key
-    // owner's — the route authorized this POST only as `update`.
-    authenticatedScope?: AuthenticatedScope;
-    /** Who performed the publish, recorded on the events and the trail. */
-    actor?: RequestActor;
-  }): Promise<CollectionServiceResult> {
+  private async setLifecycleAllLocales(
+    direction: LifecycleDirection,
+    params: AllLocalesLifecycleParams
+  ): Promise<CollectionServiceResult> {
     // Set when the in-transaction document-rule re-check refuses the publish
     // against the row-locked document. Declared out here so the catch can read
     // it: the adapter re-wraps the thrown sentinel in a DatabaseError as the
@@ -3808,7 +3804,7 @@ export class CollectionMutationService extends BaseService {
         return {
           success: true,
           statusCode: 200,
-          message: "Nothing to publish (collection has no status).",
+          message: direction.nothingToDoMessage,
           data: { id: params.entryId },
         };
       }
@@ -3845,7 +3841,7 @@ export class CollectionMutationService extends BaseService {
         this.accessService.isDocumentDependentRule(publishStoredRules?.publish);
       const publishDenied = await this.accessService.checkCollectionAccess(
         params.collectionName,
-        "publish",
+        direction.accessAction,
         accessUser,
         params.entryId,
         existingEntry,
@@ -4048,25 +4044,36 @@ export class CollectionMutationService extends BaseService {
             // transition then reads as a first publication when the document was already
             // reachable, so the same document-level question is asked here. No locale is excluded
             // — this write publishes all of them, so any already-published one predates it.
-            const alreadyPublicBeforePublishAll =
-              lockedMarker == null
-                ? await this.isDocumentAlreadyPublic(
-                    tx,
-                    params.collectionName,
-                    params.entryId,
-                    lockedPreviousStatus,
-                    undefined
-                  )
-                : false;
-            publishFirstPublishedAt = resolveFirstPublishedStamp({
-              hasStatus: true,
-              previousStatus: alreadyPublicBeforePublishAll
-                ? "published"
-                : lockedPreviousStatus,
-              nextStatus: "published",
-              existingMarker: lockedMarker,
-              now: publishNow,
-            });
+            // Only a PUBLICATION can establish first publication. A withdrawal
+            // leaves the marker untouched: it records when the document first
+            // became reachable, which taking it down does not change, and
+            // re-dating or clearing it would make a later republish report a
+            // first publication that had already happened years earlier.
+            //
+            // Nothing below needs a branch for that — `firstPublishedStamp`
+            // stays undefined for a withdrawal, and every use of it is already a
+            // conditional spread.
+            if (direction.stampsFirstPublished) {
+              const alreadyPublicBeforeThisWrite =
+                lockedMarker == null
+                  ? await this.isDocumentAlreadyPublic(
+                      tx,
+                      params.collectionName,
+                      params.entryId,
+                      lockedPreviousStatus,
+                      undefined
+                    )
+                  : false;
+              publishFirstPublishedAt = resolveFirstPublishedStamp({
+                hasStatus: true,
+                previousStatus: alreadyPublicBeforeThisWrite
+                  ? "published"
+                  : lockedPreviousStatus,
+                nextStatus: "published",
+                existingMarker: lockedMarker,
+                now: publishNow,
+              });
+            }
             // Through the adapter's Drizzle layer rather than an interpolated statement. That
             // also removes the reason the previous version needed a SQL `now()` expression: a
             // `Date` bound as a raw parameter stores wrong against SQLite's integer timestamps,
@@ -4074,7 +4081,7 @@ export class CollectionMutationService extends BaseService {
             await tx.update(
               tableName,
               {
-                status: "published",
+                status: direction.nextStatus,
                 updated_at: publishNow,
                 ...(publishFirstPublishedAt
                   ? { first_published_at: publishFirstPublishedAt }
@@ -4087,7 +4094,7 @@ export class CollectionMutationService extends BaseService {
             await this.writeCompanionStatus(tx, {
               companionTableName: companion.companionTableName,
               parentId: params.entryId,
-              status: "published",
+              status: direction.nextStatus,
               locale: EVERY_LOCALE,
             });
           }
@@ -4107,7 +4114,7 @@ export class CollectionMutationService extends BaseService {
             publishedParentRow = lockedSchemaRow
               ? {
                   ...lockedSchemaRow,
-                  status: "published",
+                  status: direction.nextStatus,
                   ...(publishFirstPublishedAt
                     ? { first_published_at: publishFirstPublishedAt }
                     : {}),
@@ -4146,7 +4153,7 @@ export class CollectionMutationService extends BaseService {
                   scopeSlug: params.collectionName,
                   entryId: params.entryId,
                 },
-                contentStatus: "published",
+                contentStatus: direction.nextStatus,
                 // Tagged like every other capture: a snapshot records which
                 // component its values came from, whichever path produced it.
                 parts: await this.snapshotPartsFor(
@@ -4180,7 +4187,7 @@ export class CollectionMutationService extends BaseService {
           const publishedDocument = this.readShapeEventDocument(
             {
               ...(publishedParentRow ?? preImageRow),
-              status: "published",
+              status: direction.nextStatus,
             },
             fields
           );
@@ -4230,7 +4237,7 @@ export class CollectionMutationService extends BaseService {
           defaultCompanionTransitions =
             defaultLocale !== undefined &&
             priorCompanionStatuses.has(defaultLocale) &&
-            priorCompanionStatuses.get(defaultLocale) !== "published";
+            priorCompanionStatuses.get(defaultLocale) !== direction.nextStatus;
           // The document-wide (main-row) publish transition, WITHOUT a locale
           // tag. Emitted only when a default-companion event does not already
           // encode it (a non-localized collection, or a default locale whose
@@ -4240,14 +4247,14 @@ export class CollectionMutationService extends BaseService {
           // judged correctly.
           if (
             hasMainStatus &&
-            lockedPreviousStatus !== "published" &&
+            lockedPreviousStatus !== direction.nextStatus &&
             !defaultCompanionTransitions
           ) {
             const statusRecorded = await this.recordStatusEvents(tx, {
               collection: params.collectionName,
               id: params.entryId,
               from: lockedPreviousStatus,
-              to: "published",
+              to: direction.nextStatus,
               isCreate: false,
               data: publishedDocument,
               previous: previousDocument,
@@ -4273,7 +4280,7 @@ export class CollectionMutationService extends BaseService {
           for (const [locale, priorLocaleStatus] of priorCompanionStatuses) {
             if (configuredLocales.size > 0 && !configuredLocales.has(locale))
               continue;
-            if (priorLocaleStatus === "published") continue;
+            if (priorLocaleStatus === direction.nextStatus) continue;
             // Build this locale's own before/after documents. Publishing changes
             // only status, so the locale's translatable values AND its component
             // subtrees are identical on both sides — read them at this locale and
@@ -4330,7 +4337,7 @@ export class CollectionMutationService extends BaseService {
             const localeDataParent = {
               ...publishedDocument,
               ...localeValues,
-              status: "published",
+              status: direction.nextStatus,
             };
             stripPasswordFieldValues(localeDataParent, fields);
             const localePrevParent = {
@@ -4354,7 +4361,7 @@ export class CollectionMutationService extends BaseService {
               id: params.entryId,
               locale,
               from: priorLocaleStatus,
-              to: "published",
+              to: direction.nextStatus,
               isCreate: false,
               data: localeData,
               previous: localePrevious,
@@ -4394,7 +4401,7 @@ export class CollectionMutationService extends BaseService {
       // back to the pre-read only if the row vanished mid-publish.
       if (
         hasMainStatus &&
-        lockedPreviousStatus !== "published" &&
+        lockedPreviousStatus !== direction.nextStatus &&
         !defaultCompanionTransitions
       ) {
         this.transitionStatus({
@@ -4402,11 +4409,11 @@ export class CollectionMutationService extends BaseService {
           id: params.entryId,
           data: publishedParentRow ?? {
             ...(existingEntry as Record<string, unknown>),
-            status: "published",
+            status: direction.nextStatus,
           },
           user: params.user,
           previousStatus: lockedPreviousStatus,
-          status: "published",
+          status: direction.nextStatus,
           emitStatusChanged: true,
         });
       }
@@ -4421,7 +4428,7 @@ export class CollectionMutationService extends BaseService {
           data: transition.data,
           user: params.user,
           previousStatus: transition.from,
-          status: "published",
+          status: direction.nextStatus,
           emitStatusChanged: true,
           locale: transition.locale,
         });
@@ -4477,7 +4484,7 @@ export class CollectionMutationService extends BaseService {
         success: true,
         statusCode: 200,
         message: "All languages published.",
-        data: { id: params.entryId, status: "published" },
+        data: { id: params.entryId, status: direction.nextStatus },
         eventRecorded,
         revalidationIntent,
       };
@@ -4501,6 +4508,80 @@ export class CollectionMutationService extends BaseService {
         ...errorEnvelopeFields(error),
       };
     }
+  }
+
+  /**
+   * Publish ALL languages of an entry at once (i18n M7, spec §10).
+   *
+   * Unchanged in behaviour and in signature: the route, the dispatcher and the
+   * admin hooks that call this keep working. What moved is where the work is
+   * stated — see {@link LifecycleDirection}.
+   */
+  async publishAllLocales(
+    params: AllLocalesLifecycleParams
+  ): Promise<CollectionServiceResult> {
+    return this.setLifecycleAllLocales(PUBLISH_ALL_LOCALES, params);
+  }
+
+  /**
+   * Take ALL languages of an entry down at once.
+   *
+   * The counterpart the codebase never had. Publishing every language has been
+   * reachable from the admin hooks, the dispatcher and the service since i18n
+   * M7; withdrawing them had no equivalent at any layer, so a scheduled content
+   * release could schedule a takedown that no code path could perform on a
+   * localized collection.
+   *
+   * ## Why this refuses instead of half-performing
+   *
+   * `_status` can be physically ABSENT from a companion that was localized
+   * before Draft/Published was enabled on it: `reconcileCompanionColumns`
+   * deliberately declines to add the column to an already-provisioned companion,
+   * because ADD-then-backfill is not retryable from physical shape alone, and
+   * tells the operator to run `nextly migrate` instead. In production, where
+   * boot refuses DDL, that state persists.
+   *
+   * The gate the publish path uses cannot see it. `hasStatus` is
+   * `metadata.status === true` — the DECLARED shape — and `isCompanionReady`
+   * checks that the TABLE exists, not the column. For publishing, being wrong
+   * costs a loud failure and nothing is lost. For a takedown, being wrong leaves
+   * every translation READABLE while reporting success, which is the one outcome
+   * a withdrawal must never produce. So this asks the physical question first.
+   *
+   * The probe runs BEFORE the transaction opens, deliberately: a failed
+   * catalogue query aborts the whole transaction on PostgreSQL, and the error
+   * then names an innocent later statement. It also propagates rather than
+   * answering `false` — a dropped connection must not be read as "no such
+   * column, nothing to sweep", which is precisely the reading that would report
+   * a takedown that never happened.
+   */
+  async unpublishAllLocales(
+    params: AllLocalesLifecycleParams
+  ): Promise<CollectionServiceResult> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    if (
+      companion?.hasStatus === true &&
+      (await isCompanionReady(this.adapter, companion.companionTableName)) &&
+      !(await companionHasStatusColumn(
+        this.adapter,
+        companion.companionTableName
+      ))
+    ) {
+      return {
+        success: false,
+        statusCode: 409,
+        message:
+          `Cannot unpublish every language of '${params.collectionName}': its translation table ` +
+          `is missing the per-language status column, so the translations cannot be taken down. ` +
+          `This collection was localized before Draft/Published was enabled on it. ` +
+          `Run \`nextly migrate\` to add the column, then retry. ` +
+          `Nothing was changed.`,
+        data: null,
+      };
+    }
+    return this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params);
   }
 
   /**
