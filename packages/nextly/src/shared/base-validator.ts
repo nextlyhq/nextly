@@ -59,6 +59,16 @@ export interface SlugValidationContext {
 
   /** SQL keywords (Set for O(1) lookup). */
   sqlKeywordsSet: Set<string>;
+
+  /**
+   * Extra guidance for particular reserved slugs, appended to the refusal.
+   *
+   * Optional because most reservations need none: a name that has always been
+   * reserved is only ever met by somebody naming something new. A name that
+   * became reserved is met by an upgrade, where the bare refusal describes a
+   * config that worked in the previous version and says nothing about why.
+   */
+  reservedSlugNotes?: ReadonlyMap<string, string>;
 }
 
 // ============================================================
@@ -219,9 +229,12 @@ export function validateSlugShared(
   }
 
   if (ctx.reservedSlugsSet.has(slug.toLowerCase())) {
+    const note = ctx.reservedSlugNotes?.get(slug.toLowerCase());
     errors.push({
       path,
-      message: `${ctx.entityLabel} slug '${slug}' is reserved and cannot be used`,
+      message:
+        `${ctx.entityLabel} slug '${slug}' is reserved and cannot be used` +
+        (note === undefined ? "" : `. ${note}`),
       code: "SLUG_RESERVED",
     });
   }
