@@ -1,14 +1,16 @@
 /**
  * What a scheduled webhook drain is bounded by.
  *
- * Written BEFORE the bounds move out of `api/webhooks.ts`, and confirmed
- * passing against the unmodified route, so it describes what the code did
- * rather than what the change made it do. A characterisation test written after
- * a refactor can only agree with the refactor.
- *
  * These numbers are the contract between a scheduler tick and the platform that
- * kills it. If a move quietly changed one, a serverless drain would start being
- * killed mid-pass and the symptom would be deliveries that retry forever.
+ * kills it: they cap how much work one invocation starts, so it returns before
+ * the platform terminates it and the next tick continues from the durable
+ * outbox. A drain that exceeded them would be killed mid-pass, and the symptom
+ * would be deliveries that retry forever without progressing.
+ *
+ * The route is mocked at `runWebhookDrain` rather than driven end to end because
+ * the subject is the OPTIONS the route chooses, not what the engine does with
+ * them; a real drain would exercise fan-out and delivery and tell us nothing
+ * about the four numbers under test.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";

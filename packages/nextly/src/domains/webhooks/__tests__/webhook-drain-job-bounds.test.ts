@@ -8,6 +8,11 @@
  *
  * These compare the two bound sets against each other rather than against copied
  * numbers, so they keep meaning something after either is retuned.
+ *
+ * What they establish is the FIRST-START case: a drain beginning at the top of a
+ * pass finishes inside it. A handler that starts late is bounded by the pass's
+ * remaining time rather than by any constant, and that value has to reach the
+ * handler from the runner before it can be enforced.
  */
 
 import { describe, expect, it } from "vitest";
@@ -27,10 +32,20 @@ describe("the drain job's bounds", () => {
     );
   });
 
-  it("leaves room for an in-flight request after its own budget expires", () => {
-    // The budget bounds when the drain stops STARTING work, not when its last
-    // request returns. A hung receiver can therefore overrun it by up to one
-    // request timeout, and that overrun has to fit in the pass too.
+  it("fits the whole pass when it is the first handler to start", () => {
+    // What a STATIC bound can establish, and the limit of it.
+    //
+    // The budget caps when the drain stops STARTING work, not when its last
+    // request returns, so a hung receiver adds up to one request timeout on top.
+    // Both together fit the pass — provided this handler begins at the start of
+    // it.
+    //
+    // It does NOT bound a late start. `runJobs` checks its budget before each
+    // CLAIM and cannot interrupt a running handler, so an earlier job that
+    // overran leaves this one starting with less pass remaining than it assumes,
+    // and no constant chosen here can know that. Bounding the late start needs
+    // the pass's own remaining time, which the runner has and the handler is not
+    // yet given; the deadline on `JobContext` is where it will come from.
     expect(
       IN_PASS_DRAIN_BOUNDS.maxDurationMs + IN_PASS_DRAIN_BOUNDS.requestTimeoutMs
     ).toBeLessThan(JOBS_RUN_MAX_DURATION_MS);
