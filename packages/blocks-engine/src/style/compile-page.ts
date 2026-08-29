@@ -90,6 +90,25 @@ export interface StyleCompileContext {
    */
   previewContainer?: string;
   /**
+   * Emit each interaction state so a previewing surface can FORCE one on an
+   * element, by putting {@link previewStateClass} on it.
+   *
+   * For an editor, and off by default. A published page has no reason to carry
+   * a class nothing will ever set, and a visitor's browser decides its own
+   * `:hover`.
+   *
+   * SEPARATE from `previewContainer` although both describe a preview, because
+   * that one is only set when the site defines breakpoints — a site with none
+   * would silently get no state preview if this rode on it. Two surfaces can
+   * want one without the other.
+   *
+   * Costs nothing in weight: the marker joins the pseudo-class INSIDE the
+   * existing `:where()`, which contributes nothing whatever it holds. That is
+   * what lets the preview cascade match the published one exactly, which the
+   * style panel's provenance depends on — it explains what a VISITOR gets.
+   */
+  previewStates?: boolean;
+  /**
    * Which hosts this site will fetch from.
    *
    * A stylesheet is a fetching surface: `background-image: url(...)` makes the
@@ -368,6 +387,51 @@ const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
   hover: ":where(:hover)",
   focus: ":where(:focus-visible)",
   active: ":where(:active)",
+};
+
+/**
+ * The class a previewing surface puts on ONE element to force an interaction
+ * state on it.
+ *
+ * A page cannot force a pseudo-class on itself. There is no CSS or DOM way to
+ * make an element match `:hover` without a pointer — `Emulation.forcePseudoState`
+ * is a devtools protocol, not something a page can reach. So an editor that
+ * lets an author edit a hover appearance has to be given something it CAN
+ * toggle, and this is it.
+ *
+ * Named by the engine rather than by the editor because it is a contract
+ * between the two: the compiler writes it into a selector and the surface puts
+ * it on an element, and a name spelled in two places can be spelled
+ * differently. The same reason `NODE_ID_ATTRIBUTE` is published.
+ */
+export function previewStateClass(state: StyleState): string {
+  return `nx-pb-state-${state}`;
+}
+
+/**
+ * The state selectors a PREVIEW sheet uses, with the marker joined to the
+ * pseudo-class inside the existing wrapper.
+ *
+ * INSIDE `:where()`, which is the whole reason this is safe. `:where()`
+ * contributes nothing whatever it holds, so a previewed rule weighs exactly
+ * what the published one weighs and the preview cascade cannot differ from the
+ * cascade a visitor gets. Measured in a browser against the alternative: with
+ * the marker inside, a later equal-weight rule still won; moved outside, the
+ * earlier rule won because the class had added weight of its own.
+ *
+ * That equality is a requirement rather than a nicety. The style panel's
+ * provenance explains what the PUBLISHED page does, so a preview that ranked
+ * its rules differently would describe an order no visitor ever sees — in the
+ * one state the author opened the panel to inspect.
+ *
+ * `base` has no marker: it is not a state anything forces, it is what applies
+ * when nothing else does.
+ */
+const PREVIEW_STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
+  base: "",
+  hover: `:where(:hover, .${previewStateClass("hover")})`,
+  focus: `:where(:focus-visible, .${previewStateClass("focus")})`,
+  active: `:where(:active, .${previewStateClass("active")})`,
 };
 
 /** One breakpoint to emit under, with the at-rule it needs. */
@@ -1124,6 +1188,8 @@ interface EnvelopeContext {
    * same elements are styled either way.
    */
   weightlessAnchor?: string;
+  /** Emit the forceable form of each interaction state. See the context field. */
+  previewStates?: boolean;
 }
 
 /** Compile one styles envelope into rules under one selector. */
@@ -1147,7 +1213,12 @@ function envelopeRules(
    */
   about: EnvelopeContext
 ): CssRule[] {
-  const { origin, trace, mayFetchUrl, weightlessAnchor } = about;
+  const { origin, trace, mayFetchUrl, weightlessAnchor, previewStates } = about;
+  // Chosen ONCE per envelope rather than per rule: it is a property of the
+  // compile, and re-deciding it inside the loop invites the two forms to
+  // disagree between a node's base rule and its hover one.
+  const stateSelectors =
+    previewStates === true ? PREVIEW_STATE_SELECTORS : STATE_SELECTORS;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1239,8 +1310,8 @@ function envelopeRules(
           // the only part that weighs.
           selector:
             weightlessAnchor === undefined
-              ? `${selector}${STATE_SELECTORS[state]}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${STATE_SELECTORS[state]}${rule.descendant})`,
+              ? `${selector}${stateSelectors[state]}${rule.descendant}`
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1603,6 +1674,11 @@ export function compilePageCss(
   const tokenPrefix = ctx.tokenPrefix ?? DEFAULT_TOKEN_PREFIX;
   const mayFetchUrl = ctx.mayFetchUrl;
   const scope = scopeSelector(ctx.scope, warnings);
+  // Read ONCE for the whole compile and handed to every tier. Every rule that
+  // can match the previewed element has to honour the forced state — a node's
+  // own hover, a class's, a block type's, the page's — so a tier that missed it
+  // would show half the appearance the author is editing.
+  const previewStates = ctx.previewStates === true;
   // What was WRITTEN, which is not always what was asked for: a scope this
   // compiler refuses is dropped and the sheet compiled global, and a caller that
   // recorded the request would store an artifact claiming an isolation its own
@@ -1677,7 +1753,7 @@ export function compilePageCss(
       warnings,
       budget,
       warningAllowance,
-      { origin: { kind: "page" }, trace, mayFetchUrl }
+      { origin: { kind: "page" }, trace, mayFetchUrl, previewStates }
     )
   );
 
@@ -1702,6 +1778,7 @@ export function compilePageCss(
         warningAllowance,
         {
           origin: { kind: "element", tag },
+          previewStates,
           trace,
           mayFetchUrl,
           weightlessAnchor: defaultsAnchor,
@@ -1754,6 +1831,7 @@ export function compilePageCss(
         warningAllowance,
         {
           origin: { kind: "blockType", type },
+          previewStates,
           trace,
           mayFetchUrl,
           weightlessAnchor: defaultsAnchor,
@@ -1903,6 +1981,7 @@ export function compilePageCss(
         warningAllowance,
         {
           origin: { kind: "class", id: cls.id, slug: cls.slug },
+          previewStates,
           trace,
           mayFetchUrl,
         }
@@ -1943,7 +2022,12 @@ export function compilePageCss(
         warnings,
         budget,
         warningAllowance,
-        { origin: { kind: "node", id: node.id }, trace, mayFetchUrl }
+        {
+          origin: { kind: "node", id: node.id },
+          trace,
+          mayFetchUrl,
+          previewStates,
+        }
       ),
       ...visibilityRules(
         node,

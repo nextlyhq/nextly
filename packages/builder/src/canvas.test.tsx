@@ -35,7 +35,13 @@ import {
 import * as React from "react";
 import { createElement } from "react";
 
-import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import {
+  clearBlocks,
+  previewStateClass,
+  registerBlocks,
+  STYLE_STATES,
+  type StyleState,
+} from "@nextlyhq/blocks-engine";
 
 import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 
@@ -2007,5 +2013,201 @@ describe("reporting the scale to a host that keeps changing its mind", () => {
     );
 
     expect(reports).toEqual([1.5, 0.75]);
+  });
+});
+
+describe("forcing the interaction state the panel is editing", () => {
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-state-test" }
+    );
+  });
+  afterAll(clearBlocks);
+
+  function renderCanvas(selectedId: string | null, forcedState?: StyleState) {
+    return render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              { id: "a", type: "acme/leaf", version: 1, props: {} },
+              { id: "b", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={selectedId}
+        {...(forcedState === undefined ? {} : { forcedState })}
+      />
+    );
+  }
+
+  const elementFor = (id: string) =>
+    document.querySelector(`[${NODE_ID_ATTRIBUTE}="${id}"]`);
+
+  it("marks the PRIMARY selection and nothing else", () => {
+    // Forcing it page-wide would show every other block in a state nobody
+    // asked about, so the second node is the separating half of this case.
+    renderCanvas("a", "hover");
+
+    expect(elementFor("a")?.className).toContain(previewStateClass("hover"));
+    expect(elementFor("b")?.className).not.toContain(
+      previewStateClass("hover")
+    );
+  });
+
+  it("marks the CANVAS ROOT too, so page-level rules match", () => {
+    /*
+     * `:hover` matches an element and every ANCESTOR of it — measured in a
+     * browser, a pointer over a leaf puts the leaf, its parent and the root all
+     * in the chain. The page tier compiles onto the canvas root
+     * (`.nx-pb-page.nx-pb-page:where(:hover, …)`), and a marker on a descendant
+     * cannot make its ancestor match.
+     *
+     * So a preview that marked only the selected node would drop exactly the
+     * tiers a real pointer triggers: a page-level hover colour would vanish in
+     * the simulation and appear for the visitor — the preview disagreeing with
+     * the page in the one state the author opened the panel to inspect.
+     */
+    const view = renderCanvas("a", "hover");
+    const root = view.container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    expect(root).not.toBeNull();
+    expect((root as Element).className).toContain(previewStateClass("hover"));
+  });
+
+  it("leaves the canvas root unmarked when nothing is being forced", () => {
+    // The control: a root marked unconditionally would put every page-level
+    // hover rule on screen permanently, which is worse than not previewing at
+    // all — the author would be reading an appearance no visitor ever sees.
+    const view = renderCanvas("a");
+    const root = view.container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    for (const state of STYLE_STATES) {
+      expect((root as Element).className).not.toContain(
+        previewStateClass(state)
+      );
+    }
+  });
+
+  it("clears the previous state when the panel moves to another one", () => {
+    // hover -> focus. A marker left behind would have the canvas showing two
+    // states at once, and the author would be reading an appearance that
+    // cannot occur.
+    const view = renderCanvas("a", "hover");
+    expect(elementFor("a")?.className).toContain(previewStateClass("hover"));
+
+    view.rerender(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              { id: "a", type: "acme/leaf", version: 1, props: {} },
+              { id: "b", type: "acme/leaf", version: 1, props: {} },
+            ],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="a"
+        forcedState="focus"
+      />
+    );
+
+    expect(elementFor("a")?.className).toContain(previewStateClass("focus"));
+    expect(elementFor("a")?.className).not.toContain(
+      previewStateClass("hover")
+    );
+  });
+
+  it("does not touch the class of an element whose marking is unchanged", () => {
+    /*
+     * `classList.remove` of a token that is NOT present still touches the
+     * attribute, and this canvas is observed: the empty-container appender
+     * watches the subtree for layout-relevant mutations and re-measures on one.
+     * An unconditional clear across every marked element made a selection
+     * change schedule a re-measure of the whole overlay — caught by that
+     * appender's own case, which asserts its control does not move for a
+     * mutation of its own output, and it moved.
+     *
+     * The WRITE is what this observes, because the write is the defect. Two
+     * earlier versions of this case watched for mutation records instead — one
+     * on the primary alone, one on the whole subtree — and both passed the
+     * break: the records never reached them, so each reported a guard it did
+     * not have.
+     *
+     * `c` is the separating node: never selected, so its marking does not
+     * change when the selection moves from `a` to `b`, and nothing should be
+     * written to it at all.
+     */
+    const nodes = ["a", "b", "c"].map(id => ({
+      id,
+      type: "acme/leaf",
+      version: 1,
+      props: {},
+    }));
+    const canvas = (selectedId: string) => (
+      <Canvas
+        document={{ formatVersion: 1, kind: "page", nodes } as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId={selectedId}
+        forcedState="hover"
+      />
+    );
+
+    const view = render(canvas("a"));
+    const bystander = elementFor("c");
+    expect(bystander).not.toBeNull();
+    const remove = vi.spyOn((bystander as Element).classList, "remove");
+    const add = vi.spyOn((bystander as Element).classList, "add");
+
+    act(() => {
+      view.rerender(canvas("b"));
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(add).not.toHaveBeenCalled();
+
+    // The other half: an element that KEEPS its marker must not have it
+    // written again. `c` cannot show this — it never wants one — so the
+    // now-selected `b` carries the case.
+    const kept = elementFor("b");
+    const keptAdd = vi.spyOn((kept as Element).classList, "add");
+    act(() => {
+      view.rerender(canvas("b"));
+    });
+    expect(keptAdd).not.toHaveBeenCalled();
+  });
+
+  it("forces nothing for `base`, or when the host states no state", () => {
+    // `base` is what applies when no state does, and the compiler emits no
+    // marker for it — so a canvas that marked it would be putting on a class
+    // no selector contains.
+    renderCanvas("a", "base");
+    for (const state of STYLE_STATES) {
+      expect(elementFor("a")?.className).not.toContain(
+        previewStateClass(state)
+      );
+    }
+    cleanup();
+
+    renderCanvas("a");
+    for (const state of STYLE_STATES) {
+      expect(elementFor("a")?.className).not.toContain(
+        previewStateClass(state)
+      );
+    }
   });
 });

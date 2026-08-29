@@ -91,6 +91,17 @@ export type SharedStyleInputs = Pick<
   // baseline at all, and is refused rather than served.
   | "elementBases"
   | "previewContainer"
+  // A preview sheet's selectors DIFFER from a published sheet's — each
+  // interaction state gains a forceable form — so the two cannot share a
+  // stored artifact. Present here for the same reason `previewContainer` is:
+  // an artifact compiled one way and served the other is wrong in a way
+  // nothing downstream can detect.
+  //
+  // No `ENCODING` bump goes with it. The field is optional and absent means
+  // exactly what it meant before, so every artifact already stored stays valid
+  // for the contexts that produced it; only a caller that turns it ON computes
+  // a different identity, which is the point.
+  | "previewStates"
 >;
 
 /**
@@ -601,6 +612,18 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // to different stylesheets, and a stamp that cannot see the difference
     // hands the first one's sheet to the second.
     blockBaseParts(inputs.elementBases, reading),
+    // A preview sheet gives every interaction state a forceable form, so its
+    // selectors are not the published ones and the two must not share a stored
+    // artifact. Without this, `resolvePageStyles` — exported, and returning a
+    // storable `PageStyles` — hands back preview CSS stamped as published, and
+    // a live page is served rules carrying a class nothing on it will ever set.
+    //
+    // SPREAD rather than appended as a slot, which is the same care
+    // `previewContainer` takes one element up: absent, this array's shape is
+    // exactly what it was, so every artifact already stored keeps its stamp.
+    // A fixed slot would have invalidated every page on the site to record a
+    // field that is unset on all of them.
+    ...(inputs.previewStates === true ? ["preview-states"] : []),
   ]);
 }
 
