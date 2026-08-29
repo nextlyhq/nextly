@@ -273,6 +273,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "pluginAdminSlug (value)",
   "pluginField (value)",
   "resolvedCollectionDraftSplit (value)",
+  "resolvedCollectionView (value)",
   "secret (value)",
   "text (value)",
   "textarea (value)",

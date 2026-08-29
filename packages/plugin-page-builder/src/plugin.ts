@@ -6,6 +6,7 @@ import {
 import {
   definePlugin,
   resolvedCollectionDraftSplit,
+  resolvedCollectionView,
 } from "@nextlyhq/plugin-sdk";
 import type { PreviewViewportsDeclaration } from "nextly/config";
 
@@ -23,7 +24,6 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
-import { resolvedCollectionView } from "./class-usage-collection-view";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
 import {
   CLASS_USAGE_INDEX_SLUG,

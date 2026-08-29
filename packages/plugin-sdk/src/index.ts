@@ -63,6 +63,12 @@ export type {
  * it: the two inputs overlap in neither direction, and a runtime check that
  * tried to tell them apart would misread the boolean shorthand and fail
  * silently in the direction that disables drafts.
+ *
+ * That record is not DECLARED as one, which is why `resolvedCollectionView`
+ * below exists: `getCollection` returns `Collection`, whose fields live under
+ * `schemaDefinition` and which promises no root-level `status` or `versions`,
+ * so its result is not assignable here however faithfully the object carries
+ * them. Project it rather than asserting it.
  */
 export { resolvedCollectionDraftSplit } from "nextly";
 /**
@@ -71,6 +77,18 @@ export { resolvedCollectionDraftSplit } from "nextly";
  *   release tag applies to the declaration it precedes.
  */
 export type { ResolvedDraftSplitCollection } from "nextly";
+/**
+ * @experimental `resolvedCollectionView` — a registry record, projected onto
+ *   the shape above.
+ *
+ * Published rather than left to each plugin. The projection is the only way to
+ * get from the documented producer to the documented consumer without an
+ * assertion, so every plugin needing the question would otherwise write it, and
+ * a projection restated per caller drifts from the type it feeds while all of
+ * them still compile. It reads every property as unknown and checks it, which
+ * is the honest handling of a value whose declared type under-states it.
+ */
+export { resolvedCollectionView } from "nextly";
 
 /**
  * Plugin identity and classification.
