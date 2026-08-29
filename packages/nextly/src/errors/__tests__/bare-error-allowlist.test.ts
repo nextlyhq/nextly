@@ -36,7 +36,7 @@ const packageRoot = resolve(
  * happening — the lint run stays green by construction. Requiring the same change to edit this
  * number puts the growth in the diff where review can see it.
  */
-const EXPECTED_ALLOWLIST_SIZE = 97;
+const EXPECTED_ALLOWLIST_SIZE = 96;
 
 const ALLOWLIST_FILE = "eslint-bare-error-allowlist.json";
 

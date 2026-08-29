@@ -261,6 +261,15 @@ function batchOptions(options?: BulkOperationOptions): {
     stopOnError = false,
     skipHooks = false,
   } = options ?? {};
+  // A size that cannot advance the slice window (zero or negative) would
+  // pin the loop, and a fractional one slices overlapping batches. The
+  // option is developer configuration, so the refusal names the value it
+  // received.
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw NextlyError.invalidInput({
+      message: `batchSize must be a positive whole number, received ${batchSize}.`,
+    });
+  }
   return { batchSize, stopOnError, skipHooks };
 }
 
@@ -306,8 +315,15 @@ async function runLegacyBatchItem<TItem>(
       if (options.stopOnError) {
         // Thrown inside the try on purpose: the catch below records it
         // like any unexpected error before re-throwing, which is the
-        // accounting every legacy loop performed for this case.
-        throw new Error(`Entry at index ${index} failed: ${verdict.message}`);
+        // accounting every legacy loop performed for this case. A typed
+        // internal failure: the public message stays generic for the wire
+        // while the cause carries the per-index detail the twin's callers
+        // and the operator log read.
+        throw NextlyError.internal({
+          cause: new Error(
+            `Entry at index ${index} failed: ${verdict.message}`
+          ),
+        });
       }
     }
   } catch (error: unknown) {
@@ -1910,9 +1926,9 @@ export class CollectionBulkService extends BaseService {
       { batchSize, stopOnError, skipHooks },
       state
     );
-    // Delete always reports the outbox signal, even when nothing recorded,
-    // matching the self-transaction twin's read-back-after-commit shape.
-    state.eventRecorded = state.eventRecorded ?? false;
+    // Unlike the self-transaction twin, a caller-owned batch reports the
+    // outbox signal only when an item recorded one: the caller owns the
+    // commit, so absence — not a coerced false — is what it reads back.
     return toBatchResult(state);
   }
 
@@ -1921,12 +1937,6 @@ export class CollectionBulkService extends BaseService {
   // by both of its entry points
   // ============================================================
 
-  /**
-   * The create batch's per-item worker and abort policy, shared by both entry
-   * points so the operation's loop exists exactly once. Only marked
-   * write-integrity failures abort a create batch; every other throw
-   * soft-fails its item unless stopOnError says otherwise.
-   */
   /**
    * Rewrite a self-transaction create/update batch's accounting after its
    * transaction rolled back, shared by both operations — their rollback
@@ -1972,6 +1982,12 @@ export class CollectionBulkService extends BaseService {
     }
   }
 
+  /**
+   * The create batch's per-item worker and abort policy, shared by both entry
+   * points so the operation's loop exists exactly once. Only marked
+   * write-integrity failures abort a create batch; every other throw
+   * soft-fails its item unless stopOnError says otherwise.
+   */
   private async runCreateBatch(
     tx: TransactionContext,
     params: {

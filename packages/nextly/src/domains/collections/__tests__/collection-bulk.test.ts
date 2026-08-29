@@ -13,6 +13,10 @@
  *   overrides, 404 source.
  */
 
+// The suites below drive the real services over mocked collaborators: these
+// imports carry the adapter transaction shape the caller-owned entry points
+// take, the result contracts the assertions pin, the write-integrity marker
+// whose failures force a rollback, and the typed error the abort paths throw.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
@@ -24,6 +28,7 @@ import type {
   CollectionServiceResult,
 } from "../services/collection-types";
 import { markWriteIntegrityFailure } from "../../../shared/write-integrity";
+import { NextlyError } from "../../../errors/nextly-error";
 
 import {
   createMockSchema,
@@ -706,6 +711,28 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       revalidationIntent: { tags: ["tag-failed"] },
     });
 
+    // Verdicts with neither side-channel signal: a row that committed
+    // without the worker recording an event, and an item refused before any
+    // write. Together they pin the outbox flag's ABSENCE on a result whose
+    // items never owed a delivery.
+    const okWithoutSignals = (
+      op: OpDef,
+      index: number
+    ): CollectionServiceResult<unknown> => ({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: op.name === "deleteEntries" ? null : { id: op.expectedIds[index] },
+    });
+    const refusedWithoutSignals = (
+      message: string
+    ): CollectionServiceResult<unknown> => ({
+      success: false,
+      statusCode: 422,
+      message,
+      data: null,
+    });
+
     interface OpDef {
       name: string;
       worker: BatchWorker;
@@ -901,9 +928,58 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         it("stopOnError rejects out of the InTransaction twin so the caller's transaction rolls back", async () => {
           scriptWorker(op, [okFor(op, 0), committedThenFailed("nope")]);
 
+          const rejection = await op.inTx(makeTx(), { stopOnError: true }).then(
+            () => undefined,
+            (error: unknown) => error
+          );
+          // The abort is a typed internal failure: the public message stays
+          // generic for the wire, and the per-index detail rides the cause
+          // so the caller's rollback handling and the operator log still
+          // see which item aborted the batch.
+          if (!(rejection instanceof NextlyError)) {
+            throw new Error(
+              "expected the stopOnError abort to be a NextlyError"
+            );
+          }
+          expect(rejection.code).toBe("INTERNAL_ERROR");
+          expect(rejection.cause?.message).toContain("Entry at index 1 failed");
+        });
+
+        it("leaves the outbox signal absent on the twin when no item records an event", async () => {
+          scriptWorker(op, [
+            okWithoutSignals(op, 0),
+            refusedWithoutSignals("nope"),
+          ]);
+
+          const result = await op.inTx(makeTx());
+
+          // A caller-owned batch reports the outbox signal only when an
+          // item recorded one: the caller owns the commit, so absence —
+          // not a coerced false — is what it reads back afterwards. The
+          // self-transaction twins differ on purpose: they own the commit
+          // and read their own signal back, false included.
+          expect("eventRecorded" in result).toBe(false);
+          expect(result.successful).toBe(1);
+          expect(result.failed).toBe(1);
+        });
+
+        it("refuses a batchSize that cannot advance the shared loop", async () => {
+          scriptWorker(op, [okFor(op, 0), okFor(op, 1)]);
+
+          // A fractional size slices overlapping batches, zero and negative
+          // sizes pin the loop forever. The option is developer
+          // configuration, so the refusal names the value it received.
+          await expect(op.self({ batchSize: 2.5 })).rejects.toMatchObject({
+            code: "INVALID_INPUT",
+          });
+          await expect(op.self({ batchSize: 0 })).rejects.toMatchObject({
+            code: "INVALID_INPUT",
+          });
           await expect(
-            op.inTx(makeTx(), { stopOnError: true })
-          ).rejects.toThrow("Entry at index 1 failed");
+            op.inTx(makeTx(), { batchSize: -1 })
+          ).rejects.toMatchObject({
+            code: "INVALID_INPUT",
+          });
         });
 
         if (op.name !== "deleteEntries") {
