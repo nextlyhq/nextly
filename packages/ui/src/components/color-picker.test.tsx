@@ -516,6 +516,73 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange).not.toHaveBeenCalledWith("#123456");
   });
 
+  it("finishes a colour when the KEYBOARD leaves the picker entirely", () => {
+    /*
+     * Type, tab to a control further inside the picker, then tab out without
+     * activating it. Watched at the field alone this was lost: the field's own
+     * blur was declined because focus had moved to something inside, and
+     * nothing watched the boundary focus actually crossed. No pointer is
+     * involved, so the press listener cannot cover it either.
+     */
+    const onColorChange = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    // Field -> preset: still inside, so nothing is finished yet.
+    const preset = screen.getByRole("button", { name: "Primary" });
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: preset })
+    );
+    expect(onColorChange).not.toHaveBeenCalled();
+
+    // Preset -> somewhere else entirely: the picker has been left.
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    preset.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: outside })
+    );
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("does not finish a TOUCH press that becomes a scroll", () => {
+    /*
+     * An outside touch press may become a scroll or a long press rather than a
+     * tap, and a dismissable layer waits for the resulting click before
+     * dismissing for that reason. Finishing on the press would publish a draft
+     * while the picker stays open and the field is still being edited.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+
+    // A scroll produces no click, so nothing finished.
+    expect(onColorChange).not.toHaveBeenCalled();
+
+    // The control: the same press completing as a TAP does finish it.
+    outside.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
   it("keeps a draft when the EYEDROPPER is cancelled", () => {
     /*
      * The eyedropper's button is inside the picker, so pressing it is not a

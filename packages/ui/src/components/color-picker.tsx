@@ -15,6 +15,7 @@ import {
   surfacePointFor,
   toHex,
 } from "../lib/color";
+import { useIsomorphicLayoutEffect } from "../lib/isomorphic-layout-effect";
 import { cn } from "../lib/utils";
 
 import { Button } from "./button";
@@ -184,6 +185,8 @@ export function ColorPicker<TValue = string>({
   const fieldId = React.useId();
   /** The picker's own subtree, for telling a press inside it from a dismissal. */
   const rootRef = React.useRef<HTMLDivElement>(null);
+  /** Undoes a touch press that is waiting to see whether it becomes a tap. */
+  const pendingTap = React.useRef<(() => void) | null>(null);
   /**
    * The saturation area, whose BOX is what turns a pointer position into a
    * saturation and brightness pair — the mapping needs the rectangle, not the
@@ -301,7 +304,11 @@ export function ColorPicker<TValue = string>({
    * and removed — a host that coalesces a picker gesture on close has already
    * decided what to write by then.
    *
-   * RE-REGISTERED every render, with no dependency list, which is deliberate.
+   * RE-REGISTERED every render, with no dependency list, and at LAYOUT timing.
+   * A passive effect leaves the previous listener installed until its cleanup
+   * runs, so a native press arriving after a render that changed `showAlpha` or
+   * `onColorChange` would reach the closure from the render before it — an old
+   * alpha, or a consumer that is no longer the current one.
    * The obvious alternative keeps the handler in a ref refreshed by an effect,
    * and that ref is not guaranteed fresh when a NATIVE listener fires: a
    * passive effect runs after the commit, and this listener is outside React's
@@ -313,7 +320,7 @@ export function ColorPicker<TValue = string>({
    * nothing here runs and the draft dies with the surface, which is what a
    * cancel means.
    */
-  React.useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const root = rootRef.current;
     if (root === null) return;
     const onPointerDown = (event: Event): void => {
@@ -346,6 +353,33 @@ export function ColorPicker<TValue = string>({
       // of doing so, and the blur below declines to report one while focus is
       // moving within this picker.
       if (inside) return;
+      /*
+       * A TOUCH press is not yet a tap. It may become a scroll or a long press,
+       * and a dismissable layer waits for the resulting click before dismissing
+       * for exactly that reason — so finishing here would publish a draft while
+       * the picker stays open and the field is still being edited. The click
+       * that follows a completed tap is what finishes it; a scroll produces
+       * none, and the listener is discarded with the effect.
+       */
+      /*
+       * Read off the event rather than narrowed by `instanceof PointerEvent`,
+       * which is realm-bound for the same reason the node test above avoids it.
+       * A listener registered for `pointerdown` receives a pointer event; the
+       * property is absent only where the environment does not implement them,
+       * and an absent type is not a touch.
+       */
+      const pointerType = (event as Partial<PointerEvent>).pointerType;
+      if (pointerType === "touch") {
+        const onClick = (): void => {
+          owner.removeEventListener("click", onClick, true);
+          commitDraft();
+        };
+        owner.addEventListener("click", onClick, true);
+        pendingTap.current = () => {
+          owner.removeEventListener("click", onClick, true);
+        };
+        return;
+      }
       commitDraft();
     };
     /*
@@ -359,6 +393,8 @@ export function ColorPicker<TValue = string>({
     owner.addEventListener("pointerdown", onPointerDown, true);
     return () => {
       owner.removeEventListener("pointerdown", onPointerDown, true);
+      pendingTap.current?.();
+      pendingTap.current = null;
     };
   });
 
@@ -438,7 +474,30 @@ export function ColorPicker<TValue = string>({
   };
 
   return (
-    <div ref={rootRef} className={cn("w-64 space-y-3", className)}>
+    <div
+      ref={rootRef}
+      className={cn("w-64 space-y-3", className)}
+      /*
+       * The finish that focus can express, watched at the PICKER rather than at
+       * the field. `onBlur` is delivered from the bubbling `focusout`, so this
+       * sees focus leaving any descendant.
+       *
+       * At the field alone it missed the keyboard route entirely: tab from the
+       * field to a preset and then out without activating it, and the field's
+       * own blur was declined — focus had moved to something inside — while
+       * nothing watched the boundary the focus actually crossed. The pointer
+       * listener cannot cover it either, since no pointer was involved.
+       *
+       * `relatedTarget` names where focus is going, and is null when it leaves
+       * the document entirely, which is also a finish.
+       */
+      onBlur={event => {
+        const next = event.relatedTarget;
+        const root = rootRef.current;
+        if (root !== null && isNode(next) && root.contains(next)) return;
+        commitDraft();
+      }}
+    >
       <div
         ref={surfaceRef}
         role="application"
@@ -559,22 +618,6 @@ export function ColorPicker<TValue = string>({
             // Kept off the surrounding form, which may have a submit of its own:
             // finishing a colour is not submitting whatever contains it.
             event.preventDefault();
-            commitDraft();
-          }}
-          onBlur={event => {
-            /*
-             * Focus moving WITHIN the picker is not a finish. Pressing a
-             * preset, a recent colour or the eyedropper blurs this field before
-             * that press becomes a click, so reporting here would publish the
-             * typed literal first and the replacement second — two edits for
-             * the one the author made.
-             *
-             * `relatedTarget` is what the focus is moving TO, and it is null
-             * when focus leaves the document entirely, which IS a finish.
-             */
-            const next = event.relatedTarget;
-            const root = rootRef.current;
-            if (root !== null && isNode(next) && root.contains(next)) return;
             commitDraft();
           }}
         />
