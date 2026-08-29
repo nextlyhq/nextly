@@ -276,12 +276,18 @@ export async function copyDefaultLocaleOntoMain(
 /**
  * Set one locale's `_updated_at` to NULL, tolerating a companion that has no such column.
  *
- * Raw SQL because the column is deliberately not declared on the companion's Drizzle table — see
- * `readCompanionStamps` for why — so `.set()` cannot name it.
+ * The column is deliberately not declared on the companion's own Drizzle table — see
+ * `readCompanionStamps` for why — so this drives a narrow handle built for the three columns it
+ * needs, `buildCompanionStampTable`, rather than the companion's table. `.set()` can then name
+ * the column, and the value is encoded by the same dialect mapping every other Drizzle write
+ * uses; a hand-built statement would bind a `Date` straight to the driver and write the local
+ * wall clock into a column that records no zone.
  *
  * A companion that predates the column is not an error here: it simply has no stamp to clear, and
- * every locale on it already reads as UNKNOWN. Anything else rethrows, so a permission fault is
- * not quietly absorbed into "there was nothing to do".
+ * every locale on it already reads as UNKNOWN. Recognising that case takes a predicate that walks
+ * the CAUSE chain, because Drizzle wraps the driver error and the wording this must match is on
+ * the cause rather than on the error a caller catches. Anything else rethrows, so a permission
+ * fault is not quietly absorbed into "there was nothing to do".
  *
  * The guard is part of the statement rather than a check before it. This clears the stamp on
  * EVERY row of the locale, and the caller passes the SOURCE locale — one half of every comparison
