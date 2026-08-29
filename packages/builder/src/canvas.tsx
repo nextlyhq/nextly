@@ -687,13 +687,45 @@ function useSelectionMarkers(
      * state, on an ordinary shipping block.
      */
     const mark = (): void => {
+      /*
+       * Every element a marker can land on OR currently carries one, which are
+       * not the same set. A render can move a node id from one existing element
+       * to another without touching the child list — the attribute case this
+       * effect subscribes to — and the element that LOST the id then matches
+       * nothing selected by node id. Left out, it keeps the selection attribute
+       * and the state class it was last given: a second outline around a block
+       * nothing is editing, and a hover appearance forced on it.
+       *
+       * The rendered PAGE ROOT is named explicitly rather than reached by one
+       * of the marker selectors: `PageRenderer` draws `.nx-pb-page` as a child
+       * of this container and the page tier compiles onto that element rather
+       * than onto the canvas wrapper, so it must be markable before it has ever
+       * been marked.
+       */
+      const touched = new Set<Element>([container]);
       // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
       // that declares its iterator, and this package compiles without one — so the
       // loop that reads more naturally does not type-check here.
-      container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+      container
+        .querySelectorAll(
+          [
+            `.${PAGE_ROOT_CLASS}`,
+            `[${NODE_ID_ATTRIBUTE}]`,
+            `[${SELECTED_ATTRIBUTE}]`,
+            ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
+          ].join(", ")
+        )
+        .forEach(element => touched.add(element));
+
+      touched.forEach(element => {
         const id = element.getAttribute(NODE_ID_ATTRIBUTE);
         if (id === null || !marked.includes(id)) {
-          element.removeAttribute(SELECTED_ATTRIBUTE);
+          // Guarded like the writes below: this walk now visits the page root
+          // and the container, which never carry the attribute, and removing an
+          // absent one still touches the element.
+          if (element.hasAttribute(SELECTED_ATTRIBUTE)) {
+            element.removeAttribute(SELECTED_ATTRIBUTE);
+          }
           return;
         }
         // The VALUE carries which member the panels answer for. A boolean
@@ -771,17 +803,9 @@ function useSelectionMarkers(
           });
       }
 
-      /*
-       * Every element a marker can land on OR has to be cleared from. The
-       * rendered PAGE ROOT is in the list explicitly: `PageRenderer` draws
-       * `.nx-pb-page` as a child of this container, and the page tier compiles
-       * onto that element rather than onto the canvas wrapper — so marking the
-       * wrapper leaves page-level state rules unmatched while looking correct.
-       */
-      const marks: Element[] = [container];
-      container
-        .querySelectorAll(`.${PAGE_ROOT_CLASS}, [${NODE_ID_ATTRIBUTE}]`)
-        .forEach(element => marks.push(element));
+      // The SAME set the selection was written from, so the two markers cannot
+      // disagree about which elements exist.
+      const marks: Element[] = Array.from(touched);
 
       marks.forEach(element => {
         // `base` is not a state anything forces: it is what applies when nothing

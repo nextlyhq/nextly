@@ -2365,4 +2365,52 @@ describe("forcing a state onto a tree React commits over time", () => {
     expect(late?.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
     expect(late?.className).toContain(previewStateClass("hover"));
   });
+
+  it("clears an element that LOSES the node id it was marked for", async () => {
+    /*
+     * A render can move a node id between two elements that both already exist,
+     * changing no child list — which is the attribute-only case this effect
+     * subscribes to, and the one where the element left behind is reachable by
+     * neither the node-id selector nor the page root.
+     *
+     * Asserted on the OLD element rather than on the new one: marking the
+     * arrival is what the case above already covers, and a walk that marks the
+     * arrival while leaving the departure dressed draws two outlines and forces
+     * hover on a block nothing is editing.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="movable"
+        forcedState="hover"
+      />
+    );
+
+    const host = document.querySelector(`.${PAGE_ROOT_CLASS}`);
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    first.setAttribute(NODE_ID_ATTRIBUTE, "movable");
+    await act(async () => {
+      host?.appendChild(first);
+      host?.appendChild(second);
+    });
+    expect(first.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+    expect(first.className).toContain(previewStateClass("hover"));
+
+    await act(async () => {
+      first.removeAttribute(NODE_ID_ATTRIBUTE);
+      second.setAttribute(NODE_ID_ATTRIBUTE, "movable");
+    });
+
+    expect(second.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+    expect(first.getAttribute(SELECTED_ATTRIBUTE)).toBeNull();
+    expect(first.className).not.toContain(previewStateClass("hover"));
+  });
 });

@@ -17,6 +17,17 @@ import { TEST_GLOBS } from "./src/source-modules";
  * that omitted an extension the guard accepted would let a file import `vitest`
  * and never be run. Both now come from one list in `src/source-modules.ts`.
  *
+ * `testTimeout` is raised for the same reason the environment is lowered. The
+ * default budget is aimed at a unit test, and the layering contracts are not
+ * one: each reads every module in the package off disk and parses it, which is
+ * IO-bound work whose duration is decided by how loaded the machine is rather
+ * than by anything in the import graph. Measured, one contract ran in under
+ * half a second here and timed out 200ms past five seconds on a contended
+ * runner — a red that reports nothing about the property it checks, on a
+ * suite where the cost is bounded by the file count and cannot run away.
+ * `blocks-engine`, whose suite is static analysis for the same reason, already
+ * carries this budget.
+ *
  * `globalSetup` is what keeps that derivation honest. Narrowing the one list
  * narrows these globs too, and a suite that stops being collected reports the
  * same green as a suite that passed — so the check that the runner still
@@ -28,6 +39,7 @@ import { TEST_GLOBS } from "./src/source-modules";
 export default defineConfig({
   test: {
     environment: "node",
+    testTimeout: 30_000,
     include: TEST_GLOBS,
     globalSetup: ["./vitest.global-setup.ts"],
     // Runs fresh inside EACH test file's own resolved environment, which is

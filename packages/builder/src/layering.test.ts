@@ -135,9 +135,27 @@ function sourceFiles(dir: string): string[] {
   );
 }
 
-/** Every module specifier a file imports. */
+/**
+ * Every module specifier a file imports.
+ *
+ * MEMOISED, because the answer cannot change during a run and every contract
+ * below sweeps the whole package: without this each one re-reads and re-parses
+ * all of them, so the cost is the file count times the number of contracts
+ * rather than the file count. That is disk-bound work on a shared runner, and
+ * it put a single contract 200ms past the default 5s timeout while the same
+ * test took under half a second locally — a red that says nothing about the
+ * import graph it exists to check.
+ *
+ * Keyed by absolute path, which is what `sourceFiles` yields.
+ */
+const importCache = new Map<string, string[]>();
+
 function importsOf(file: string): string[] {
-  return importedSpecifiers(readFileSync(file, "utf8"), file);
+  const cached = importCache.get(file);
+  if (cached !== undefined) return cached;
+  const specifiers = importedSpecifiers(readFileSync(file, "utf8"), file);
+  importCache.set(file, specifiers);
+  return specifiers;
 }
 
 /**
