@@ -19,7 +19,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
@@ -699,6 +705,143 @@ describe("the grid, and the strip that describes it", () => {
     // and arriving somewhere unlabelled is its own defect.
     expect(after.getAttribute("aria-hidden")).toBeNull();
     expect(after.getAttribute("aria-label")).toBe("Block description");
+  });
+
+  /**
+   * Force the strip to report that its content overflows its box.
+   *
+   * jsdom lays nothing out, so `scrollHeight` and `clientHeight` are 0 on every
+   * element and a 400-character description overflows by exactly as much as a
+   * short one — which is to say not at all. Defining the two properties is what
+   * puts the branch under test at all.
+   */
+  function forceOverflow(element: HTMLElement, overflowing: boolean): void {
+    Object.defineProperty(element, "scrollHeight", {
+      value: overflowing ? 200 : 40,
+      configurable: true,
+    });
+    Object.defineProperty(element, "clientHeight", {
+      value: 80,
+      configurable: true,
+    });
+  }
+
+  /** Install a `ResizeObserver` whose callback the test can fire on demand. */
+  function drivableObserver(): { fire: () => void; restore: () => void } {
+    const previous = globalThis.ResizeObserver;
+    let callback: (() => void) | undefined;
+    globalThis.ResizeObserver = class {
+      constructor(fn: () => void) {
+        callback = fn;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    return {
+      fire: () => {
+        callback?.();
+      },
+      restore: () => {
+        globalThis.ResizeObserver = previous;
+      },
+    };
+  }
+
+  it("re-measures when the STRIP RESIZES, with no change of subject", () => {
+    /*
+     * The panel is resizable, and browser zoom and font size move the box too.
+     * None of those re-render anything here, so a measurement taken only when
+     * the described block changes leaves a newly overflowing description out of
+     * the tab order with its tail unreachable — and leaves a dead focus stop
+     * behind when it stops overflowing.
+     *
+     * The subject deliberately never changes in this case. That is the whole
+     * property: a measurement keyed on the subject cannot see this.
+     */
+    const observer = drivableObserver();
+    try {
+      sevenBlocks();
+      render(<InsertPanel editor={editorSpy(documentOf())} />);
+      const body = document.querySelector(
+        ".nx-insert-panel__describes"
+      ) as HTMLElement;
+      expect(body.getAttribute("tabindex")).toBeNull();
+
+      forceOverflow(body, true);
+      act(() => {
+        observer.fire();
+      });
+
+      expect(
+        (
+          document.querySelector(".nx-insert-panel__describes") as HTMLElement
+        ).getAttribute("tabindex")
+      ).toBe("0");
+
+      // And back again, so this is not a one-way latch that accumulates focus
+      // stops as an author drags the panel about.
+      forceOverflow(body, false);
+      act(() => {
+        observer.fire();
+      });
+      expect(
+        (
+          document.querySelector(".nx-insert-panel__describes") as HTMLElement
+        ).getAttribute("tabindex")
+      ).toBeNull();
+    } finally {
+      observer.restore();
+    }
+  });
+
+  it("re-measures when the DESCRIPTION changes but the block does not", () => {
+    /*
+     * The other half, and a `ResizeObserver` cannot see it: a longer sentence
+     * inside a strip already at its bound grows `scrollHeight` while the border
+     * box stays exactly where it was, so the observer never fires. The entry's
+     * id is the BLOCK NAME, so replacing a definition's description leaves the
+     * subject unchanged too.
+     *
+     * A measurement keyed on the subject is therefore blind to this, which is
+     * why the effect carries no dependency list.
+     */
+    const defs = (description: string) =>
+      [
+        {
+          ...base,
+          name: "acme/solo",
+          description,
+          editor: { label: "Solo", category: "Layout" },
+        },
+      ] as never;
+
+    const view = render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        definitions={defs("Short.")}
+      />
+    );
+    const body = document.querySelector(
+      ".nx-insert-panel__describes"
+    ) as HTMLElement;
+    forceOverflow(body, false);
+    expect(body.getAttribute("tabindex")).toBeNull();
+
+    forceOverflow(body, true);
+    view.rerender(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        definitions={defs("A much longer sentence about the very same block.")}
+      />
+    );
+
+    // Same block, same id, same box — only the text grew.
+    expect(
+      (
+        document.querySelector(".nx-insert-panel__describes") as HTMLElement
+      ).getAttribute("tabindex")
+    ).toBe("0");
   });
 
   it("bounds the strip, so a long description cannot eat the palette", () => {
