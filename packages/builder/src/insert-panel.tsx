@@ -63,7 +63,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  useCommandState,
+  useCommandHighlight,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -148,8 +148,9 @@ export interface InsertPanelProps {
  * the grid from REFLOWING while the author drags the panel's edge, which would
  * move a tile out from under the cursor mid-drag.
  *
- * The KEYBOARD does not read this, and that is deliberate — see the note on
- * arrow keys in this module's documentation.
+ * LAYOUT ONLY. No keyboard behaviour derives from it, and that is deliberate
+ * rather than an omission: arrow keys stepping by a row would contradict the
+ * listbox semantics the palette announces. See this module's documentation.
  */
 const GRID_COLUMNS = 3;
 
@@ -157,14 +158,17 @@ const GRID_COLUMNS = 3;
  * The strip describing whichever tile the palette has highlighted.
  *
  * A component of its own, and rendered INSIDE the palette, because that is
- * where the highlight lives: `useCommandState` reads the palette's own store,
+ * where the highlight lives: `useCommandHighlight` reads the palette's own
+ * store,
  * so this follows a pointer, an arrow key and a filter alike without the panel
  * keeping a second copy of which tile is current.
  *
- * Hidden from assistive technology deliberately. The sentence it shows is
- * already the accessible description of the tile it describes, so exposing it
- * here as well would have a screen reader read every description twice — once
- * on the option and once from a region that changed because of it.
+ * Hidden from assistive technology while it shows the whole sentence. That
+ * sentence is already the option's own accessible description, so exposing the
+ * region as well would have a screen reader read every description twice —
+ * once on the tile and once from a region that changed because of it. It
+ * becomes a named, focusable region only when it has a tail no pointer-free
+ * reader could otherwise reach.
  */
 function DescriptionStrip({
   groups,
@@ -176,7 +180,7 @@ function DescriptionStrip({
   // Empty string is the palette's "nothing highlighted", which is a different
   // answer from an entry it does not hold — both fall back, but only one of
   // them would silently match an entry whose token was the empty string.
-  const highlighted = useCommandState(state => state.value);
+  const highlighted = useCommandHighlight();
   const described = describedEntry(
     groups,
     tokens,
@@ -196,12 +200,49 @@ function DescriptionStrip({
    */
   const body = React.useRef<HTMLParagraphElement>(null);
   const subject = described?.id;
+  /*
+   * Whether this description has text the box is not showing.
+   *
+   * Measured rather than assumed from length, because whether a sentence
+   * overflows depends on the panel's width — which an author drags — and on
+   * the reader's own font size. A character count would be wrong at both ends
+   * of that range.
+   */
+  const [clipped, setClipped] = React.useState(false);
   React.useEffect(() => {
-    if (body.current !== null) body.current.scrollTop = 0;
+    const element = body.current;
+    if (element === null) return;
+    element.scrollTop = 0;
+    setClipped(element.scrollHeight > element.clientHeight);
   }, [subject]);
   if (described === undefined) return null;
+  /*
+   * Reachable by keyboard ONLY while there is something hidden to reach.
+   *
+   * The strip is bounded and scrollable, so a description longer than the box
+   * has a tail that a pointer can scroll to and a keyboard cannot: focus stays
+   * in the search field, and nothing else can direct a scroll here.
+   *
+   * Made focusable only when it actually overflows, rather than always. A
+   * permanent stop between the search field and the tiles costs every author a
+   * keystroke on the way to the thing they came for, and buys nothing in the
+   * ordinary case where the whole sentence is already visible.
+   *
+   * `aria-hidden` goes with it, because hiding a focusable element is a
+   * contradiction assistive technology has no good answer to. Nothing is lost
+   * by that: the same sentence is the option's own description, so a screen
+   * reader hears it on the tile whether or not this region exists. What the
+   * region adds when it is reachable is a NAME saying what it holds, so
+   * arriving here is not arriving at unlabelled prose.
+   */
   return (
-    <p ref={body} className="nx-insert-panel__describes" aria-hidden="true">
+    <p
+      ref={body}
+      className="nx-insert-panel__describes"
+      {...(clipped
+        ? { tabIndex: 0, role: "group", "aria-label": "Block description" }
+        : { "aria-hidden": true })}
+    >
       <b className="nx-insert-panel__describes-name">{described.label}</b>
       {` ${described.description}`}
     </p>
@@ -414,9 +455,12 @@ export function InsertPanel({
   return (
     <div
       className="nx-insert-panel"
-      /* The one column count, handed to the stylesheet rather than spelled
-         again in it. Written twice, a change to the layout would move the
-         tiles and leave the arrow keys stepping by the old number.
+      /* The column count, handed to the stylesheet rather than spelled again
+         in it, so the layout has one source.
+
+         LAYOUT ONLY. Nothing reads it to move a highlight — arrow keys are the
+         command primitives' and step by one option, which is what their
+         listbox semantics announce. See this module's documentation.
 
          On the PANEL rather than on each group, because the primitives own the
          element the grid is applied to — their items container — and a

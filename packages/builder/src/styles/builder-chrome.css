@@ -194,9 +194,12 @@
  * Tiles, three to a row.
  *
  * The count comes from the panel as `--nx-insert-columns` rather than being
- * spelled here, because the arrow keys step by the same number: written in
- * both places, a change to the layout would move the tiles and leave the
- * keyboard stepping by the old count.
+ * spelled here, so the layout has one source.
+ *
+ * It is a LAYOUT count and nothing else. Arrow keys belong to the command
+ * primitives and step by one option, matching the listbox semantics they
+ * announce — a grid keyboard would need a grid accessibility tree, which is
+ * not something the panel can add on top of them.
  *
  * Applied to the primitives\' OWN items container rather than to a wrapper of
  * this file\'s. The primitives register an item through the group that

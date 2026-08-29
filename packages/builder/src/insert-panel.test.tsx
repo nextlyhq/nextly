@@ -652,6 +652,55 @@ describe("the grid, and the strip that describes it", () => {
     expect(body.scrollTop).toBe(0);
   });
 
+  it("becomes keyboard-reachable ONLY while it is hiding text", () => {
+    /*
+     * The strip is bounded and scrollable, so a description longer than the box
+     * has a tail a pointer can scroll to and a keyboard cannot — focus stays in
+     * the search field and nothing can direct a scroll here.
+     *
+     * Both states are asserted, and the not-clipped one is what stops this
+     * becoming an argument for a permanent tab stop. A stop between the search
+     * field and the tiles costs every author a keystroke on the way to what
+     * they came for, and buys nothing when the whole sentence is visible.
+     *
+     * Overflow is FORCED rather than produced by a long description, because
+     * jsdom lays nothing out: `scrollHeight` and `clientHeight` are both 0 for
+     * every element, so a real 400-character description overflows by exactly
+     * as much as a short one — that is, not at all. Defining the two
+     * properties is what puts the branch under test.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    const body = document.querySelector(
+      ".nx-insert-panel__describes"
+    ) as HTMLElement;
+    expect(body).not.toBeNull();
+
+    // Not clipped: hidden from assistive technology and out of the tab order.
+    expect(body.getAttribute("aria-hidden")).toBe("true");
+    expect(body.getAttribute("tabindex")).toBeNull();
+
+    Object.defineProperty(body, "scrollHeight", {
+      value: 200,
+      configurable: true,
+    });
+    Object.defineProperty(body, "clientHeight", {
+      value: 80,
+      configurable: true,
+    });
+    fireEvent.pointerMove(tile("B4"));
+
+    const after = document.querySelector(
+      ".nx-insert-panel__describes"
+    ) as HTMLElement;
+    expect(after.getAttribute("tabindex")).toBe("0");
+    // A focusable element must not be hidden from the tree it is focusable in,
+    // and arriving somewhere unlabelled is its own defect.
+    expect(after.getAttribute("aria-hidden")).toBeNull();
+    expect(after.getAttribute("aria-label")).toBe("Block description");
+  });
+
   it("bounds the strip, so a long description cannot eat the palette", () => {
     /*
      * Asserted against the stylesheet for the same reason the `touch-action`

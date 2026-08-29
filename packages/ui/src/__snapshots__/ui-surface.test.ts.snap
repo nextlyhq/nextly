@@ -293,7 +293,7 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "spinnerVariants (value)",
   "toast (value)",
   "useActiveShortcuts (value)",
-  "useCommandState (value)",
+  "useCommandHighlight (value)",
   "usePortalContainer (value)",
   "useShortcutManager (value)",
   "useShortcuts (value)",
