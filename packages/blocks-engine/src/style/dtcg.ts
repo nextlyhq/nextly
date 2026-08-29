@@ -394,15 +394,7 @@ function familyToDtcg(css: string): string | string[] | undefined {
   ) {
     return undefined;
   }
-  // An unquoted item is a run of identifiers and nothing else. `10px, serif`
-  // tokenizes as a dimension, so a browser drops any declaration reading the
-  // token — exporting it as a family list shows a stack the site never used.
-  if (parts.some(part => !part.quoted && !UNQUOTED_FAMILY.test(part.raw))) {
-    return undefined;
-  }
-  if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
-    return undefined;
-  }
+  if (!isUsableFamilyList(parts)) return undefined;
   return parts.length === 1 ? parts[0]?.name : parts.map(part => part.name);
 }
 
@@ -415,7 +407,7 @@ function familyToDtcg(css: string): string | string[] | undefined {
  * because the name is the family, not the spelling, and backslash escapes are
  * resolved for the same reason.
  */
-function splitFamilyList(css: string): FamilyPart[] {
+export function splitFamilyList(css: string): FamilyPart[] {
   const parts: FamilyPart[] = [];
   let current = "";
   let quoted = false;
@@ -504,8 +496,33 @@ function trimCssWhitespace(text: string): string {
   return text.replace(CSS_WS_EDGES, "");
 }
 
+/**
+ * Whether a split family list is one CSS will read.
+ *
+ * `FamilyPart.valid` answers the QUOTING rule alone — one string per item, and
+ * nothing outside it. That is half the grammar. `<family-name>` is one string
+ * OR a run of identifiers, so an unquoted item must also be an identifier run
+ * carrying no parentheses: `10px, serif` tokenizes as a dimension and
+ * `var(--x)` as a function, and a browser drops the whole declaration for
+ * either.
+ *
+ * Exported and shared rather than repeated at each caller, because both halves
+ * have to be asked together. Asking only `valid` accepts `var(--x)` as a font
+ * called `var(--x)`, which is the answer a caller reading one half gets — and
+ * it looks like a family until something tries to render it.
+ */
+export function isUsableFamilyList(parts: readonly FamilyPart[]): boolean {
+  if (parts.length === 0) return false;
+  return parts.every(
+    part =>
+      part.valid &&
+      (part.quoted ||
+        (UNQUOTED_FAMILY.test(part.raw) && !/[()]/.test(part.name)))
+  );
+}
+
 /** One family from a list, how it was written, and whether CSS accepts it. */
-interface FamilyPart {
+export interface FamilyPart {
   name: string;
   /** As written, before escapes were resolved. */
   raw: string;

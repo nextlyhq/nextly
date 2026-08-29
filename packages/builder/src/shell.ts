@@ -425,3 +425,22 @@ export type {
   DeletionWarning,
   NameRefusal,
 } from "./class-library";
+
+/**
+ * The fonts panel, and the rules it draws from.
+ *
+ * A reader over the site's faces and its `fontFamily` tokens rather than an
+ * editor: creating and renaming those tokens belongs to the tokens studio, and
+ * the question this answers — whether a family a token names will actually
+ * render — needs both lists at once, which is why neither the studio nor the
+ * inspector can ask it.
+ */
+export { FontsPanel } from "./fonts-panel";
+export type { FontsPanelProps } from "./fonts-panel";
+export { fontTokenRows, readStack, rowsNeedingAttention } from "./font-library";
+export type {
+  FamilyReading,
+  FamilySource,
+  FontTokenRow,
+  StackReading,
+} from "./font-library";
