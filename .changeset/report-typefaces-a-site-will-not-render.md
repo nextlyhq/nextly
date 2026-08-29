@@ -65,3 +65,8 @@ about what a browser will read.
 invalid. `font-family: Brand,` is a parse error the browser drops the whole
 declaration for, and reporting it as the single family `Brand` described a value
 the page never rendered.
+
+`BuilderShell`'s `openInsertPanelToken` is now `openPanelRequest`, carrying the
+panel alongside the count. Opening `insert` from the canvas appender and opening
+`tokens` from the fonts panel are the same request with a different subject, and
+two props would have been two answers to one question.

@@ -91,19 +91,30 @@ export interface StackReading {
 }
 
 /**
- * The families a set of faces provides, lowercased for comparison.
+ * The faces the compiler will actually EMIT.
  *
- * Only faces the compiler will actually EMIT. `emitFontFaces` drops a face
- * whose `src` is empty, remote, or carries an unusable descriptor, and the
- * stored tier deliberately keeps those shaped-but-invalid faces so their issues
- * can be reported. Counting them here would mark a token healthy against a
- * `@font-face` the site sheet does not contain.
+ * `emitFontFaces` drops a face whose `src` is empty, remote, or carries an
+ * unusable descriptor, while the stored tier deliberately keeps those
+ * shaped-but-invalid faces so their issues can be reported. Anything reading
+ * "what does this site load" has to ask this rather than the raw list —
+ * counting a refused face marks a token healthy against a `@font-face` the site
+ * sheet does not contain, and listing one tells an author a file loads when it
+ * does not.
+ *
+ * Exported so the panel's list and the token analysis cannot disagree about
+ * which faces exist. Two filters would agree today and drift on the next
+ * validation rule the engine adds.
  */
+export function emittableFaces(
+  faces: readonly FontFaceDef[]
+): readonly FontFaceDef[] {
+  return faces.filter(face => validateFontFace(face, "fonts").length === 0);
+}
+
+/** The families those faces provide, lowercased for comparison. */
 function hostedFamilies(faces: readonly FontFaceDef[]): ReadonlySet<string> {
   return new Set(
-    faces
-      .filter(face => validateFontFace(face, "fonts").length === 0)
-      .map(face => face.family.trim().toLowerCase())
+    emittableFaces(faces).map(face => face.family.trim().toLowerCase())
   );
 }
 
@@ -296,12 +307,32 @@ export function tokenSummary(
   }
   if (attention.length === 0) {
     const noun = rows.length === 1 ? "token" : "tokens";
-    return `${rows.length} typeface ${noun}, each asking first for a family this site provides.`;
+    // Deliberately not "each asking first for a family this site provides".
+    // A `var()` stack has an unknown first choice and a lone `inherit` has no
+    // family at all, so that sentence would claim something checked about rows
+    // this code cannot check — the same over-claim the class manager avoids by
+    // reporting absence of evidence rather than absence of usage.
+    return `${rows.length} typeface ${noun}, none asking first for a typeface this site provides no file for.`;
   }
-  const unreadable = attention.filter(
-    row => row.reading.kind === "invalid" || row.darkReading?.kind === "invalid"
-  ).length;
-  const unprovided = attention.length - unreadable;
+  // Counted per ROW-MODE rather than by subtraction. A token invalid in one
+  // mode and unprovided in the other belongs in BOTH counts, and deriving one
+  // as `attention.length - other` forced it to zero — omitting a problem
+  // `tokenNotes` was reporting on the very same row.
+  let unreadable = 0;
+  let unprovided = 0;
+  for (const row of attention) {
+    const readings = [row.reading, row.darkReading].filter(
+      (r): r is StackReading => r !== undefined
+    );
+    if (readings.some(r => r.kind === "invalid")) unreadable += 1;
+    if (
+      readings.some(
+        r => r.kind !== "invalid" && r.firstChoice?.source === "not-provided"
+      )
+    ) {
+      unprovided += 1;
+    }
+  }
   const parts: string[] = [];
   if (unprovided > 0) {
     parts.push(

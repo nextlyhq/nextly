@@ -353,7 +353,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
 
@@ -392,7 +392,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
 
@@ -407,7 +407,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
     expect(screen.getByText("insert panel")).toBeTruthy();
@@ -420,7 +420,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={2}
+        openPanelRequest={{ panel: "insert", count: 2 }}
       />
     );
 
@@ -459,7 +459,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={store}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
 
@@ -498,7 +498,7 @@ describe("opening the insert panel from outside the shell", () => {
       <BuilderShell
         onExit={vi.fn()}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
 
@@ -567,7 +567,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={second}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
 
@@ -597,7 +597,7 @@ describe("opening the insert panel from outside the shell", () => {
     // close it had nothing to do with.
     //
     // A `className` change was tried here first and did not exercise this at
-    // all — neither `openInsertPanelToken` nor `update` depends on it, so the
+    // all — neither `openPanelRequest` nor `update` depends on it, so the
     // effect never re-runs and the guard is never reached. Only a dependency
     // the effect actually reads can demonstrate the guard is doing anything.
     stubContainerFits(true);
@@ -614,7 +614,7 @@ describe("opening the insert panel from outside the shell", () => {
         onExit={vi.fn()}
         store={storeOverBacking()}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
     expect(screen.getByText("insert panel")).toBeTruthy();
@@ -623,13 +623,13 @@ describe("opening the insert panel from outside the shell", () => {
     expect(screen.queryByText("insert panel")).toBeNull();
 
     // A DIFFERENT store object reading the same backing value — `update`
-    // changes identity, `openInsertPanelToken` does not.
+    // changes identity, `openPanelRequest` does not.
     rerender(
       <BuilderShell
         onExit={vi.fn()}
         store={storeOverBacking()}
         renderPanel={panel => <p>{panel} panel</p>}
-        openInsertPanelToken={1}
+        openPanelRequest={{ panel: "insert", count: 1 }}
       />
     );
 

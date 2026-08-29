@@ -325,7 +325,17 @@ export {
  * Escaped rather than refused, because a backslash or a quote in a family name
  * is legal CSS and the escape is what the spec provides for exactly this.
  */
-function cssString(value: string): string {
+/**
+ * A value as the CONTENT of a CSS string, escaped so it cannot end one.
+ *
+ * Published because a family name reaches CSS from more than one place: the
+ * compiler writes `font-family:"…"` into the site sheet, and a surface drawing
+ * a specimen writes the same name into an inline style. Wrapping author data in
+ * quotes without this produces `"ACME "Pro""` for the perfectly legal family
+ * `ACME "Pro"` — the browser drops the declaration, and the specimen silently
+ * demonstrates the fallback instead of the face it names.
+ */
+export function cssString(value: string): string {
   let out = "";
   for (const char of value) {
     const code = char.codePointAt(0) ?? 0;

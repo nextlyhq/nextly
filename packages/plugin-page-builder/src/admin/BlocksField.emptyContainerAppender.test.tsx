@@ -72,7 +72,7 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   return {
     ...real,
     // Captures the WHOLE props object — `onShowEmptyElementsChange` and
-    // `openInsertPanelToken` are what this file drives, and a narrower
+    // `openPanelRequest` are what this file drives, and a narrower
     // destructure (as the sibling files use for a shell that ignores those)
     // would silently discard them.
     BuilderShell: (

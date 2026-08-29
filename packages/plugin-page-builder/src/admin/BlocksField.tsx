@@ -49,7 +49,11 @@ import {
   type FontFaceDef,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
+import {
+  DEFAULT_PREFERENCES,
+  registrySlotSource,
+  type LeftPanel,
+} from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   authoredBreakpoints,
@@ -431,6 +435,26 @@ function offerableFaces(
 ): readonly FontFaceDef[] | undefined {
   if (pending || error !== null) return undefined;
   return style?.fonts ?? [];
+}
+
+/**
+ * The tokens as the PAGE renders them, defaults included.
+ *
+ * Deliberately not `offerableTokens`. A studio edits what the site AUTHORED —
+ * showing the engine's defaults as rows an author can rename would offer edits
+ * that write nothing — while a report on what the page draws has to read what
+ * the page draws. `resolveSiteTokens` layers the engine's own underneath, and
+ * one of them is `font.body: system-ui`, a real typeface every site renders
+ * with. Reading the authored set had the panel announce "no typeface tokens"
+ * for a site whose every page was using one.
+ */
+function renderedTokens(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): SiteTokenSet | undefined {
+  if (pending || error !== null) return undefined;
+  return resolveSiteTokens(style?.tokens);
 }
 
 function offerableTokens(
@@ -1460,12 +1484,24 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * nothing the second time. Starts `undefined` rather than `0` so mounting
    * the editor is not itself a press.
    */
-  const [openInsertPanelToken, setOpenInsertPanelToken] = useState<
-    number | undefined
+  /*
+   * A request to open one panel, carrying its own count so the shell can tell a
+   * second press from the first. One piece of state for every panel that asks:
+   * the appender opens `insert`, and the fonts panel sends an author to
+   * `tokens` to fix a typeface the site does not provide.
+   */
+  const [openPanelRequest, setOpenPanelRequest] = useState<
+    { panel: LeftPanel; count: number } | undefined
   >(undefined);
-  const openInsertPanel = useCallback(() => {
-    setOpenInsertPanelToken(current => (current ?? 0) + 1);
+  const requestPanel = useCallback((panel: LeftPanel) => {
+    setOpenPanelRequest(current => ({
+      panel,
+      count: (current?.count ?? 0) + 1,
+    }));
   }, []);
+  const openInsertPanel = useCallback(() => {
+    requestPanel("insert");
+  }, [requestPanel]);
 
   /*
    * Whether the author wants empty-container chrome showing at all, mirrored
@@ -1517,7 +1553,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // Forces the insert panel open from the empty-container appender,
         // which lives on the canvas below rather than beside the rail that
         // normally opens a panel.
-        openInsertPanelToken={openInsertPanelToken}
+        openPanelRequest={openPanelRequest}
         // The read half of the same gap: mirrors the shell's own preference
         // so the appender below can be suppressed by the SAME switch that
         // already suppresses the placeholder box it sits over.
@@ -1714,12 +1750,20 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   siteStylePending,
                   siteStyleError
                 )}
-                tokens={offerableTokens(
+                tokens={renderedTokens(
                   canvasSiteStyle,
                   siteStylePending,
                   siteStyleError
                 )}
                 absence={siteStyleError !== null ? "failed" : "pending"}
+                /*
+                  The fix for a token naming a family this site does not provide
+                  is to edit that token, and editing belongs to the studio. This
+                  shell offers one, so the jump is wired: without the callback
+                  the panel suppresses the action and an author is left to find
+                  the right panel and the right row themselves.
+                */
+                onOpenTokens={() => requestPanel("tokens")}
               />
             ),
             /*

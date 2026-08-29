@@ -86,7 +86,11 @@ describe("the panel over a site that has been read", () => {
     // could be a constant.
     render(<FontsPanel faces={[face("Brand")]} tokens={tokens} />);
     expect(screen.queryByText(/ask first for a typeface/)).toBeNull();
-    expect(screen.getByText(/each asking first for a family/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /none asking first for a typeface this site provides no file for/
+      )
+    ).toBeTruthy();
   });
 
   it("offers the jump to Tokens only when the host supplied one", () => {
