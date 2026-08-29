@@ -609,34 +609,3 @@ export function registrySlotSource(): SlotSource {
     },
   };
 }
-
-/**
- * Whether two entry ids name the same entry.
- *
- * Trimmed on both sides because the command primitives hand back a TRIMMED
- * value, so an id carrying surrounding whitespace would never match itself and
- * the panel would describe the wrong tile — or none.
- */
-function sameId(a: string, b: string): boolean {
-  return a.trim() === b.trim();
-}
-
-/**
- * The entry an id names, or `undefined` where the groups no longer hold it.
- *
- * A filter can remove the highlighted entry between renders, so a caller
- * holding an id has to be able to find out that it is gone rather than being
- * handed something adjacent.
- */
-export function entryById(
-  groups: readonly InsertGroup[],
-  id: string | undefined
-): InsertEntry | undefined {
-  if (id === undefined) return undefined;
-  for (const group of groups) {
-    for (const entry of group.entries) {
-      if (sameId(entry.id, id)) return entry;
-    }
-  }
-  return undefined;
-}

@@ -545,6 +545,95 @@ describe("the grid, and the strip that describes it", () => {
     expect(strip()).toBe("B0 Block number 0.");
   });
 
+  it("bounds the strip, so a long description cannot eat the palette", () => {
+    /*
+     * Asserted against the stylesheet for the same reason the `touch-action`
+     * case above is: jsdom computes no layout, so every element reports zero
+     * height and a case driving a long description through the DOM would pass
+     * with the bound deleted.
+     *
+     * The failure is a valid input, not a malformed one. Nothing caps a
+     * `BlockDefinition.description`, and the command root is `h-full` with
+     * `overflow-hidden` — so an unshrinkable strip claims its full content
+     * height, squeezes the tile list toward zero, and then clips its own
+     * overflow with no way to scroll to it. One long-winded plugin hides every
+     * block in the palette and is itself unreadable.
+     */
+    const css = readFileSync(
+      join(process.cwd(), "src/styles/builder-chrome.css"),
+      "utf8"
+    );
+    const rule = css.slice(css.indexOf(".nx-insert-panel__describes {"));
+    // COMMENTS STRIPPED, because the block's own comment names the
+    // declaration it exists to forbid — searching the raw text finds the prose
+    // and reports a violation that is not there.
+    const block = rule
+      .slice(0, rule.indexOf("}"))
+      .replace(/\/\*[\s\S]*?\*\//g, "");
+
+    // Population first: a renamed selector leaves every assertion below
+    // reading an empty string, and "the forbidden value is absent" passes on
+    // nothing at all.
+    expect(block.length).toBeGreaterThan(0);
+    expect(block).toContain("max-height:");
+    expect(block).toContain("overflow-y: auto;");
+    // `flex: none` is the specific declaration that made it unshrinkable, and
+    // it is what a later edit would most naturally reintroduce.
+    expect(block).not.toContain("flex: none");
+  });
+
+  it("keeps two variations apart when only TRAILING SPACE separates them", () => {
+    /*
+     * Nothing validates a variation name, and the command primitives TRIM the
+     * value they report — so `compact` and `compact ` are two valid, distinct
+     * entries whose reported values are identical. Pointing at the second then
+     * describes and inserts the FIRST, silently.
+     *
+     * Both halves are asserted. Describing the right one is the visible
+     * symptom; inserting the right one is what the author actually loses, and
+     * a case checking only the strip would pass against a panel that describes
+     * correctly and inserts the wrong block.
+     */
+    registerBlocks(
+      [
+        {
+          ...base,
+          name: "acme/card",
+          description: "A card.",
+          editor: {
+            label: "Card",
+            // Distinct PROPS, so the inserted node says which variation was
+            // chosen. Without them both inserts look identical and the half
+            // of this case about inserting is satisfied by absence.
+            variations: [
+              { name: "compact", label: "Compact", props: { tone: "tight" } },
+              { name: "compact ", label: "Spacious", props: { tone: "loose" } },
+            ],
+          },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+    const editor = editorSpy(documentOf());
+    render(<InsertPanel editor={editor} />);
+
+    // Driven through the primitives' OWN highlight — a pointer move, which is
+    // what they report a value from — because that report is where the
+    // trimming happens. A press sets the value directly and would never reach
+    // the collapse this case exists for.
+    fireEvent.pointerMove(tile("Spacious"));
+    expect(strip()).toBe("Spacious A card.");
+
+    fireEvent.click(tile("Spacious"));
+    expect(editor.apply).toHaveBeenCalledTimes(1);
+    expect(editor.apply.mock.calls[0][0].node.props.tone).toBe("loose");
+    // The two tiles must also carry DIFFERENT description references, or one
+    // of them points at the other's sentence.
+    expect(tile("Compact").getAttribute("aria-describedby")).not.toBe(
+      tile("Spacious").getAttribute("aria-describedby")
+    );
+  });
+
   it("describes a tile on the PRESS, so touch reads it before lifting", () => {
     /*
      * A touch screen produces no `pointermove` before contact, and hover is

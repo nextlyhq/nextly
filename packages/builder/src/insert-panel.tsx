@@ -73,12 +73,12 @@ import {
   allowedEntries,
   blockSourceFor,
   catalogFrom,
-  entryById,
   filterEntries,
   groupByCategory,
   insertionPointFor,
   nodeForEntry,
   registrySlotSource,
+  type InsertGroup,
   type InsertionPoint,
   type InsertEntry,
 } from "./inserter";
@@ -151,6 +151,33 @@ export interface InsertPanelProps {
  * arrow keys in this module's documentation.
  */
 const GRID_COLUMNS = 3;
+
+/**
+ * The entry a command value names, or the first one offered.
+ *
+ * Scoped to the GROUPS rather than to the whole catalog, because a filter can
+ * remove the highlighted entry between renders and describing something the
+ * author cannot see is worse than describing nothing.
+ *
+ * The fallback is what keeps the strip from being blank on the pass before
+ * anything has been highlighted, and after a search removes the entry that
+ * was. It is DERIVED rather than written into state: a fallback that stored
+ * itself would be a second writer racing the primitives' own selection.
+ */
+function describedEntry(
+  groups: readonly InsertGroup[],
+  tokens: ReadonlyMap<string, string>,
+  active: string | undefined
+): InsertEntry | undefined {
+  if (active !== undefined) {
+    for (const group of groups) {
+      for (const entry of group.entries) {
+        if (tokens.get(entry.id) === active) return entry;
+      }
+    }
+  }
+  return groups[0]?.entries[0];
+}
 
 /** Sentence describing where the next insert will land. */
 function placementLabel(point: InsertionPoint, label?: string): string {
@@ -243,31 +270,37 @@ export function InsertPanel({
   const [active, setActive] = React.useState<string>();
 
   /*
-   * One document-unique id per entry, for `aria-describedby` to point at.
+   * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
+   * needs a string: the command value, and the id `aria-describedby` points at.
    *
-   * Prefixed from `useId` rather than built from the entry id alone, because
-   * two inserters can be mounted at once — a panel and a palette, or two
-   * editors side by side — and duplicate ids would have every tile in one
-   * describe itself with the other's sentence.
+   * Opaque rather than the entry's own id, and that is load-bearing twice over.
    *
-   * The entry id is NOT part of the generated id, only its key. A variation's
-   * name is an unrestricted string and a variation entry is identified as
-   * `block#variation`, so a variation named "wide card" would put a SPACE in
-   * the attribute — and `aria-describedby` is a space-separated list of id
-   * references, so assistive technology would look for two ids that do not
-   * exist and announce the tile with no description at all. A position is
-   * opaque and cannot carry a separator.
+   * The command primitives TRIM the value they report, so two variation names
+   * differing only in trailing space — both valid, since nothing validates a
+   * variation name — collapse to one value. Pointing at the second would then
+   * describe and insert the first, silently. A token cannot collapse because
+   * it carries no author-supplied text at all.
    *
-   * Keyed off the CATALOG rather than the filtered groups, so an id belongs to
-   * an entry for the life of the mount instead of changing as an author types.
+   * `aria-describedby` is a space-separated list of id REFERENCES, so an id
+   * built from `block#wide card` names two ids that do not exist and the tile
+   * is announced with no description — also silently, since a reference that
+   * resolves to nothing is not an error.
+   *
+   * Prefixed from `useId` because two inserters can be mounted at once — a
+   * panel and a palette, or two editors side by side — and duplicate ids would
+   * have every tile in one describe itself with the other's sentence.
+   *
+   * Built from the CATALOG rather than the filtered groups, so a token belongs
+   * to an entry for the life of the mount instead of changing as an author
+   * types.
    */
   const idPrefix = React.useId();
-  const descriptionIds = React.useMemo(() => {
-    const ids = new Map<string, string>();
+  const tokens = React.useMemo(() => {
+    const byEntry = new Map<string, string>();
     catalog.forEach((entry, index) => {
-      ids.set(entry.id, `${idPrefix}-block-${index}`);
+      byEntry.set(entry.id, `${idPrefix}-b${index}`);
     });
-    return ids;
+    return byEntry;
   }, [catalog, idPrefix]);
 
   /*
@@ -278,8 +311,7 @@ export function InsertPanel({
    * was. It is DERIVED rather than written into state: a fallback that stored
    * itself would be a second writer racing the primitives' own selection.
    */
-  const described =
-    entryById(groups, active) ?? groups[0]?.entries[0] ?? undefined;
+  const described = describedEntry(groups, tokens, active);
 
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
@@ -330,7 +362,7 @@ export function InsertPanel({
       <Command
         shouldFilter={false}
         label="Insert a block"
-        value={described?.id}
+        value={described === undefined ? undefined : tokens.get(described.id)}
         onValueChange={setActive}
       >
         <CommandInput
@@ -362,7 +394,7 @@ export function InsertPanel({
                   // unique across blocks AND their variations, while a label is
                   // not — two plugins may both label a block "Card".
                   key={entry.id}
-                  value={entry.id}
+                  value={tokens.get(entry.id)}
                   onSelect={() => insert(entry)}
                   /*
                    * NAMED by the block and DESCRIBED by its sentence, rather
@@ -382,7 +414,7 @@ export function InsertPanel({
                    * still matches what is written on the tile.
                    */
                   aria-label={entry.label}
-                  aria-describedby={descriptionIds.get(entry.id)}
+                  aria-describedby={tokens.get(entry.id)}
                   // Beside `onSelect`, never instead of it. A press stays a
                   // click until it has travelled far enough to mean a drag, so
                   // this does not consume the row's own activation — and a host
@@ -400,7 +432,7 @@ export function InsertPanel({
                      * lifting, and a finger dragging across tiles reads each
                      * one it passes.
                      */
-                    setActive(entry.id);
+                    setActive(tokens.get(entry.id));
                     beginInsertDrag?.(event, {
                       blockName: entry.blockName,
                       makeNode: () => nodeForEntry(entry, blockSource, nesting),
@@ -418,7 +450,7 @@ export function InsertPanel({
                       rendered apart. */}
                   <span
                     className="nx-insert-panel__description"
-                    id={descriptionIds.get(entry.id)}
+                    id={tokens.get(entry.id)}
                   >
                     {entry.description}
                   </span>
