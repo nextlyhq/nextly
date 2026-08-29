@@ -702,12 +702,46 @@ function useSelectionMarkers(
      * changes from hover to focus, or a selection that moves, must not leave
      * the previous class behind on an element nothing is editing.
      */
-    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+    /*
+     * The ANCESTOR CHAIN, not the selected element alone.
+     *
+     * `:hover` matches an element and every ancestor of it — measured in a
+     * browser, a pointer over a leaf puts the leaf, its parent and the root all
+     * in the hover chain. So the tiers that style an ancestor match under a
+     * real pointer, and a preview that marked only the selected node would drop
+     * exactly those: a page-level hover colour, or an enclosing block's, would
+     * vanish in the simulation and appear for the visitor.
+     *
+     * The canvas ROOT is in the chain too, because the page tier compiles onto
+     * it and a marker on a descendant cannot make its ancestor match. The walk
+     * reaches it without a special case: it stops where `contains` does, and an
+     * element contains itself. With nothing selected the walk never starts, so
+     * the root is not marked and no page-level state rule is forced.
+     */
+    const chain = new Set<Element>();
+    if (forcedState !== undefined && forcedState !== "base") {
+      const primary = container.querySelector(
+        `[${SELECTED_ATTRIBUTE}="primary"]`
+      );
+      for (
+        let node: Element | null = primary;
+        node !== null && container.contains(node);
+        node = node.parentElement
+      ) {
+        chain.add(node);
+      }
+    }
+
+    const marks: Element[] = [container];
+    container
+      .querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`)
+      .forEach(element => marks.push(element));
+
+    marks.forEach(element => {
       // `base` is not a state anything forces: it is what applies when nothing
       // else does, and the compiler emits no marker for it.
       const wanted =
-        id === selectedId && forcedState !== undefined && forcedState !== "base"
+        chain.has(element) && forcedState !== undefined
           ? previewStateClass(forcedState)
           : undefined;
 

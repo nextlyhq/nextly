@@ -13,6 +13,7 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 
 import { compilePageCss } from "./compile-page";
 import type { NamedClass } from "./named-class";
+import { previewStateClass } from "./compile-page";
 import { compileSiteSheet } from "./site-sheet";
 
 const styles = (values: Record<string, unknown>): NodeStyles =>
@@ -323,5 +324,50 @@ describe("the site sheet's host-fetch policy", () => {
     const open = sheet({ classes: [tracking] });
     const closed = sheet({ classes: [tracking], mayFetchUrl: () => false });
     expect(closed.contentHash).not.toBe(open.contentHash);
+  });
+});
+
+describe("forceable interaction states", () => {
+  /** A class and a block default that each style a hover appearance. */
+  const hovering = {
+    classes: [
+      {
+        id: "c1",
+        slug: "card",
+        orderIndex: 0,
+        styles: { hover: { base: { color: "#000001" } } },
+      },
+    ],
+    blockBases: { "core/box": { hover: { base: { color: "#000002" } } } },
+  };
+
+  it("carries the marker into the SITE tiers when the caller asks", () => {
+    /*
+     * The tiers split across two sheets and the option must not. A named class
+     * and a block-type default are compiled HERE, not with the page — so an
+     * editor that asked only the page compile for forceable states gets a
+     * selected block whose hover appearance comes from a class showing nothing
+     * at all, which is the half of the feature nobody would notice missing
+     * until an author styled a block through a class.
+     */
+    const out = sheet({ ...hovering, previewStates: true }).css;
+
+    const forced = out
+      .split("\n")
+      .filter(line => line.includes(previewStateClass("hover")));
+    // Both tiers, asserted by their values: a filter that found one would
+    // satisfy "contains the marker" while half the sheet stayed pseudo-only.
+    expect(forced.some(rule => rule.includes("#000001"))).toBe(true);
+    expect(forced.some(rule => rule.includes("#000002"))).toBe(true);
+  });
+
+  it("carries none of it into a published sheet", () => {
+    // The default, which is what every route compiles: a visitor's browser
+    // decides its own `:hover`, and a class nothing will ever set is bytes on
+    // every page for nobody.
+    const out = sheet(hovering).css;
+
+    expect(out).toContain(":where(:hover)");
+    expect(out).not.toContain(previewStateClass("hover"));
   });
 });

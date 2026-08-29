@@ -2069,6 +2069,38 @@ describe("forcing the interaction state the panel is editing", () => {
     );
   });
 
+  it("marks the CANVAS ROOT too, so page-level rules match", () => {
+    /*
+     * `:hover` matches an element and every ANCESTOR of it — measured in a
+     * browser, a pointer over a leaf puts the leaf, its parent and the root all
+     * in the chain. The page tier compiles onto the canvas root
+     * (`.nx-pb-page.nx-pb-page:where(:hover, …)`), and a marker on a descendant
+     * cannot make its ancestor match.
+     *
+     * So a preview that marked only the selected node would drop exactly the
+     * tiers a real pointer triggers: a page-level hover colour would vanish in
+     * the simulation and appear for the visitor — the preview disagreeing with
+     * the page in the one state the author opened the panel to inspect.
+     */
+    const view = renderCanvas("a", "hover");
+    const root = view.container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    expect(root).not.toBeNull();
+    expect((root as Element).className).toContain(previewStateClass("hover"));
+  });
+
+  it("leaves the canvas root unmarked when nothing is being forced", () => {
+    // The control: a root marked unconditionally would put every page-level
+    // hover rule on screen permanently, which is worse than not previewing at
+    // all — the author would be reading an appearance no visitor ever sees.
+    const view = renderCanvas("a");
+    const root = view.container.querySelector(`.${CANVAS_ROOT_CLASS}`);
+    for (const state of STYLE_STATES) {
+      expect((root as Element).className).not.toContain(
+        previewStateClass(state)
+      );
+    }
+  });
+
   it("clears the previous state when the panel moves to another one", () => {
     // hover -> focus. A marker left behind would have the canvas showing two
     // states at once, and the author would be reading an appearance that

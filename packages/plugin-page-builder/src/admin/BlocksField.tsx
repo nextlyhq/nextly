@@ -47,6 +47,7 @@ import {
   type SiteTokenSet,
   type BreakpointId,
   type FontFaceDef,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import {
@@ -937,6 +938,23 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(
     null
   );
+  /*
+   * The interaction state being edited, owned HERE so the panel and the canvas
+   * cannot disagree about it.
+   *
+   * One value handed to both surfaces rather than two defaults that happen to
+   * match: the panel states no `liveStates`, so provenance falls back to the
+   * edited state plus base — correct exactly while the canvas is simulating
+   * that state. Wired from one value that precondition holds by construction.
+   *
+   * A CONSTANT rather than state, because no control chooses it yet and state
+   * nothing writes is state that lints as unused and reads as unfinished. What
+   * matters now is that ONE value reaches both surfaces: the day a control
+   * arrives it replaces this line and finds both call sites already wired,
+   * rather than having to discover that the canvas and the panel were each
+   * defaulting on their own.
+   */
+  const styleState: StyleState = "base";
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
   /*
    * Is a drag happening — of EITHER kind.
@@ -1664,6 +1682,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // inferring one from the document. Two refs would let the panel
             // read a canvas that is not the one on screen.
             canvasRoot={canvasElement}
+            styleState={styleState}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
@@ -1863,6 +1882,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 document={editor.document}
                 rootRef={canvasRoot}
                 onRoot={setCanvasElement}
+                forcedState={styleState}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}
