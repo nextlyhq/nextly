@@ -32,6 +32,7 @@
  * @module domains/releases/release-mutations
  */
 
+import { NextlyError } from "../../errors/nextly-error";
 import type { UserContext } from "../collections/services/collection-types";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
@@ -49,9 +50,39 @@ import type { DocumentRef } from "./releases-repository";
  */
 const WITHDRAWN_STATUS = "draft";
 
+/**
+ * The document-wide lifecycle operations, as a release needs them.
+ *
+ * Separate from the Direct API port above because they are not on it: setting a
+ * document's status across every language lives on the collections handler, and
+ * the Direct API exposes only the ordinary per-locale `update`. Threading it as
+ * its own narrow port keeps this module from acquiring the whole handler, and
+ * keeps the shape of what a release is allowed to do visible in one place.
+ */
+export interface AllLocalesLifecyclePort {
+  publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+  }): Promise<{ success: boolean; message?: string }>;
+  unpublishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+  }): Promise<{ success: boolean; message?: string }>;
+}
+
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
+  /**
+   * The all-languages lifecycle, used for every DOCUMENT-WIDE collection member.
+   *
+   * Optional so a runtime that has not wired it keeps the previous behaviour
+   * rather than failing to construct — but a localized collection then has the
+   * defect this port exists to close, so every real wiring site supplies it.
+   */
+  allLocales?: AllLocalesLifecyclePort;
 }): ReleaseMutations {
   const write = async (
     ref: DocumentRef,
@@ -67,6 +98,48 @@ export function createReleaseMutations(deps: {
         data: { status },
         locale,
       });
+      return;
+    }
+
+    // A DOCUMENT-WIDE member goes through the all-languages operation, because
+    // an ordinary update carrying no locale reaches the default language only.
+    // On a localized collection that is the defect: a withdrawal would leave
+    // every other translation published while the read seam hid the whole entry,
+    // so a translation reappears the moment the projection goes away.
+    //
+    // Safe for a NON-localized collection too — `publishAllLocales` states that
+    // it is then a plain publish of the single row — so this needs no knowledge
+    // of whether the collection is localized, which this module does not have.
+    if (deps.allLocales !== undefined && ref.locale == null) {
+      const result =
+        status === "published"
+          ? await deps.allLocales.publishAllLocales({
+              collectionName: ref.scopeSlug,
+              entryId: ref.entryId,
+              user,
+            })
+          : await deps.allLocales.unpublishAllLocales({
+              collectionName: ref.scopeSlug,
+              entryId: ref.entryId,
+              user,
+            });
+      // THROWN, not returned. The applier reads a rejection as WRITE_FAILED and
+      // holds the release open for the next pass; a refusal returned as a value
+      // would be read as success, and the release would discharge having taken
+      // nothing down. The handler answers with an envelope rather than throwing,
+      // so this boundary is where the two conventions meet.
+      if (!result.success) {
+        // A NextlyError, not a bare one: this refusal is caller-fixable — the
+        // handler's own message names the collection and tells an operator to
+        // run `nextly migrate` — and a bare Error would reach the API layer
+        // without a code and be reported as a 500, which reads as "the server
+        // broke" rather than "this document cannot be taken down yet".
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            result.message ?? "the all-languages lifecycle write was refused",
+        });
+      }
       return;
     }
 
