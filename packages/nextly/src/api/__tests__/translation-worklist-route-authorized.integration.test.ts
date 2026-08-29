@@ -143,4 +143,31 @@ describe("the worklist endpoint itself", () => {
     // none.
     expect(reads).toHaveBeenCalledTimes(1);
   });
+
+  it("🔴 answers the review state at all, rather than erroring before it starts", async () => {
+    // 🔴 THE STATE THAT TAKES A DIFFERENT PATH. `stale` is the only value that resolves a physical
+    // capability per collection before the fan-out, and it shipped asking a dependency-injection
+    // container for a key nothing registers — so the tab returned an internal error on every
+    // request while the other four states, which never enter that branch, stayed green.
+    //
+    // Every existing case here drives `state=missing`, which is why a whole broken tab passed a
+    // suite that exercised the endpoint. A per-STATE smoke is the cheapest thing that would have
+    // caught it, and it is cheap precisely because it asserts almost nothing: reaching a 200 is
+    // the claim.
+    const { getTranslationWorklist } = await import("../translations");
+    await boot(() => true);
+
+    for (const state of [
+      "missing",
+      "translated",
+      "draft",
+      "published",
+      "stale",
+    ] as const) {
+      const res = await getTranslationWorklist(
+        new Request(`http://t/api/translations?locale=de&state=${state}`)
+      );
+      expect(res.status, `state=${state} must not error`).toBe(200);
+    }
+  });
 });
