@@ -680,7 +680,7 @@ export class ReleasesRepository {
   }
 
   /**
-   * The members whose author still exists and is still active.
+   * Of the given author ids, those whose user still exists and is still active.
    *
    * A second `IN` query rather than a join, matching {@link loadScheduledReleases}
    * directly above: the adapter layer is dialect-agnostic and expresses no joins,
