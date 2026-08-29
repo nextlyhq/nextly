@@ -545,6 +545,113 @@ describe("the grid, and the strip that describes it", () => {
     expect(strip()).toBe("B0 Block number 0.");
   });
 
+  it("never announces an option that has been FILTERED AWAY", () => {
+    /*
+     * The palette announces the current option through `aria-activedescendant`
+     * on the search field, and it maintains that alongside the mark it draws —
+     * but only along its own navigation path. A panel that STEERS the palette
+     * by handing it a value moves the mark and leaves the announcement behind,
+     * and after a filter the announcement names an element that has been
+     * removed from the document entirely.
+     *
+     * A dangling reference is worse than an absent one: assistive technology
+     * is told there is a current option and then cannot find it, where absence
+     * at least reads as "nothing current".
+     *
+     * The first assertion is the CONTROL. It requires the reference to resolve
+     * while the tile is present, so the second assertion cannot pass merely
+     * because this panel never sets the attribute at all.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+    const input = search() as HTMLInputElement;
+
+    fireEvent.pointerMove(tile("B4"));
+    const announced = input.getAttribute("aria-activedescendant");
+    expect(announced).toBeTruthy();
+    expect(document.getElementById(announced ?? "")).not.toBeNull();
+    expect(strip()).toBe("B4 Block number 4.");
+
+    fireEvent.change(input, { target: { value: "B0" } });
+
+    // B4 is gone from the document. Whatever the field now announces, it must
+    // not be B4 — resolving to nothing is the failure being excluded.
+    const after = input.getAttribute("aria-activedescendant");
+    if (after !== null) {
+      expect(document.getElementById(after)).not.toBeNull();
+    }
+    expect(strip()).toBe("B0 Block number 0.");
+  });
+
+  it("keeps a tile's token when the DEFINITIONS around it change", () => {
+    /*
+     * A host may replace `definitions` while the panel is mounted. Tokens
+     * taken from an entry's POSITION would then be reassigned — inserting one
+     * definition shifts every entry after it — so the same string would name a
+     * different block while the palette is still holding it, and the strip
+     * would describe, and Enter would insert, whichever block had inherited
+     * the token.
+     *
+     * Asserted on the token for a block whose POSITION MOVES, which is the
+     * only case that can separate a stable allocation from a positional one: a
+     * block that stays at index 0 has the same token either way.
+     */
+    const defs = (names: string[]) =>
+      names.map(n => ({
+        ...base,
+        name: `acme/${n}`,
+        description: `The ${n}.`,
+        editor: { label: n, category: "Layout" },
+      })) as never;
+
+    const view = render(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        definitions={defs(["beta", "gamma"])}
+      />
+    );
+    const before = tile("gamma").getAttribute("data-value");
+    expect(before).toBeTruthy();
+
+    // "alpha" is inserted AHEAD of gamma, so gamma's index moves from 1 to 2.
+    view.rerender(
+      <InsertPanel
+        editor={editorSpy(documentOf())}
+        definitions={defs(["alpha", "beta", "gamma"])}
+      />
+    );
+
+    expect(tile("gamma").getAttribute("data-value")).toBe(before);
+    // And the newcomer must not have been handed a token already in use.
+    expect(tile("alpha").getAttribute("data-value")).not.toBe(before);
+  });
+
+  it("returns the strip to the TOP when it changes subject", () => {
+    /*
+     * The strip is scrollable and React reuses the same element as the
+     * highlight moves, so a description that was scrolled leaves the next one
+     * opening partway through its own text — the block's name and first lines
+     * above the fold, the reader looking at the middle of a sentence about a
+     * block they have only just pointed at.
+     */
+    sevenBlocks();
+    render(<InsertPanel editor={editorSpy(documentOf())} />);
+
+    const body = document.querySelector(
+      ".nx-insert-panel__describes"
+    ) as HTMLElement;
+    expect(body).not.toBeNull();
+    body.scrollTop = 40;
+    // The control: jsdom computes no layout, so an element with no overflow
+    // refuses a non-zero scrollTop and the assertion below would pass on an
+    // element that was never scrolled.
+    expect(body.scrollTop).toBe(40);
+
+    fireEvent.pointerMove(tile("B4"));
+
+    expect(body.scrollTop).toBe(0);
+  });
+
   it("bounds the strip, so a long description cannot eat the palette", () => {
     /*
      * Asserted against the stylesheet for the same reason the `touch-action`

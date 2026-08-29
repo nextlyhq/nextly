@@ -63,6 +63,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  useCommandState,
 } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -151,6 +152,61 @@ export interface InsertPanelProps {
  * arrow keys in this module's documentation.
  */
 const GRID_COLUMNS = 3;
+
+/**
+ * The strip describing whichever tile the palette has highlighted.
+ *
+ * A component of its own, and rendered INSIDE the palette, because that is
+ * where the highlight lives: `useCommandState` reads the palette's own store,
+ * so this follows a pointer, an arrow key and a filter alike without the panel
+ * keeping a second copy of which tile is current.
+ *
+ * Hidden from assistive technology deliberately. The sentence it shows is
+ * already the accessible description of the tile it describes, so exposing it
+ * here as well would have a screen reader read every description twice — once
+ * on the option and once from a region that changed because of it.
+ */
+function DescriptionStrip({
+  groups,
+  tokens,
+}: {
+  groups: readonly InsertGroup[];
+  tokens: ReadonlyMap<string, string>;
+}): React.JSX.Element | null {
+  // Empty string is the palette's "nothing highlighted", which is a different
+  // answer from an entry it does not hold — both fall back, but only one of
+  // them would silently match an entry whose token was the empty string.
+  const highlighted = useCommandState(state => state.value);
+  const described = describedEntry(
+    groups,
+    tokens,
+    highlighted === "" ? undefined : highlighted
+  );
+  /*
+   * Back to the top whenever the subject changes.
+   *
+   * The strip is scrollable, and React reuses this same element as the
+   * highlight moves — so a description that was scrolled leaves the next one
+   * opening partway through its own text, with the block's name and first
+   * lines above the fold. The reader is then looking at the middle of a
+   * sentence about a block they have only just pointed at.
+   *
+   * Keyed on the entry's id rather than on the element: two entries can carry
+   * the same description, and scrolling is about which BLOCK is being read.
+   */
+  const body = React.useRef<HTMLParagraphElement>(null);
+  const subject = described?.id;
+  React.useEffect(() => {
+    if (body.current !== null) body.current.scrollTop = 0;
+  }, [subject]);
+  if (described === undefined) return null;
+  return (
+    <p ref={body} className="nx-insert-panel__describes" aria-hidden="true">
+      <b className="nx-insert-panel__describes-name">{described.label}</b>
+      {` ${described.description}`}
+    </p>
+  );
+}
 
 /**
  * The entry a command value names, or the first one offered.
@@ -256,20 +312,6 @@ export function InsertPanel({
         );
 
   /*
-   * Which tile the panel is describing, held here rather than read back out of
-   * the DOM.
-   *
-   * ONE piece of state for hover and for the keyboard, because the command
-   * primitives already collapse them: an item highlights on `pointermove` and
-   * on arrow navigation alike, and reports both through `onValueChange`. A
-   * panel tracking hover separately would hold a second answer to "which tile
-   * is the author on", and the two would disagree the moment a pointer rested
-   * over one tile while the keyboard moved to another — which is what happens
-   * every time somebody types after reaching for the mouse.
-   */
-  const [active, setActive] = React.useState<string>();
-
-  /*
    * One opaque TOKEN per catalog entry, standing in for it everywhere the DOM
    * needs a string: the command value, and the id `aria-describedby` points at.
    *
@@ -295,11 +337,35 @@ export function InsertPanel({
    * types.
    */
   const idPrefix = React.useId();
+  /*
+   * Allocated ONCE per entry and never reused, rather than taken from the
+   * entry's position.
+   *
+   * A host may replace `definitions` while the panel is mounted, and inserting
+   * one definition shifts the position of every entry after it. Positional
+   * tokens would then be reassigned underneath a highlight the palette is
+   * still holding: the same string would name a different block, so the strip
+   * would describe it and Enter would insert it.
+   *
+   * The allocation lives in a ref because it must survive re-renders without
+   * being one — it is DOM identity, not state, and nothing renders differently
+   * because a token was issued. Handing out a token for an id already in the
+   * store is what makes this idempotent, so a repeated call cannot renumber
+   * anything.
+   */
+  const issued = React.useRef({ next: 0, byEntry: new Map<string, string>() });
   const tokens = React.useMemo(() => {
+    const store = issued.current;
     const byEntry = new Map<string, string>();
-    catalog.forEach((entry, index) => {
-      byEntry.set(entry.id, `${idPrefix}-b${index}`);
-    });
+    for (const entry of catalog) {
+      const existing = store.byEntry.get(entry.id);
+      const token = existing ?? `${idPrefix}-b${store.next}`;
+      if (existing === undefined) {
+        store.next += 1;
+        store.byEntry.set(entry.id, token);
+      }
+      byEntry.set(entry.id, token);
+    }
     return byEntry;
   }, [catalog, idPrefix]);
 
@@ -311,7 +377,6 @@ export function InsertPanel({
    * was. It is DERIVED rather than written into state: a fallback that stored
    * itself would be a second writer racing the primitives' own selection.
    */
-  const described = describedEntry(groups, tokens, active);
 
   const insert = (entry: InsertEntry) => {
     if (point === null) return;
@@ -359,12 +424,7 @@ export function InsertPanel({
          instead of read by the grid. */
       style={{ "--nx-insert-columns": GRID_COLUMNS } as React.CSSProperties}
     >
-      <Command
-        shouldFilter={false}
-        label="Insert a block"
-        value={described === undefined ? undefined : tokens.get(described.id)}
-        onValueChange={setActive}
-      >
+      <Command shouldFilter={false} label="Insert a block">
         <CommandInput
           value={query}
           onValueChange={setQuery}
@@ -432,7 +492,21 @@ export function InsertPanel({
                      * lifting, and a finger dragging across tiles reads each
                      * one it passes.
                      */
-                    setActive(tokens.get(entry.id));
+                    /*
+                     * Replayed through the primitives' OWN handler rather
+                     * than by setting the highlight directly. They move it on
+                     * `pointermove`, which a touch screen never sends before
+                     * contact — so without this the strip on touch describes
+                     * whatever was current when the panel opened, and the tap
+                     * that finally moves it is the same tap that inserts.
+                     *
+                     * Dispatching the event they already listen for keeps the
+                     * announced option and the scroll in step, which setting
+                     * the value from outside does not.
+                     */
+                    event.currentTarget.dispatchEvent(
+                      new PointerEvent("pointermove", { bubbles: true })
+                    );
                     beginInsertDrag?.(event, {
                       blockName: entry.blockName,
                       makeNode: () => nodeForEntry(entry, blockSource, nesting),
@@ -459,17 +533,7 @@ export function InsertPanel({
             </CommandGroup>
           ))}
         </CommandList>
-        {described === undefined ? null : (
-          /* Sighted authors only, and deliberately so. The sentence it shows
-             is already the accessible name of the tile it describes, so
-             exposing it here as well would have a screen reader read every
-             description twice — once on the option and once from a region
-             that changed because of it. */
-          <p className="nx-insert-panel__describes" aria-hidden="true">
-            <b className="nx-insert-panel__describes-name">{described.label}</b>
-            {` ${described.description}`}
-          </p>
-        )}
+        <DescriptionStrip groups={groups} tokens={tokens} />
       </Command>
     </div>
   );

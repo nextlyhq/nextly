@@ -72,3 +72,26 @@ variation's name is an unrestricted string and a variation is identified as
 reference — which is a space-separated list of ids, so assistive technology
 looked for two ids that did not exist and announced the tile with no
 description at all.
+
+The description strip now READS the palette's highlight rather than steering
+it, and `@nextlyhq/ui` publishes `useCommandState` so it can.
+
+Steering it was wrong in a way that only assistive technology could see. The
+palette's controlled value sets which tile is MARKED and does not move the
+internal cursor that the announced option and the scroll position follow — so
+the tile drawn as current and the option announced as current drifted apart,
+and after a search removed the highlighted tile the announcement named an
+element that was no longer in the document at all. A reference that resolves to
+nothing is worse than none: a screen reader is told there is a current option
+and then cannot find it.
+
+Reading the palette's own state leaves one owner. It follows a pointer, an
+arrow key and a filter alike, because those are the palette's business and it
+was always doing them correctly.
+
+Two smaller repairs to the same panel. A tile's identifier is now allocated
+once and never reused, so a host replacing the block definitions while the
+panel is open cannot have an identifier come to mean a different block — which
+would have described one block and inserted another. And the description strip
+returns to the top when it changes subject, instead of opening the next
+description partway down where a previous one had been scrolled.

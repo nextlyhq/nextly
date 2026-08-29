@@ -342,6 +342,7 @@ export {
   CommandGroup,
   CommandItem,
   commandDefaultFilter,
+  useCommandState,
   CommandSeparator,
   CommandShortcut,
 } from "./components/command";
