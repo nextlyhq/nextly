@@ -443,6 +443,41 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange).toHaveBeenCalledTimes(1);
   });
 
+  it("reports ONCE when an outside press and its blur arrive together", () => {
+    /*
+     * An outside press moves focus, so the dismissal path and the blur path can
+     * BOTH finish the same draft. `setDraftHex(null)` is only queued, so unless
+     * something flushes between them each reads a still-non-null draft and
+     * reports the colour twice — duplicate persistence for one edit.
+     *
+     * Dispatched NATIVELY rather than through `fireEvent`, which wraps each
+     * call in `act` and flushes between them: that ordering is the safe one and
+     * would pass against the version that had the bug. These two go out in one
+     * turn, which is the ordering in question.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    /*
+     * `focusout`, not `blur`. React delegates from the root and maps `onBlur`
+     * onto the bubbling `focusout`, so a non-bubbling native `blur` never
+     * reaches the handler at all — a first attempt used one, and the case then
+     * passed against the broken version because the second path never ran.
+     */
+    field.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
+  });
+
   it("reports NOTHING when the picker GOES AWAY mid-draft", () => {
     /*
      * Dismissal is not a finish. Escape means cancel, so a draft dying with the

@@ -136,6 +136,21 @@ interface EyeDropperLike {
 }
 
 /**
+ * Whether an event target is a node in ANY document.
+ *
+ * `instanceof Node` cannot answer this: it is bound to one JavaScript realm, so
+ * a target from an iframe or a pop-out fails it while being a perfectly good
+ * node. Probing for the property the DOM guarantees is realm-independent, and
+ * `Partial<Node>` is the honest shape to probe through — the value is not known
+ * to be a node until this returns.
+ */
+function isNode(value: EventTarget | null): value is Node {
+  return (
+    value !== null && typeof (value as Partial<Node>).nodeType === "number"
+  );
+}
+
+/**
  * A colour control: a saturation square, a hue strip, optional alpha, a hex
  * field, and any presets the host supplies.
  *
@@ -173,6 +188,16 @@ export function ColorPicker<TValue = string>({
   // What the hex field shows while it is being typed into. A half-typed value
   // is not a colour, and reformatting it on every keystroke moves the caret.
   const [draftHex, setDraftHex] = React.useState<string | null>(null);
+  /*
+   * The same draft, held where a SECOND finish in the same dispatch can see it.
+   *
+   * `setDraftHex(null)` is queued, not applied, so two paths that both finish —
+   * an outside press moving focus, and the blur that press produces — can each
+   * read a still-non-null draft and report the colour twice. React renders
+   * between them only if something flushes, which is what makes a test
+   * dispatching the events separately miss it entirely.
+   */
+  const draftRef = React.useRef<string | null>(null);
 
   // Re-seeded when the host supplies a colour this picker did not produce.
   // Comparing the RENDERED hex rather than the prop avoids a loop: the same
@@ -216,7 +241,10 @@ export function ColorPicker<TValue = string>({
    * write, which is a value published into nothing.
    */
   const commitDraft = (): void => {
-    const text = draftHex;
+    const text = draftRef.current;
+    // Taken BEFORE anything else, so a second caller in this same dispatch
+    // finds nothing to report rather than the value this one is publishing.
+    draftRef.current = null;
     // NOTHING TYPED, nothing to report. Reading the field's value instead would
     // publish the colour already on screen every time focus merely passed
     // through — a save for an edit nobody made, and a second one for an edit
@@ -265,11 +293,20 @@ export function ColorPicker<TValue = string>({
     const root = rootRef.current;
     if (root === null) return;
     const onPointerDown = (event: Event): void => {
-      const target = event.target;
-      // A press INSIDE is not a dismissal — a swatch, a slider, the field
-      // itself — and committing there would report a draft the press is about
-      // to replace.
-      if (target instanceof Node && root.contains(target)) return;
+      /*
+       * A press INSIDE is not a dismissal — a swatch, a slider, the field
+       * itself — and committing there would report a draft the press is about
+       * to replace.
+       *
+       * Recognised WITHOUT `instanceof`, which is realm-bound: rendered into an
+       * iframe or a pop-out the target belongs to that document's own
+       * JavaScript realm and is not an instance of this one's `Node`, so every
+       * press — the hex field included — would read as outside and commit the
+       * draft the author was still typing. `contains` is a tree operation and
+       * does not care which realm the node came from; the shape test in front
+       * of it is what keeps a non-node target from reaching it.
+       */
+      if (isNode(event.target) && root.contains(event.target)) return;
       commitDraft();
     };
     /*
@@ -288,6 +325,7 @@ export function ColorPicker<TValue = string>({
 
   const commit = (next: Hsva): void => {
     setHsva(next);
+    draftRef.current = null;
     setDraftHex(null);
     onColorChange(toHexString(next, showAlpha));
   };
@@ -466,7 +504,10 @@ export function ColorPicker<TValue = string>({
            * effect above, which compares the rendered hex against the host's
            * prop and would pull a half-typed value straight back.
            */
-          onChange={event => setDraftHex(event.target.value)}
+          onChange={event => {
+            draftRef.current = event.target.value;
+            setDraftHex(event.target.value);
+          }}
           onKeyDown={event => {
             if (event.key !== "Enter") return;
             // Kept off the surrounding form, which may have a submit of its own:
