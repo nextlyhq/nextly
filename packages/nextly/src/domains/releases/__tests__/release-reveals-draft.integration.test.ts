@@ -24,6 +24,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ReleasesRepository } from "../releases-repository";
+import { seedLiveAuthor } from "./helpers/live-author";
 
 let current: TestNextly | undefined;
 
@@ -73,6 +74,9 @@ async function draftInRelease(
     entryId: id,
     locale: null,
     action: "publish",
+    // A live author: the read path projects a due member only when its author
+    // still exists and is active, matching the write path that runs AS them.
+    createdBy: await seedLiveAuthor(t),
   });
   if (scheduledAt !== null) {
     await repo.scheduleRelease(release.id, scheduledAt, "UTC");
@@ -106,6 +110,7 @@ async function publishedInTakedown(
     entryId: id,
     locale: null,
     action: "unpublish",
+    createdBy: await seedLiveAuthor(t),
   });
   if (scheduledAt !== null) {
     await repo.scheduleRelease(release.id, scheduledAt, "UTC");

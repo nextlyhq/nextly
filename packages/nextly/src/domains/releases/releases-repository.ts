@@ -56,6 +56,13 @@ export type ReleasesDbApi = VersionsDbApi & {
 
 const RELEASES = "nextly_releases";
 const MEMBERS = "nextly_release_members";
+/**
+ * Read ONLY to answer whether a member's author may still act. This module owns
+ * no user behaviour and writes nothing here; the alternative is resolving an
+ * identity per document on the hot read path, which is the cost the whole memo
+ * in `pending-transition-cache` exists to avoid.
+ */
+const USERS = "users";
 
 /** The document a member points at. */
 export interface DocumentRef {
@@ -555,16 +562,65 @@ export class ReleasesRepository {
 
     const grouped = groupMembersByDocument(members, releases);
 
-    const reveal: string[] = [];
-    const hide: string[] = [];
+    // The WINNER is resolved over every member, then validated. The order
+    // matters and the other way round is wrong.
+    //
+    // Materialisation runs each action as the winning member's `createdBy`, so
+    // that "schedule this" cannot become a privilege escalation with a delay on
+    // it — and it chooses that winner over ALL members, judging the author
+    // afterwards. Removing candidates here before the winner rule would let this
+    // seam pick a DIFFERENT member: an earlier publish by an active author beats
+    // a later takedown by a deactivated one, while the write path still picks
+    // the takedown, fails it, and performs nothing. The release stays scheduled,
+    // so reads would project that older publish indefinitely against a document
+    // the write path never touches.
+    //
+    // Validating the winner instead makes the two seams agree by construction:
+    // whatever materialisation would attempt is what this projects, and when
+    // that attempt cannot be authorised, this projects nothing.
+    const decisions: {
+      entryId: string;
+      effect: string;
+      memberId: string | null;
+    }[] = [];
     for (const [entryId, due] of grouped) {
       const decision = resolveReleaseEffect({ members: due, now: input.now });
+      if (decision.effect === null) continue;
+      decisions.push({
+        entryId,
+        effect: decision.effect,
+        memberId: decision.memberId,
+      });
+    }
+    if (decisions.length === 0) return NO_DECISIONS;
+
+    const authorOf = new Map(members.map(m => [m.id, m.createdBy]));
+    const live = await this.liveAuthorIds(
+      decisions
+        .map(d =>
+          d.memberId === null ? null : (authorOf.get(d.memberId) ?? null)
+        )
+        .filter((id): id is string => typeof id === "string" && id !== "")
+    );
+
+    const reveal: string[] = [];
+    const hide: string[] = [];
+    for (const decision of decisions) {
+      const author =
+        decision.memberId === null
+          ? null
+          : (authorOf.get(decision.memberId) ?? null);
+      // No recorded author, or one who can no longer act. The materialiser
+      // reaches the same verdict — there is nobody to act as, and the only
+      // fallback is the privileged principal it refuses — so projecting this
+      // would show an effect no write could perform.
+      if (author === null || !live.has(author)) continue;
       // BOTH directions. Reading only the publish half made a scheduled
       // takedown a no-op: the decision said `unpublish`, the id was simply left
       // out of the reveal set, and the ordinary `status = published` filter went
       // on returning the row it was supposed to withdraw.
-      if (decision.effect === "publish") reveal.push(entryId);
-      else if (decision.effect === "unpublish") hide.push(entryId);
+      if (decision.effect === "publish") reveal.push(decision.entryId);
+      else if (decision.effect === "unpublish") hide.push(decision.entryId);
     }
 
     // Disjoint, and now actually so: ONE group per document means one winning
@@ -621,6 +677,48 @@ export class ReleasesRepository {
       if (row.scheduledAt !== null) instants.push(row.scheduledAt);
     }
     return instants;
+  }
+
+  /**
+   * Of the given author ids, those whose user still exists and is still active.
+   *
+   * A second `IN` query rather than a join, matching {@link loadScheduledReleases}
+   * directly above: the adapter layer is dialect-agnostic and expresses no joins,
+   * and two small keyed reads are the shape this repository already pays on a
+   * read that reaches here at all.
+   *
+   * A member with NO recorded author is dropped without asking anybody. That is
+   * the same verdict the materialiser reaches — there is nobody to act as, and
+   * the only fallback is the privileged principal it refuses — so admitting it
+   * here would project an effect no write could ever perform.
+   *
+   * A failure PROPAGATES rather than resolving to "everyone is live". Answering
+   * that on a failed lookup would reinstate exactly the projection this exists to
+   * prevent, and it would do so precisely when the database is unhealthy. The
+   * caller treating a throw as "no release is due" would be wrong in the other
+   * direction, which is why the transition memo above propagates too.
+   */
+  private async liveAuthorIds(ids: string[]): Promise<ReadonlySet<string>> {
+    const authorIds = [...new Set(ids)];
+    if (authorIds.length === 0) return new Set();
+
+    const rows = await this.db.select<{ id: string; isActive: boolean }>(
+      USERS,
+      {
+        columns: ["id", "isActive"],
+        where: {
+          and: [
+            { column: "id", op: "IN", value: authorIds },
+            // Asked of the database rather than filtered in memory, so a dialect
+            // storing this as 0/1 (SQLite) and one storing a real boolean answer
+            // the same question. A truthiness check here would read `0` as false
+            // on one dialect and the string "0" as TRUE on another.
+            { column: "isActive", op: "=", value: true },
+          ],
+        },
+      }
+    );
+    return new Set(rows.map(r => r.id));
   }
 
   private async loadScheduledReleases(
