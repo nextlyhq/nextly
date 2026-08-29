@@ -46,9 +46,15 @@ import {
   type NamedClass,
   type SiteTokenSet,
   type BreakpointId,
+  type FontFaceDef,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
+import {
+  DEFAULT_PREFERENCES,
+  registrySlotSource,
+  type LeftPanel,
+} from "@nextlyhq/builder";
 import {
   BlockKeyboardActions,
   authoredBreakpoints,
@@ -81,6 +87,7 @@ import {
   useInlineEditing,
   documentAfter,
   type InlineEditOutcome,
+  FontsPanel,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -171,7 +178,7 @@ export interface BlocksFieldProps<
  * and shrink the canvas to show it, which is why this grows one entry at a time
  * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers", "tokens"] as const;
+const AVAILABLE_PANELS = ["insert", "layers", "tokens", "fonts"] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -409,6 +416,48 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  * "the question was never asked" and offers no picker at all — which is the
  * truth here, and is different from a site that defines no tokens.
  */
+/**
+ * The faces the site loads, or `undefined` while that is not yet known.
+ *
+ * The same third state `offerableTokens` keeps, and for the same reason: a site
+ * that self-hosts nothing legitimately has no faces, so a surface cannot tell
+ * "none stored" from "the read has not come back" by looking at the value. The
+ * fonts panel draws those two differently, and would otherwise report a site
+ * mid-load as one loading no fonts at all.
+ *
+ * Unlike tokens there are no engine defaults to layer underneath — a font file
+ * is something a site provides or does not — so the resolved list is returned
+ * as it stands, including an empty one.
+ */
+function offerableFaces(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): readonly FontFaceDef[] | undefined {
+  if (pending || error !== null) return undefined;
+  return style?.fonts ?? [];
+}
+
+/**
+ * The tokens as the PAGE renders them, defaults included.
+ *
+ * Deliberately not `offerableTokens`. A studio edits what the site AUTHORED —
+ * showing the engine's defaults as rows an author can rename would offer edits
+ * that write nothing — while a report on what the page draws has to read what
+ * the page draws. `resolveSiteTokens` layers the engine's own underneath, and
+ * one of them is `font.body: system-ui`, a real typeface every site renders
+ * with. Reading the authored set had the panel announce "no typeface tokens"
+ * for a site whose every page was using one.
+ */
+function renderedTokens(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): SiteTokenSet | undefined {
+  if (pending || error !== null) return undefined;
+  return resolveSiteTokens(style?.tokens);
+}
+
 function offerableTokens(
   style: SiteStyleData | undefined,
   pending: boolean,
@@ -889,6 +938,23 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(
     null
   );
+  /*
+   * The interaction state being edited, owned HERE so the panel and the canvas
+   * cannot disagree about it.
+   *
+   * One value handed to both surfaces rather than two defaults that happen to
+   * match: the panel states no `liveStates`, so provenance falls back to the
+   * edited state plus base — correct exactly while the canvas is simulating
+   * that state. Wired from one value that precondition holds by construction.
+   *
+   * A CONSTANT rather than state, because no control chooses it yet and state
+   * nothing writes is state that lints as unused and reads as unfinished. What
+   * matters now is that ONE value reaches both surfaces: the day a control
+   * arrives it replaces this line and finds both call sites already wired,
+   * rather than having to discover that the canvas and the panel were each
+   * defaulting on their own.
+   */
+  const styleState: StyleState = "base";
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
   /*
    * Is a drag happening — of EITHER kind.
@@ -1211,6 +1277,19 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
          * the desktop tier live while the box paints the tablet one.
          */
         ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
+        /*
+         * Unconditional, unlike the container above. A page cannot force a
+         * pseudo-class on itself, so the sheet has to carry a class alternative
+         * beside each one before the canvas can show an author the hover
+         * appearance they are editing — and whether they are editing one is not
+         * known when the sheet is compiled.
+         *
+         * It costs a few bytes per state rule in a sheet only the editor sees,
+         * and nothing at all in weight: the marker sits inside the `:where()`
+         * that already wrapped the pseudo-class, which contributes nothing. The
+         * published sheet is compiled elsewhere and never asks for this.
+         */
+        previewStates: true,
       },
       ...(remotePatterns === undefined
         ? {}
@@ -1436,12 +1515,24 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * nothing the second time. Starts `undefined` rather than `0` so mounting
    * the editor is not itself a press.
    */
-  const [openInsertPanelToken, setOpenInsertPanelToken] = useState<
-    number | undefined
+  /*
+   * A request to open one panel, carrying its own count so the shell can tell a
+   * second press from the first. One piece of state for every panel that asks:
+   * the appender opens `insert`, and the fonts panel sends an author to
+   * `tokens` to fix a typeface the site does not provide.
+   */
+  const [openPanelRequest, setOpenPanelRequest] = useState<
+    { panel: LeftPanel; count: number } | undefined
   >(undefined);
-  const openInsertPanel = useCallback(() => {
-    setOpenInsertPanelToken(current => (current ?? 0) + 1);
+  const requestPanel = useCallback((panel: LeftPanel) => {
+    setOpenPanelRequest(current => ({
+      panel,
+      count: (current?.count ?? 0) + 1,
+    }));
   }, []);
+  const openInsertPanel = useCallback(() => {
+    requestPanel("insert");
+  }, [requestPanel]);
 
   /*
    * Whether the author wants empty-container chrome showing at all, mirrored
@@ -1493,7 +1584,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // Forces the insert panel open from the empty-container appender,
         // which lives on the canvas below rather than beside the rail that
         // normally opens a panel.
-        openInsertPanelToken={openInsertPanelToken}
+        openPanelRequest={openPanelRequest}
         // The read half of the same gap: mirrors the shell's own preference
         // so the appender below can be suppressed by the SAME switch that
         // already suppresses the placeholder box it sits over.
@@ -1591,6 +1682,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // inferring one from the document. Two refs would let the panel
             // read a canvas that is not the one on screen.
             canvasRoot={canvasElement}
+            styleState={styleState}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
@@ -1648,16 +1740,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           ) : undefined
         }
         renderPanel={panel => {
-          if (panel === "insert") {
-            return (
+          /*
+            A lookup rather than a chain of comparisons, so the arrow answers
+            in one step and adding a panel is one entry rather than one more
+            branch. It also states the pairing the shell needs: every key here
+            is a panel this file can fill, and `AVAILABLE_PANELS` is what the
+            rail offers — reading them side by side is how a panel that is
+            offered and renders nothing gets noticed.
+          */
+          const panels: Partial<Record<string, () => React.ReactNode>> = {
+            insert: () => (
               <InsertPanel
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
               />
-            );
-          }
-          if (panel === "layers") {
+            ),
             /*
               The panel cannot work this out for itself. It is drawn here, in
               the shell's panel region, while `BlockKeyboardActions` below wraps
@@ -1665,10 +1763,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               read from where it sits reports what this file knows by writing
               both. Passed as a fact rather than inferred.
             */
-            return <LayersPanel editor={editor} moveHints />;
-          }
-          if (panel === "tokens") {
-            return (
+            layers: () => <LayersPanel editor={editor} moveHints />,
+            tokens: () => (
               <TokensStudio
                 merged={offerableTokens(
                   canvasSiteStyle,
@@ -1678,17 +1774,40 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 supplied={configSiteStyle?.tokens}
                 pending={siteStylePending}
               />
-            );
-          }
-          /*
-           * The entry's own fields — SEO, relations, whatever this collection
-           * declares — which the takeover removed from the page behind this
-           * editor. Rendered by the ADMIN's closure, not reconstructed here: how
-           * a field is drawn is the entry form's contract, and a second
-           * renderer would drift from it.
-           */
-          if (panel === "settings") return renderEntryFields?.(name) ?? null;
-          return null;
+            ),
+            fonts: () => (
+              <FontsPanel
+                faces={offerableFaces(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                tokens={renderedTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                absence={siteStyleError !== null ? "failed" : "pending"}
+                /*
+                  The fix for a token naming a family this site does not provide
+                  is to edit that token, and editing belongs to the studio. This
+                  shell offers one, so the jump is wired: without the callback
+                  the panel suppresses the action and an author is left to find
+                  the right panel and the right row themselves.
+                */
+                onOpenTokens={() => requestPanel("tokens")}
+              />
+            ),
+            /*
+              The entry's own fields — SEO, relations, whatever this collection
+              declares — which the takeover removed from the page behind this
+              editor. Rendered by the ADMIN's closure, not reconstructed here:
+              how a field is drawn is the entry form's contract, and a second
+              renderer would drift from it.
+            */
+            settings: () => renderEntryFields?.(name) ?? null,
+          };
+          return panels[panel]?.() ?? null;
         }}
       >
         {/*
@@ -1763,6 +1882,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 document={editor.document}
                 rootRef={canvasRoot}
                 onRoot={setCanvasElement}
+                forcedState={styleState}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}

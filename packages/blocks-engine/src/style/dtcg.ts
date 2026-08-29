@@ -374,55 +374,58 @@ function colorToDtcg(css: string): DtcgNode | undefined {
 
 /** A family list as one string or an array, which is what the format takes. */
 function familyToDtcg(css: string): string | string[] | undefined {
-  const parts = splitFamilyList(css);
-  if (parts.length === 0) return undefined;
-  // A family list holding `var(--brand-font)` has no DTCG form: the format
-  // stores NAMES, so exporting the text would describe a font literally called
-  // `var(--brand-font)` to every tool that reads the standard value rather than
-  // this vendor's extension. Reported as unrepresentable instead, which is the
-  // same answer a `clamp()` dimension already gets.
-  if (parts.some(part => !part.valid)) return undefined;
-  // A bare CSS-wide keyword is not a family name: `font-family: inherit` takes
-  // the parent's font, so exporting `"inherit"` as a `$value` would describe a
-  // font by that name to any tool reading the standard value. Quoted, it IS a
-  // name somebody chose.
-  if (
-    parts.some(
-      part =>
-        !part.quoted && FAMILY_KEYWORD_NOT_A_NAME.has(part.name.toLowerCase())
-    )
-  ) {
-    return undefined;
-  }
-  // An unquoted item is a run of identifiers and nothing else. `10px, serif`
-  // tokenizes as a dimension, so a browser drops any declaration reading the
-  // token — exporting it as a family list shows a stack the site never used.
-  if (parts.some(part => !part.quoted && !UNQUOTED_FAMILY.test(part.raw))) {
-    return undefined;
-  }
-  if (parts.some(part => !part.quoted && /[()]/.test(part.name))) {
-    return undefined;
-  }
-  return parts.length === 1 ? parts[0]?.name : parts.map(part => part.name);
+  const reading = readFamilyList(css);
+  // The format stores NAMES, and three of the four readings are not names.
+  //
+  // `dynamic` — a list holding `var(--brand-font)` has no DTCG form: exporting
+  // the text would describe a font literally called `var(--brand-font)` to
+  // every tool reading the standard value. The same answer a `clamp()`
+  // dimension already gets, and the reason this asks for the READING rather
+  // than a usability boolean: the browser reads that value fine, so a shared
+  // yes/no would have to call it either broken or exportable, and it is
+  // neither.
+  //
+  // `keyword` — `font-family: inherit` takes the parent's font, so exporting
+  // `"inherit"` would name a font nobody has. Quoted, it IS a name somebody
+  // chose, which `familyPartKind` already distinguishes.
+  //
+  // `invalid` — a value no browser reads was never a stack this site rendered.
+  if (reading.kind !== "families") return undefined;
+  const names = reading.parts.map(p => p.part.name);
+  return names.length === 1 ? names[0] : names;
 }
 
 /**
  * A CSS family list split into its families.
  *
- * The comma only separates families outside quotes: `"ACME, Inc", serif` names
- * two families, not three, and a plain split turns a real company's font into a
- * fallback list that fails over to a family called `Inc`. Quotes are removed
+ * The comma only separates families outside quotes AND outside parentheses.
+ * `"ACME, Inc", serif` names two families, not three — a plain split turns a
+ * real company's font into a fallback list failing over to a family called
+ * `Inc` — and `var(--font, Arial), sans-serif` names two, not three, because
+ * the first comma belongs to the custom property's fallback. Quotes are removed
  * because the name is the family, not the spelling, and backslash escapes are
  * resolved for the same reason.
  */
-function splitFamilyList(css: string): FamilyPart[] {
+export function splitFamilyList(css: string): FamilyPart[] {
   const parts: FamilyPart[] = [];
   let current = "";
+  // What the quotes actually enclosed, collected separately.
+  //
+  // `current` cannot answer for a quoted item: it accumulates the whitespace
+  // around the string as well as the string, so `" Brand "` and ` "Brand" `
+  // both arrive as `" Brand "` and are indistinguishable. Trimming served the
+  // second and corrupted the first — a quoted name keeps its edge spaces,
+  // because inside quotes they are part of the family's name.
+  let inner = "";
   let quoted = false;
   let strings = 0;
   let outsideQuotes = "";
   let raw = "";
   let quote: string | undefined;
+  // Parenthesis depth, so a comma inside `var(--font, Arial)` is not a
+  // separator. Counted rather than flagged: `var(--a, var(--b, serif))` nests,
+  // and a boolean would close on the inner `)`.
+  let depth = 0;
 
   for (let index = 0; index < css.length; index++) {
     const char = css[index];
@@ -434,6 +437,9 @@ function splitFamilyList(css: string): FamilyPart[] {
       // standard value.
       const escape = readCssEscape(css, index);
       current += escape.text;
+      // An escape inside quotes is part of the NAME, so it belongs to the
+      // quoted content too: `"ACME\\26 Co"` is the family `ACME&Co`.
+      if (quote !== undefined) inner += escape.text;
       raw += css.slice(index, escape.next);
       index = escape.next - 1;
       continue;
@@ -441,7 +447,10 @@ function splitFamilyList(css: string): FamilyPart[] {
     if (quote !== undefined) {
       raw += char;
       if (char === quote) quote = undefined;
-      else current += char;
+      else {
+        current += char;
+        inner += char;
+      }
       continue;
     }
     if (char === '"' || char === "'") {
@@ -453,9 +462,14 @@ function splitFamilyList(css: string): FamilyPart[] {
       quoted = true;
       continue;
     }
-    if (char === ",") {
-      parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
+    if (char === "(") depth += 1;
+    else if (char === ")" && depth > 0) depth -= 1;
+    if (char === "," && depth === 0) {
+      parts.push(
+        finishPart(current, inner, quoted, strings, outsideQuotes, raw)
+      );
       current = "";
+      inner = "";
       raw = "";
       quoted = false;
       strings = 0;
@@ -466,19 +480,35 @@ function splitFamilyList(css: string): FamilyPart[] {
     current += char;
     raw += char;
   }
-  parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
+  parts.push(finishPart(current, inner, quoted, strings, outsideQuotes, raw));
 
-  return parts.filter(part => part.name !== "");
+  // Empty items are KEPT, marked invalid by `finishPart`. `Brand,` and
+  // `Brand,, serif` are parse errors — CSS reads `<family-name>#`, which admits
+  // no empty item — and a browser drops the whole declaration. Filtering them
+  // out here reported `Brand,` as the single family `Brand`, which is a value
+  // the page never rendered.
+  return parts;
 }
 
 /** Words that are keywords rather than family names when written bare. */
-const FAMILY_KEYWORD_NOT_A_NAME = new Set([
+/**
+ * Words an unquoted family name may not be, and what each one is.
+ *
+ * These stand for the whole declaration — `font-family: inherit` takes the
+ * parent's font — so a lone one is a valid value naming no family.
+ *
+ * `default` is deliberately NOT here. It must be quoted to name a font, which
+ * is why {@link FAMILY_MUST_QUOTE} carries it for the importer, but it is not a
+ * CSS-wide keyword: the font-family grammar excludes it from `<family-name>`,
+ * so a browser drops a declaration reading it bare. Reading it as a working
+ * whole-value keyword is how a dropped declaration reports as healthy.
+ */
+const CSS_WIDE_KEYWORDS = new Set([
   "inherit",
   "initial",
   "unset",
   "revert",
   "revert-layer",
-  "default",
 ]);
 
 // The five characters CSS calls whitespace. JavaScript's `\s` is a wider set —
@@ -498,14 +528,153 @@ const UNQUOTED_FAMILY = new RegExp(
   `^${IDENT_START}${IDENT_CHAR}*(?:${CSS_WS}+${IDENT_START}${IDENT_CHAR}*)*$`
 );
 const CSS_WS_EDGES = new RegExp(`^${CSS_WS}+|${CSS_WS}+$`, "g");
+/** A run of CSS whitespace, which separates identifiers within one family. */
+const CSS_WS_RUN = new RegExp(`${CSS_WS}+`, "g");
 
 /** Strip the whitespace CSS recognises from both ends, and only that. */
 function trimCssWhitespace(text: string): string {
   return text.replace(CSS_WS_EDGES, "");
 }
 
+/**
+ * The CSS generic families, plus the `ui-*` system aliases.
+ *
+ * Unquoted, these are KEYWORDS rather than names: `font-family: serif` asks for
+ * the browser's serif default, and no `@font-face` can claim it — the engine
+ * emits every face family quoted, so only a quoted value can name one.
+ */
+const GENERIC_FAMILIES: ReadonlySet<string> = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace",
+  "ui-rounded",
+  "math",
+  "emoji",
+  "fangsong",
+]);
+
+/**
+ * How CSS reads ONE item of a family list.
+ *
+ * Five outcomes rather than a boolean, because the callers ask different
+ * questions of the same text and a shared yes/no answers neither well. The DTCG
+ * export needs to know whether an item is a NAME it can write down; a surface
+ * reporting on a site needs to know whether the browser will resolve it, and
+ * what to say when it cannot.
+ *
+ * - `name` — a real family: a quoted string, or an unquoted identifier run.
+ * - `generic` — an unquoted generic keyword. Always resolves, names no file.
+ * - `dynamic` — carries a `var()` substitution. Valid CSS whose value is not
+ *   knowable from the text, which is a THIRD state and not a failure.
+ * - `keyword` — an unquoted CSS-wide keyword. Valid alone, and a parse error
+ *   in a list.
+ * - `invalid` — the grammar rejects it: `10px`, `"Bad" "Name"`, or an empty
+ *   item left by a stray comma.
+ */
+export type FamilyPartKind =
+  | "name"
+  | "generic"
+  | "dynamic"
+  | "keyword"
+  | "invalid";
+
+/** Any `var(` call, however written. Case-insensitive: CSS functions are. */
+const VAR_CALL = /\bvar\s*\(/i;
+
+/**
+ * Every `var(` in the text opening with a custom-property name.
+ *
+ * `--` is what makes an identifier a custom property, so `var(foo)` is not a
+ * substitution CSS will make. Written as "no occurrence of `var(` NOT followed
+ * by `--`", because one malformed call spoils the declaration however many
+ * well-formed ones sit beside it.
+ */
+const WELL_FORMED_VAR_CALLS =
+  /^(?:(?!\bvar\s*\()[\s\S])*(?:\bvar\s*\(\s*--[^\s,()]*(?:(?!\bvar\s*\()[\s\S])*)*$/i;
+
+/** Classify one family-list item. */
+export function familyPartKind(part: FamilyPart): FamilyPartKind {
+  if (!part.valid) return "invalid";
+  if (part.quoted) return "name";
+  const lower = part.name.toLowerCase();
+  // `var()` is checked before the grammar, because the grammar rejects the
+  // parentheses and would report a valid, common value as broken. It is checked
+  // for WELL-FORMEDNESS rather than presence: CSS requires the first argument
+  // to be a custom-property name, so `var(foo)` computes to an invalid
+  // `font-family` and the browser drops the declaration rather than falling
+  // through to the next family. Reading every `var(` as dynamic gave that an
+  // all-clear, which is the same shape as reading a dropped declaration as a
+  // working keyword.
+  if (VAR_CALL.test(part.name)) {
+    return WELL_FORMED_VAR_CALLS.test(part.name) ? "dynamic" : "invalid";
+  }
+  if (CSS_WIDE_KEYWORDS.has(lower)) return "keyword";
+  // Reserved, and not a whole-value keyword: bare `default` names no family and
+  // the declaration is dropped, so it is invalid rather than a working value.
+  if (lower === "default") return "invalid";
+  if (GENERIC_FAMILIES.has(lower)) return "generic";
+  if (!UNQUOTED_FAMILY.test(part.raw) || /[()]/.test(part.name))
+    return "invalid";
+  return "name";
+}
+
+/**
+ * How CSS reads a WHOLE family list.
+ *
+ * - `families` — the browser reads it and every item is resolvable from the text.
+ * - `dynamic` — the browser reads it, and at least one item is a `var()` whose
+ *   value this code cannot see. Reportable, but not as a fault.
+ * - `keyword` — a lone CSS-wide keyword. Valid, and names no family at all, so
+ *   there is nothing to resolve rather than something that failed to.
+ * - `invalid` — the browser drops the declaration.
+ */
+export type FamilyListKind = "families" | "dynamic" | "keyword" | "invalid";
+
+/** One classified item of a family list. */
+export interface ReadFamilyPart {
+  readonly part: FamilyPart;
+  readonly kind: FamilyPartKind;
+}
+
+/** A family list, split and classified in one call. */
+export interface FamilyListReading {
+  readonly kind: FamilyListKind;
+  readonly parts: readonly ReadFamilyPart[];
+}
+
+/**
+ * Split a `font-family` value and say how CSS reads it.
+ *
+ * The one place that judgement lives. `familyToDtcg` and any surface reporting
+ * on a site ask this and then apply their own narrower rule to the answer,
+ * rather than each re-deriving the grammar — two derivations of one question
+ * agree on the day they are written and diverge on the values that matter.
+ */
+export function readFamilyList(css: string): FamilyListReading {
+  const split = splitFamilyList(css);
+  const parts = split.map(part => ({ part, kind: familyPartKind(part) }));
+  if (parts.length === 0) return { kind: "invalid", parts };
+  if (parts.some(p => p.kind === "invalid")) return { kind: "invalid", parts };
+  const keywords = parts.filter(p => p.kind === "keyword");
+  if (keywords.length > 0) {
+    // A CSS-wide keyword stands for the WHOLE value. `inherit, serif` is a
+    // parse error, not a stack with a fallback.
+    return parts.length === 1
+      ? { kind: "keyword", parts }
+      : { kind: "invalid", parts };
+  }
+  if (parts.some(p => p.kind === "dynamic")) return { kind: "dynamic", parts };
+  return { kind: "families", parts };
+}
+
 /** One family from a list, how it was written, and whether CSS accepts it. */
-interface FamilyPart {
+export interface FamilyPart {
   name: string;
   /** As written, before escapes were resolved. */
   raw: string;
@@ -523,15 +692,19 @@ interface FamilyPart {
  */
 function finishPart(
   current: string,
+  inner: string,
   quoted: boolean,
   strings: number,
   outsideQuotes: string,
   raw: string
 ): FamilyPart {
-  const name = current.trim();
-  const valid = quoted
-    ? strings === 1 && outsideQuotes.trim() === ""
-    : strings === 0;
+  // A QUOTED item is its quoted content verbatim: `" Brand "` names a family
+  // whose name has those spaces, and is a different family from `Brand`.
+  // Unquoted, the surrounding whitespace is separation and is trimmed.
+  const name = quoted ? inner : current.trim();
+  const valid =
+    name !== "" &&
+    (quoted ? strings === 1 && outsideQuotes.trim() === "" : strings === 0);
   // The raw spelling is kept because the identifier-run check has to read what
   // was WRITTEN. `\\31 0px` is a legal identifier naming the family `10px`;
   // tested after decoding it looks like a dimension and a valid token is lost.
@@ -540,7 +713,13 @@ function finishPart(
   // `String.trim` strips characters CSS does not treat as whitespace, so a
   // family led by one would have it removed here and pass a check the browser
   // fails.
-  return { name, raw: trimCssWhitespace(raw), quoted, valid };
+  // CSS separates the identifiers of an unquoted family with any run of its
+  // whitespace, and treats every run alike — `Brand   Sans` selects the face
+  // named `Brand Sans`. Keeping the author's spelling made an equivalent value
+  // compare unequal against the family a face declares. A QUOTED name keeps its
+  // spelling exactly: there the spaces are part of the name.
+  const collapsed = quoted ? name : name.replace(CSS_WS_RUN, " ");
+  return { name: collapsed, raw: trimCssWhitespace(raw), quoted, valid };
 }
 
 /**

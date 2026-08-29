@@ -47,7 +47,21 @@ export const COMPANION_UPDATED_AT_COLUMN = "_updated_at";
  * MySQL. Anything checking that a live companion still has its key reads this rather than
  * restating the pair.
  */
-export const COMPANION_KEY_COLUMNS: readonly string[] = ["_parent", "_locale"];
+/** The companion row's link back to the document it translates. */
+export const COMPANION_PARENT_COLUMN = "_parent";
+
+/** Which language a companion row holds. */
+export const COMPANION_LOCALE_COLUMN = "_locale";
+
+/**
+ * Derived from the two constants above rather than restated, so a caller that
+ * builds a WHERE clause out of them cannot drift from the set that decides
+ * whether a column counts as translated content.
+ */
+export const COMPANION_KEY_COLUMNS: readonly string[] = [
+  COMPANION_PARENT_COLUMN,
+  COMPANION_LOCALE_COLUMN,
+];
 
 /**
  * Every column a companion has structurally, so a reader looking at an existing companion can

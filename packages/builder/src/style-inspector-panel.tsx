@@ -193,7 +193,24 @@ export interface StyleInspectorPanelProps {
    * than a guess.
    */
   renderedTag?: string;
-  /** The interaction state being edited. `base` when the host says nothing. */
+  /**
+   * The interaction state being edited. `base` when the host says nothing.
+   *
+   * A host that renders a canvas should hand the SAME value to
+   * `Canvas.forcedState`, and the two are one decision rather than two.
+   * Provenance depends on it: this panel states no `liveStates`, so
+   * `styleProvenance` falls back to the edited state plus base — correct
+   * exactly when the canvas is simulating the state being edited, and wrong the
+   * moment it is not. Wired from one value, that precondition holds by
+   * construction; wired from two, a control reports a value the browser is not
+   * showing and nothing says so.
+   *
+   * Measuring the real pseudo-classes instead was considered and declined. The
+   * pointer is in the inspector whenever anyone is reading the panel, so a
+   * measured `:hover` is false every time and every hover control would report
+   * unset permanently — the affordance switched off in the exact state the
+   * author opened it to inspect.
+   */
   state?: StyleState;
   /** The breakpoint being edited. The unconditional one when the host says nothing. */
   breakpoint?: BreakpointId;

@@ -27,11 +27,8 @@
  * @module api/webhooks
  */
 
-import { createHash, timingSafeEqual } from "node:crypto";
-
 import { z } from "zod";
 
-import { validateOrigin } from "../auth/csrf/validate";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -54,7 +51,6 @@ import {
   UpdateWebhookSchema,
 } from "../schemas/_zod/webhooks";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
-import { env } from "../shared/lib/env";
 
 import { readJsonBody } from "./read-json-body";
 import {
@@ -64,6 +60,7 @@ import {
   respondList,
   respondMutation,
 } from "./response-shapes";
+import { authorizeTrigger } from "./trigger-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
@@ -149,13 +146,6 @@ function denySessionOnly(
 }
 
 /**
- * Minimum length for a secret that may authorize the drain trigger. Enforced at
- * the auth boundary so a short platform-wide `CRON_SECRET` is ignored without
- * failing app boot (see env.ts).
- */
-const MIN_DRAIN_SECRET_LENGTH = 32;
-
-/**
  * Per-invocation work bounds for the cron/manual drain trigger. A scheduler tick
  * runs inside a platform execution limit (Vercel Cron functions default to tens
  * of seconds), so one request must NOT try to drain an unbounded backlog: it
@@ -173,87 +163,22 @@ const MIN_DRAIN_SECRET_LENGTH = 32;
  */
 const DRAIN_MAX_ROUNDS = 10;
 const DRAIN_DELIVER_BATCH = 25;
-// Bound fan-out too, not just delivery: at the engine default (100) ten rounds
-// could fan out 1,000 events into 1,000 × endpoints delivery rows in one tick —
-// database work the delivery deadline does not cover. Keep it near the delivery
-// batch so a tick creates roughly what it can attempt; the rest waits.
 const DRAIN_FANOUT_BATCH = 50;
 const DRAIN_MAX_DURATION_MS = 25_000;
 
-/** The bearer token on the request, or null when there is no bearer header. */
-function bearerToken(request: Request): string | null {
-  const header = request.headers.get("authorization");
-  if (!header) return null;
-  const [scheme, token] = header.split(" ");
-  return scheme?.toLowerCase() === "bearer" && token ? token : null;
-}
-
 /**
- * Constant-time string compare. Both sides are hashed to a fixed length first so
- * `timingSafeEqual` never throws on a length mismatch and the comparison leaks
- * neither the secret's length nor its content through timing.
- */
-function constantTimeEqual(a: string, b: string): boolean {
-  const ah = createHash("sha256").update(a).digest();
-  const bh = createHash("sha256").update(b).digest();
-  return timingSafeEqual(ah, bh);
-}
-
-/**
- * Authorize a drain trigger. The cron path matches the shared drain secret
- * presented as a bearer token (Vercel Cron sends `Authorization: Bearer
- * <CRON_SECRET>`); constant-time so it leaks nothing. Anything else must be an
- * authenticated caller able to manage webhooks — a non-matching bearer simply
- * falls through to be tried as an API key by the permission check.
+ * Authorize a webhook drain trigger.
+ *
+ * The posture — scheduler bearer secret, or a human with webhook-update through
+ * a POST from a same-origin context — is the one every trigger in this codebase
+ * shares, so it lives in `trigger-auth` and this names only what is specific to
+ * webhooks: the permission a human needs.
  */
 async function authorizeDrain(request: Request): Promise<void> {
-  const presented = bearerToken(request);
-  if (presented) {
-    // A scheduler presents a shared secret as a bearer token — either Nextly's
-    // NEXTLY_DRAIN_SECRET or Vercel Cron's CRON_SECRET (what Vercel actually
-    // sends). Constant-time against each configured value. A bearer token is not
-    // sent on a cross-site request, so this path is not CSRF-exposed.
-    //
-    // The entropy floor is enforced HERE, not only in the env schema, so a
-    // platform-wide CRON_SECRET that is too short to be a safe authorizer is
-    // ignored rather than accepted — and its length never blocks app boot for a
-    // deployment that doesn't use the drain.
-    for (const secret of [env.NEXTLY_DRAIN_SECRET, env.CRON_SECRET]) {
-      if (
-        secret &&
-        secret.length >= MIN_DRAIN_SECRET_LENGTH &&
-        constantTimeEqual(presented, secret)
-      ) {
-        return;
-      }
-    }
-  }
-  // GET is authorized ONLY by the shared bearer secret above. A GET can be
-  // driven by a cross-site top-level navigation, which carries the victim's
-  // `SameSite=Lax` session cookie, so falling through to the session/API-key
-  // path here would be a CSRF trigger. The session/API-key path (a manual admin
-  // drain) is therefore POST-only: a `SameSite=Lax` cookie is not sent on a
-  // cross-site POST, the same baseline the rest of the session-authenticated
-  // REST API relies on.
-  if (request.method.toUpperCase() === "GET") {
-    throw NextlyError.forbidden({
-      logContext: { reason: "drain-get-requires-secret" },
-    });
-  }
-  const authResult = await requireWebhookPermission(request, "update");
-  if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
-  // Defense in depth for the cookie path: on top of `SameSite=Lax`, require a
-  // same-origin `Origin`/`Referer` so a same-site or misconfigured browser
-  // context cannot forge this side-effecting trigger. API-key auth carries no
-  // ambient cookie and sends no browser Origin, so it is exempt.
-  if (
-    authResult.authMethod !== "api-key" &&
-    !validateOrigin(request, env.NEXTLY_ALLOWED_ORIGINS_PARSED)
-  ) {
-    throw NextlyError.forbidden({
-      logContext: { reason: "drain-origin-mismatch" },
-    });
-  }
+  await authorizeTrigger(request, {
+    requirePermission: req => requireWebhookPermission(req, "update"),
+    reason: "drain",
+  });
 }
 
 /**

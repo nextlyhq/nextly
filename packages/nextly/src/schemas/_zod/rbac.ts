@@ -34,6 +34,12 @@ export const SYSTEM_RESOURCES = [
   // permissions reclassified as system permissions, silently costing preset
   // roles their access.
   "content-releases",
+  // NOT "jobs", for the reason "content-releases" is not "releases": a system
+  // resource RESERVES its name, and "jobs" is a word real sites use for
+  // content — a careers page or a job board is an ordinary collection. This
+  // one reads as a system concept and cannot be mistaken for content, which is
+  // the whole test.
+  "background-jobs",
 ] as const;
 
 export type SystemResource = (typeof SYSTEM_RESOURCES)[number];
@@ -66,6 +72,14 @@ export const NEWLY_RESERVED_SLUG_NOTES: ReadonlyMap<string, string> = new Map([
       "the read-, create- and publish-content-releases permissions are seeded under this name, " +
       "so a content entity sharing it would have its own permissions treated as system-owned " +
       "and preset roles would silently lose access to it.",
+  ],
+  [
+    "background-jobs",
+    "This name became a reserved system resource when the background job runner gained its trigger. " +
+      "An installation that already has a collection or Single with this slug must rename it: " +
+      "the manage-background-jobs permission is seeded under this name, so a content entity " +
+      "sharing it would have its own permissions treated as system-owned and preset roles " +
+      "would silently lose access to it.",
   ],
 ]);
 

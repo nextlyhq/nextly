@@ -64,6 +64,11 @@ export function createReleasesDrainJob(deps: {
 }): JobDefinition<unknown> {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
+    // A sweep: a release comes due at an instant with no request attached, so
+    // nothing is ever in a position to enqueue this. A trigger keeps one queued
+    // instead. Without it the handler is registered and never runs, which looks
+    // exactly like a site with no releases due.
+    sweep: true,
     handler: async () => {
       const result = await applyDueReleases({
         repository: new ReleasesRepository(deps.db),

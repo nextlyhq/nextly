@@ -78,6 +78,16 @@ export interface JobDefinition<TInput = unknown> {
   slug: string;
   handler: (input: TInput, context: JobContext) => Promise<void>;
   retry: JobRetryPolicy;
+  /**
+   * Whether a trigger should keep one of these queued at all times.
+   *
+   * A job type is normally queued by whoever wants the work: something happens,
+   * a row is written, a pass runs it. A SWEEP has no such moment — it asks a
+   * question of the database ("which releases have come due?") at an instant
+   * with no request attached, so nothing is ever in a position to enqueue it,
+   * and a handler that nothing enqueues is a handler that never runs.
+   */
+  sweep: boolean;
 }
 
 export interface JobDefinitionInput<TInput = unknown> {
@@ -85,6 +95,8 @@ export interface JobDefinitionInput<TInput = unknown> {
   handler: (input: TInput, context: JobContext) => Promise<void>;
   /** Defaults to {@link DEFAULT_MAX_ATTEMPTS} attempts. */
   retry?: Partial<JobRetryPolicy>;
+  /** Keep one queued at all times; see {@link JobDefinition.sweep}. */
+  sweep?: boolean;
 }
 
 /**
@@ -125,7 +137,12 @@ export function defineJob<TInput = unknown>(
     });
   }
 
-  return { slug, handler: input.handler, retry: { maxAttempts } };
+  return {
+    slug,
+    handler: input.handler,
+    retry: { maxAttempts },
+    sweep: input.sweep ?? false,
+  };
 }
 
 /**
@@ -166,5 +183,19 @@ export class JobRegistry {
    */
   slugs(): string[] {
     return [...this.definitions.keys()].sort();
+  }
+
+  /**
+   * Every job type that must be kept queued, sorted.
+   *
+   * Read by a trigger before it drains, so the pass finds the sweep it is about
+   * to run. Derived from the definitions rather than listed separately: a
+   * second list is a second place to forget a job type, and forgetting it here
+   * is invisible — the queue simply stays empty.
+   */
+  sweeps(): JobDefinition<never>[] {
+    return [...this.definitions.values()]
+      .filter(definition => definition.sweep)
+      .sort((a, b) => a.slug.localeCompare(b.slug));
   }
 }

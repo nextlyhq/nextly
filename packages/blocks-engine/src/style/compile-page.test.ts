@@ -14,6 +14,7 @@ import {
   compilePageCss,
   MAX_SCANNED_KEYS,
   MAX_SCOPE_LENGTH,
+  previewStateClass,
 } from "./compile-page";
 import type { StyleCompileContext } from "./compile-page";
 import {
@@ -1833,5 +1834,108 @@ describe("element defaults", () => {
     expect(nodeRule).toContain("5rem");
     // Both present, and the node's selector is the heavier one.
     expect(nodeRule?.startsWith(PAGE_ROOT_SELECTOR)).toBe(true);
+  });
+});
+
+describe("previewing an interaction state", () => {
+  /** Every tier that can style the previewed element, in one document. */
+  function everyTier(previewStates: boolean): string {
+    const document = doc(
+      [
+        {
+          id: "n1",
+          type: "core/box",
+          version: 1,
+          props: {},
+          classes: ["c1"],
+          styles: { hover: { base: { color: "#000001" } } },
+        } as unknown as BlockNode,
+      ],
+      { styles: { hover: { base: { color: "#000005" } } } }
+    );
+    return css(document, {
+      ...CTX,
+      ...(previewStates ? { previewStates: true } : {}),
+      namedClasses: [
+        {
+          id: "c1",
+          slug: "card",
+          orderIndex: 0,
+          styles: { hover: { base: { color: "#000002" } } },
+        },
+      ],
+      blockBases: { "core/box": { hover: { base: { color: "#000003" } } } },
+      elementBases: { h1: { hover: { base: { color: "#000004" } } } },
+    } as unknown as StyleCompileContext);
+  }
+
+  it("is OFF unless a caller asks, so a published page carries no marker", () => {
+    // The default matters more than the feature: a visitor's browser decides
+    // its own `:hover`, and a class nothing will ever set is bytes on every
+    // page for nobody.
+    const out = everyTier(false);
+    expect(out).toContain(":where(:hover)");
+    expect(out).not.toContain("nx-pb-state-hover");
+  });
+
+  it("gives EVERY tier the forceable form, not just the node's own", () => {
+    // A forced state has to reach every rule that can match the element. A tier
+    // left behind shows half the appearance the author is editing — and the
+    // half that is missing is whichever one they did not set directly.
+    const out = everyTier(true);
+    const forced = out
+      .split("\n")
+      .filter(line => line.includes(`.${previewStateClass("hover")}`));
+    // Five tiers wrote a hover rule, so five must carry the marker. Asserting
+    // "contains the class" would pass with one.
+    expect(forced).toHaveLength(5);
+    // One distinguishable value per tier. Sentinels like `#node` read better
+    // and are not colours — the compiler drops an invalid value and emits
+    // nothing, so the whole fixture compiled to an empty sheet and every
+    // assertion over it was vacuous.
+    for (const value of [
+      "#000001",
+      "#000002",
+      "#000003",
+      "#000004",
+      "#000005",
+    ]) {
+      expect(
+        forced.some(rule => rule.includes(value)),
+        `no forced rule carried ${value}`
+      ).toBe(true);
+    }
+  });
+
+  it("joins the marker INSIDE the wrapper, so it adds no weight", () => {
+    /*
+     * The whole reason this is safe. `:where()` contributes nothing whatever it
+     * holds, so a previewed rule weighs exactly what the published one weighs.
+     * Measured in a browser: with the marker inside, a later equal-weight rule
+     * still won; moved outside, the earlier rule won because the class had
+     * added a class of its own.
+     *
+     * It matters because the style panel's provenance explains what a VISITOR
+     * gets. A preview that ranked its rules differently would describe an order
+     * nobody is served, in the one state the author opened the panel to see.
+     */
+    const out = everyTier(true);
+    for (const rule of out.split("\n")) {
+      if (!rule.includes(`.${previewStateClass("hover")}`)) continue;
+      // The marker never appears outside a `:where(...)` group.
+      const outside = rule
+        .replace(/:where\([^)]*\)/g, "")
+        .includes(previewStateClass("hover"));
+      expect(outside, `marker escaped its wrapper in: ${rule}`).toBe(false);
+    }
+  });
+
+  it("leaves `base` alone, which is not a state anything forces", () => {
+    const out = css(doc([node("n1", { base: { base: { color: "#111" } } })]), {
+      ...CTX,
+      previewStates: true,
+    } as unknown as StyleCompileContext);
+    expect(out).toContain(`${PAGE_ROOT_SELECTOR} .${nodeClassName("n1")} {`);
+    expect(out).not.toContain("nx-pb-state-base");
   });
 });

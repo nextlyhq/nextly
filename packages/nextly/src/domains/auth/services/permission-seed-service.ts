@@ -304,6 +304,23 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     description:
       "Permission to schedule or cancel a content release, which is what makes its content go live",
   },
+  // Background jobs. ONE permission, not a CRUD set: the only surface that
+  // checks anything today is the trigger that runs a drain pass by hand, and a
+  // permission nothing enforces teaches the admin a vocabulary the server
+  // ignores. `read-background-jobs` arrives with the queue view that reads it.
+  //
+  // Pulling the trigger confers no authority over the work itself. Every job
+  // runs as the identity it was queued with, reconstructed at execution, so a
+  // holder of this permission makes already-queued, already-authorized work
+  // happen NOW — they do not gain the power to perform it.
+  {
+    name: "Manage Background Jobs",
+    slug: "manage-background-jobs",
+    action: "manage",
+    resource: "background-jobs",
+    description:
+      "Permission to run the background job queue by hand, outside its schedule",
+  },
 ];
 
 /**

@@ -119,7 +119,7 @@ export interface BuilderShellProps {
    */
   availablePanels?: readonly LeftPanel[];
   /**
-   * Opens the insert panel from OUTSIDE the shell, once per distinct value.
+   * Opens a panel from OUTSIDE the shell, once per distinct count.
    *
    * The rail is normally the only way to change which panel is open, and its
    * own click handler is a TOGGLE — pressing an already-open panel's item
@@ -135,10 +135,15 @@ export interface BuilderShellProps {
    * shape {@link PreferencesLoad.count} below has: not the state itself, but a
    * count of how many times the thing behind it happened.
    *
+   * The panel travels WITH the count rather than in a second prop. One caller
+   * asking for insert and another for tokens are the same request with a
+   * different subject, and two props would be two answers to one question —
+   * free to disagree about which panel a given count refers to.
+   *
    * Left `undefined` this does nothing, which is what every host that has no
    * such control gets by default.
    */
-  openInsertPanelToken?: number;
+  openPanelRequest?: { readonly panel: LeftPanel; readonly count: number };
   /**
    * Reports `showEmptyElements` to a host that needs to know whether the
    * canvas's empty-container chrome should be showing right now.
@@ -147,7 +152,7 @@ export interface BuilderShellProps {
    * and a caller drawing a SEPARATE overlay over the same canvas (the
    * empty-container appender, mounted through `Canvas`'s own `overlay` prop
    * rather than through this component's internals) has no way to reach it.
-   * This is the read half of that gap; `openInsertPanelToken` above is the
+   * This is the read half of that gap; `openPanelRequest` above is the
    * write half of a different one.
    *
    * Called for every value the preference takes, including the very first
@@ -1054,7 +1059,13 @@ function ShellRegions({
                   </React.Fragment>
                 </section>
               </ResizablePanel>
-              <ResizableHandle withGrip />
+              {/* Named for what it DIVIDES rather than for itself. A keyboard
+                  user lands here between two regions and hears its position;
+                  "Panel and canvas" is what makes the position mean something.
+                  The panel side is named by its role rather than by which
+                  panel is open, because the name would otherwise change under
+                  a user who is standing on it. */}
+              <ResizableHandle withGrip aria-label="Panel and canvas" />
             </>
           ) : null}
 
@@ -1106,7 +1117,7 @@ function ShellRegions({
             </div>
           </ResizablePanel>
 
-          <ResizableHandle withGrip />
+          <ResizableHandle withGrip aria-label="Canvas and inspector" />
 
           <ResizablePanel
             id="inspector"
@@ -1154,7 +1165,7 @@ function ShellRegions({
  */
 export function BuilderShell({
   store,
-  openInsertPanelToken,
+  openPanelRequest,
   onShowEmptyElementsChange,
   onZoomChange,
   appliedScale = 1,
@@ -1174,7 +1185,7 @@ export function BuilderShell({
   const [measureShell, shellFits] = useFitsFullShell();
 
   /*
-   * Applies an `openInsertPanelToken` change AT MOST ONCE — a ref rather than
+   * Applies an `openPanelRequest` change AT MOST ONCE — a ref rather than
    * state, because recording that a token was handled is not itself something a
    * re-render should follow from.
    *
@@ -1193,9 +1204,9 @@ export function BuilderShell({
    * the panel it actually renders, so a request naming a panel the host
    * cannot fill is absorbed there rather than needing a second check here.
    */
-  const handledInsertPanelToken = React.useRef<number | undefined>(undefined);
+  const handledPanelRequest = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
-    if (openInsertPanelToken === undefined) return;
+    if (openPanelRequest === undefined) return;
     /*
      * Nothing is applied until THIS store's read has landed, and that ordering
      * is the whole of this guard.
@@ -1229,10 +1240,11 @@ export function BuilderShell({
      * same flush it arrived in.
      */
     if (!loadedFromCurrentStore) return;
-    if (handledInsertPanelToken.current === openInsertPanelToken) return;
-    handledInsertPanelToken.current = openInsertPanelToken;
-    update(current => ({ ...current, leftPanel: "insert" }));
-  }, [openInsertPanelToken, update, loadedFromCurrentStore]);
+    if (handledPanelRequest.current === openPanelRequest.count) return;
+    handledPanelRequest.current = openPanelRequest.count;
+    const panel = openPanelRequest.panel;
+    update(current => ({ ...current, leftPanel: panel }));
+  }, [openPanelRequest, update, loadedFromCurrentStore]);
 
   /*
    * The read half of the same gap: told on every value `showEmptyElements`

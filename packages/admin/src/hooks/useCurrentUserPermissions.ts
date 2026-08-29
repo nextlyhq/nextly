@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
   AdminCapabilities,
@@ -14,17 +15,12 @@ import { useRouter } from "./useRouter";
  * Permissions for these resources map to dedicated capability flags
  * rather than per-collection capabilities.
  */
-export const SYSTEM_RESOURCES = new Set([
-  "users",
-  "roles",
-  "permissions",
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-  "api-keys",
-  "webhooks",
-]);
+/**
+ * Built-in resources, derived from the single admin definition.
+ *
+ * Was a hand-kept copy; see `constants/permissions` for why there is now one.
+ */
+export const SYSTEM_RESOURCES: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
 
 /**
  * Build AdminCapabilities from a flat list of permission slugs.

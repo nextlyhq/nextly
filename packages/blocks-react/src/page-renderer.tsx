@@ -201,6 +201,7 @@ interface SiteInputRoles {
   blockBases: "reconciled-here";
   tokenPrefix: "reconciled-here";
   previewContainer: "reconciled-here";
+  previewStates: "reconciled-here";
   mayFetchUrl: "reconciled-elsewhere";
   fonts: "sheet-only";
   tokens: "sheet-only";
@@ -317,6 +318,7 @@ export function withoutStatedNulls(
     blockBases: shared.blockBases ?? undefined,
     tokenPrefix: shared.tokenPrefix ?? undefined,
     previewContainer: shared.previewContainer ?? undefined,
+    previewStates: shared.previewStates ?? undefined,
   };
 }
 
@@ -399,6 +401,11 @@ export function sharedStyleInputs(
       route.previewContainer,
       stored.previewContainer
     ),
+    // The same precedence, for the same reason: whether this surface is
+    // previewing an interaction state is a fact about THIS render, while a
+    // stored tier describes the site. A site record has no business turning
+    // forceable states on for a published page.
+    previewStates: firstStated(route.previewStates, stored.previewStates),
   });
 }
 
@@ -793,6 +800,11 @@ export function PageRenderer({
           // context above was given. A shared tier compiled for the published
           // page beneath node styles compiled for a preview surface puts two
           // answers to one breakpoint in one document.
+          // Carried into the SITE sheet as well as the page compile. A named
+          // class and a block-type default are emitted here, so an editor that
+          // asked only the page compile for forceable states gets a selected
+          // block whose hover appearance comes from a class showing nothing.
+          ...(shared.previewStates === true ? { previewStates: true } : {}),
           ...(shared.previewContainer == null
             ? {}
             : { previewContainer: shared.previewContainer }),

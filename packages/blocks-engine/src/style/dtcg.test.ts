@@ -268,9 +268,17 @@ describe("export", () => {
     expect(document).toEqual({});
   });
 
-  it("still exports a family run separated by the whitespace CSS allows", () => {
+  it("exports a family run separated by CSS whitespace under its ONE name", () => {
     // The other side of that rule: a form feed IS whitespace to CSS, so the run
     // it separates is two identifiers and the token is expressible.
+    //
+    // Exported with the separator NORMALISED, because CSS joins the identifiers
+    // of an unquoted family with a single space to form the name it matches on.
+    // `My\u000cFont` and `My Font` are one family to a browser, so exporting
+    // the author's spelling would hand every tool reading the standard value a
+    // name carrying a form feed, which matches no installed font — and would
+    // make the same value compare unequal against the family a `@font-face`
+    // declares. A quoted name is untouched: there the whitespace is the name.
     const { document } = tokensToDtcg(
       tokens([
         {
@@ -281,7 +289,7 @@ describe("export", () => {
       ])
     );
     expect((document.f as Record<string, unknown>)?.$value).toEqual([
-      "My\u000cFont",
+      "My Font",
       "serif",
     ]);
   });

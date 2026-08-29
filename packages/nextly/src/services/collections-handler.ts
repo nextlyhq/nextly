@@ -925,6 +925,46 @@ export class CollectionsHandler {
   }
 
   /**
+   * Take every language of an entry down at once.
+   *
+   * Sets the main status and, for localized+draft collections, every companion
+   * `_status` to draft, atomically — and refuses rather than half-performing
+   * when the companion physically lacks the status column. See
+   * `unpublishAllLocales` on the mutation service for why a takedown asks that
+   * question when a publish does not.
+   */
+  async unpublishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    userId?: string;
+    userName?: string;
+    userEmail?: string;
+    /** Authenticated role set, forwarded to role-based access rules. */
+    userRoles?: string[];
+    user?: UserContext;
+    /** When true, bypass all access control checks */
+    overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: TrustBound;
+    /**
+     * Set by the REST dispatcher to attest the route middleware already ran the
+     * RBAC/code-access gate, so the entry service skips only that redundant
+     * re-check. Never inferred from a userId.
+     */
+    routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional unpublish check. */
+    authenticatedScope?: AuthenticatedScope;
+    /** Acting identity from the transport, forwarded to the recorded event. */
+    actor?: RequestActor;
+  }) {
+    return this.entryService.unpublishAllLocales(this.resolveUserParam(params));
+  }
+
+  /**
    * Delete an entry.
    * @param params - Collection name, entry ID, and optional user ID
    */

@@ -1,7 +1,11 @@
 "use client";
 
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Command as CommandPrimitive, defaultFilter } from "cmdk";
+import {
+  Command as CommandPrimitive,
+  defaultFilter,
+  useCommandState as useCommandStatePrimitive,
+} from "cmdk";
 import { Search } from "lucide-react";
 import type {
   ElementRef,
@@ -454,3 +458,44 @@ export {
  * @experimental
  */
 export const commandDefaultFilter = defaultFilter;
+
+/**
+ * The value of the item the palette has HIGHLIGHTED, from a component inside
+ * it.
+ *
+ * The palette owns which item is highlighted, and it moves that highlight for
+ * reasons a caller never sees: a pointer crossing an item, an arrow key, and a
+ * filter that removes the item the highlight was on. Anything outside wanting
+ * to follow it — a preview pane, a description strip, a status line — needs to
+ * read that rather than keep a copy.
+ *
+ * Reading beats mirroring here for a specific reason rather than on principle.
+ * The palette's controlled `value` sets which item is MARKED, and does not move
+ * the internal cursor that `aria-activedescendant` and the scroll follow. So a
+ * caller that writes the value to steer the highlight desynchronises the two:
+ * the item drawn as current and the option announced as current stop agreeing,
+ * and after a filter the announcement can name an element that has been
+ * removed. A read leaves one owner and takes a derived view.
+ *
+ * NARROWED to the one field deliberately. The underlying library exposes its
+ * whole store through a selector — the raw search text, its internal item and
+ * group maps, the id it uses for `aria-activedescendant` — and publishing that
+ * selector would make every one of those part of this kit's public API and its
+ * generated declarations. A dependency upgrade could then reshape what callers
+ * can reach without any export changing name, which is exactly what the
+ * surface snapshot cannot see. This returns a string.
+ *
+ * Empty string means nothing is highlighted, which is the library's own
+ * spelling and a different answer from "an item whose value is unknown".
+ *
+ * Must be called from inside the palette, since that is where the state lives.
+ *
+ * Bound to a declaration rather than re-exported with `export { x as y }`: the
+ * bundler keeps a doc comment attached to a declaration and drops one attached
+ * to an export statement, so the release tag would not reach the published
+ * types.
+ *
+ * @experimental
+ */
+export const useCommandHighlight = (): string =>
+  useCommandStatePrimitive(state => state.value);

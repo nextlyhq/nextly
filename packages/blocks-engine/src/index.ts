@@ -336,6 +336,7 @@ export {
   TOKEN_MODES,
   defaultSiteTokens,
   resolveSiteTokens,
+  cssString,
   emitFontFaces,
   emitTokenBlocks,
   isAuthorableTokenName,
@@ -369,8 +370,18 @@ export {
   dtcgToTokens,
   isKind,
   tokensToDtcg,
+  familyPartKind,
+  readFamilyList,
+  splitFamilyList,
 } from "./style/dtcg";
-export type { DtcgNode } from "./style/dtcg";
+export type {
+  DtcgNode,
+  FamilyListKind,
+  FamilyListReading,
+  FamilyPart,
+  FamilyPartKind,
+  ReadFamilyPart,
+} from "./style/dtcg";
 export {
   checkContrast,
   compositeOver,
@@ -482,7 +493,11 @@ export type { BreakpointAxis } from "./style/breakpoint-axes";
 // two apart whenever they compile differently, and this is the set that decides
 // how much "enough" is.
 export { EMITTABLE_STRING_BOUNDS } from "./style/emittable-string-bounds";
-export { MAX_SCOPE_LENGTH } from "./style/compile-page";
+// `previewStateClass` is published because it is a CONTRACT between the
+// compiler and a previewing surface: the compiler writes it into a selector
+// and the surface puts it on an element. A name spelled in two places can be
+// spelled differently, which is why `NODE_ID_ATTRIBUTE` is published too.
+export { MAX_SCOPE_LENGTH, previewStateClass } from "./style/compile-page";
 export type { EmittableStringBound } from "./style/emittable-string-bounds";
 export type { StyleOrigin, StyleTraceEntry } from "./style/style-trace";
 export type { StyleQuery, StyleSubject } from "./style/style-origin";

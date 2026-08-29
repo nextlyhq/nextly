@@ -67,6 +67,16 @@ export interface SiteSheetInput {
    * tier does. See {@link BreakpointContextOptions.previewContainer}.
    */
   previewContainer?: string;
+  /**
+   * Emit each interaction state so a previewing surface can force one.
+   *
+   * Carried through for the same reason `previewContainer` is: a named class
+   * and a block-type default are compiled HERE, not with the page, so an editor
+   * that asked the page compile for forceable states and not this one gets a
+   * selected block whose hover appearance comes from a class showing nothing at
+   * all. The tiers split across two sheets; the option must not.
+   */
+  previewStates?: boolean;
 }
 
 /** The shared sheet and the name it is addressed by. */
@@ -177,6 +187,7 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     ...(input.previewContainer === undefined
       ? {}
       : { previewContainer: input.previewContainer }),
+    ...(input.previewStates === true ? { previewStates: true } : {}),
   });
   warnings.push(...tiers.warnings);
   if (tiers.css !== "") blocks.push(tiers.css);

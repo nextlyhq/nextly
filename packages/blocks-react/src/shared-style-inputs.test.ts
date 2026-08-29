@@ -141,6 +141,41 @@ describe("the stamp", () => {
       );
     });
 
+    it("the state-preview option, which changes every state selector", () => {
+      /*
+       * A preview sheet gives each interaction state a forceable form, so its
+       * selectors are not the published ones. Sharing a stamp would let
+       * `resolvePageStyles` — exported, and returning a storable `PageStyles` —
+       * hand back preview CSS stamped as published, and a live page would be
+       * served rules carrying a class nothing on it will ever set.
+       */
+      expect(sharedStyleInputsId(inputs({ previewStates: true }))).not.toBe(
+        sharedStyleInputsId(inputs())
+      );
+    });
+
+    it("adds NOTHING to the label of a page that never asked", () => {
+      /*
+       * The reason the option is spread into the label rather than given a
+       * slot: a fixed slot changes the array's SHAPE for every caller,
+       * invalidating every artifact already stored on the site to record a
+       * field that is unset on all of them.
+       *
+       * Asserted on the shape, not by comparing two current labels. Both sides
+       * of such a comparison carry whatever shape the code has, so it agrees
+       * with a fixed slot as readily as with a spread — measured: it did, and
+       * the break passed.
+       */
+      const absent = JSON.parse(sharedStyleInputsLabel(inputs())) as unknown[];
+      const asked = JSON.parse(
+        sharedStyleInputsLabel(inputs({ previewStates: true }))
+      ) as unknown[];
+
+      expect(asked).toHaveLength(absent.length + 1);
+      expect(asked.at(-1)).toBe("preview-states");
+      expect(absent).not.toContain("preview-states");
+    });
+
     it("the token prefix", () => {
       // Renders into every `var(--<prefix><name>)` the sheet references.
       expect(sharedStyleInputsId(inputs({ tokenPrefix: "--acme-" }))).not.toBe(

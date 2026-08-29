@@ -100,6 +100,7 @@ import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
+import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildCompanionExists,
   buildLocalizedOrderExpr,
@@ -117,7 +118,10 @@ import {
   resolveFallbackChain,
   resolveRequestedLocale,
 } from "../../i18n/resolve-locale";
-import { resolveCompanionSchemaReadiness } from "../../i18n/runtime/companion-readiness";
+import {
+  resolveCompanionColumn,
+  resolveCompanionSchemaReadiness,
+} from "../../i18n/runtime/companion-readiness";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -448,28 +452,57 @@ export class CollectionQueryService extends BaseService {
       collectionName,
       rows.map(r => r.id).filter((id): id is string => typeof id === "string")
     );
+    // 🔴 Resolved ONCE and read twice. `populateTranslationStatus` returns immediately for any
+    // verdict but `ready`, so probing the column for a companion that is not there introspects a
+    // table that does not exist to answer a question nobody will ask — and since a negative column
+    // verdict is deliberately not remembered, it does that on every list read until the operator
+    // migrates. Resolving it inline in the argument list is what hid the ordering.
+    const readiness = await resolveCompanionSchemaReadiness(
+      this.adapter,
+      companion
+    );
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
       pendingChangeLocales,
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness,
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
       defaultLocale: this.localization.defaultLocale,
       hasStatus: companion.hasStatus,
-      // 🔴 `staleness` is deliberately NOT supplied, so every locale reports its staleness as
-      // UNKNOWN.
+      // 🔴 Supplied only when the companion PHYSICALLY carries the column, which is a different
+      // question from whether the schema declares it. `companion.hasUpdatedAt` reports the
+      // DECLARED shape and is unconditionally true, so trusting it would emit SQL naming a column
+      // a pre-existing companion may not have and fail the whole read for that collection.
       //
-      // Nothing here can establish whether a given companion physically carries `_updated_at`.
-      // `hasUpdatedAt` on the schema reports the DECLARED shape and is unconditionally true, which
-      // is a claim about a column nobody checked, and a companion created before the column
-      // existed has no path that adds it. Reporting staleness from a capability that cannot be
-      // checked is the one thing this must not do: a wrong "needs review" is indistinguishable
-      // from a right one to the person reading it.
+      // Omission is the mechanism rather than a flag, because absent is already the defined answer
+      // for a caller that cannot ask: every locale then reports UNKNOWN, which is never rendered
+      // as up to date. A wrong "needs review" is indistinguishable from a right one to the person
+      // reading it, so the conservative direction is the only safe default.
       //
-      // Omission is the mechanism rather than a flag, because it is already the defined answer for
-      // a caller that cannot ask — see `readCompanionStamps`.
+      // Resolved on the pool BEFORE any transaction opens — a failed probe inside one marks the
+      // whole PostgreSQL transaction aborted and the error then names an innocent statement.
+      //
+      // Unconditional here, unlike the filter path, and the difference is that this read NEEDS the
+      // answer: there is no badge without it. A companion that already carries the column answers
+      // from the remembered verdict and costs nothing; one that predates it pays an introspection
+      // per list read, because a negative is deliberately not remembered and the migration that
+      // would end that cost runs in another process. That is the same trade `companion-readiness`
+      // already makes for an entity in a `pre-migration` state, and it is bounded the same way —
+      // it stops the moment the operator migrates.
+      staleness:
+        readiness === "ready" &&
+        (await resolveCompanionColumn(
+          this.adapter,
+          companion.companionTableName,
+          COMPANION_UPDATED_AT_COLUMN
+        ))
+          ? {
+              companionTableName: companion.companionTableName,
+              dialect: this.adapter.dialect,
+            }
+          : undefined,
 
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValue:
@@ -584,17 +617,31 @@ export class CollectionQueryService extends BaseService {
       mainIdColumn,
       localizedColumns: companion.localizedFields.map(f => f.column),
       hasStatus: companion.hasStatus,
-      // 🔴 Left absent, which makes the `stale` filter answer `1=0` — nothing here is KNOWN to be
-      // stale.
+      // 🔴 The PHYSICAL answer, not the declared one, and it is the same probe the per-row badge
+      // resolves — so the tab and the badge cannot disagree about whether the question is even
+      // askable for this collection.
       //
       // `companion.hasUpdatedAt` reports the DECLARED shape and is unconditionally true, which is
-      // a claim about a physical column that nothing has checked. A companion created before the
-      // column existed has no path that adds it, so emitting SQL naming it would fail the query
-      // for that collection — and a filter that cannot be evaluated is worse than one returning
-      // nothing, because the worklist would present every document as needing review.
+      // a claim about a physical column that nothing has checked. Emitting SQL naming a column a
+      // pre-existing companion lacks would fail the query for that collection, and a filter that
+      // cannot be evaluated is worse than one returning nothing: the worklist would present every
+      // document as needing review.
       //
-      // Absent is already the defined answer for "cannot answer", so this is the designed
-      // conservative path rather than a flag.
+      // False leaves the `stale` arm answering `1=0` — nothing is KNOWN to be stale — which is
+      // the defined answer for "cannot ask" rather than a claim that nothing is.
+      //
+      // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a NEGATIVE verdict
+      // is deliberately not cached — so on a companion that predates the column, asking here
+      // unconditionally would put a catalogue query on every filtered list, twice per page, for a
+      // capability the other four states never consult. The one state that needs it pays for it.
+      hasUpdatedAt:
+        filter.state === "stale"
+          ? await resolveCompanionColumn(
+              this.adapter,
+              companion.companionTableName,
+              COMPANION_UPDATED_AT_COLUMN
+            )
+          : undefined,
       defaultLocale: this.localization.defaultLocale,
       filter,
     });
