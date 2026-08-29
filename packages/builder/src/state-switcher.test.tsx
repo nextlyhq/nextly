@@ -16,7 +16,8 @@ import * as React from "react";
 
 import type { NodeStyles } from "@nextlyhq/blocks-engine";
 
-import { StateSwitcher, stateHasOwnValues } from "./state-switcher";
+import { StateSwitcher } from "./state-switcher";
+import { stateHasOwnValues } from "./style-values";
 
 afterEach(cleanup);
 
@@ -72,6 +73,44 @@ describe("which states report that they carry values", () => {
     render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
 
     expect(marked()).toEqual(["Hover"]);
+  });
+
+  it("survives a malformed stored envelope rather than taking the tab down", () => {
+    /*
+     * The envelope arrives from STORAGE, and the field's guard admits this
+     * deliberately: it checks that `nodes` is an array and no more, so a
+     * migration, a DTCG import or a hand-edited row can leave a null state or a
+     * null breakpoint behind. Enumerating one throws during RENDER, which takes
+     * the whole Style tab down — removing the only surface that could repair
+     * the value that broke it.
+     *
+     * Both shapes in one case, because they fail at different levels: the state
+     * itself, and one breakpoint under a state that is otherwise fine.
+     */
+    const styles = {
+      hover: null,
+      focus: { base: null },
+      active: { base: { color: "#000001" } },
+    } as unknown as NodeStyles;
+
+    expect(() =>
+      render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />)
+    ).not.toThrow();
+
+    expect(marked()).toEqual(["Pressed"]);
+  });
+
+  it("ignores a state reached through the PROTOTYPE", () => {
+    // A state the compiler will not read must not be reported as styled: the
+    // marker would send an author looking for values that never reach the page.
+    const styles = Object.create({
+      hover: { base: { color: "#000001" } },
+    }) as NodeStyles;
+
+    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+
+    expect(marked()).toEqual([]);
+    expect(stateHasOwnValues(styles, "hover")).toBe(false);
   });
 
   it("marks nothing when the host supplies no styles at all", () => {

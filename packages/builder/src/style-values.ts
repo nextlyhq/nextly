@@ -301,6 +301,41 @@ function valuesAt(
   return hasOwnKeys(values) ? values : undefined;
 }
 
+/**
+ * Whether a state holds any declaration of its own, at any breakpoint.
+ *
+ * Here rather than beside the control that draws the answer, because this file
+ * is the chokepoint for reading this envelope and the reading is the whole
+ * difficulty. The value arrives from storage, so a migration, a DTCG import or
+ * a hand-edited row can leave `hover: null` or `{ base: null }` behind, and the
+ * field's own guard admits both — it checks that `nodes` is an array and no
+ * more, deliberately, so a malformed document stays repairable instead of
+ * throwing. `Object.values(null)` throws during RENDER, which takes the Style
+ * tab down and removes the only surface that could repair the value that broke
+ * it.
+ *
+ * Own keys at every level, for the reason `valuesAt` gives: a state or
+ * breakpoint reached through a PROTOTYPE is one the compiler will not read, so
+ * reporting it as styled would mark a state whose values never reach the page.
+ *
+ * EMPTY IS NOT SET. Both levels are sparse and either can survive empty — a
+ * state whose last declaration was cleared leaves the keys behind — so a
+ * presence test reports a state as styled when it carries nothing, which is
+ * precisely the false reassurance the marker exists to remove.
+ */
+export function stateHasOwnValues(
+  styles: NodeStyles | undefined,
+  state: StyleState
+): boolean {
+  if (!hasOwnKeys(styles)) return false;
+  const breakpoints = ownData(styles, state);
+  if (!hasOwnKeys(breakpoints)) return false;
+  return Object.keys(breakpoints).some(breakpoint => {
+    const values = ownData(breakpoints, breakpoint);
+    return hasOwnKeys(values) && Object.keys(values).length > 0;
+  });
+}
+
 /** The whole envelope with one state × breakpoint replaced, pruning what empties. */
 function withValues(
   styles: NodeStyles | undefined,

@@ -886,6 +886,29 @@ function isSaveChord(event: KeyboardEvent): boolean {
   );
 }
 
+/**
+ * The interaction state to SHOW, given the state being edited and how many
+ * blocks are selected.
+ *
+ * Suppressed rather than reset while several are selected. The inspector
+ * replaces its whole tab strip with a multi-selection summary, so the state
+ * control goes with it — and the panel's own tab handler cannot catch that,
+ * because the stored tab value is still `style` and no tab change happens. A
+ * forced state outliving its control is a canvas drawn mid-hover with nothing
+ * on screen explaining why.
+ *
+ * Derived rather than written back, so the author's choice SURVIVES: they
+ * shift-click a second block, the canvas returns to the normal appearance, and
+ * clicking back to one block restores the state they were editing. Writing
+ * `base` into the state instead would silently discard it.
+ */
+function shownStyleStateFor(
+  editing: StyleState,
+  selectedCount: number
+): StyleState {
+  return selectedCount > 1 ? "base" : editing;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -966,9 +989,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * holds a draft. `setStyleState` is stable, so this changes exactly when the
    * state does.
    */
+  // ONE derivation feeding BOTH consumers, which is what keeps the panel and the
+  // canvas showing the same thing. See `shownStyleStateFor`.
+  const shownStyleState = shownStyleStateFor(
+    styleState,
+    editor.selection.ids.length
+  );
   const styleStateBinding = useMemo(
-    () => ({ state: styleState, onChange: setStyleState }),
-    [styleState]
+    () => ({ state: shownStyleState, onChange: setStyleState }),
+    [shownStyleState]
   );
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
   /*
@@ -1897,7 +1926,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 document={editor.document}
                 rootRef={canvasRoot}
                 onRoot={setCanvasElement}
-                forcedState={styleState}
+                forcedState={shownStyleState}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}

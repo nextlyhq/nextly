@@ -31,6 +31,7 @@ import { cn } from "@nextlyhq/ui/utils";
 import * as React from "react";
 
 import { radioGroupStep } from "./roving-radios";
+import { stateHasOwnValues } from "./style-values";
 
 /**
  * What each state is CALLED, in this product's vocabulary.
@@ -65,32 +66,6 @@ const STATE_HINTS: Readonly<Record<StyleState, string>> = {
   focus: "while it has keyboard focus",
   active: "while it is being pressed",
 };
-
-/**
- * Whether a state holds declarations OF ITS OWN.
- *
- * Presence of the key is not the property. Both levels of `NodeStyles` are
- * sparse and either can survive as an empty object — a state whose last
- * declaration was cleared, a breakpoint that was opened and left alone — so a
- * key test would report a state as styled when it carries nothing, which is
- * precisely the false reassurance this marker exists to remove.
- *
- * Node-local, deliberately. A hover appearance can also come from a named class
- * or a block-type default, and those are real, but this marker sits on the
- * control that decides what the panel WRITES, and the panel writes here. A dot
- * meaning "you have set something in this state" can be acted on; one meaning
- * "something, somewhere, affects this state" cannot.
- */
-export function stateHasOwnValues(
-  styles: NodeStyles | undefined,
-  state: StyleState
-): boolean {
-  const perBreakpoint = styles?.[state];
-  if (perBreakpoint === undefined) return false;
-  return Object.values(perBreakpoint).some(
-    values => values !== undefined && Object.keys(values).length > 0
-  );
-}
 
 /**
  * Props for StateSwitcher.
