@@ -478,6 +478,134 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
   });
 
+  it("does not report a draft a PRESET replaces", () => {
+    /*
+     * The browser blurs the field before the preset's press becomes a click, so
+     * a draft left in place is published first and the replacement second —
+     * two edits recorded for the one the author made, and for a preset an
+     * `onColorChange` beside the `onSwatchSelect` that was the point.
+     */
+    const onColorChange = vi.fn();
+    const onSwatchSelect = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        onSwatchSelect={onSwatchSelect}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const preset = screen.getByRole("button", { name: "Primary" });
+    preset.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+
+    expect(onColorChange).not.toHaveBeenCalledWith("#123456");
+  });
+
+  it("keeps a draft when the press is the FIELD itself", () => {
+    /*
+     * The control for the case above, and the one a blanket "inside presses
+     * drop the draft" rule would break: clicking into the field to move the
+     * caret must not discard what is being typed.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+    field.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("drops a draft the HOST replaces", () => {
+    /*
+     * An undo, or an edit made elsewhere, arrives as a new `color`. Text typed
+     * against the old value is stale, and left in place the next blur publishes
+     * it back over the value that just arrived.
+     */
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    view.rerender(
+      <ColorPicker color="#00ff00" onColorChange={onColorChange} />
+    );
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves Enter to the IME while a composition is active", () => {
+    // Accepting a candidate is not finishing a colour; consuming that Enter
+    // blocks the acceptance and reports the pre-composition text.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter", isComposing: true });
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("works inside a SHADOW ROOT, where a press on the field keeps its draft", () => {
+    /*
+     * What this DOES prove: the picker functions when mounted inside a shadow
+     * root — the listener attaches, a press on the field is read as inside, and
+     * the draft survives to be finished.
+     *
+     * What it does NOT prove, stated because the name would otherwise imply it:
+     * the `composedPath` branch that exists for this case. A composed event
+     * crossing a shadow boundary is retargeted to the HOST in a browser, so a
+     * containment test would find an element the picker does not contain and
+     * read a press on the field as an outside dismissal. jsdom does not
+     * reproduce that retargeting — measured, removing the `composedPath` branch
+     * leaves this case passing — so the branch is reasoned from the spec rather
+     * than covered here, and a reader should not take this green as evidence
+     * for it.
+     */
+    const holder = document.createElement("div");
+    document.body.appendChild(holder);
+    const shadow = holder.attachShadow({ mode: "open" });
+    const mount = document.createElement("div");
+    shadow.appendChild(mount);
+
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />, {
+      container: mount,
+    });
+
+    // BY ITS ID, not the first input in the tree — the sliders come first, and
+    // a probe that grabbed one of those tested the hue control while claiming
+    // to test the hex field.
+    const field = shadow.querySelector<HTMLInputElement>('input[id$="-hex"]');
+    expect(field).not.toBeNull();
+    if (field === null) return;
+
+    fireEvent.change(field, { target: { value: "#123456" } });
+    field.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      })
+    );
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
   it("reports NOTHING when the picker GOES AWAY mid-draft", () => {
     /*
      * Dismissal is not a finish. Escape means cancel, so a draft dying with the

@@ -183,6 +183,7 @@ export function ColorPicker<TValue = string>({
 }: ColorPickerProps<TValue>) {
   const fieldId = React.useId();
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const fieldRef = React.useRef<HTMLInputElement>(null);
   const surfaceRef = React.useRef<HTMLDivElement>(null);
   const [hsva, setHsva] = React.useState<Hsva>(() => toHsva(color));
   // What the hex field shows while it is being typed into. A half-typed value
@@ -214,6 +215,13 @@ export function ColorPicker<TValue = string>({
       // in must not silently move the surface's hue to red. Read from the
       // updater rather than from `hsva`, so the effect does not re-run on a
       // hue change it is not interested in.
+      /*
+       * The DRAFT goes with it. A colour arriving from the host — an undo, an
+       * edit made elsewhere — replaces what is stored, so text typed against
+       * the old value is stale: left in place, the next blur would publish it
+       * back over the value that just arrived.
+       */
+      dropDraft();
       setHsva(prev => hsvaFrom(incoming, incoming.alpha, prev.h));
     }
   }, [color, rendered, showAlpha]);
@@ -240,6 +248,17 @@ export function ColorPicker<TValue = string>({
    * after a host that coalesces a gesture on close has already decided what to
    * write, which is a value published into nothing.
    */
+  /*
+   * Forget the draft without reporting it, for everything that SUPERSEDES one:
+   * a preset, a recent colour, a drag, or the host pushing a new colour in. The
+   * ref and the state move together, and the ref moves synchronously, because a
+   * blur that has already been queued will read it before React renders.
+   */
+  const dropDraft = (): void => {
+    draftRef.current = null;
+    setDraftHex(null);
+  };
+
   const commitDraft = (): void => {
     const text = draftRef.current;
     // Taken BEFORE anything else, so a second caller in this same dispatch
@@ -298,15 +317,40 @@ export function ColorPicker<TValue = string>({
        * itself — and committing there would report a draft the press is about
        * to replace.
        *
-       * Recognised WITHOUT `instanceof`, which is realm-bound: rendered into an
-       * iframe or a pop-out the target belongs to that document's own
-       * JavaScript realm and is not an instance of this one's `Node`, so every
-       * press — the hex field included — would read as outside and commit the
-       * draft the author was still typing. `contains` is a tree operation and
-       * does not care which realm the node came from; the shape test in front
-       * of it is what keeps a non-node target from reaching it.
+       * Recognised through the COMPOSED PATH first, because a composed event
+       * crossing a shadow boundary is retargeted to the host by the time it
+       * reaches this document: `root` does not contain that host, so a press on
+       * the hex field itself would read as outside and publish a half-typed
+       * prefix — clicking to move the caret after `#123` would store `#112233`.
+       *
+       * The containment test behind it covers the ordinary case and is written
+       * WITHOUT `instanceof`, which is realm-bound: in an iframe or a pop-out
+       * the target belongs to that document's own JavaScript realm and is not
+       * an instance of this one's `Node`. `contains` is a tree operation and
+       * does not care which realm a node came from.
        */
-      if (isNode(event.target) && root.contains(event.target)) return;
+      const path =
+        typeof event.composedPath === "function" ? event.composedPath() : [];
+      const inside =
+        path.includes(root) ||
+        (isNode(event.target) && root.contains(event.target));
+      if (inside) {
+        /*
+         * A press inside that is NOT the field replaces the value: a preset, a
+         * recent colour, the surface. The browser blurs the field before that
+         * press becomes a click, so leaving the draft would have the blur
+         * publish the typed literal first and the replacement second — two
+         * edits recorded for one the author made, and for a preset an
+         * `onColorChange` beside the `onSwatchSelect` that was the point.
+         */
+        const field = fieldRef.current;
+        const inField =
+          field !== null &&
+          (path.includes(field) ||
+            (isNode(event.target) && field.contains(event.target)));
+        if (!inField) dropDraft();
+        return;
+      }
       commitDraft();
     };
     /*
@@ -325,8 +369,7 @@ export function ColorPicker<TValue = string>({
 
   const commit = (next: Hsva): void => {
     setHsva(next);
-    draftRef.current = null;
-    setDraftHex(null);
+    dropDraft();
     onColorChange(toHexString(next, showAlpha));
   };
 
@@ -496,6 +539,7 @@ export function ColorPicker<TValue = string>({
         </label>
         <Input
           id={`${fieldId}-hex`}
+          ref={fieldRef}
           className="font-mono"
           value={draftHex ?? rendered}
           /*
@@ -510,6 +554,14 @@ export function ColorPicker<TValue = string>({
           }}
           onKeyDown={event => {
             if (event.key !== "Enter") return;
+            /*
+             * An Enter that ACCEPTS AN IME CANDIDATE is not a finish. Consuming
+             * it blocks the acceptance and reports whatever was in the field
+             * before the composition resolved. The shortcut manager in this
+             * package treats composing keystrokes as the IME's for the same
+             * reason.
+             */
+            if (event.nativeEvent.isComposing) return;
             // Kept off the surrounding form, which may have a submit of its own:
             // finishing a colour is not submitting whatever contains it.
             event.preventDefault();
