@@ -57,17 +57,26 @@ import {
   lockStateOf,
   propPatch,
   renameOp,
+  selectedNode,
   type BlockIdentity,
   type EditableProp,
   type LockState,
 } from "./inspector";
 import { selectionLock } from "./selection-ops";
+import { StyleStateField } from "./state-switcher";
 import {
   StyleInspectorPanel,
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 import { useRenderedTag } from "./use-rendered-tag";
+
+export interface StyleStateBinding {
+  /** The state being edited. `base` when omitted. */
+  state?: StyleState | undefined;
+  /** Choose a different one. Omitted withholds the control. */
+  onChange?: ((state: StyleState) => void) | undefined;
+}
 
 export interface InspectorPanelProps {
   /**
@@ -114,8 +123,20 @@ export interface InspectorPanelProps {
    * omitting it does not mean "allow" — it means the question was never asked.
    */
   policy?: StylePolicy;
-  /** The interaction state the Style tab edits. `base` when the host says nothing. */
-  styleState?: StyleState;
+  /**
+   * The interaction state the Style tab edits, and how to change it.
+   *
+   * ONE prop rather than a value and a setter beside each other, because they
+   * are one decision: this state and `Canvas.forcedState` must be the same
+   * value, and a host wiring them separately gets a panel reporting a state its
+   * canvas is not showing. Bundled, the pair travels together or not at all.
+   *
+   * `onChange` absent WITHHOLDS the switcher rather than disabling it. A host
+   * that cannot carry the choice to its canvas would otherwise show a control
+   * whose selection nothing follows — the arrangement that contract exists to
+   * prevent.
+   */
+  styleState?: StyleStateBinding;
   /** The breakpoint the Style tab edits. The unconditional one by default. */
   breakpoint?: BreakpointId;
   /**
@@ -195,6 +216,32 @@ const INSPECTOR_TABS = [
   { value: "advanced", label: "Advanced" },
 ] as const;
 
+/**
+ * The Style tab's own handler for a change of tab.
+ *
+ * Drops the forced interaction state when the author leaves the Style tab.
+ *
+ * The one real cost of placing the state control inside the Style tab is that
+ * it goes off screen with the tab, so a state left switched on becomes a canvas
+ * disagreeing with everything visible — the author edits the text of a button
+ * drawn mid-press, with no control on screen saying why. Dropping it here
+ * removes that state rather than documenting it.
+ *
+ * On the CHANGE rather than in an effect keyed on the tab: an effect would also
+ * fire on mount and on any re-render that reasserted the same tab, which would
+ * fight a host restoring a state deliberately. This runs exactly when a person
+ * leaves the tab.
+ */
+function tabChangeHandler(
+  setTab: (next: string) => void,
+  onStyleStateChange: ((state: StyleState) => void) | undefined
+): (next: string) => void {
+  return next => {
+    setTab(next);
+    if (next !== "style") onStyleStateChange?.("base");
+  };
+}
+
 export function InspectorPanel({
   editor,
   canvasRoot,
@@ -224,6 +271,14 @@ export function InspectorPanel({
     editor.document
   );
   const inspection = inspectSelection(editor.document, editor.selectedId);
+  /*
+   * The NODE rather than the inspection, because the marker is about stored
+   * styles and an inspection describes editable props. `selectedNode` answers
+   * for a block the registry does not know as well, which is right here: an
+   * unregistered block still has styles, and refusing to say which states carry
+   * them would be a worse answer than saying none.
+   */
+  const styleNode = selectedNode(editor.document, editor.selectedId);
 
   // Declared before the early returns below, because a hook has to run on every
   // render of this component and "no selection" is one of them.
@@ -318,7 +373,11 @@ export function InspectorPanel({
         told when it stops being the one on screen: it is force-mounted, so its
         own removal no longer tells it.
       */}
-      <Tabs value={tab} onValueChange={setTab} className="nx-inspector__tabs">
+      <Tabs
+        value={tab}
+        onValueChange={tabChangeHandler(setTab, styleState?.onChange)}
+        className="nx-inspector__tabs"
+      >
         <TabsList>
           {INSPECTOR_TABS.map(tab => (
             <TabsTrigger key={tab.value} value={tab.value}>
@@ -350,11 +409,26 @@ export function InspectorPanel({
         </TabsContent>
 
         <TabsContent value="style">
+          {/*
+            ABOVE the controls, because it decides what every one of them reads
+            and writes. Below them it would be a filter applied after the fact,
+            and an author would have edited a value before meeting the thing
+            that says which state the value belongs to.
+
+            Whether it appears at all is the FIELD's own decision — see
+            `StyleStateField`, which withholds itself from a host that cannot
+            carry the choice to its canvas.
+          */}
+          <StyleStateField
+            state={styleState?.state}
+            onSelect={styleState?.onChange}
+            node={styleNode}
+          />
           <StyleInspectorPanel
             editor={editor}
             renderedTag={renderedTag}
             policy={policy}
-            state={styleState}
+            state={styleState?.state}
             breakpoint={breakpoint}
             cascade={cascade}
             breakpoints={breakpoints}

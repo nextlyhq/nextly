@@ -45,6 +45,7 @@ import {
   offeredTiers,
   selectableTiers,
 } from "./canvas-width";
+import { radioGroupStep } from "./roving-radios";
 
 /**
  * Props for BreakpointSwitcher.
@@ -382,13 +383,10 @@ export function BreakpointSwitcher({
       className="nx-breakpoint-switcher inline-flex items-center gap-0.5 rounded-md border p-0.5"
       onKeyDown={event => {
         if (!ready) return;
-        if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-          event.preventDefault();
-          move(1);
-        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-          event.preventDefault();
-          move(-1);
-        }
+        const step = radioGroupStep(event.key);
+        if (step === null) return;
+        event.preventDefault();
+        move(step);
       }}
     >
       {options.map((option, index) => {
