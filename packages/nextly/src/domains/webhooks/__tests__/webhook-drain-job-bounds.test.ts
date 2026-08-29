@@ -15,7 +15,7 @@
  * handler from the runner before it can be enforced.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { IN_PASS_DRAIN_BOUNDS, SCHEDULED_DRAIN_BOUNDS } from "../drain-runner";
 import { createWebhookDrainJob } from "../webhook-drain-job";
@@ -58,6 +58,52 @@ describe("the drain job's bounds", () => {
     expect(IN_PASS_DRAIN_BOUNDS.maxDurationMs).toBeLessThan(
       SCHEDULED_DRAIN_BOUNDS.maxDurationMs
     );
+  });
+
+  it("derives its budget from what is LEFT of the pass, not a constant", async () => {
+    // The late-start case a static bound cannot cover. `runJobs` checks its
+    // budget before starting a handler and cannot interrupt one, so a job that
+    // begins with three seconds of pass remaining must drain within three
+    // seconds — whatever any constant says.
+    const runWebhookDrain = vi.fn(async () => ({ rounds: 0 }));
+    vi.doMock("../drain-runner", async importOriginal => {
+      const actual = await importOriginal<typeof import("../drain-runner")>();
+      return { ...actual, runWebhookDrain };
+    });
+    vi.resetModules();
+    const { createWebhookDrainJob: create } = await import(
+      "../webhook-drain-job"
+    );
+
+    const REMAINING_MS = 3_000;
+    const job = create({} as never, {} as never);
+    await job.handler(null, {
+      user: null,
+      now: new Date(),
+      content: {} as never,
+      deadline: new Date(Date.now() + REMAINING_MS),
+    });
+
+    const [, , options] = runWebhookDrain.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      { maxDurationMs: number; requestTimeoutMs: number },
+    ];
+    // Everything the drain may spend — the budget it starts work in, plus the
+    // one request that can still be in flight when the budget expires — fits
+    // what is left of the pass. That is the property; the individual numbers are
+    // whatever the arithmetic makes them.
+    expect(
+      options.maxDurationMs + options.requestTimeoutMs
+    ).toBeLessThanOrEqual(REMAINING_MS);
+    expect(options.maxDurationMs).toBeGreaterThan(0);
+    // And the request timeout shrank rather than staying at its default, which
+    // alone would have exceeded what remained.
+    expect(options.requestTimeoutMs).toBeLessThan(
+      IN_PASS_DRAIN_BOUNDS.requestTimeoutMs
+    );
+    vi.doUnmock("../drain-runner");
+    vi.resetModules();
   });
 
   it("is registered as a sweep, or no trigger ever queues it", () => {

@@ -35,12 +35,57 @@
 import { defineJob, type JobDefinition } from "../jobs/job-registry";
 
 import {
+  IN_PASS_DRAIN_BOUNDS,
   runWebhookDrain,
   type RunWebhookDrainOptions,
   type WebhookDrainDatabase,
   type WebhookDrainRegistry,
 } from "./drain-runner";
 import type { RunDrainResult } from "./run-drain";
+
+/**
+ * Fit a drain inside what is LEFT of the pass, not inside a fixed budget.
+ *
+ * `runJobs` checks its wall-clock budget before starting a handler and cannot
+ * interrupt a running one, so a handler beginning late has less pass remaining
+ * than any constant could know: an earlier job that overran leaves this one
+ * starting with seconds rather than the full tick. Beginning a fixed-length
+ * drain then means outliving the invocation and being killed before the row is
+ * finalized — the sweep retries having done partial work.
+ *
+ * The deadline the runner supplies is the only value that knows the answer.
+ * Reserved against it is one in-flight request: the budget bounds when the drain
+ * stops STARTING deliveries, not when the last one returns.
+ *
+ * A caller's explicit `maxDurationMs` still wins — a trigger that owns its whole
+ * invocation, rather than sharing a pass, is entitled to say so.
+ */
+function boundsWithin(
+  deadline: Date,
+  options?: RunWebhookDrainOptions
+): Pick<RunWebhookDrainOptions, "maxDurationMs" | "requestTimeoutMs"> {
+  if (options?.maxDurationMs !== undefined) return {};
+
+  const remaining = Math.max(0, deadline.getTime() - Date.now());
+
+  // The per-request timeout shrinks with the remaining time, and does not simply
+  // sit at its default. With little of the pass left, a request allowed the full
+  // default would overrun the invocation on its own — the very failure the
+  // budget exists to prevent, arriving through the timeout instead. Half the
+  // remainder leaves the other half to actually start deliveries in.
+  const requestTimeoutMs = Math.min(
+    options?.requestTimeoutMs ?? IN_PASS_DRAIN_BOUNDS.requestTimeoutMs,
+    Math.floor(remaining / 2)
+  );
+
+  return {
+    // Never negative. A pass already at or past its deadline yields zero, which
+    // the engine reads as "start nothing" — correct, and different from omitting
+    // the field, which would read as no limit at all.
+    maxDurationMs: Math.max(0, remaining - requestTimeoutMs),
+    requestTimeoutMs,
+  };
+}
 
 /** The slug the drain is registered and enqueued under. */
 export const WEBHOOK_DRAIN_JOB = "webhooks:drain";
@@ -92,8 +137,11 @@ export function createWebhookDrainJob(
     // Without this the definition is registered and unrunnable: the queue stays
     // empty and looks exactly like a queue with nothing to do.
     sweep: true,
-    handler: async () => {
-      const result = await runWebhookDrain(adapter, registry, options);
+    handler: async (_input, context) => {
+      const result = await runWebhookDrain(adapter, registry, {
+        ...options,
+        ...boundsWithin(context.deadline, options),
+      });
       await onOutcome?.(result);
     },
   });
