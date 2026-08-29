@@ -645,6 +645,65 @@ describe.each(getConfiguredTestDialects())(
         ).resolves.toMatchObject({ reveal: [], hide: [] });
       });
 
+      it("projects NOTHING when the WINNING member's author was deactivated", async () => {
+        // The read and the write must pick the same winner. Materialisation
+        // resolves the winner over EVERY member and judges the author
+        // afterwards, so removing candidates before the winner rule lets this
+        // seam pick a different one: the earlier publish below beats the later
+        // takedown once the takedown is filtered out, while the write path still
+        // picks the takedown, fails it, and performs nothing. The release stays
+        // scheduled, so the older publish would be projected indefinitely
+        // against a document nothing ever writes.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const active = await seedLiveAuthor(app);
+        const gone = await seedLiveAuthor(app);
+
+        const earlier = await repo.createRelease({ title: "Publish" });
+        await repo.addMember({
+          releaseId: earlier.id,
+          ...ref("e1"),
+          action: "publish",
+          createdBy: active,
+        });
+        await repo.scheduleRelease(earlier.id, PAST, "UTC");
+
+        const later = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: later.id,
+          ...ref("e1"),
+          action: "unpublish",
+          createdBy: gone,
+        });
+        // Later than the publish, so it WINS the effect rule.
+        await repo.scheduleRelease(
+          later.id,
+          new Date(PAST.getTime() + 60_000),
+          "UTC"
+        );
+
+        // Precondition: with both authors live, the later takedown wins.
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ hide: ["e1"] });
+
+        await deactivate(app, gone);
+
+        // NOT `reveal: ["e1"]` — that is the older action the write path will
+        // never perform.
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toEqual({ reveal: [], hide: [] });
+      });
+
       it("does NOT project a member with no recorded author", async () => {
         // The same verdict the materialiser reaches: there is nobody to act as,
         // and the only fallback is the privileged principal it refuses. So a

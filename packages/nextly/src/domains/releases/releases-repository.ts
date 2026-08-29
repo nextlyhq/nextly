@@ -555,40 +555,72 @@ export class ReleasesRepository {
     });
     if (members.length === 0) return NO_DECISIONS;
 
-    // A member whose author can no longer act is not projected.
-    //
-    // The write path already refuses one: materialisation runs every action as
-    // the member's `createdBy` precisely so that "schedule this" cannot become a
-    // privilege escalation with a delay on it. This seam used to ignore that
-    // entirely — it projected any due member of any scheduled release — so
-    // deactivating somebody stopped their scheduled publish from being WRITTEN
-    // while the read path went on making it LOOK applied. And because a refused
-    // member holds its release open, the release stayed `scheduled` forever and
-    // the projection with it. Not a window: permanent.
-    //
-    // Filtered here rather than derived from the materialiser's verdict because
-    // nothing triggers a drain yet, so a fix that waited for one would not fire
-    // at all. This one is correct on the next read.
-    const authorized = await this.filterByLiveAuthor(members);
-    if (authorized.length === 0) return NO_DECISIONS;
-
     const releases = await this.loadScheduledReleases(
-      authorized.map(m => m.releaseId)
+      members.map(m => m.releaseId)
     );
     if (releases.size === 0) return NO_DECISIONS;
 
-    const grouped = groupMembersByDocument(authorized, releases);
+    const grouped = groupMembersByDocument(members, releases);
+
+    // The WINNER is resolved over every member, then validated. The order
+    // matters and the other way round is wrong.
+    //
+    // Materialisation runs each action as the winning member's `createdBy`, so
+    // that "schedule this" cannot become a privilege escalation with a delay on
+    // it — and it chooses that winner over ALL members, judging the author
+    // afterwards. Removing candidates here before the winner rule would let this
+    // seam pick a DIFFERENT member: an earlier publish by an active author beats
+    // a later takedown by a deactivated one, while the write path still picks
+    // the takedown, fails it, and performs nothing. The release stays scheduled,
+    // so reads would project that older publish indefinitely against a document
+    // the write path never touches.
+    //
+    // Validating the winner instead makes the two seams agree by construction:
+    // whatever materialisation would attempt is what this projects, and when
+    // that attempt cannot be authorised, this projects nothing.
+    const decisions: {
+      entryId: string;
+      effect: string;
+      memberId: string | null;
+    }[] = [];
+    for (const [entryId, due] of grouped) {
+      const decision = resolveReleaseEffect({ members: due, now: input.now });
+      if (decision.effect === null) continue;
+      decisions.push({
+        entryId,
+        effect: decision.effect,
+        memberId: decision.memberId,
+      });
+    }
+    if (decisions.length === 0) return NO_DECISIONS;
+
+    const authorOf = new Map(members.map(m => [m.id, m.createdBy]));
+    const live = await this.liveAuthorIds(
+      decisions
+        .map(d =>
+          d.memberId === null ? null : (authorOf.get(d.memberId) ?? null)
+        )
+        .filter((id): id is string => typeof id === "string" && id !== "")
+    );
 
     const reveal: string[] = [];
     const hide: string[] = [];
-    for (const [entryId, due] of grouped) {
-      const decision = resolveReleaseEffect({ members: due, now: input.now });
+    for (const decision of decisions) {
+      const author =
+        decision.memberId === null
+          ? null
+          : (authorOf.get(decision.memberId) ?? null);
+      // No recorded author, or one who can no longer act. The materialiser
+      // reaches the same verdict — there is nobody to act as, and the only
+      // fallback is the privileged principal it refuses — so projecting this
+      // would show an effect no write could perform.
+      if (author === null || !live.has(author)) continue;
       // BOTH directions. Reading only the publish half made a scheduled
       // takedown a no-op: the decision said `unpublish`, the id was simply left
       // out of the reveal set, and the ordinary `status = published` filter went
       // on returning the row it was supposed to withdraw.
-      if (decision.effect === "publish") reveal.push(entryId);
-      else if (decision.effect === "unpublish") hide.push(entryId);
+      if (decision.effect === "publish") reveal.push(decision.entryId);
+      else if (decision.effect === "unpublish") hide.push(decision.entryId);
     }
 
     // Disjoint, and now actually so: ONE group per document means one winning
@@ -666,17 +698,9 @@ export class ReleasesRepository {
    * caller treating a throw as "no release is due" would be wrong in the other
    * direction, which is why the transition memo above propagates too.
    */
-  private async filterByLiveAuthor(
-    members: ReleaseMemberRow[]
-  ): Promise<ReleaseMemberRow[]> {
-    const authorIds = [
-      ...new Set(
-        members
-          .map(m => m.createdBy)
-          .filter((id): id is string => typeof id === "string" && id !== "")
-      ),
-    ];
-    if (authorIds.length === 0) return [];
+  private async liveAuthorIds(ids: string[]): Promise<ReadonlySet<string>> {
+    const authorIds = [...new Set(ids)];
+    if (authorIds.length === 0) return new Set();
 
     const rows = await this.db.select<{ id: string; isActive: boolean }>(
       USERS,
@@ -694,8 +718,7 @@ export class ReleasesRepository {
         },
       }
     );
-    const live = new Set(rows.map(r => r.id));
-    return members.filter(m => m.createdBy !== null && live.has(m.createdBy));
+    return new Set(rows.map(r => r.id));
   }
 
   private async loadScheduledReleases(
