@@ -409,6 +409,14 @@ function familyToDtcg(css: string): string | string[] | undefined {
 export function splitFamilyList(css: string): FamilyPart[] {
   const parts: FamilyPart[] = [];
   let current = "";
+  // What the quotes actually enclosed, collected separately.
+  //
+  // `current` cannot answer for a quoted item: it accumulates the whitespace
+  // around the string as well as the string, so `" Brand "` and ` "Brand" `
+  // both arrive as `" Brand "` and are indistinguishable. Trimming served the
+  // second and corrupted the first — a quoted name keeps its edge spaces,
+  // because inside quotes they are part of the family's name.
+  let inner = "";
   let quoted = false;
   let strings = 0;
   let outsideQuotes = "";
@@ -429,6 +437,9 @@ export function splitFamilyList(css: string): FamilyPart[] {
       // standard value.
       const escape = readCssEscape(css, index);
       current += escape.text;
+      // An escape inside quotes is part of the NAME, so it belongs to the
+      // quoted content too: `"ACME\\26 Co"` is the family `ACME&Co`.
+      if (quote !== undefined) inner += escape.text;
       raw += css.slice(index, escape.next);
       index = escape.next - 1;
       continue;
@@ -436,7 +447,10 @@ export function splitFamilyList(css: string): FamilyPart[] {
     if (quote !== undefined) {
       raw += char;
       if (char === quote) quote = undefined;
-      else current += char;
+      else {
+        current += char;
+        inner += char;
+      }
       continue;
     }
     if (char === '"' || char === "'") {
@@ -451,8 +465,11 @@ export function splitFamilyList(css: string): FamilyPart[] {
     if (char === "(") depth += 1;
     else if (char === ")" && depth > 0) depth -= 1;
     if (char === "," && depth === 0) {
-      parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
+      parts.push(
+        finishPart(current, inner, quoted, strings, outsideQuotes, raw)
+      );
       current = "";
+      inner = "";
       raw = "";
       quoted = false;
       strings = 0;
@@ -463,7 +480,7 @@ export function splitFamilyList(css: string): FamilyPart[] {
     current += char;
     raw += char;
   }
-  parts.push(finishPart(current, quoted, strings, outsideQuotes, raw));
+  parts.push(finishPart(current, inner, quoted, strings, outsideQuotes, raw));
 
   // Empty items are KEPT, marked invalid by `finishPart`. `Brand,` and
   // `Brand,, serif` are parse errors — CSS reads `<family-name>#`, which admits
@@ -567,14 +584,36 @@ export type FamilyPartKind =
   | "keyword"
   | "invalid";
 
+/** Any `var(` call, however written. Case-insensitive: CSS functions are. */
+const VAR_CALL = /\bvar\s*\(/i;
+
+/**
+ * Every `var(` in the text opening with a custom-property name.
+ *
+ * `--` is what makes an identifier a custom property, so `var(foo)` is not a
+ * substitution CSS will make. Written as "no occurrence of `var(` NOT followed
+ * by `--`", because one malformed call spoils the declaration however many
+ * well-formed ones sit beside it.
+ */
+const WELL_FORMED_VAR_CALLS =
+  /^(?:(?!\bvar\s*\()[\s\S])*(?:\bvar\s*\(\s*--[^\s,()]*(?:(?!\bvar\s*\()[\s\S])*)*$/i;
+
 /** Classify one family-list item. */
 export function familyPartKind(part: FamilyPart): FamilyPartKind {
   if (!part.valid) return "invalid";
   if (part.quoted) return "name";
   const lower = part.name.toLowerCase();
   // `var()` is checked before the grammar, because the grammar rejects the
-  // parentheses and would report a valid, common value as broken.
-  if (/\bvar\(/i.test(part.name)) return "dynamic";
+  // parentheses and would report a valid, common value as broken. It is checked
+  // for WELL-FORMEDNESS rather than presence: CSS requires the first argument
+  // to be a custom-property name, so `var(foo)` computes to an invalid
+  // `font-family` and the browser drops the declaration rather than falling
+  // through to the next family. Reading every `var(` as dynamic gave that an
+  // all-clear, which is the same shape as reading a dropped declaration as a
+  // working keyword.
+  if (VAR_CALL.test(part.name)) {
+    return WELL_FORMED_VAR_CALLS.test(part.name) ? "dynamic" : "invalid";
+  }
   if (CSS_WIDE_KEYWORDS.has(lower)) return "keyword";
   // Reserved, and not a whole-value keyword: bare `default` names no family and
   // the declaration is dropped, so it is invalid rather than a working value.
@@ -653,12 +692,16 @@ export interface FamilyPart {
  */
 function finishPart(
   current: string,
+  inner: string,
   quoted: boolean,
   strings: number,
   outsideQuotes: string,
   raw: string
 ): FamilyPart {
-  const name = current.trim();
+  // A QUOTED item is its quoted content verbatim: `" Brand "` names a family
+  // whose name has those spaces, and is a different family from `Brand`.
+  // Unquoted, the surrounding whitespace is separation and is trimmed.
+  const name = quoted ? inner : current.trim();
   const valid =
     name !== "" &&
     (quoted ? strings === 1 && outsideQuotes.trim() === "" : strings === 0);
