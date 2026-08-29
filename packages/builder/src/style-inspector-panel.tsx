@@ -120,7 +120,7 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
-import { renderedTagOf, styleSubjectFor } from "./style-subject";
+import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
   type StyleAddress,
@@ -177,22 +177,22 @@ export interface StyleInspectorPanelProps {
    */
   policy?: StylePolicy;
   /**
-   * The canvas root, so the panel can read what element a node RENDERS as.
+   * The element the selected node is DRAWN as, or `undefined` when nobody can
+   * say.
    *
    * Only the typographic baseline needs it: those rules land on `h1` itself, so
    * nothing in the document says whether one reaches this node — `core/heading`
    * takes its tag from a prop, and `core/rich-text` renders a `div` with its
-   * headings inside. Omitted, a heading's baseline is reported as reaching
-   * nothing, which is the quiet answer a host that cannot supply a canvas
-   * should get rather than a guess.
+   * headings inside.
    *
-   * A READ-ONLY view of the ref rather than `React.RefObject`, which is
-   * invariant: `Canvas` publishes its root as `RefObject<HTMLDivElement | null>`
-   * and that is not assignable to `RefObject<HTMLElement | null>`. Widening the
-   * element type here instead would tie this panel to a `div` the canvas is
-   * free to stop being. This panel only ever reads `current`.
+   * Resolved by the caller rather than read here, the same way `cascade` and
+   * `liveBreakpoints` are. Reading it needs a subscription to the canvas, and
+   * the reader that decides which control shows a value should not also own
+   * one. Omitted, a heading's baseline is reported as reaching nothing, which
+   * is the quiet answer a host that cannot supply a canvas should get rather
+   * than a guess.
    */
-  canvasRoot?: { readonly current: HTMLElement | null };
+  renderedTag?: string;
   /** The interaction state being edited. `base` when the host says nothing. */
   state?: StyleState;
   /** The breakpoint being edited. The unconditional one when the host says nothing. */
@@ -469,7 +469,7 @@ function SelectedNodeClasses({
 
 export function StyleInspectorPanel({
   editor,
-  canvasRoot,
+  renderedTag,
   policy,
   tokens,
   state,
@@ -496,11 +496,6 @@ export function StyleInspectorPanel({
     {}
   );
   const prefersDark = usePrefersDark();
-  const renderedTag = useRenderedTag(
-    canvasRoot,
-    editor.selectedId,
-    editor.document
-  );
   /*
    * What the browser is applying, or `undefined` when nobody can say.
    *
@@ -1274,33 +1269,6 @@ function selectedSubject(
   // anyone reading a logged subject.
   if (subject === undefined || tag === undefined) return subject;
   return { ...subject, tag };
-}
-
-/**
- * The element the selected node is drawn as, re-read after every commit.
- *
- * An effect rather than a read in the panel's body: the canvas and this panel
- * re-render together, so during the body the DOM still holds the PREVIOUS tag —
- * an author switching a heading from `h2` to `h1` would see the panel answer
- * for `h2` until something else re-rendered it.
- *
- * `document` is a dependency because the tag is a function of the node's props:
- * changing a heading's level changes what it renders without changing which
- * node is selected.
- */
-function useRenderedTag(
-  canvasRoot: { readonly current: HTMLElement | null } | undefined,
-  selectedId: string | null,
-  document: EditorState["document"]
-): string | undefined {
-  const [tag, setTag] = React.useState<string | undefined>(undefined);
-  React.useEffect(() => {
-    const next = renderedTagOf(canvasRoot?.current, selectedId);
-    // Compared before setting, or an effect that runs on every commit and sets
-    // unconditionally re-renders on every commit.
-    setTag(current => (current === next ? current : next));
-  }, [canvasRoot, selectedId, document]);
-  return tag;
 }
 
 /**
