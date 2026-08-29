@@ -34,7 +34,10 @@ import {
   isOwnableSystemColumn,
   isReservedSystemColumn,
 } from "../../lib/system-columns";
-import { SYSTEM_RESOURCES } from "../../schemas/_zod/rbac";
+import {
+  NEWLY_RESERVED_SLUG_NOTES,
+  SYSTEM_RESOURCES,
+} from "../../schemas/_zod/rbac";
 import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
@@ -697,6 +700,7 @@ export function validateCollectionConfig(
   validateSlugShared(config.slug, errsBase, {
     entityLabel: "Collection",
     reservedSlugsSet: RESERVED_SLUGS_SET,
+    reservedSlugNotes: NEWLY_RESERVED_SLUG_NOTES,
     sqlKeywordsSet: DEFAULT_SQL_KEYWORDS_SET,
   });
 
