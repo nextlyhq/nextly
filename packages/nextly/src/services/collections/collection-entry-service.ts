@@ -583,6 +583,43 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
+  /**
+   * Take every language of an entry down at once.
+   *
+   * The counterpart publishing has had since i18n M7 and withdrawing never did.
+   * Same shape deliberately: a caller that can publish every language should not
+   * have to learn a different call to reverse it.
+   */
+  async unpublishAllLocales(params: {
+    collectionName: string;
+    /**
+     * Skip cache revalidation for this write (the outbox drain still runs).
+     * Set by callers that own their cache strategy — a CLI, seed, or
+     * bulk-import write — so it does not fan out a revalidation per row.
+     */
+    disableRevalidate?: boolean;
+    entryId: string;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    /**
+     * Which collections a trusted read may reach as relationships are expanded.
+     * Absent means every populated target inherits the caller's trust. Only ever
+     * narrows, and never admits a target's drafts.
+     */
+    trusted?: TrustBound;
+    /**
+     * Set by the REST dispatcher: the route already authorized this POST as
+     * `update`, so the preliminary update gate skips its redundant RBAC re-check.
+     */
+    routeAuthorized?: boolean;
+    /** API-key scope; gates the unconditional unpublish check. */
+    authenticatedScope?: AuthenticatedScope;
+  }) {
+    const result = await this.mutationService.unpublishAllLocales(params);
+    await this.afterWriteIfRecorded(result, params.disableRevalidate);
+    return result;
+  }
+
   async deleteEntry(params: {
     collectionName: string;
     /**
