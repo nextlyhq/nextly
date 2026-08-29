@@ -78,6 +78,7 @@ import {
   EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
+  selectionIsInspectable,
   pageStyleTrace,
   LayersPanel,
   TokensPanel,
@@ -1200,6 +1201,40 @@ function isSaveChord(event: KeyboardEvent): boolean {
   );
 }
 
+/**
+ * The interaction state to SHOW, given the state being edited and how many
+ * blocks are selected.
+ *
+ * Suppressed rather than reset whenever the switcher is not on screen. The
+ * inspector replaces its whole tab strip — for a multi-selection, and for a
+ * selection it cannot inspect at all — so the state control goes with it, and
+ * the panel's own tab handler cannot catch either case because the stored tab
+ * value is still `style` and no tab change happens. A forced state outliving
+ * its control is a canvas drawn mid-hover with nothing on screen explaining
+ * why.
+ *
+ * Decides WHETHER THE CONTROL IS THERE rather than taking a selection count,
+ * because a count cannot see the second case: an unregistered block type reads
+ * as one ordinary selection while the panel shows no tabs for it. The
+ * inspectability half is asked of the same predicate the panel's own early
+ * return uses, so the two cannot disagree about what is inspectable.
+ *
+ * Derived rather than written back, so the author's choice SURVIVES: they
+ * shift-click a second block, the canvas returns to the normal appearance, and
+ * clicking back to one block restores the state they were editing. Writing
+ * `base` into the state instead would silently discard it.
+ */
+function shownStyleStateFor(
+  editing: StyleState,
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  selectedId: string | null
+): StyleState {
+  const switcherIsOnScreen =
+    selectedIds.length <= 1 && selectionIsInspectable(document, selectedId);
+  return switcherIsOnScreen ? editing : "base";
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -1261,14 +1296,37 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * edited state plus base — correct exactly while the canvas is simulating
    * that state. Wired from one value that precondition holds by construction.
    *
-   * A CONSTANT rather than state, because no control chooses it yet and state
-   * nothing writes is state that lints as unused and reads as unfinished. What
-   * matters now is that ONE value reaches both surfaces: the day a control
-   * arrives it replaces this line and finds both call sites already wired,
-   * rather than having to discover that the canvas and the panel were each
-   * defaulting on their own.
+   * ONE value reaching both surfaces, which is the property that matters: the
+   * panel states no `liveStates`, so its provenance falls back to the edited
+   * state plus base — correct exactly while the canvas is simulating the state
+   * being edited, and wrong the moment it is not. Held here rather than in
+   * either consumer so that precondition holds by construction; held in both,
+   * a control would report a value the canvas is not showing and nothing would
+   * say so.
+   *
+   * Editor state, not document state. Which state an author is LOOKING at is
+   * not a property of the page, so it is neither stored nor undoable, and two
+   * people editing one page can be looking at different states.
    */
-  const styleState: StyleState = "base";
+  const [styleState, setStyleState] = useState<StyleState>("base");
+  /*
+   * Memoised because it is a PROP OBJECT: rebuilt on every render it would be a new
+   * identity every time, and the panel it feeds is the one surface here that
+   * holds a draft. `setStyleState` is stable, so this changes exactly when the
+   * state does.
+   */
+  // ONE derivation feeding BOTH consumers, which is what keeps the panel and the
+  // canvas showing the same thing. See `shownStyleStateFor`.
+  const shownStyleState = shownStyleStateFor(
+    styleState,
+    editor.document,
+    editor.selection.ids,
+    editor.selectedId
+  );
+  const styleStateBinding = useMemo(
+    () => ({ state: shownStyleState, onChange: setStyleState }),
+    [shownStyleState]
+  );
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
   /*
    * Is a drag happening — of EITHER kind.
@@ -2021,7 +2079,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // inferring one from the document. Two refs would let the panel
             // read a canvas that is not the one on screen.
             canvasRoot={canvasElement}
-            styleState={styleState}
+            styleState={styleStateBinding}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
@@ -2248,7 +2306,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 document={editor.document}
                 rootRef={canvasRoot}
                 onRoot={setCanvasElement}
-                forcedState={styleState}
+                forcedState={shownStyleState}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}

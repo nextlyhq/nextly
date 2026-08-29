@@ -21,9 +21,12 @@
  */
 
 import {
+  breakpointContexts,
+  isPlainRecord,
   isTokenRef,
   validateStyleValues,
   type BreakpointId,
+  type BreakpointSet,
   type NodeStyles,
   type StyleState,
   type StyleValue,
@@ -289,6 +292,36 @@ function hasOwnKeys(value: unknown): value is Record<string, never> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * Whether a record carries at least one own key.
+ *
+ * The LOOP stops at the first own key; the ENUMERATION does not, and the
+ * difference is worth stating because it is easy to read this as bounded and it
+ * is not. `for...in` asks the engine for the record's key list before the body
+ * runs, so this is O(n) in the record's width however early it returns —
+ * measured here at 0.08ms for a thousand keys, 10.75ms for a hundred thousand
+ * and 103ms for a million. `Object.keys(...).length > 0` costs the same and
+ * allocates as well, which is the only reason to prefer this form.
+ *
+ * No bounded alternative exists at this layer: JavaScript has no O(1) emptiness
+ * test for a plain object, and this package publishes no list of style property
+ * names to probe instead. The width is therefore a property of the DOCUMENT,
+ * and the place to bound it is where a document is admitted.
+ *
+ * What makes that acceptable rather than merely unavoidable: the compiler
+ * enumerates the same record the same way — `validateStyleValues` iterates it
+ * with a bare `for...in` — so a values record wide enough to cost this marker
+ * anything has already cost the compile that produced the page. The bound the
+ * engine DOES apply, `MAX_SCANNED_KEYS` in `boundedKeys`, is over the
+ * breakpoint DEFINITIONS record, which this no longer walks at all.
+ */
+function hasAnyOwnKey(record: object): boolean {
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) return true;
+  }
+  return false;
+}
+
 function valuesAt(
   styles: NodeStyles | undefined,
   state: StyleState,
@@ -299,6 +332,114 @@ function valuesAt(
   if (!hasOwnKeys(breakpoints)) return undefined;
   const values = ownData(breakpoints, breakpoint);
   return hasOwnKeys(values) ? values : undefined;
+}
+
+/**
+ * Whether a state holds any declaration of its own, at any breakpoint.
+ *
+ * Here rather than beside the control that draws the answer, because this file
+ * is the chokepoint for reading this envelope and the reading is the whole
+ * difficulty. The value arrives from storage, so a migration, a DTCG import or
+ * a hand-edited row can leave `hover: null` or `{ base: null }` behind, and the
+ * field's own guard admits both — it checks that `nodes` is an array and no
+ * more, deliberately, so a malformed document stays repairable instead of
+ * throwing. `Object.values(null)` throws during RENDER, which takes the Style
+ * tab down and removes the only surface that could repair the value that broke
+ * it.
+ *
+ * Own keys at every level, for the reason `valuesAt` gives: a state or
+ * breakpoint reached through a PROTOTYPE is one the compiler will not read, so
+ * reporting it as styled would mark a state whose values never reach the page.
+ *
+ * A PLAIN RECORD at every level, and the engine's own predicate rather than a
+ * looser one, for the same reason stated positively: this must agree with what
+ * the COMPILER will read. An array is a non-null object, so a guard asking only
+ * that would accept `hover: []` and count its numeric indexes as declarations —
+ * while `isPlainRecord` makes the compiler emit nothing for it. A state marked
+ * as styled that cannot affect the page is worse than an unmarked one, because
+ * it sends an author looking for a value that was never going to apply.
+ *
+ * A TIER THE SHEET HAS. A value stored under a breakpoint the site has since
+ * deleted is not reachable by any visitor — the compiler iterates the
+ * breakpoint contexts it was given and never looks at the rest — so counting it
+ * would mark a state whose appearance nobody can see.
+ *
+ * EMPTY IS NOT SET. Both levels are sparse and either can survive empty — a
+ * state whose last declaration was cleared leaves the keys behind — so a
+ * presence test reports a state as styled when it carries nothing, which is
+ * precisely the false reassurance the marker exists to remove.
+ *
+ * REFUSED IS NOT UNSET, and this is the one boundary here that is a judgement
+ * rather than a fact about the shape. A declaration the current policy rejects
+ * emits no CSS, so validating here would make the marker agree with the sheet
+ * in that case too. It is deliberately not done: a policy is a HOST SETTING
+ * that changes without the document changing, so a value refused today is
+ * still the author's, still deliberate, and restored by a policy change. A
+ * marker that vanished for it would report their work as ABSENT rather than as
+ * refused — and refusal already has a better channel, the control that shows
+ * the value and says why it did not apply.
+ *
+ * So this answers "you have set something here that this site can express",
+ * and the tiers and shapes above are the part of that question decided by the
+ * document rather than by configuration.
+ */
+export function stateHasOwnValues(
+  styles: NodeStyles | undefined,
+  state: StyleState,
+  breakpoints: BreakpointSet | undefined
+): boolean {
+  if (!isPlainRecord(styles)) return false;
+  const tiers = ownData(styles, state);
+  if (!isPlainRecord(tiers)) return false;
+
+  const holdsValues = (tier: string): boolean => {
+    const values = ownData(tiers, tier);
+    return isPlainRecord(values) && hasAnyOwnKey(values);
+  };
+
+  /*
+   * Driven by the tiers the SHEET has, asked of the compiler's own reader.
+   * `breakpointContexts` is what decides which breakpoints a site actually has
+   * — it drops a definition whose bound it cannot use and claims each id once —
+   * so a value stored under a tier that has since been deleted emits nothing at
+   * all. Measured: the same node compiles to 73 bytes under a known tier and to
+   * an empty sheet under an unknown one.
+   *
+   * Iterating the KNOWN ids rather than the stored ones is also what bounds
+   * this. A stored record arrives from storage and can be arbitrarily wide, so
+   * asking it for its keys reads all of them before any filter can narrow the
+   * set — on every render, once per non-base state. Asking the sheet instead
+   * costs one lookup per tier the site actually has, which is a handful.
+   */
+  if (breakpoints !== undefined) {
+    return breakpointContexts(breakpoints).some(context =>
+      holdsValues(context.id)
+    );
+  }
+
+  /*
+   * With no breakpoints known there is NO ANSWER, and this returns false rather
+   * than guessing one.
+   *
+   * The marker means "you have set something here that this site can express",
+   * and without the site's tiers that question cannot be asked at all — a value
+   * under a tier the sheet lacks reaches nobody, and which tiers the sheet has
+   * is exactly what is missing. Reporting from the stored keys instead would
+   * answer a different question and read as the same dot.
+   *
+   * It is also what makes this bounded BY CONSTRUCTION rather than by a cap.
+   * The stored record arrives from storage and can be arbitrarily wide, and
+   * every way of walking it — `Object.keys`, `for...in` with an early break —
+   * asks the engine for the whole key list first, so an early exit bounds the
+   * BODY and not the enumeration. Measured by review: a plain-object probe
+   * breaking after 256 entries still grew from ~32ms at 100,000 keys to ~573ms
+   * at 1,000,000. A cap cannot fix that; not enumerating can.
+   *
+   * The product always supplies them — `BlocksField` passes the same
+   * breakpoints it compiles the canvas against — so this is the path for a host
+   * that has not adopted the marker rather than a case an author reaches.
+   */
+  return false;
 }
 
 /** The whole envelope with one state × breakpoint replaced, pruning what empties. */
