@@ -508,6 +508,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, FUTURE, "UTC");
 
@@ -531,6 +536,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
 
         expect(
@@ -555,6 +565,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: up.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(
           up.id,
@@ -567,6 +582,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: down.id,
           ...ref("e1"),
           action: "unpublish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(
           down.id,
@@ -724,6 +744,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "unpublish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, FUTURE, "UTC");
 
@@ -752,6 +777,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1", "de"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
@@ -826,6 +856,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 

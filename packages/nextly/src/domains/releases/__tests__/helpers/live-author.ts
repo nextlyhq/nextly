@@ -43,9 +43,16 @@ export async function seedLiveAuthor(t: TestNextly): Promise<string> {
 /**
  * Set a user's active flag directly.
  *
- * Written straight to the column rather than through a service, so the fixture
- * states the condition under test — "this account can/cannot act" — without
- * depending on which of several service paths happens to set it.
+ * Written to the column rather than through a service, so the fixture states the
+ * condition under test — "this account can/cannot act" — without depending on
+ * which of several service paths happens to set it.
+ *
+ * Through the adapter's typed `update` rather than a SQL string. A hand-written
+ * `UPDATE "users" …` runs on SQLite and Postgres and FAILS on MySQL, which
+ * without `ANSI_QUOTES` reads a double-quoted token as a string literal rather
+ * than an identifier — so every test in the MySQL leg of
+ * `getConfiguredTestDialects` would have died in the fixture, before reaching
+ * the behaviour it claims to check.
  */
 export async function setActive(
   t: TestNextly,
@@ -53,10 +60,16 @@ export async function setActive(
   active: boolean
 ): Promise<void> {
   const adapter = t.adapter as unknown as {
-    executeQuery: (sql: string) => Promise<unknown>;
+    update: (
+      table: string,
+      values: Record<string, unknown>,
+      where: unknown
+    ) => Promise<unknown>;
   };
-  await adapter.executeQuery(
-    `UPDATE "users" SET "is_active" = ${active ? 1 : 0} WHERE "id" = '${id}'`
+  await adapter.update(
+    "users",
+    { isActive: active },
+    { and: [{ column: "id", op: "=", value: id }] }
   );
 }
 
