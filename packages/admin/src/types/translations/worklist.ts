@@ -90,8 +90,7 @@ export const WORKLIST_STATES: readonly {
   // `worklistStateFrom` resolves only what this array offers, so a saved link naming `stale`
   // falls back to the question this page leads with. A page filtered by a state whose tab is not
   // shown would highlight nothing while listing a subset the reader cannot account for, which is
-  // worse than answering a different question visibly. Offering the tab is an edit to this array
-  // and nothing else.
+  // worse than answering a different question visibly.
 ];
 
 /**
