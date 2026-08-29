@@ -385,23 +385,47 @@ export type TypographicElement = (typeof TYPOGRAPHIC_ELEMENTS)[number];
 /**
  * What each interaction state MEANS, in one place.
  *
- * The single definition both renderings below are derived from. Written out
- * twice, a change to what `focus` matches would land in one map and leave the
- * other silently selecting a different pseudo-class — both type-correct, and
- * the preview would then simulate a state the published page does not have.
+ * Both facts about a state live here together, because both are read by
+ * surfaces outside this file and either one written down twice can drift from
+ * the other. The pseudo-class is what the compiler emits; whether the state
+ * PROPAGATES is what a previewing surface needs in order to decide which
+ * elements to force it on.
  *
- * `base` is the empty string because it is not a state: it is what applies when
- * no state does.
+ * Propagation is measured behaviour rather than a convention. In a browser, an
+ * ancestor of the target matches `:hover` and `:active` and does NOT match
+ * `:focus-visible` — the selector that would propagate there is
+ * `:focus-within`, which this compiler does not emit. A surface that assumed
+ * one rule for all three would light up an enclosing block for an appearance no
+ * visitor ever sees.
+ *
+ * `base` is not a state: it is what applies when no state does, so it has no
+ * pseudo-class and nothing to propagate.
  */
-const STATE_PSEUDO: Readonly<Record<StyleState, string>> = {
-  base: "",
-  hover: ":hover",
-  focus: ":focus-visible",
-  active: ":active",
+const STATE_FACTS: Readonly<
+  Record<StyleState, { readonly pseudo: string; readonly propagates: boolean }>
+> = {
+  base: { pseudo: "", propagates: false },
+  hover: { pseudo: ":hover", propagates: true },
+  focus: { pseudo: ":focus-visible", propagates: false },
+  active: { pseudo: ":active", propagates: true },
 };
 
 /**
- * One rendering of {@link STATE_PSEUDO} per state, built by `render`.
+ * Whether forcing this state on an element should also force it on that
+ * element's ancestors.
+ *
+ * Published because the decision belongs beside the selector it follows from: a
+ * previewing surface marks elements, and a surface deciding for itself which
+ * states propagate holds a second opinion that can disagree with the CSS this
+ * compiler emits. Changing `focus` to `:focus-within` would then move the
+ * published rules and leave the canvas marking the wrong chain.
+ */
+export function statePropagatesToAncestors(state: StyleState): boolean {
+  return STATE_FACTS[state].propagates;
+}
+
+/**
+ * One rendering of each state's pseudo-class, built by `render`.
  *
  * A helper rather than two object literals, so neither map can gain a state the
  * other lacks or spell one differently.
@@ -411,7 +435,7 @@ function stateSelectors(
 ): Readonly<Record<StyleState, string>> {
   const selectors = {} as Record<StyleState, string>;
   for (const state of STYLE_STATES) {
-    const pseudo = STATE_PSEUDO[state];
+    const pseudo = STATE_FACTS[state].pseudo;
     selectors[state] = pseudo === "" ? "" : render(pseudo, state);
   }
   return selectors;

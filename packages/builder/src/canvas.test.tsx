@@ -2080,9 +2080,9 @@ describe("forcing the interaction state the panel is editing", () => {
      * appear for the visitor.
      *
      * The element asserted is the RENDERED page root, not the canvas wrapper.
-     * `PageRenderer` draws `.nx-pb-page` as a child of the wrapper and the
-     * selector names that child — an earlier version of this case asserted the
-     * wrapper, passed, and exercised nothing the compiler actually targets.
+     * `PageRenderer` draws `.nx-pb-page` as a CHILD of the wrapper and the page
+     * tier's selector names that child, so asserting the wrapper would go green
+     * without touching the element the compiler targets.
      */
     const view = renderCanvas("a", "hover");
     const pageRoot = view.container.querySelector(`.${PAGE_ROOT_CLASS}`);

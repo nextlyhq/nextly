@@ -33,6 +33,7 @@ import {
   PAGE_ROOT_CLASS,
   previewContainerName,
   previewStateClass,
+  statePropagatesToAncestors,
   STYLE_STATES,
   type BlockDocument,
   type BreakpointSet,
@@ -704,21 +705,18 @@ function useSelectionMarkers(
      * the previous class behind on an element nothing is editing.
      */
     /*
-     * WHICH ELEMENTS a forced state belongs on, which is a property of the
-     * state rather than a single rule. Measured in a browser rather than
-     * assumed, because the three do not agree:
+     * WHICH ELEMENTS a forced state belongs on, ASKED of the engine rather
+     * than decided here.
      *
-     *   :hover           an ancestor of the pointed element matches      YES
-     *   :active          an ancestor of the pressed element matches      YES
-     *   :focus-visible   an ancestor of the focused element matches      NO
+     * Whether a state propagates follows from the pseudo-class the compiler
+     * emits for it — an ancestor matches `:hover` and `:active` and does not
+     * match `:focus-visible` — so the two facts live together beside that
+     * definition. Encoding the rule here as well would be a second opinion
+     * about the CSS: changing `focus` to `:focus-within` would move the
+     * published rules and leave this canvas marking the wrong chain, with both
+     * sides type-correct.
      *
-     * The last one is `:focus-within`, which is a different selector the
-     * compiler does not emit. So marking the chain for focus would put an
-     * enclosing block's focus styles on screen for an appearance no visitor
-     * ever sees — the preview lying, which is the failure this feature exists
-     * to remove.
-     *
-     * For the two that do propagate the chain is required, not optional: the
+     * Where a state does propagate the chain is required rather than tidy: the
      * page tier compiles onto the RENDERED page root, and a marker on a
      * descendant cannot make its ancestor match.
      */
@@ -729,7 +727,7 @@ function useSelectionMarkers(
       );
       if (primary !== null) {
         chain.add(primary);
-        if (forcedState !== "focus") {
+        if (statePropagatesToAncestors(forcedState)) {
           for (
             let node: Element | null = primary.parentElement;
             node !== null && container.contains(node);
