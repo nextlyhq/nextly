@@ -30,8 +30,10 @@
  */
 
 import {
+  PAGE_ROOT_CLASS,
   previewContainerName,
   previewStateClass,
+  statePropagatesToAncestors,
   STYLE_STATES,
   type BlockDocument,
   type BreakpointSet,
@@ -703,38 +705,50 @@ function useSelectionMarkers(
      * the previous class behind on an element nothing is editing.
      */
     /*
-     * The ANCESTOR CHAIN, not the selected element alone.
+     * WHICH ELEMENTS a forced state belongs on, ASKED of the engine rather
+     * than decided here.
      *
-     * `:hover` matches an element and every ancestor of it — measured in a
-     * browser, a pointer over a leaf puts the leaf, its parent and the root all
-     * in the hover chain. So the tiers that style an ancestor match under a
-     * real pointer, and a preview that marked only the selected node would drop
-     * exactly those: a page-level hover colour, or an enclosing block's, would
-     * vanish in the simulation and appear for the visitor.
+     * Whether a state propagates follows from the pseudo-class the compiler
+     * emits for it — an ancestor matches `:hover` and `:active` and does not
+     * match `:focus-visible` — so the two facts live together beside that
+     * definition. Encoding the rule here as well would be a second opinion
+     * about the CSS: changing `focus` to `:focus-within` would move the
+     * published rules and leave this canvas marking the wrong chain, with both
+     * sides type-correct.
      *
-     * The canvas ROOT is in the chain too, because the page tier compiles onto
-     * it and a marker on a descendant cannot make its ancestor match. The walk
-     * reaches it without a special case: it stops where `contains` does, and an
-     * element contains itself. With nothing selected the walk never starts, so
-     * the root is not marked and no page-level state rule is forced.
+     * Where a state does propagate the chain is required rather than tidy: the
+     * page tier compiles onto the RENDERED page root, and a marker on a
+     * descendant cannot make its ancestor match.
      */
     const chain = new Set<Element>();
     if (forcedState !== undefined && forcedState !== "base") {
       const primary = container.querySelector(
         `[${SELECTED_ATTRIBUTE}="primary"]`
       );
-      for (
-        let node: Element | null = primary;
-        node !== null && container.contains(node);
-        node = node.parentElement
-      ) {
-        chain.add(node);
+      if (primary !== null) {
+        chain.add(primary);
+        if (statePropagatesToAncestors(forcedState)) {
+          for (
+            let node: Element | null = primary.parentElement;
+            node !== null && container.contains(node);
+            node = node.parentElement
+          ) {
+            chain.add(node);
+          }
+        }
       }
     }
 
+    /*
+     * Every element a marker can land on OR has to be cleared from. The
+     * rendered PAGE ROOT is in the list explicitly: `PageRenderer` draws
+     * `.nx-pb-page` as a child of this container, and the page tier compiles
+     * onto that element rather than onto the canvas wrapper — so marking the
+     * wrapper leaves page-level state rules unmatched while looking correct.
+     */
     const marks: Element[] = [container];
     container
-      .querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`)
+      .querySelectorAll(`.${PAGE_ROOT_CLASS}, [${NODE_ID_ATTRIBUTE}]`)
       .forEach(element => marks.push(element));
 
     marks.forEach(element => {
