@@ -61,6 +61,22 @@ export function createReleasesDrainJob(deps: {
    * than defaulted to silence.
    */
   onOutcome: (result: ApplyDueReleasesResult) => void | Promise<void>;
+  /**
+   * How long one pass may spend STARTING content mutations.
+   *
+   * A drain runs behind a serverless cron tick as often as on a long-lived
+   * process, and a platform kills a tick at a fixed limit. The runner cannot
+   * bound this — `maxDurationMs` is checked before each CLAIM, so it bounds how
+   * many JOBS a pass starts, not how long one handler takes — and `run-jobs`
+   * names the handler being written to fit a tick as what bounds it instead.
+   *
+   * Taken here rather than read from `JobContext`, which carries `user`, `now`
+   * and `content` but no deadline: a handler is asked to fit a tick and told
+   * nothing about how long one is. Wiring a budget per job is the smaller
+   * change; giving every handler its run's deadline is the better one, and it
+   * belongs to the jobs domain rather than here.
+   */
+  budgetMs?: number;
 }): JobDefinition<unknown> {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
@@ -69,8 +85,14 @@ export function createReleasesDrainJob(deps: {
     // instead. Without it the handler is registered and never runs, which looks
     // exactly like a site with no releases due.
     sweep: true,
-    handler: async () => {
+    handler: async (_input, context) => {
       const result = await applyDueReleases({
+        // Derived from the runner's own clock, not wall time, so a pass is as
+        // testable as the rest of the job.
+        deadline:
+          deps.budgetMs === undefined
+            ? undefined
+            : new Date(context.now.getTime() + deps.budgetMs),
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({ contentApi: deps.contentApi }),
         runAs: deps.runAs,
