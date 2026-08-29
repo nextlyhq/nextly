@@ -382,12 +382,42 @@ export const TYPOGRAPHIC_ELEMENTS = [
  */
 export type TypographicElement = (typeof TYPOGRAPHIC_ELEMENTS)[number];
 
-const STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
+/**
+ * What each interaction state MEANS, in one place.
+ *
+ * The single definition both renderings below are derived from. Written out
+ * twice, a change to what `focus` matches would land in one map and leave the
+ * other silently selecting a different pseudo-class — both type-correct, and
+ * the preview would then simulate a state the published page does not have.
+ *
+ * `base` is the empty string because it is not a state: it is what applies when
+ * no state does.
+ */
+const STATE_PSEUDO: Readonly<Record<StyleState, string>> = {
   base: "",
-  hover: ":where(:hover)",
-  focus: ":where(:focus-visible)",
-  active: ":where(:active)",
+  hover: ":hover",
+  focus: ":focus-visible",
+  active: ":active",
 };
+
+/**
+ * One rendering of {@link STATE_PSEUDO} per state, built by `render`.
+ *
+ * A helper rather than two object literals, so neither map can gain a state the
+ * other lacks or spell one differently.
+ */
+function stateSelectors(
+  render: (pseudo: string, state: StyleState) => string
+): Readonly<Record<StyleState, string>> {
+  const selectors = {} as Record<StyleState, string>;
+  for (const state of STYLE_STATES) {
+    const pseudo = STATE_PSEUDO[state];
+    selectors[state] = pseudo === "" ? "" : render(pseudo, state);
+  }
+  return selectors;
+}
+
+const STATE_SELECTORS = stateSelectors(pseudo => `:where(${pseudo})`);
 
 /**
  * The class a previewing surface puts on ONE element to force an interaction
@@ -427,12 +457,9 @@ export function previewStateClass(state: StyleState): string {
  * `base` has no marker: it is not a state anything forces, it is what applies
  * when nothing else does.
  */
-const PREVIEW_STATE_SELECTORS: Readonly<Record<StyleState, string>> = {
-  base: "",
-  hover: `:where(:hover, .${previewStateClass("hover")})`,
-  focus: `:where(:focus-visible, .${previewStateClass("focus")})`,
-  active: `:where(:active, .${previewStateClass("active")})`,
-};
+const PREVIEW_STATE_SELECTORS = stateSelectors(
+  (pseudo, state) => `:where(${pseudo}, .${previewStateClass(state)})`
+);
 
 /** One breakpoint to emit under, with the at-rule it needs. */
 export interface BreakpointContext {
