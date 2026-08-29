@@ -71,7 +71,11 @@ describe("the panel over a site that has been read", () => {
 
   it("reports the token whose first choice the site does not provide", () => {
     render(<FontsPanel faces={[]} tokens={tokens} />);
-    expect(screen.getByText(/1 of 2 ask first for a typeface/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /1 ask first for a typeface this site provides no file for/
+      )
+    ).toBeTruthy();
     expect(
       screen.getByText(/Brand is the typeface this token asks for first/)
     ).toBeTruthy();
@@ -94,6 +98,49 @@ describe("the panel over a site that has been read", () => {
 
     rerender(<FontsPanel faces={[]} tokens={tokens} />);
     expect(screen.queryByRole("button", { name: "Edit in Tokens" })).toBeNull();
+  });
+
+  it("demonstrates each face with its OWN weight and style", () => {
+    // Family alone selects the browser's normal upright face, so a site loading
+    // regular and italic of one family would draw two identical specimens —
+    // the list would then demonstrate the opposite of what it claims.
+    const italic: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-i.woff2", format: "woff2" }],
+      style: "italic",
+      weight: "700",
+    };
+    render(
+      <FontsPanel faces={[face("Brand"), italic]} tokens={{ tokens: [] }} />
+    );
+    const specimens = screen.getAllByText(
+      "Almost before we knew it, we had left the ground"
+    );
+    expect(specimens.some(el => el.style.fontStyle === "italic")).toBe(true);
+    expect(specimens.some(el => el.style.fontWeight === "700")).toBe(true);
+  });
+
+  it("keys subset faces apart rather than colliding them", () => {
+    // Subsetting by `unicodeRange` is how a large script ships, and those faces
+    // share family, weight and style by design. A key on those three alone
+    // collides, and React cannot reconcile the rows.
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    const latin: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-latin.woff2", format: "woff2" }],
+      unicodeRange: "U+0000-00FF",
+    };
+    const greek: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-greek.woff2", format: "woff2" }],
+      unicodeRange: "U+0370-03FF",
+    };
+    render(<FontsPanel faces={[latin, greek]} tokens={{ tokens: [] }} />);
+    const duplicateKey = warn.mock.calls.some(call =>
+      String(call[0]).includes("same key")
+    );
+    warn.mockRestore();
+    expect(duplicateKey).toBe(false);
   });
 
   it("says a site with no faces has none, rather than staying silent", () => {

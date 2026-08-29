@@ -46,6 +46,7 @@ import {
   type NamedClass,
   type SiteTokenSet,
   type BreakpointId,
+  type FontFaceDef,
 } from "@nextlyhq/blocks-engine";
 import { CORE_CATEGORIES, coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { DEFAULT_PREFERENCES, registrySlotSource } from "@nextlyhq/builder";
@@ -81,6 +82,7 @@ import {
   useInlineEditing,
   documentAfter,
   type InlineEditOutcome,
+  FontsPanel,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -171,7 +173,7 @@ export interface BlocksFieldProps<
  * and shrink the canvas to show it, which is why this grows one entry at a time
  * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers", "tokens"] as const;
+const AVAILABLE_PANELS = ["insert", "layers", "tokens", "fonts"] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -409,6 +411,28 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  * "the question was never asked" and offers no picker at all — which is the
  * truth here, and is different from a site that defines no tokens.
  */
+/**
+ * The faces the site loads, or `undefined` while that is not yet known.
+ *
+ * The same third state `offerableTokens` keeps, and for the same reason: a site
+ * that self-hosts nothing legitimately has no faces, so a surface cannot tell
+ * "none stored" from "the read has not come back" by looking at the value. The
+ * fonts panel draws those two differently, and would otherwise report a site
+ * mid-load as one loading no fonts at all.
+ *
+ * Unlike tokens there are no engine defaults to layer underneath — a font file
+ * is something a site provides or does not — so the resolved list is returned
+ * as it stands, including an empty one.
+ */
+function offerableFaces(
+  style: SiteStyleData | undefined,
+  pending: boolean,
+  error: unknown
+): readonly FontFaceDef[] | undefined {
+  if (pending || error !== null) return undefined;
+  return style?.fonts ?? [];
+}
+
 function offerableTokens(
   style: SiteStyleData | undefined,
   pending: boolean,
@@ -1648,16 +1672,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
           ) : undefined
         }
         renderPanel={panel => {
-          if (panel === "insert") {
-            return (
+          /*
+            A lookup rather than a chain of comparisons, so the arrow answers
+            in one step and adding a panel is one entry rather than one more
+            branch. It also states the pairing the shell needs: every key here
+            is a panel this file can fill, and `AVAILABLE_PANELS` is what the
+            rail offers — reading them side by side is how a panel that is
+            offered and renders nothing gets noticed.
+          */
+          const panels: Partial<Record<string, () => React.ReactNode>> = {
+            insert: () => (
               <InsertPanel
                 editor={editor}
                 categoryOrder={CORE_CATEGORIES}
                 beginInsertDrag={drag.beginInsertDrag}
               />
-            );
-          }
-          if (panel === "layers") {
+            ),
             /*
               The panel cannot work this out for itself. It is drawn here, in
               the shell's panel region, while `BlockKeyboardActions` below wraps
@@ -1665,10 +1695,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               read from where it sits reports what this file knows by writing
               both. Passed as a fact rather than inferred.
             */
-            return <LayersPanel editor={editor} moveHints />;
-          }
-          if (panel === "tokens") {
-            return (
+            layers: () => <LayersPanel editor={editor} moveHints />,
+            tokens: () => (
               <TokensStudio
                 merged={offerableTokens(
                   canvasSiteStyle,
@@ -1678,17 +1706,32 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 supplied={configSiteStyle?.tokens}
                 pending={siteStylePending}
               />
-            );
-          }
-          /*
-           * The entry's own fields — SEO, relations, whatever this collection
-           * declares — which the takeover removed from the page behind this
-           * editor. Rendered by the ADMIN's closure, not reconstructed here: how
-           * a field is drawn is the entry form's contract, and a second
-           * renderer would drift from it.
-           */
-          if (panel === "settings") return renderEntryFields?.(name) ?? null;
-          return null;
+            ),
+            fonts: () => (
+              <FontsPanel
+                faces={offerableFaces(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                tokens={offerableTokens(
+                  canvasSiteStyle,
+                  siteStylePending,
+                  siteStyleError
+                )}
+                absence={siteStyleError !== null ? "failed" : "pending"}
+              />
+            ),
+            /*
+              The entry's own fields — SEO, relations, whatever this collection
+              declares — which the takeover removed from the page behind this
+              editor. Rendered by the ADMIN's closure, not reconstructed here:
+              how a field is drawn is the entry form's contract, and a second
+              renderer would drift from it.
+            */
+            settings: () => renderEntryFields?.(name) ?? null,
+          };
+          return panels[panel]?.() ?? null;
         }}
       >
         {/*

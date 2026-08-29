@@ -49,10 +49,19 @@ Nothing is called missing or unavailable. A named family with no face may be
 installed on the reader's device, so the wording says what is true: this site
 provides no font file for it.
 
-`splitFamilyList` and `isUsableFamilyList` are now published from
-`@nextlyhq/blocks-engine`. Reading a family list is quoting, comma and CSS
-escape rules together — `"ACME, Inc", serif` is two families, not three — and
-`isUsableFamilyList` pairs the quoting rule with the identifier-run grammar that
-`FamilyPart.valid` leaves out. Asked alone, `valid` accepts `var(--x)` as a font
-called `var(--x)`. `familyToDtcg` now asks the same predicate, so the DTCG
-export and the panel cannot disagree about what a browser will read.
+`readFamilyList`, `familyPartKind` and `splitFamilyList` are now published from
+`@nextlyhq/blocks-engine`, and they classify rather than answering yes or no.
+CSS reads a family list four ways and a boolean misdescribes two of them: a
+stack holding `var(--font-geist)` is read perfectly and cannot be resolved from
+the text, and a lone `inherit` is valid while naming no family at all. Each item
+is classified as a name, a generic keyword, a `var()` substitution, a CSS-wide
+keyword, or invalid; the list's own reading follows from those.
+
+`familyToDtcg` asks the same reading and applies its own narrower rule to the
+answer, so the DTCG export and any surface reporting on a site cannot disagree
+about what a browser will read.
+
+`splitFamilyList` no longer discards empty items — it keeps them, marked
+invalid. `font-family: Brand,` is a parse error the browser drops the whole
+declaration for, and reporting it as the single family `Brand` described a value
+the page never rendered.
