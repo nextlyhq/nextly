@@ -414,6 +414,35 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
   });
 
+  it("reports NOTHING when focus merely passes through the field", () => {
+    /*
+     * Tabbing into the hex field and out again is not an edit. Reading the
+     * field's VALUE on blur rather than the draft would report the colour
+     * already on screen every time, so an untouched control looks edited and a
+     * host that persists each callback writes for nothing.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#3b82f6" onColorChange={onColorChange} />);
+
+    fireEvent.focus(hexField());
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("reports a finished colour ONCE, not again on the way out", () => {
+    // Enter finishes it; the blur that follows has no draft left to report, so
+    // a host persisting each callback does not see the same edit twice.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter" });
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+  });
+
   it("reports NOTHING when the picker GOES AWAY mid-draft", () => {
     /*
      * Dismissal is not a finish. Escape means cancel, so a draft dying with the

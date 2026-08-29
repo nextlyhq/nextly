@@ -1125,6 +1125,34 @@ describe("a Reset beside a picker mid-gesture", () => {
     fireEvent.blur(picker);
   };
 
+  it("keeps a colour typed and then DISMISSED by clicking away", async () => {
+    /*
+     * The path `fireEvent.blur` cannot reach. Radix runs its dismiss layer from
+     * an outside `pointerdown` and unmounts the content there, so a blur may
+     * never be delivered — which would lose a complete colour the author typed,
+     * trading a silent wrong write for a silent lost one.
+     *
+     * Driven as a real outside press rather than as a blur, because a blur is
+     * the thing in question.
+     */
+    const editor = mountWithResets([{ property: "color" }]);
+    fireEvent.click(screen.getByRole("button", { name: "Colour for Color" }));
+    await settle();
+
+    const picker = within(screen.getByRole("dialog")).getAllByRole(
+      "textbox"
+    )[0];
+    expect(picker).toBeDefined();
+    if (picker === undefined) return;
+    fireEvent.change(picker, { target: { value: "#ff0000" } });
+
+    fireEvent.pointerDown(document.body);
+    fireEvent.click(document.body);
+    await settle();
+
+    expect(JSON.stringify(editor.applyAll.mock.calls)).toContain("#ff0000");
+  });
+
   it("drops the gesture the Reset replaced, rather than queueing it", async () => {
     /*
      * Reset supersedes the gesture, so the picker must DISCARD it — not merely

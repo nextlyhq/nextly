@@ -167,6 +167,7 @@ export function ColorPicker<TValue = string>({
   className,
 }: ColorPickerProps<TValue>) {
   const fieldId = React.useId();
+  const rootRef = React.useRef<HTMLDivElement>(null);
   const surfaceRef = React.useRef<HTMLDivElement>(null);
   const [hsva, setHsva] = React.useState<Hsva>(() => toHsva(color));
   // What the hex field shows while it is being typed into. A half-typed value
@@ -214,9 +215,14 @@ export function ColorPicker<TValue = string>({
    * after a host that coalesces a gesture on close has already decided what to
    * write, which is a value published into nothing.
    */
-  const commitDraft = (text: string | null): void => {
-    setDraftHex(null);
+  const commitDraft = (): void => {
+    const text = draftHex;
+    // NOTHING TYPED, nothing to report. Reading the field's value instead would
+    // publish the colour already on screen every time focus merely passed
+    // through — a save for an edit nobody made, and a second one for an edit
+    // already reported by Enter.
     if (text === null) return;
+    setDraftHex(null);
     const parsed = parseHex(text);
     // An unfinishable draft is DISCARDED rather than reported. The field
     // returns to the colour that is actually stored, so what is shown and what
@@ -226,6 +232,47 @@ export function ColorPicker<TValue = string>({
     setHsva(prev => hsvaFrom(parsed, parsed.alpha, prev.h));
     onColorChange(toHex(parsed, showAlpha ? parsed.alpha : 1));
   };
+
+  /*
+   * A press OUTSIDE is a finish, and it is the one a blur cannot catch.
+   *
+   * Measured rather than assumed: a dismissable layer runs from the outside
+   * `pointerdown` and unmounts this content there, so the focus change that
+   * would have produced a blur never happens and a complete typed colour was
+   * lost with no report at all. A test driving `blur` directly cannot see that
+   * — the blur is the thing in question — so the case that proves it presses
+   * outside for real.
+   *
+   * CAPTURE, because the ordering is the whole point: a capture listener on the
+   * document runs before the dismiss layer's own, so the value is reported
+   * while this is still mounted. Reporting from an unmount instead was tried
+   * and removed — a host that coalesces a picker gesture on close has already
+   * decided what to write by then.
+   *
+   * Escape is untouched and still cancels: it dismisses without a pointer, so
+   * nothing here runs and the draft dies with the surface, which is what a
+   * cancel means.
+   */
+  const latestCommit = React.useRef(commitDraft);
+  React.useEffect(() => {
+    latestCommit.current = commitDraft;
+  });
+  React.useEffect(() => {
+    const onPointerDown = (event: PointerEvent): void => {
+      const root = rootRef.current;
+      if (root === null) return;
+      const target = event.target;
+      // A press INSIDE is not a dismissal — a swatch, a slider, the field
+      // itself — and committing there would report a draft the press is about
+      // to replace.
+      if (target instanceof Node && root.contains(target)) return;
+      latestCommit.current();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, []);
 
   const commit = (next: Hsva): void => {
     setHsva(next);
@@ -303,7 +350,7 @@ export function ColorPicker<TValue = string>({
   };
 
   return (
-    <div className={cn("w-64 space-y-3", className)}>
+    <div ref={rootRef} className={cn("w-64 space-y-3", className)}>
       <div
         ref={surfaceRef}
         role="application"
@@ -413,9 +460,9 @@ export function ColorPicker<TValue = string>({
             // Kept off the surrounding form, which may have a submit of its own:
             // finishing a colour is not submitting whatever contains it.
             event.preventDefault();
-            commitDraft(event.currentTarget.value);
+            commitDraft();
           }}
-          onBlur={event => commitDraft(event.target.value)}
+          onBlur={() => commitDraft()}
         />
         {canPickFromScreen && (
           <Button
