@@ -636,7 +636,6 @@ function buildStaleCondition(args: {
   const src = sql.identifier("nx_stale_source");
   const parent = sql.identifier("_parent");
   const localeCol = sql.identifier("_locale");
-  const stamp = sql.identifier(COMPANION_UPDATED_AT_COLUMN);
 
   return sql`EXISTS (
     SELECT 1 FROM ${table} ${tgt}
@@ -647,9 +646,34 @@ function buildStaleCondition(args: {
       SELECT 1 FROM ${table} ${src}
       WHERE ${src}.${parent} = ${mainIdColumn}
       AND ${src}.${localeCol} = ${defaultLocale}
-      AND ${src}.${stamp} > ${tgt}.${stamp}
+      AND ${sourceMovedAfterTarget(src, tgt)}
     )
   )`;
+}
+
+/** A table alias as `sql.identifier` produces it — derived, so it cannot drift from that call. */
+type TableAlias = ReturnType<typeof sql.identifier>;
+
+/**
+ * The rule: the source row was written strictly after the target row.
+ *
+ * 🔴 ONE spelling, used by the filter arm above and by {@link readStaleLocales}, because the
+ * worklist tab and the per-row badge answer the same question about the same document and must
+ * not be able to disagree. They ran as two implementations — this predicate in SQL and a JS twin
+ * comparing two `Date`s — and the twin's own comment admitted the hazard while keeping it.
+ *
+ * Both operands are nullable, and SQL's three-valued logic is the whole null policy: `NULL > x`
+ * and `x > NULL` are UNKNOWN, which no `WHERE` admits. So a locale with no stamp — one written
+ * before the column existed, or seeded from a history that had none — is never reported stale,
+ * which is what UNKNOWN has to mean here. Writing that as an explicit `IS NOT NULL` guard would
+ * state the same thing twice and let the two drift.
+ *
+ * STRICT, not `>=`. Equal stamps are a translation saved alongside its source, and on SQLite they
+ * are also two writes inside one second, because the column stores whole seconds there.
+ */
+function sourceMovedAfterTarget(source: TableAlias, target: TableAlias): SQL {
+  const stamp = sql.identifier(COMPANION_UPDATED_AT_COLUMN);
+  return sql`${source}.${stamp} > ${target}.${stamp}`;
 }
 
 /** Per-locale translation state for one entry (i18n M7 — translation-status overview). */
@@ -796,63 +820,53 @@ function markPendingChanges(
  * anything else, so a permission fault or a dropped connection still surfaces instead of being
  * reported as "this site has no staleness information".
  */
-async function readCompanionStamps(
+async function readStaleLocales(
   db: SelectableDb,
   companionTableName: string,
   dialect: SupportedDialect,
   ids: (string | number)[],
-  locales: string[]
-): Promise<Map<string, Date>> {
-  const out = new Map<string, Date>();
+  locales: string[],
+  defaultLocale: string
+): Promise<Set<string>> {
+  const out = new Set<string>();
   if (ids.length === 0 || locales.length === 0) return out;
 
   const stamp = buildCompanionStampTable(companionTableName, dialect);
+  // The outer row, addressed by the table's own name: `.from()` emits it unaliased, so the
+  // correlated subquery can reach it without the projection having to carry it.
+  const target = sql.identifier(companionTableName);
+  const source = sql.identifier("nx_stale_source");
+  const parent = sql.identifier("_parent");
+  const localeCol = sql.identifier("_locale");
+
   let rows: Record<string, unknown>[];
   try {
     rows = await db
-      .select({
-        _parent: stamp.parent,
-        _locale: stamp.locale,
-        [COMPANION_UPDATED_AT_COLUMN]: stamp.updatedAt,
-      })
+      .select({ _parent: stamp.parent, _locale: stamp.locale })
       .from(stamp.table)
       .where(
         and(
           inArray(stamp.parent as never, ids),
-          inArray(stamp.locale as never, locales)
+          inArray(stamp.locale as never, locales),
+          sql`EXISTS (
+            SELECT 1 FROM ${target} ${source}
+            WHERE ${source}.${parent} = ${target}.${parent}
+            AND ${source}.${localeCol} = ${defaultLocale}
+            AND ${sourceMovedAfterTarget(source, target)}
+          )`
         )
       );
   } catch (error) {
+    // A companion provisioned before the column exists. Reported as "nothing is KNOWN to be
+    // stale", never as "nothing is stale" — the caller renders an absent entry as unknown.
     if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return out;
     throw error;
   }
 
   for (const row of rows) {
-    const at = toStampDate(row[COMPANION_UPDATED_AT_COLUMN]);
-    if (at !== null) {
-      out.set(`${String(row._parent)}::${String(row._locale)}`, at);
-    }
+    out.add(`${String(row._parent)}::${String(row._locale)}`);
   }
   return out;
-}
-
-/**
- * One raw `_updated_at` value as a `Date`, or `null` when it cannot be one.
- *
- * Drizzle decodes the column for every dialect it declares, so a `Date` is the expected shape.
- * A raw epoch is still accepted because a driver that returns one unmapped would otherwise be
- * read as "no stamp", which is silently wrong rather than loudly wrong.
- *
- * Anything else answers `null` and the caller reports UNKNOWN. Guessing at an unrecognised shape
- * is what would turn a driver change into wrong staleness answers rather than absent ones.
- */
-function toStampDate(raw: unknown): Date | null {
-  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
-  if (typeof raw === "number") {
-    const at = new Date(raw * 1000);
-    return Number.isNaN(at.getTime()) ? null : at;
-  }
-  return null;
 }
 
 /**
@@ -905,29 +919,6 @@ export function isMissingColumnError(error: unknown, column: string): boolean {
   return false;
 }
 
-/**
- * Was the SOURCE row written after the TARGET row was? (i18n B2.)
- *
- * The JS twin of the `stale` SQL arm, and deliberately the same rule: content is checked by the
- * caller, both timestamps must be present, and the comparison is strict. Two spellings of "is
- * this stale" would let the worklist tab and the per-row badge disagree about one document, which
- * is the shape of defect this module already carries a fix for.
- *
- * Reads a `Date` because that is what the column's declared `timestamp` kind decodes to on all
- * three dialects. Anything else — a driver returning a raw epoch, a column that was never
- * declared and so never selected — answers `false` rather than guessing, because a wrong
- * comparison here reports a translation nobody touched as needing review.
- */
-function isStaleAgainstSource(
-  targetAt: Date | undefined,
-  sourceAt: Date | undefined
-): boolean {
-  if (targetAt === undefined || sourceAt === undefined) return false;
-  // Strict, matching the SQL. Equal stamps are a translation saved alongside its source — and on
-  // SQLite they are also two writes inside one second, since the column stores whole seconds.
-  return sourceAt.getTime() > targetAt.getTime();
-}
-
 export async function populateTranslationStatus(
   args: TranslationStatusArgs
 ): Promise<void> {
@@ -973,15 +964,16 @@ export async function populateTranslationStatus(
 
   // One extra query for the whole page rather than one per row, and skipped entirely when the
   // caller supplies no reader.
-  const stamps = args.staleness
-    ? await readCompanionStamps(
+  const staleKeys = args.staleness
+    ? await readStaleLocales(
         db,
         args.staleness.companionTableName,
         args.staleness.dialect,
         ids,
-        locales
+        locales,
+        defaultLocale
       )
-    : new Map<string, Date>();
+    : new Set<string>();
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -994,8 +986,8 @@ export async function populateTranslationStatus(
         defaultLocale,
         hasStatus,
         statusValue: args.statusValue,
-        stampFor: (locale: string) =>
-          stamps.get(`${String(row[idKey])}::${locale}`),
+        isStale: (locale: string) =>
+          staleKeys.has(`${String(row[idKey])}::${locale}`),
       });
     }
     markPendingChanges(
@@ -1039,8 +1031,14 @@ function buildLocaleMeta(args: {
   defaultLocale: string;
   hasStatus: boolean;
   statusValue: string | undefined;
-  /** When this locale was last written, or `undefined` when nothing is known. */
-  stampFor: (locale: string) => Date | undefined;
+  /**
+   * Whether the database reported this locale as stale against the source.
+   *
+   * `false` covers both "the source has not moved" and "nothing is known", because the caller
+   * cannot act on the difference: an absent entry is a locale the comparison could not be made
+   * for, and the answer to both is the same — do not mark it.
+   */
+  isStale: (locale: string) => boolean;
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
@@ -1060,17 +1058,13 @@ function buildLocaleMeta(args: {
   // `stale === false` is reading a real "not stale" rather than an unknown wearing its clothes.
   //
   // 🔴 `code !== defaultLocale` is BELT-AND-BRACES and is kept deliberately, so it does not read
-  // as load-bearing to the next person: for the source locale, `companionRow` and the source row
-  // are the same object, so the strict comparison is already false. That redundancy rests on
-  // object IDENTITY rather than on a rule, though — a future normalisation that handed this a
-  // copy, or a rounded timestamp, could make a row compare greater than itself — so the state the
+  // as load-bearing to the next person: the comparison joins the source row to itself for that
+  // locale, and no row is written strictly after itself, so the database already answers false.
+  // That redundancy rests on the comparison staying STRICT, though — relaxing it to `>=` to admit
+  // same-second writes would make every source locale report itself stale — so the state the
   // guard asserts is spelled out rather than inferred. No test separates the two mechanisms, and
   // none can while both hold.
-  if (
-    code !== defaultLocale &&
-    hasContent &&
-    isStaleAgainstSource(args.stampFor(code), args.stampFor(defaultLocale))
-  ) {
+  if (code !== defaultLocale && hasContent && args.isStale(code)) {
     entry.stale = true;
   }
   return entry;

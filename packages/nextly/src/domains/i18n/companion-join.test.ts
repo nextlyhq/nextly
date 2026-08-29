@@ -115,9 +115,38 @@ describe("populateTranslationStatus (read failures)", () => {
 
 describe("populateTranslationStatus — staleness (i18n B2)", () => {
   /** A db returning fixed companion rows, so the assertion is about the derivation. */
-  function dbReturning(rows: Record<string, unknown>[]) {
+  /**
+   * The two reads this function makes, kept apart.
+   *
+   * 🔴 The staleness read passes a PROJECTION and the companion read does not, which is what lets
+   * one fake serve both honestly. It matters that they are separated: staleness is decided by the
+   * database now — a correlated `EXISTS` comparing the two rows' stamps — so a fake that answered
+   * both reads with the same rows would report every locale stale and every assertion here would
+   * pass for a reason unrelated to what it names.
+   *
+   * These tests therefore assert what THIS function decides given the database's answer:
+   * orthogonality, content gating, and what happens when the answer cannot be obtained. The
+   * comparison itself is asserted against a real database in
+   * `runtime/__tests__/companion-updated-at.test.ts`, which is the only place it can be.
+   */
+  function dbReturning(
+    rows: Record<string, unknown>[],
+    staleLocales: string[] = []
+  ) {
     return {
-      select: () => ({ from: () => ({ where: () => Promise.resolve(rows) }) }),
+      select: (projection?: Record<string, unknown>) => ({
+        from: () => ({
+          where: () =>
+            Promise.resolve(
+              projection
+                ? staleLocales.map(locale => ({
+                    _parent: "doc1",
+                    _locale: locale,
+                  }))
+                : rows
+            ),
+        }),
+      }),
     } as never;
   }
 
@@ -187,13 +216,13 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
 
   async function metaFor(
     rows: Record<string, unknown>[],
-    options: { canReadStamps?: boolean } = {}
+    options: { canReadStamps?: boolean; staleLocales?: string[] } = {}
   ): Promise<
     Record<string, { translated: boolean; status?: string; stale?: boolean }>
   > {
     const row: Record<string, unknown> = { id: "doc1" };
     await populateTranslationStatus({
-      db: dbReturning(rows),
+      db: dbReturning(rows, options.staleLocales),
       companionTable: { _parent: "p", _locale: "l" },
       localizedFields: [{ name: "title", column: "title" }],
       rows: [row],
@@ -213,47 +242,50 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     return row._translations as never;
   }
 
-  it("flags a translation whose source was written afterwards", async () => {
-    const meta = await metaFor([
-      companionRow(SOURCE, "Hello again", new Date(2000)),
-      companionRow(TARGET, "Bonjour", new Date(1000)),
-    ]);
+  it("appends staleness to the state instead of replacing it", async () => {
+    const meta = await metaFor(
+      [
+        companionRow(SOURCE, "Hello again", new Date(2000)),
+        companionRow(TARGET, "Bonjour", new Date(1000)),
+      ],
+      { staleLocales: [TARGET] }
+    );
 
     expect(meta[TARGET].stale).toBe(true);
-    // 🔴 And it keeps the state it was in. This pair is the assertion: `stale`
-    // is a SECOND fact about the language, so a reader that renders it as a
-    // replacement takes a live translation out of "published" on every screen.
+    // 🔴 This pair is the assertion, and it is the one thing only this function can get wrong:
+    // `stale` is a SECOND fact about the language, so a reader that renders it as a replacement
+    // takes a live translation out of "published" on every screen. Whether the language IS stale
+    // is the database's answer, supplied above.
     expect(meta[TARGET].translated).toBe(true);
     expect(meta[TARGET].status).toBe("published");
   });
 
-  it("does not flag one written after its source", async () => {
+  it("invents no staleness the database did not report", async () => {
     const meta = await metaFor([
       companionRow(SOURCE, "Hello", new Date(1000)),
       companionRow(TARGET, "Bonjour", new Date(2000)),
     ]);
 
-    // The control. Without it, "always stale" passes the case above.
+    // The control. Without it, "always stale" passes the case above. Note the rows carry stamps
+    // and the answer is still absent: this function does not look at them, and a version that
+    // started to would be reintroducing the second implementation this one was collapsed into.
     expect(meta[TARGET].stale).toBeUndefined();
   });
 
-  it("leaves staleness ABSENT when either timestamp is unknown", async () => {
-    // Absent rather than `false`, and the difference carries weight: a consumer
-    // reading `stale === false` should be reading a real "not stale", not an
-    // unknown wearing its clothes. A row written before `_updated_at` existed
-    // cannot answer, and must never be rendered as up to date.
-    const unstampedTarget = await metaFor([
-      companionRow(SOURCE, "Hello again", new Date(2000)),
-      companionRow(TARGET, "Bonjour", null),
-    ]);
-    expect(unstampedTarget[TARGET].stale).toBeUndefined();
-    expect(unstampedTarget[TARGET].translated).toBe(true);
-
-    const unstampedSource = await metaFor([
-      companionRow(SOURCE, "Hello", null),
-      companionRow(TARGET, "Bonjour", new Date(1000)),
-    ]);
-    expect(unstampedSource[TARGET].stale).toBeUndefined();
+  it("leaves staleness ABSENT rather than false for a locale not reported", async () => {
+    // Absent rather than `false`, and the difference carries weight: a consumer reading
+    // `stale === false` should be reading a real "not stale", not an unknown wearing its clothes.
+    // A locale the comparison could not be made for — one written before `_updated_at` existed —
+    // is simply not in the reported set, and must never be rendered as up to date.
+    const meta = await metaFor(
+      [
+        companionRow(SOURCE, "Hello again", new Date(2000)),
+        companionRow(TARGET, "Bonjour", null),
+      ],
+      { staleLocales: [] }
+    );
+    expect(meta[TARGET].stale).toBeUndefined();
+    expect(meta[TARGET].translated).toBe(true);
   });
 
   it("does not flag a language that has no content", async () => {
