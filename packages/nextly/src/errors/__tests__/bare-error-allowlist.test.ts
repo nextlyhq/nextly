@@ -35,6 +35,10 @@ const packageRoot = resolve(
  * the allowlist silences the guard for it, and nothing else in the repository would show that
  * happening — the lint run stays green by construction. Requiring the same change to edit this
  * number puts the growth in the diff where review can see it.
+ *
+ * The value is the ledger's live size: it drops by one each time a file's remaining bare throws
+ * are converted to NextlyError and its entry is deleted — the reader below rejects zero-valued
+ * entries, so a fully cleaned file leaves the ledger entirely rather than sitting at 0.
  */
 const EXPECTED_ALLOWLIST_SIZE = 96;
 
