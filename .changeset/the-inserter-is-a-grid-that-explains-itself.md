@@ -74,7 +74,7 @@ looked for two ids that did not exist and announced the tile with no
 description at all.
 
 The description strip now READS the palette's highlight rather than steering
-it, and `@nextlyhq/ui` publishes `useCommandState` so it can.
+it, and `@nextlyhq/ui` publishes `useCommandHighlight` so it can.
 
 Steering it was wrong in a way that only assistive technology could see. The
 palette's controlled value sets which tile is MARKED and does not move the
