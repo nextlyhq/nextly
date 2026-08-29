@@ -135,21 +135,35 @@ function failureFromThrown(
 }
 
 /**
- * The most specific message an error carries, for rollback notes, log lines,
- * and batch accounting that must name WHAT failed rather than stay
- * wire-safe. NextlyError keeps its own message public-facing and moves the
- * operational detail onto the cause chain, so this reads the deepest
- * cause's message and falls back to the thrown message.
+ * The most specific message an error carries, for operator logs that must
+ * name WHAT failed. NextlyError keeps its own message public-facing and
+ * moves the operational detail onto the cause chain, so this reads the
+ * deepest cause's message and falls back to the thrown message. Cause
+ * graphs are arbitrary — a driver can hand back a cycle — so the walk
+ * tracks the errors it has visited rather than trusting the chain to end.
  */
 function detailedErrorMessage(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
+  const visited = new Set<Error>();
   let message = error.message;
   let cause: Error | undefined = error;
-  while (cause.cause instanceof Error) {
+  while (cause.cause instanceof Error && !visited.has(cause.cause)) {
+    visited.add(cause.cause);
     cause = cause.cause;
     message = cause.message;
   }
   return message;
+}
+
+/**
+ * The message returned accounting may carry: a typed NextlyError's own
+ * public message, because its cause may hold raw driver or adapter detail
+ * that belongs in the operator log alone; and for anything untyped, the
+ * deepest cause message — a bare error ships no envelope to protect.
+ */
+function batchErrorMessage(error: unknown): string {
+  if (NextlyError.is(error)) return error.publicMessage;
+  return detailedErrorMessage(error);
 }
 
 /**
@@ -356,26 +370,26 @@ async function runLegacyBatchItem<TItem>(
       if (options.stopOnError) {
         // Thrown inside the try on purpose: the catch below records it
         // like any unexpected error before re-throwing, which is the
-        // accounting every legacy loop performed for this case. A typed
-        // internal failure: the public message stays generic for the wire
-        // while the cause carries the per-index detail the twin's callers
-        // and the operator log read.
-        throw NextlyError.internal({
-          cause: new Error(
-            `Entry at index ${index} failed: ${verdict.message}`
-          ),
+        // accounting every legacy loop performed for this case. The
+        // abort's message is caller-facing on purpose — the failing index
+        // plus the worker's public failure reason, both of which the
+        // per-item accounting already returns — and invalidInput is the
+        // factory whose public message the caller supplies.
+        throw NextlyError.invalidInput({
+          message: `Entry at index ${index} failed: ${verdict.message}`,
         });
       }
     }
   } catch (error: unknown) {
     state.failed++;
-    // Read the cause chain so the record keeps the abort's own detail when
-    // the thrown wrapper is a wire-generic NextlyError.
+    // Returned accounting carries only what the error's public contract
+    // allows: a typed NextlyError's envelope message, never the driver
+    // detail riding its cause.
     state.errors.push({
       index,
       error:
         error instanceof Error
-          ? detailedErrorMessage(error)
+          ? batchErrorMessage(error)
           : "Unknown error occurred",
     });
 
@@ -1847,10 +1861,10 @@ export class CollectionBulkService extends BaseService {
       // their intents go with them — an undone delete busts no tags.
       state.eventRecorded = false;
       state.intents.length = 0;
-      // The note names the failing index, so read the abort's cause chain:
-      // a typed NextlyError's own message is the wire-generic text and this
-      // result never reaches the dispatcher to widen it.
-      const batchError = detailedErrorMessage(error);
+      // The note names the failing index but stays on the error's public
+      // contract — this result is returned to callers, so a typed
+      // NextlyError contributes its envelope message, not its cause.
+      const batchError = batchErrorMessage(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
       rebuildRolledBackDeleteErrors(state, ids, rollbackNote);
     }

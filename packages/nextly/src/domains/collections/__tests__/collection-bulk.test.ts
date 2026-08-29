@@ -937,17 +937,18 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             () => undefined,
             (error: unknown) => error
           );
-          // The abort is a typed internal failure: the public message stays
-          // generic for the wire, and the per-index detail rides the cause
-          // so the caller's rollback handling and the operator log still
-          // see which item aborted the batch.
+          // The abort is typed and caller-facing: invalidInput is the
+          // factory whose public message the caller supplies, and the
+          // message names the failing index plus the worker's public
+          // failure reason — both of which the per-item accounting
+          // already returns — so no private cause detail is needed.
           if (!(rejection instanceof NextlyError)) {
             throw new Error(
               "expected the stopOnError abort to be a NextlyError"
             );
           }
-          expect(rejection.code).toBe("INTERNAL_ERROR");
-          expect(rejection.cause?.message).toContain("Entry at index 1 failed");
+          expect(rejection.code).toBe("INVALID_INPUT");
+          expect(rejection.message).toContain("Entry at index 1 failed");
         });
 
         it("leaves the outbox signal absent on the twin when no item records an event", async () => {
@@ -966,6 +967,41 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           expect("eventRecorded" in result).toBe(false);
           expect(result.successful).toBe(1);
           expect(result.failed).toBe(1);
+        });
+
+        it("keeps a thrown NextlyError's cause out of the returned accounting", async () => {
+          scriptWorker(op, [
+            okFor(op, 0),
+            NextlyError.internal({
+              cause: new Error(
+                "connect ECONNREFUSED 127.0.0.1:5432 postgres://internal"
+              ),
+            }),
+          ]);
+
+          const result = await op.self();
+
+          // Returned accounting carries the typed error's public message;
+          // the driver detail riding its cause belongs to the operator
+          // log. Delete rolls the whole batch back and keeps the
+          // triggering error in its note, so both paths must stay clean.
+          const messages = result.errors.map(e => e.error).join("\n");
+          expect(result.failed).toBeGreaterThan(0);
+          expect(messages).toContain("An unexpected error occurred.");
+          expect(messages).not.toContain("ECONNREFUSED");
+        });
+
+        it("survives a worker error whose cause graph cycles", async () => {
+          const cyclic = new Error("cyclic");
+          (cyclic as { cause?: Error }).cause = cyclic;
+          scriptWorker(op, [okFor(op, 0), cyclic]);
+
+          // The separating property is termination: an unbounded cause
+          // walk blocks the thread outright here (a synchronous loop the
+          // test runner's timer can never interrupt), so the batch never
+          // returns at all.
+          const result = await op.self();
+          expect(result.failed).toBeGreaterThan(0);
         });
 
         it("refuses a batchSize that cannot advance the shared loop", async () => {
