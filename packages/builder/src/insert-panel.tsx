@@ -209,11 +209,47 @@ function DescriptionStrip({
    * of that range.
    */
   const [clipped, setClipped] = React.useState(false);
+  /*
+   * Re-measured from TWO signals, because clipping changes for two unrelated
+   * kinds of reason and neither covers the other.
+   *
+   * The box changes without React knowing: an author drags the panel wider,
+   * changes the browser zoom, or raises their font size. None of those
+   * re-render anything here, so an effect alone would leave a newly overflowing
+   * description out of the tab order with its tail unreachable — and leave a
+   * dead focus stop behind when it stops overflowing.
+   *
+   * The CONTENT changes without the box changing: a longer sentence inside a
+   * strip already at its bound grows `scrollHeight` while the border box stays
+   * exactly where it was, so a `ResizeObserver` never fires. That is a render,
+   * which is why the effect below carries no dependency list — every commit is
+   * a chance for the text to have changed, and naming which ones would be a
+   * second list to keep in step with the first.
+   *
+   * Setting the same boolean back is inert: React compares and does not
+   * re-render, so an effect with no dependencies cannot loop here.
+   */
+  const remeasure = React.useCallback(() => {
+    const element = body.current;
+    if (element === null) return;
+    setClipped(element.scrollHeight > element.clientHeight);
+  }, []);
+  React.useEffect(remeasure);
   React.useEffect(() => {
     const element = body.current;
     if (element === null) return;
-    element.scrollTop = 0;
-    setClipped(element.scrollHeight > element.clientHeight);
+    // Guarded by CALLABILITY rather than presence: jsdom defines the global on
+    // some setups without a working constructor, so a property test passes and
+    // the construction throws.
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(remeasure);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [remeasure]);
+  React.useEffect(() => {
+    if (body.current !== null) body.current.scrollTop = 0;
   }, [subject]);
   if (described === undefined) return null;
   /*
