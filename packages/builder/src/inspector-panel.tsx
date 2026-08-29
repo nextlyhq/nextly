@@ -67,8 +67,20 @@ import {
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
+import { useRenderedTag } from "./use-rendered-tag";
 
 export interface InspectorPanelProps {
+  /**
+   * The canvas root, forwarded to the style tab.
+   *
+   * Declared here only to CARRY it: this panel has no opinion about the canvas,
+   * and what the style tab does with it lives on
+   * {@link StyleInspectorPanelProps.canvasRoot}. Forwarded rather than left out
+   * for the reason the class library is: a prop the chain drops is invisible —
+   * the surface renders in isolation, its tests pass, and every real selection
+   * in the shipped editor silently loses the answer.
+   */
+  canvasRoot?: HTMLElement | null;
   /**
    * The site's class library, forwarded to the style tab's class selector.
    *
@@ -185,6 +197,7 @@ const INSPECTOR_TABS = [
 
 export function InspectorPanel({
   editor,
+  canvasRoot,
   classLibrary,
   classLibraryAbsence,
   onCreateClass,
@@ -202,6 +215,14 @@ export function InspectorPanel({
   // Recomputed each render rather than memoised: an inspection is only valid
   // against the document it was read from, and an edit anywhere changes both
   // the document and the values shown.
+  // Owned here rather than in the style tab: reading it needs a subscription to
+  // the canvas, and the panel that decides which control shows a value should
+  // not also hold one. Passed down as an answer, exactly as `cascade` is.
+  const renderedTag = useRenderedTag(
+    canvasRoot,
+    editor.selectedId,
+    editor.document
+  );
   const inspection = inspectSelection(editor.document, editor.selectedId);
 
   // Declared before the early returns below, because a hook has to run on every
@@ -331,6 +352,7 @@ export function InspectorPanel({
         <TabsContent value="style">
           <StyleInspectorPanel
             editor={editor}
+            renderedTag={renderedTag}
             policy={policy}
             state={styleState}
             breakpoint={breakpoint}

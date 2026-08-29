@@ -17,7 +17,11 @@ import {
   type BlockDocument,
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
-import { registeredBlocks, resolvePageStyles } from "@nextlyhq/blocks-react";
+import {
+  registeredBlocks,
+  resolvePageStyles,
+  withTypographyDefaults,
+} from "@nextlyhq/blocks-react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pageStyleTrace } from "./style-trace";
@@ -120,16 +124,37 @@ describe("the cascade fetched for the panel", () => {
       { breakpoints: BREAKPOINTS },
       registeredBlocks()
     );
-    const compiled = compilePageCss(page, { breakpoints: BREAKPOINTS });
+    // Through `withTypographyDefaults`, because a bare `compilePageCss` is now
+    // a different question from a render: the library adds its typographic
+    // baseline, and the engine on its own has no opinion about headings. Both
+    // sides have to be asked the same thing or the comparison reports the tier
+    // as a disagreement.
+    const compiled = compilePageCss(
+      page,
+      withTypographyDefaults({ breakpoints: BREAKPOINTS })
+    );
 
     expect(rendered.css).toBe(compiled.css);
+    // The baseline is IN what the two agreed on, rather than absent from both:
+    // a comparison of two sheets that each lack the tier would pass while the
+    // panel explained a cascade the page does not have.
+    //
+    // And ANCHORED rather than merely present. The asserted selector weighs
+    // `0-1-0` — `:where(h1)` contributes nothing, the single `.nx-pb-page`
+    // contributes one class — which is what clears a bare `h1` reset at
+    // `0-0-1` while still yielding to a host's own `.content h1` at `0-1-1`.
+    // Wrapping the selector WHOLE would weigh `0-0-0` and lose to that reset,
+    // so asserting "contains `h1`" would pass on a sheet that changes nothing.
+    expect(compiled.css).toContain(".nx-pb-page :where(h1)");
     // And the trace belongs to that same compile rather than to a different one.
     expect(
       pageStyleTrace(page, { breakpoints: BREAKPOINTS }, undefined)?.entries
         .length
     ).toBe(
-      compilePageCss(page, { breakpoints: BREAKPOINTS, trace: true }).trace
-        ?.length
+      compilePageCss(
+        page,
+        withTypographyDefaults({ breakpoints: BREAKPOINTS, trace: true })
+      ).trace?.length
     );
   });
 

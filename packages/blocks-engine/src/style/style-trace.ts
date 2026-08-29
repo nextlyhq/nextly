@@ -27,6 +27,17 @@ export type StyleOrigin =
   /** A block type's default look, shared by every node of that type. */
   | { kind: "blockType"; type: string }
   /**
+   * The typographic baseline for one element, shared by every `h1` on the page.
+   *
+   * Distinct from `page` although both are supplied by the host rather than
+   * authored: page settings compile onto the page ROOT and reach an element by
+   * inheritance, while this compiles onto the element ITSELF. Recorded as
+   * `page`, a heading's size looked like a value inherited from the page — a
+   * provenance panel then filters it as not landing on the block, and reports a
+   * visibly applied size as unset.
+   */
+  | { kind: "element"; tag: string }
+  /**
    * A named class the node applies.
    *
    * Carries the id as well as the slug because a document references a class by id and an author

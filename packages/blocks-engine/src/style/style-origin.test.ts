@@ -294,3 +294,108 @@ describe("which state is being asked about", () => {
     );
   });
 });
+
+describe("what a tier actually weighs", () => {
+  /**
+   * The default tiers are anchored to ONE page-root class with the rest of the
+   * selector inside `:where()`, so a descendant and its pseudo-classes carry no
+   * weight at all. Ranking that counted pseudo-classes alone therefore made a
+   * block default's `a:hover` heavier than a node's own `a`.
+   */
+  it("does not let a block default's hover outrank a node's own link colour", () => {
+    const document = page([node({ styles: styles({ linkColor: "blue" }) })]);
+    const trace = traceOf(document, [], {
+      "core/box": styles({ linkColorHover: "red" }),
+    });
+
+    // Both entries exist, asserted before the ranking: a trace missing either
+    // makes the contest below vacuous.
+    const kinds = trace
+      .filter(entry => entry.property === "color")
+      .map(entry => `${entry.origin.kind}${entry.descendant ?? ""}`);
+    expect(kinds).toContain("blockType a:hover");
+    expect(kinds).toContain("node a");
+
+    // The browser gives the node's rule `0-3-1` and the default's `0-1-0`, so
+    // a hovered link inside this block shows the node's blue.
+    const showing = styleOrigin(trace, box, {
+      property: "color",
+      state: "base",
+      breakpoints: ["base"],
+      // The control addresses the hovered link, where BOTH rules match.
+    });
+    expect(showing?.origin).toEqual({ kind: "node", id: "n1" });
+  });
+
+  it("keeps an inherited page value below a block default that lands directly", () => {
+    // Specificity settles a contest between rules matching the SAME element.
+    // Page settings compile onto the page ROOT, so a block reads them by
+    // inheritance and any rule of its own wins however little it weighs —
+    // measured in a browser at `0-2-0` inherited against `0-1-0` direct.
+    const document = page([node({})], { styles: styles({ color: "black" }) });
+    const trace = traceOf(document, [], {
+      "core/box": styles({ color: "green" }),
+    });
+
+    const showing = styleOrigin(trace, box, atBase);
+    expect(showing?.origin).toEqual({ kind: "blockType", type: "core/box" });
+  });
+});
+
+describe("the typographic baseline's origin", () => {
+  /** A compile carrying element defaults, which only this tier produces. */
+  function elementTrace(): readonly StyleTraceEntry[] {
+    const { trace } = compilePageCss(page([node({})]), {
+      breakpoints: FIXTURE_BREAKPOINTS,
+      elementBases: { h1: styles({ fontSize: "2.25em" }) },
+      trace: true,
+    } as never);
+    expect(trace).toBeDefined();
+    return trace ?? [];
+  }
+
+  const askFontSize = {
+    property: "font-size",
+    state: "base" as const,
+    breakpoints: ["base"],
+  };
+
+  it("records the ELEMENT rather than the page", () => {
+    // Recorded as `page`, a heading's size looks like a value inherited from
+    // the page root — and a reader filtering page entries that carry no
+    // descendant then reports a visibly applied size as unset.
+    const entries = elementTrace().filter(
+      entry => entry.property === "font-size"
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.origin).toEqual({ kind: "element", tag: "h1" });
+  });
+
+  it("reaches a node rendering that element", () => {
+    const heading: StyleSubject = {
+      nodeId: "n1",
+      blockType: "core/box",
+      tag: "h1",
+    };
+    expect(styleOrigin(elementTrace(), heading, askFontSize)?.origin).toEqual({
+      kind: "element",
+      tag: "h1",
+    });
+  });
+
+  it("does not reach a node rendering a different element", () => {
+    const paragraph: StyleSubject = {
+      nodeId: "n1",
+      blockType: "core/box",
+      tag: "p",
+    };
+    expect(styleOrigin(elementTrace(), paragraph, askFontSize)).toBeUndefined();
+  });
+
+  it("stays quiet for a subject that does not state its element", () => {
+    // The tag lives in a block's render. A caller that cannot say gets no
+    // answer rather than a guessed one — a heading's baseline reported as
+    // styling a paragraph would be worse than reporting nothing.
+    expect(styleOrigin(elementTrace(), box, askFontSize)).toBeUndefined();
+  });
+});

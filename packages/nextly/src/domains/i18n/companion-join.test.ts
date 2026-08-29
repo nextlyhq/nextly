@@ -122,6 +122,31 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
   }
 
   /**
+   * The error a Drizzle select ACTUALLY throws when the column is absent.
+   *
+   * 🔴 Transcribed from a real SQLite adapter, not invented, because the invented one is what let
+   * this defect ship: the earlier fixture put the driver wording on the top-level message, so the
+   * predicate matched and the test passed while the real path rethrew and the read failed.
+   *
+   * Two properties matter and both are reproduced here. The driver wording is on `cause`, not on
+   * the error a caller catches. And the TOP-level message quotes the SQL, so it CONTAINS the
+   * column name — which is why a predicate must test both conditions at the same level rather
+   * than asking whether any level mentions the column and any level reads as missing.
+   */
+  function drizzleMissingColumnError(): Error {
+    const top = new Error(
+      'Failed query: select "_parent", "_locale", "_updated_at" from "dc_posts_locales" where ...'
+    );
+    top.name = "DrizzleQueryError";
+    const driver = new Error(
+      'no such column: "_updated_at" - should this be a string literal in single-quotes?'
+    );
+    driver.name = "SqliteError";
+    top.cause = driver;
+    return top;
+  }
+
+  /**
    * A db whose FIRST select answers normally and whose SECOND rejects.
    *
    * The stamp read is the second query `populateTranslationStatus` issues, so failing every select
@@ -276,10 +301,7 @@ describe("populateTranslationStatus — staleness (i18n B2)", () => {
     const row: Record<string, unknown> = { id: "doc1" };
     await expect(
       populateTranslationStatus({
-        db: dbFailingOnStampRead(
-          rows,
-          new Error("SqliteError: no such column: _updated_at")
-        ),
+        db: dbFailingOnStampRead(rows, drizzleMissingColumnError()),
         companionTable: { _parent: "p", _locale: "l" },
         localizedFields: [{ name: "title", column: "title" }],
         rows: [row],
