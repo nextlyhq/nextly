@@ -452,11 +452,20 @@ export class CollectionQueryService extends BaseService {
       collectionName,
       rows.map(r => r.id).filter((id): id is string => typeof id === "string")
     );
+    // 🔴 Resolved ONCE and read twice. `populateTranslationStatus` returns immediately for any
+    // verdict but `ready`, so probing the column for a companion that is not there introspects a
+    // table that does not exist to answer a question nobody will ask — and since a negative column
+    // verdict is deliberately not remembered, it does that on every list read until the operator
+    // migrates. Resolving it inline in the argument list is what hid the ordering.
+    const readiness = await resolveCompanionSchemaReadiness(
+      this.adapter,
+      companion
+    );
     await populateTranslationStatus({
       db: this.db as never,
       companionTable: companion.table,
       pendingChangeLocales,
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness,
       localizedFields: companion.localizedFields,
       rows,
       locales: this.localization.locales.map(l => l.code),
@@ -482,16 +491,18 @@ export class CollectionQueryService extends BaseService {
       // would end that cost runs in another process. That is the same trade `companion-readiness`
       // already makes for an entity in a `pre-migration` state, and it is bounded the same way —
       // it stops the moment the operator migrates.
-      staleness: (await resolveCompanionColumn(
-        this.adapter,
-        companion.companionTableName,
-        COMPANION_UPDATED_AT_COLUMN
-      ))
-        ? {
-            companionTableName: companion.companionTableName,
-            dialect: this.adapter.dialect,
-          }
-        : undefined,
+      staleness:
+        readiness === "ready" &&
+        (await resolveCompanionColumn(
+          this.adapter,
+          companion.companionTableName,
+          COMPANION_UPDATED_AT_COLUMN
+        ))
+          ? {
+              companionTableName: companion.companionTableName,
+              dialect: this.adapter.dialect,
+            }
+          : undefined,
 
       // On a status-scoped read, don't report a draft-only translation as present.
       statusValue:

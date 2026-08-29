@@ -2195,6 +2195,12 @@ export class SingleQueryService extends BaseService {
             [docId]
           )
         : undefined;
+    // Resolved once and read twice — see the collection path for why probing a companion that is
+    // not `ready` costs an introspection for an answer that is discarded.
+    const readiness = await resolveCompanionSchemaReadiness(
+      this.adapter,
+      companion
+    );
     await populateTranslationStatus({
       db: this.adapter.getDrizzle(),
       companionTable: companion.table,
@@ -2206,7 +2212,7 @@ export class SingleQueryService extends BaseService {
       hasStatus: companion.hasStatus,
       // The Single's own row id keys the companion `_parent`, same as the collection path.
       idKey: "id",
-      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      readiness,
       // 🔴 Singles carry the signal too, and the same physical check gates it. Every companion
       // write is stamped whatever the entity, so a Single's languages accumulate truthful
       // timestamps and the comparison is as valid here as on a collection.
@@ -2216,16 +2222,18 @@ export class SingleQueryService extends BaseService {
       // shipped with no stamp, and no stamp is absent from the answer rather than reported fresh.
       // So a Single reports staleness for what it can vouch for and stays silent about the rest,
       // which is the same conservative direction the whole feature takes.
-      staleness: (await resolveCompanionColumn(
-        this.adapter,
-        companion.companionTableName,
-        COMPANION_UPDATED_AT_COLUMN
-      ))
-        ? {
-            companionTableName: companion.companionTableName,
-            dialect: this.adapter.dialect,
-          }
-        : undefined,
+      staleness:
+        readiness === "ready" &&
+        (await resolveCompanionColumn(
+          this.adapter,
+          companion.companionTableName,
+          COMPANION_UPDATED_AT_COLUMN
+        ))
+          ? {
+              companionTableName: companion.companionTableName,
+              dialect: this.adapter.dialect,
+            }
+          : undefined,
     });
   }
 
