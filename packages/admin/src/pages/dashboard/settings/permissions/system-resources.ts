@@ -2,37 +2,22 @@
  * Which resources the permissions page treats as built into Nextly rather than
  * as dynamic collections, and the order it shows them in.
  *
- * Kept as data in its own module rather than inline in the page so the parity
- * test that holds it against core's `SYSTEM_RESOURCES` does not have to import
- * a React page and everything it pulls in.
+ * Kept as its own module rather than inline in the page so the parity test that
+ * holds it against core's `SYSTEM_RESOURCES` does not have to import a React
+ * page and everything it pulls in.
  *
- * Both lists must name every core system resource. A resource missing from the
- * set is filed under Collections; a resource missing from the order is filed
- * correctly but never rendered in the system group.
+ * Both views now DERIVE from one definition in `constants/permissions`, so they
+ * can no longer disagree with each other — only with core, which is the
+ * divergence the parity test is positioned to catch.
  */
+import {
+  SYSTEM_RESOURCES_IN_DISPLAY_ORDER,
+  SYSTEM_RESOURCE_SET,
+} from "../../../../constants/permissions";
 
 /** Resources that are built-in to Nextly (not dynamic collections). */
-export const SYSTEM_RESOURCES = new Set([
-  "users",
-  "roles",
-  "permissions",
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-  "api-keys",
-  "webhooks",
-]);
+export const SYSTEM_RESOURCES = SYSTEM_RESOURCE_SET;
 
 /** Display order for the system group; collections follow alphabetically. */
-export const SYSTEM_ORDER = [
-  "users",
-  "roles",
-  "permissions",
-  "media",
-  "settings",
-  "email-providers",
-  "email-templates",
-  "api-keys",
-  "webhooks",
-];
+export const SYSTEM_ORDER: readonly string[] =
+  SYSTEM_RESOURCES_IN_DISPLAY_ORDER;
