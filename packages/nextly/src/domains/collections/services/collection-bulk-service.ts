@@ -153,6 +153,29 @@ function detailedErrorMessage(error: unknown): string {
 }
 
 /**
+ * Rebuild a rolled-back delete's accounting as exactly one error per
+ * requested id, in index order. A `stopOnError` returned-failure pushes
+ * both the item error and a thrown wrapper for the same index, so dedupe
+ * (first wins) before filling the rolled-back ids that had no entry —
+ * otherwise `errors` would exceed `failed` and give a client duplicate
+ * detail for one id.
+ */
+function rebuildRolledBackDeleteErrors(
+  state: LegacyBatchState,
+  ids: string[],
+  rollbackNote: string
+): void {
+  const byIndex = new Map<number, string>();
+  for (const e of state.errors) {
+    if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
+  }
+  state.errors = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    state.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
+  }
+}
+
+/**
  * Partition Promise.allSettled outcomes into the canonical
  * BulkOperationResult shape.
  *
@@ -1829,19 +1852,7 @@ export class CollectionBulkService extends BaseService {
       // result never reaches the dispatcher to widen it.
       const batchError = detailedErrorMessage(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
-      // Rebuild errors as exactly one entry per requested id, in index order.
-      // A `stopOnError` returned-failure pushes both the item error and a thrown
-      // wrapper for the same index, so dedupe (first wins) before filling the
-      // rolled-back ids that had no entry — otherwise `errors` would exceed
-      // `failed` and give a client duplicate detail for one id.
-      const byIndex = new Map<number, string>();
-      for (const e of state.errors) {
-        if (!byIndex.has(e.index)) byIndex.set(e.index, e.error);
-      }
-      state.errors = [];
-      for (let i = 0; i < ids.length; i += 1) {
-        state.errors.push({ index: i, error: byIndex.get(i) ?? rollbackNote });
-      }
+      rebuildRolledBackDeleteErrors(state, ids, rollbackNote);
     }
     // Delete always reports the outbox signal, even when nothing recorded:
     // the previous shape read its own flag back after commit (true) or after
