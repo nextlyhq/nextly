@@ -934,6 +934,26 @@ export function useCanvasDrag({
     [commitDrop, reset, swallowNextClick]
   );
 
+  /**
+   * Abandon the gesture, but only for the pointer that owns it.
+   *
+   * A cancel is the browser withdrawing a contact — captured by something else,
+   * or the touch became a scroll. That is a fact about ONE pointer, so a second
+   * finger being withdrawn says nothing about the drag a first finger is still
+   * performing. Resetting unconditionally would undo the gesture the press
+   * guard exists to protect: a stray touch on a block, cancelled by the browser
+   * a moment later, would end a palette drag the author is mid-way through.
+   */
+  const cancelGesture = React.useCallback(
+    (pointerId: number) => {
+      const drag = gesture.current;
+      if (drag === null) return;
+      if (pointerId !== drag.owner) return;
+      reset();
+    },
+    [reset]
+  );
+
   const onPointerUp = React.useCallback(
     (event: React.PointerEvent<HTMLElement>) => {
       endGesture(event.pointerId, event.currentTarget);
@@ -1004,30 +1024,23 @@ export function useCanvasDrag({
        * listening here rather than on the canvas.
        */
       /*
-       * Only the pointer that began this gesture drives it.
+       * These three forward the pointer id and decide nothing.
        *
-       * The node-origin path gets this from pointer capture, which retargets
-       * one pointer and ignores the rest. A palette drag deliberately takes no
-       * capture, so its document listeners see EVERY active pointer: on a
-       * touch device, lifting a second finger would otherwise commit the first
-       * finger's target, and a second finger's movement would aim the drag.
+       * Ownership is enforced inside `trackMove`, `endGesture` and
+       * `cancelGesture`, which is where BOTH transports converge — the canvas's
+       * React handlers for a pointer over the canvas, and these listeners for
+       * one anywhere else. Checking here as well would state the same rule in
+       * two places, and the copy that mattered would be the one somebody forgot
+       * when a third transport arrived.
        */
-      const owner = event.pointerId;
       const move = (native: PointerEvent): void => {
         trackMove(native.clientX, native.clientY, native.pointerId, null);
       };
       const up = (native: PointerEvent): void => {
         endGesture(native.pointerId, null);
       };
-      // `cancel` alone checks the pointer here, because it is the one ending
-      // that does not pass through `trackMove` or `endGesture` — the two both
-      // transports converge on, and where ownership is enforced for everything
-      // else. Repeating that check in these closures would put the same rule
-      // in two places, and the copy that mattered would be the one someone
-      // forgot when a third transport arrived.
       const cancel = (native: PointerEvent): void => {
-        if (native.pointerId !== owner) return;
-        reset();
+        cancelGesture(native.pointerId);
       };
       document.addEventListener("pointermove", move, true);
       document.addEventListener("pointerup", up, true);
@@ -1038,7 +1051,7 @@ export function useCanvasDrag({
         document.removeEventListener("pointercancel", cancel, true);
       };
     },
-    [canvasRoot, endGesture, reset, trackMove]
+    [canvasRoot, cancelGesture, endGesture, trackMove]
   );
 
   // Every ordinary ending funnels through `reset`. This covers the one that
@@ -1106,10 +1119,9 @@ export function useCanvasDrag({
       onPointerDown,
       onPointerMove,
       onPointerUp,
-      // A cancel is the browser withdrawing the gesture — the pointer was
-      // captured by something else, or the touch became a scroll. Dropping
-      // there would commit a move the author never released.
-      onPointerCancel: reset,
+      // Routed through the same ownership check every other ending uses, so a
+      // second contact being withdrawn cannot end a drag it does not own.
+      onPointerCancel: event => cancelGesture(event.pointerId),
     },
   };
 }
