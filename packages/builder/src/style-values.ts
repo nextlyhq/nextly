@@ -23,6 +23,7 @@
 import {
   breakpointContexts,
   isPlainRecord,
+  MAX_SCANNED_KEYS,
   isTokenRef,
   validateStyleValues,
   type BreakpointId,
@@ -292,6 +293,20 @@ function hasOwnKeys(value: unknown): value is Record<string, never> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * Whether a record carries at least one own key.
+ *
+ * `Object.keys(...).length > 0` answers the same question and reads every key
+ * to do it. These records arrive from storage, so the width is not ours to
+ * assume, and the answer is known at the first own key.
+ */
+function hasAnyOwnKey(record: object): boolean {
+  for (const key in record) {
+    if (Object.hasOwn(record, key)) return true;
+  }
+  return false;
+}
+
 function valuesAt(
   styles: NodeStyles | undefined,
   state: StyleState,
@@ -361,29 +376,51 @@ export function stateHasOwnValues(
   if (!isPlainRecord(styles)) return false;
   const tiers = ownData(styles, state);
   if (!isPlainRecord(tiers)) return false;
-  /*
-   * Only the tiers the SHEET has, asked of the compiler's own reader rather
-   * than of the stored definitions. `breakpointContexts` is what decides which
-   * breakpoints a site actually has for the sheet — it drops a definition whose
-   * bound it cannot use and claims each id once — so a value stored under a
-   * tier that has since been deleted emits nothing at all. Measured: the same
-   * node compiles to 73 bytes under a known tier and to an empty sheet under an
-   * unknown one.
-   *
-   * With no breakpoints known, every stored tier counts. That is the honest
-   * answer rather than a lenient one: the question "which tiers exist" has not
-   * been asked, and treating an unasked question as "none exist" would report
-   * every state as unstyled.
-   */
-  const known =
-    breakpoints === undefined
-      ? undefined
-      : new Set(breakpointContexts(breakpoints).map(context => context.id));
-  return Object.keys(tiers).some(tier => {
-    if (known !== undefined && !known.has(tier)) return false;
+
+  const holdsValues = (tier: string): boolean => {
     const values = ownData(tiers, tier);
-    return isPlainRecord(values) && Object.keys(values).length > 0;
-  });
+    return isPlainRecord(values) && hasAnyOwnKey(values);
+  };
+
+  /*
+   * Driven by the tiers the SHEET has, asked of the compiler's own reader.
+   * `breakpointContexts` is what decides which breakpoints a site actually has
+   * — it drops a definition whose bound it cannot use and claims each id once —
+   * so a value stored under a tier that has since been deleted emits nothing at
+   * all. Measured: the same node compiles to 73 bytes under a known tier and to
+   * an empty sheet under an unknown one.
+   *
+   * Iterating the KNOWN ids rather than the stored ones is also what bounds
+   * this. A stored record arrives from storage and can be arbitrarily wide, so
+   * asking it for its keys reads all of them before any filter can narrow the
+   * set — on every render, once per non-base state. Asking the sheet instead
+   * costs one lookup per tier the site actually has, which is a handful.
+   */
+  if (breakpoints !== undefined) {
+    return breakpointContexts(breakpoints).some(context =>
+      holdsValues(context.id)
+    );
+  }
+
+  /*
+   * With no breakpoints known, the stored keys are the only list there is, and
+   * every one of them counts — the question "which tiers exist" has not been
+   * asked, and treating an unasked question as "none exist" would report every
+   * state as unstyled.
+   *
+   * Read with an early break rather than through `Object.keys`, and stopped
+   * where `boundedKeys` stops. A reader walking the same untrusted records has
+   * to stop where the compiler stops, or a corrupt row costs this the unbounded
+   * scan that bound exists to prevent while compilation pays 256.
+   */
+  let scanned = 0;
+  for (const tier in tiers) {
+    if (!Object.hasOwn(tiers, tier)) continue;
+    if (scanned >= MAX_SCANNED_KEYS) break;
+    scanned += 1;
+    if (holdsValues(tier)) return true;
+  }
+  return false;
 }
 
 /** The whole envelope with one state × breakpoint replaced, pruning what empties. */
