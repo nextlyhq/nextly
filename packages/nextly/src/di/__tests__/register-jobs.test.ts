@@ -150,12 +150,35 @@ describe("reportReleasesOutcome", () => {
       applied: 1,
       failed: 0,
       deferred: 4,
+      undischarged: 0,
       outcomes: [],
     });
 
     expect(log.info).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ deferred: 4 })
+    );
+  });
+
+  it("reports UNDISCHARGED releases, which `deferred` cannot show", async () => {
+    // A pass truncated during finalization omits no ACTION, so `deferred` is
+    // zero while releases stay scheduled. Reporting only `deferred` therefore
+    // logs the one case the finalization bound exists for as a clean pass.
+    const log = logger();
+
+    reportReleasesOutcome(log, {
+      due: 9,
+      published: 2,
+      applied: 2,
+      failed: 0,
+      deferred: 0,
+      undischarged: 7,
+      outcomes: [],
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ undischarged: 7 })
     );
   });
 

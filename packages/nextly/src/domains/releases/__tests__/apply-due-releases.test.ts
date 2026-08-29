@@ -68,6 +68,10 @@ function deps(over: {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
   return {
+    // Pinned, so every case below observes a STABLE component order and asserts
+    // about the mechanism it names rather than about which rotation came up.
+    // The starvation case overrides it, because rotating is the thing it tests.
+    random: () => 0,
     repository: {
       findDueReleases: async () => releases,
       listMembersOf: async ids =>
@@ -524,6 +528,57 @@ describe("applyDueReleases", () => {
     expect(marked).toEqual(["r1"]);
   });
 
+  it("does not let a failing component starve the healthy ones", async () => {
+    // Head-of-line blocking, and it needs no process kill. The first component
+    // is exempt from the deadline — something must run — so with a stable order
+    // a component whose action FAILS holds itself open and consumes the budget
+    // on every tick, while the healthy releases behind it are deferred forever.
+    // Each pass reports success.
+    //
+    // The passes are a FIXED 60-SECOND CADENCE apart, which is the shape a cron
+    // actually has. A rotation derived from the pass instant repeats forever
+    // whenever the period divides the component count — 30s, 60s and 300s all do
+    // for two components — so a test advancing one second per pass would pass
+    // against a fix that does nothing in production.
+    const publish = vi.fn(async (input: { ref: { entryId: string } }) => {
+      if (input.ref.entryId === "broken") throw new Error("refused");
+    });
+    // Deterministic stand-in for the random source, cycling the rotation.
+    let call = 0;
+    const rotations = [0, 0.5];
+    const seen: string[][] = [];
+    for (let pass = 0; pass < 2; pass += 1) {
+      publish.mockClear();
+      const at = new Date(NOW.getTime() + pass * 60_000);
+      const d = deps({
+        releases: [release({ id: "rBad" }), release({ id: "rGood" })],
+        members: [
+          member({ id: "x", releaseId: "rBad", entryId: "broken" }),
+          member({ id: "y", releaseId: "rGood", entryId: "healthy" }),
+        ],
+        mutations: {
+          publish:
+            publish as unknown as ApplyDueReleasesDeps["mutations"]["publish"],
+          // The read-back must not rescue the failed write, or the failure never
+          // reaches the outcome and there is nothing to starve behind.
+          applied: async () => false,
+        },
+      });
+      await applyDueReleases({
+        ...d,
+        now: () => at,
+        random: () => rotations[call++ % rotations.length],
+        // Already spent, so only the exempt first component runs.
+        deadline: new Date(at.getTime() - 60_000),
+      });
+      seen.push(publish.mock.calls.map(c => c[0].ref.entryId));
+    }
+
+    // The healthy document is reached on one of the two passes. Pinned to a
+    // single rotation it is reached on neither, forever.
+    expect(seen.flat()).toContain("healthy");
+  });
+
   it("bounds an INTERLEAVED backlog to one release's work, not all of it", async () => {
     // The shape this guard is for, and the one it silently failed to bound. The
     // planner groups by DOCUMENT and emits in first-seen order, so members
@@ -595,6 +650,39 @@ describe("applyDueReleases", () => {
     // BOTH of r1's actions ran; only r2 was deferred.
     expect(publish).toHaveBeenCalledTimes(2);
     expect(result.deferred).toBe(1);
+  });
+
+  it("reaches an applied component sitting BEHIND untouched ones", async () => {
+    // The exemption for applied components is only reached when a group is. So
+    // breaking out of finalization strands every applied component behind an
+    // untouched one — and a stranded applied component is the replay the
+    // exemption exists to prevent: its mutations, hooks and outbox writes all
+    // run again on the next tick, while `deferred` reports zero.
+    //
+    // Two empty releases first, then the one this pass actually performed.
+    const marked: string[] = [];
+    let tick = 0;
+    const d = deps({
+      releases: [
+        release({ id: "empty1" }),
+        release({ id: "empty2" }),
+        release({ id: "rApplied" }),
+      ],
+      members: [member({ id: "a", releaseId: "rApplied", entryId: "e1" })],
+      marked,
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 1500),
+    });
+
+    // Reached despite the budget being spent on the empty ones before it.
+    expect(marked).toContain("rApplied");
+    // And what WAS skipped is reported — `deferred` cannot show it, because no
+    // action was omitted.
+    expect(result.deferred).toBe(0);
+    expect(result.undischarged).toBeGreaterThan(0);
   });
 
   it("bounds discharging of releases it did NOT apply", async () => {

@@ -124,6 +124,22 @@ export interface ApplyDueReleasesDeps {
   runAs: RunAsDeps;
   now?: () => Date;
   /**
+   * Where the pass's fairness rotation comes from.
+   *
+   * Injected so a pass stays deterministic under test, and RANDOM by default
+   * because every deterministic source available here is either constant or
+   * cadence-coupled. Deriving it from the clock looked right and is not: a cron
+   * whose period divides the component count produces the same rotation every
+   * time, and 30s, 60s and 300s all do for two or three components. Deriving it
+   * from the due set is worse — that set is exactly what does not change while a
+   * component keeps failing.
+   *
+   * Expected fairness rather than a guaranteed round-robin, which is the honest
+   * trade for holding no state: the chance a given component is missed decays
+   * geometrically, and this domain has nowhere to persist a cursor.
+   */
+  random?: () => number;
+  /**
    * When this pass must stop starting new actions.
    *
    * A drain runs behind a serverless cron tick as often as on a long-lived
@@ -189,6 +205,14 @@ export interface ApplyDueReleasesResult {
   applied: number;
   failed: number;
   /**
+   * Releases left SCHEDULED because finalization ran out of time.
+   *
+   * Counted separately from `deferred`, which counts actions never started. A
+   * truncated pass over a backlog of empty releases omits no action at all, so
+   * `deferred` is zero and the only sign that work was left behind is this.
+   */
+  undischarged: number;
+  /**
    * Actions this pass did not start, because it ran out of time.
    *
    * Reported rather than implied. A pass that stopped early and one that had
@@ -214,6 +238,7 @@ export async function applyDueReleases(
       applied: 0,
       failed: 0,
       deferred: 0,
+      undischarged: 0,
       outcomes: [],
     };
   }
@@ -235,7 +260,8 @@ export async function applyDueReleases(
   const { outcomes, unfinished, applied } = await applyWithinBudget(
     deps,
     plan,
-    now
+    now,
+    deps.random ?? Math.random
   );
 
   // A release is discharged only when nothing attributed to it failed — AND
@@ -257,7 +283,7 @@ export async function applyDueReleases(
     }
   }
 
-  const published = await dischargeSettledComponents(
+  const { published, undischarged } = await dischargeSettledComponents(
     deps,
     plan,
     heldOpen,
@@ -273,6 +299,7 @@ export async function applyDueReleases(
     applied: outcomes.length - failed,
     failed,
     deferred,
+    undischarged,
     outcomes,
   };
 }
@@ -488,7 +515,8 @@ function messageOf(error: unknown): string {
 async function applyWithinBudget(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
-  now: () => Date
+  now: () => Date,
+  random: () => number
 ): Promise<{
   outcomes: MaterialisationOutcome[];
   unfinished: Set<string>;
@@ -509,9 +537,32 @@ async function applyWithinBudget(
   // Ordered so a component's actions are contiguous. The planner's own order is
   // by document and provides no such grouping; without this the guard has
   // nothing left to defer by the time it first fires.
+  // ROTATED, so no component is permanently first.
+  //
+  // The first component is exempt from the deadline — something must run, or a
+  // budget too small for one stalls everything. With a stable order that
+  // exemption becomes head-of-line blocking: a component that is slow, or whose
+  // action FAILS and holds it open, consumes the budget on every tick, and the
+  // healthy releases behind it are deferred forever. No process kill is needed;
+  // a cleanly returning failure is enough, and each tick reports success.
+  //
+  // The rotation is RANDOM, and the obvious alternative is a trap. Deriving it
+  // from the pass instant reads as deterministic and fair, and is neither: a
+  // cron whose period divides the component count repeats the same rotation
+  // forever, and 30s, 60s and 300s all do for two or three components — so the
+  // failing component keeps the exempt position under every realistic cadence.
+  // Deriving it from the due set is worse still, because that set is precisely
+  // what does not change while a component keeps failing.
+  //
+  // A component that keeps failing still retries, which is the at-least-once
+  // contract; what it no longer does is starve the others while it fails.
+  const componentCount = Math.max(plan.overlappingReleases.length, 1);
+  const rotation = Math.floor(random() * componentCount) % componentCount;
+  const rank = (releaseId: string): number =>
+    ((componentOf.get(releaseId) ?? 0) - rotation + componentCount) %
+    componentCount;
   const ordered = [...plan.actions].sort(
-    (a, b) =>
-      (componentOf.get(a.releaseId) ?? 0) - (componentOf.get(b.releaseId) ?? 0)
+    (a, b) => rank(a.releaseId) - rank(b.releaseId)
   );
   const startedComponents = new Set<number>();
   const applied = new Set<string>();
@@ -561,7 +612,7 @@ async function dischargeSettledComponents(
   heldOpen: ReadonlySet<string>,
   applied: ReadonlySet<string>,
   now: () => Date
-): Promise<number> {
+): Promise<{ published: number; undischarged: number }> {
   let published = 0;
   // Discharged by COMPONENT, for the reason the planner states: splitting one
   // reverses work. If the deadline fell between two members of a component, the
@@ -574,6 +625,7 @@ async function dischargeSettledComponents(
   // leaves the counter at zero and every row gets a serial write with the budget
   // long gone.
   let finalizedComponents = 0;
+  let undischarged = 0;
   for (const group of plan.overlappingReleases) {
     const settleable = group.filter(
       id => !heldOpen.has(id) && plan.releaseIds.includes(id)
@@ -597,7 +649,17 @@ async function dischargeSettledComponents(
       finalizedComponents > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
-      break;
+      // SKIPPED, not broken out of. The exemption above is only reached when a
+      // group is, so breaking here strands every applied component that happens
+      // to sit behind an untouched one — and a stranded applied component is the
+      // replay this exemption exists to prevent: its mutations, hooks and outbox
+      // writes all run again next tick.
+      //
+      // Continuing costs one comparison per remaining group and guarantees every
+      // applied component is reached. Only untouched ones are deferred, which is
+      // what the bound is for.
+      undischarged += settleable.length;
+      continue;
     }
     finalizedComponents += 1;
     for (const id of settleable) {
@@ -608,5 +670,5 @@ async function dischargeSettledComponents(
       if (await deps.repository.markReleasePublished(id, now())) published += 1;
     }
   }
-  return published;
+  return { published, undischarged };
 }
