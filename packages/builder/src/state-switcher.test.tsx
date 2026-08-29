@@ -113,6 +113,31 @@ describe("which states report that they carry values", () => {
     expect(stateHasOwnValues(styles, "hover")).toBe(false);
   });
 
+  it("does NOT mark an ARRAY-shaped tier the compiler will emit nothing for", () => {
+    /*
+     * An array is a non-null object, so a guard asking only that accepts
+     * `hover: []` and counts its numeric indexes as declarations. The compiler
+     * reads this envelope with `isPlainRecord` and emits nothing for an array,
+     * so a state marked from one is a state that cannot affect the page —
+     * worse than an unmarked one, because it sends an author looking for a
+     * value that was never going to apply.
+     *
+     * NONEMPTY arrays, at both levels, because an empty one is already refused
+     * by the length test and would pass on the broken implementation too.
+     */
+    const styles = {
+      hover: [{ color: "#000001" }],
+      focus: { base: ["#000002"] },
+      active: { base: { color: "#000003" } },
+    } as unknown as NodeStyles;
+
+    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+
+    // `active` is the control: a real record beside the two bad shapes, so this
+    // case cannot pass by the marker never appearing at all.
+    expect(marked()).toEqual(["Pressed"]);
+  });
+
   it("marks nothing when the host supplies no styles at all", () => {
     // Absent styles is "the question was not asked", which must not read as
     // "every state is unstyled" the way an empty object would.

@@ -177,10 +177,29 @@ export function StateSwitcher({
               <span
                 aria-hidden="true"
                 data-nx-state-marked="true"
-                className={cn(
-                  "size-1 rounded-full",
-                  selected ? "bg-accent-foreground" : "bg-muted-foreground"
-                )}
+                /*
+                 * `bg-current` — the button's own text colour — rather than a
+                 * named colour utility, and the reason is measured rather than
+                 * stylistic.
+                 *
+                 * A named one fails at TWO layers here, so fixing either alone
+                 * leaves the dot invisible. `bg-accent-foreground` is emitted
+                 * into no stylesheet this package produces or consumes: the
+                 * builder's own is built from these sources and this was its
+                 * only use, and the admin's emits `bg-muted-foreground` and not
+                 * the accent one. And the theme token behind it,
+                 * `--accent-foreground`, is undefined on both `:root` and
+                 * `.nx-builder-chrome` in the editor, so even a rule that WAS
+                 * emitted would paint transparent.
+                 *
+                 * `currentColor` depends on neither: it is a CSS keyword rather
+                 * than a theme lookup, so the utility is generated from this
+                 * use alone. It is also the better answer independently — the
+                 * dot takes the colour of the label it sits beside, so it stays
+                 * legible in both the selected and unselected states without
+                 * restating either, and cannot drift from them.
+                 */
+                className="size-1 rounded-full bg-current"
               />
             ) : null}
           </button>

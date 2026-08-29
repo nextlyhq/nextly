@@ -21,6 +21,7 @@
  */
 
 import {
+  isPlainRecord,
   isTokenRef,
   validateStyleValues,
   type BreakpointId,
@@ -318,6 +319,14 @@ function valuesAt(
  * breakpoint reached through a PROTOTYPE is one the compiler will not read, so
  * reporting it as styled would mark a state whose values never reach the page.
  *
+ * A PLAIN RECORD at every level, and the engine's own predicate rather than a
+ * looser one, for the same reason stated positively: this must agree with what
+ * the COMPILER will read. An array is a non-null object, so a guard asking only
+ * that would accept `hover: []` and count its numeric indexes as declarations —
+ * while `isPlainRecord` makes the compiler emit nothing for it. A state marked
+ * as styled that cannot affect the page is worse than an unmarked one, because
+ * it sends an author looking for a value that was never going to apply.
+ *
  * EMPTY IS NOT SET. Both levels are sparse and either can survive empty — a
  * state whose last declaration was cleared leaves the keys behind — so a
  * presence test reports a state as styled when it carries nothing, which is
@@ -327,12 +336,12 @@ export function stateHasOwnValues(
   styles: NodeStyles | undefined,
   state: StyleState
 ): boolean {
-  if (!hasOwnKeys(styles)) return false;
+  if (!isPlainRecord(styles)) return false;
   const breakpoints = ownData(styles, state);
-  if (!hasOwnKeys(breakpoints)) return false;
+  if (!isPlainRecord(breakpoints)) return false;
   return Object.keys(breakpoints).some(breakpoint => {
     const values = ownData(breakpoints, breakpoint);
-    return hasOwnKeys(values) && Object.keys(values).length > 0;
+    return isPlainRecord(values) && Object.keys(values).length > 0;
   });
 }
 
