@@ -169,11 +169,10 @@ function batchErrorMessage(error: unknown): string {
 
 /**
  * Rebuild a rolled-back delete's accounting as exactly one error per
- * requested id, in index order. A `stopOnError` returned-failure pushes
- * both the item error and a thrown wrapper for the same index, so dedupe
- * (first wins) before filling the rolled-back ids that had no entry —
- * otherwise `errors` would exceed `failed` and give a client duplicate
- * detail for one id.
+ * requested id, in index order. The per-id invariant is asserted here
+ * rather than assumed of the accounting: the rebuild is the last stop
+ * before the result, and `errors` exceeding one entry per id would give
+ * a client duplicate detail and disagree with `failed`.
  */
 function rebuildRolledBackDeleteErrors(
   state: LegacyBatchState,
@@ -339,7 +338,10 @@ function batchOptions(options?: BulkOperationOptions): {
  * The two subtle rules the six hand-rolled loops encoded live here once: an
  * item's outbox signal and revalidation intent are collected whether it is
  * reported a success or a committed-then-failed failure, and a returned
- * failure under stopOnError throws so the surrounding transaction rolls back.
+ * failure under stopOnError throws so the surrounding transaction rolls
+ * back — recorded ONCE, because the abort is thrown outside the catch that
+ * accounts for worker throws; counting the wrapper as well would report a
+ * single returned failure as two.
  *
  * `abortOnError` is the operation's own policy for THROWN errors: create and
  * update re-throw only marked write-integrity failures, delete treats every
@@ -353,36 +355,9 @@ async function runLegacyBatchItem<TItem>(
   worker: (item: TItem) => Promise<LegacyBatchVerdict>,
   abortOnError: (error: unknown) => boolean
 ): Promise<void> {
+  let verdict: LegacyBatchVerdict;
   try {
-    const verdict = await worker(item);
-
-    if (verdict.revalidationIntent) {
-      state.intents.push(verdict.revalidationIntent);
-    }
-    if (verdict.eventRecorded) state.eventRecorded = true;
-
-    if (verdict.ok) {
-      state.successful++;
-      state.ids.push(verdict.id);
-    } else {
-      state.failed++;
-      state.errors.push({ index, error: verdict.message });
-
-      if (options.stopOnError) {
-        // Thrown inside the try on purpose: the catch below records it
-        // like any unexpected error before re-throwing, which is the
-        // accounting every legacy loop performed for this case. A typed
-        // internal failure: a returned worker failure may be a hook,
-        // access, or server problem rather than caller input, so the
-        // public message stays generic and the per-index detail rides the
-        // cause, which the wire never serializes.
-        throw NextlyError.internal({
-          cause: new Error(
-            `Entry at index ${index} failed: ${verdict.message}`
-          ),
-        });
-      }
-    }
+    verdict = await worker(item);
   } catch (error: unknown) {
     state.failed++;
     // Returned accounting carries only what the error's public contract
@@ -404,6 +379,33 @@ async function runLegacyBatchItem<TItem>(
     if (options.stopOnError) {
       throw error;
     }
+    return;
+  }
+
+  if (verdict.revalidationIntent) {
+    state.intents.push(verdict.revalidationIntent);
+  }
+  if (verdict.eventRecorded) state.eventRecorded = true;
+
+  if (verdict.ok) {
+    state.successful++;
+    state.ids.push(verdict.id);
+    return;
+  }
+
+  state.failed++;
+  state.errors.push({ index, error: verdict.message });
+
+  if (options.stopOnError) {
+    // A typed internal failure: a returned worker failure may be a hook,
+    // access, or server problem rather than caller input, so the public
+    // message stays generic and the per-index detail rides the cause,
+    // which the wire never serializes. The item above is already recorded
+    // once — this throw is the transaction's abort signal, not a second
+    // failure of the same item, so nothing records it on the way out.
+    throw NextlyError.internal({
+      cause: new Error(`Entry at index ${index} failed: ${verdict.message}`),
+    });
   }
 }
 
@@ -1870,8 +1872,7 @@ export class CollectionBulkService extends BaseService {
       // operational detail the result must not widen. Items process in
       // order, so the ABORTING failure is the highest-index record; an
       // earlier soft failure the batch continued past must not stand in
-      // for it. The first record at that index is the worker's public
-      // reason; later ones are the thrown wrapper's own accounting.
+      // for it.
       const firstRecord = state.errors[0];
       let aborting = firstRecord;
       if (aborting !== undefined) {

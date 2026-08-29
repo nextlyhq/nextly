@@ -896,6 +896,28 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           expect(result.revalidationIntents).toHaveLength(2);
         });
 
+        it("counts a stop-on-error returned failure once", async () => {
+          // Only the first item is scripted; the abort happens before the
+          // second runs (the mock's fallback covers an unexpected call).
+          scriptWorker(op, [committedThenFailed("nope")]);
+          const result = await op.self({ stopOnError: true });
+
+          if (op.name === "deleteEntries") {
+            // Delete rebuilds the accounting: one error per requested id,
+            // failed equals the requested count.
+            expect(result.failed).toBe(2);
+            expect(result.errors).toHaveLength(2);
+          } else {
+            // The returned failure is recorded once. The abort wrapper is
+            // the transaction's signal, not a second item failure of its
+            // own: counting it would report failed: 2 for one item and
+            // duplicate the index's error.
+            expect(result.failed).toBe(1);
+            expect(result.errors).toHaveLength(1);
+            expect(result.errors[0]).toMatchObject({ index: 0, error: "nope" });
+          }
+        });
+
         it("stopOnError rolls the self-transaction back", async () => {
           scriptWorker(op, [okFor(op, 0), committedThenFailed("nope")]);
           const result = await op.self({ stopOnError: true });
