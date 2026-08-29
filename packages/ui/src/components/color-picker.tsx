@@ -249,30 +249,42 @@ export function ColorPicker<TValue = string>({
    * and removed — a host that coalesces a picker gesture on close has already
    * decided what to write by then.
    *
+   * RE-REGISTERED every render, with no dependency list, which is deliberate.
+   * The obvious alternative keeps the handler in a ref refreshed by an effect,
+   * and that ref is not guaranteed fresh when a NATIVE listener fires: a
+   * passive effect runs after the commit, and this listener is outside React's
+   * event system, so an outside press arriving in between would call the
+   * previous closure and discard the draft it was holding. Swapping one
+   * listener per render costs nothing measurable and has no such window.
+   *
    * Escape is untouched and still cancels: it dismisses without a pointer, so
    * nothing here runs and the draft dies with the surface, which is what a
    * cancel means.
    */
-  const latestCommit = React.useRef(commitDraft);
   React.useEffect(() => {
-    latestCommit.current = commitDraft;
-  });
-  React.useEffect(() => {
-    const onPointerDown = (event: PointerEvent): void => {
-      const root = rootRef.current;
-      if (root === null) return;
+    const root = rootRef.current;
+    if (root === null) return;
+    const onPointerDown = (event: Event): void => {
       const target = event.target;
       // A press INSIDE is not a dismissal — a swatch, a slider, the field
       // itself — and committing there would report a draft the press is about
       // to replace.
       if (target instanceof Node && root.contains(target)) return;
-      latestCommit.current();
+      commitDraft();
     };
-    document.addEventListener("pointerdown", onPointerDown, true);
+    /*
+     * The picker's OWN document, not the global one. Rendered into an iframe or
+     * a pop-out window this component's presses happen in a different document
+     * entirely, and a listener on the parent global would never see them —
+     * which is the case where a dismiss layer unmounts the picker and the draft
+     * goes with it.
+     */
+    const owner = root.ownerDocument;
+    owner.addEventListener("pointerdown", onPointerDown, true);
     return () => {
-      document.removeEventListener("pointerdown", onPointerDown, true);
+      owner.removeEventListener("pointerdown", onPointerDown, true);
     };
-  }, []);
+  });
 
   const commit = (next: Hsva): void => {
     setHsva(next);
