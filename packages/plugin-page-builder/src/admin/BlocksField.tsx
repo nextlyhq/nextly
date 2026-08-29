@@ -734,10 +734,25 @@ function readDocumentLimits(
   const merged: DocumentLimits = { ...DEFAULT_LIMITS };
   for (const key of Object.keys(DEFAULT_LIMITS) as (keyof DocumentLimits)[]) {
     const supplied = declared[key];
+    /*
+     * Zero and Infinity are both LEGITIMATE bounds, so neither may be narrowed
+     * away here. A host setting `maxNodes: 0` gets a renderer that draws
+     * nothing, and substituting the default would have the panel mark classes
+     * as present on a page that renders none of them; the engine supports an
+     * infinite byte limit outright. What is refused is a value that is not a
+     * number, or one below zero, which no bound can mean.
+     */
+    // `null` is the wire spelling for an INFINITE bound: `Infinity` is not a
+    // JSON value and the client config is refused unless it survives the round
+    // trip unchanged, so the publisher encodes it and this decodes it.
+    if (supplied === null) {
+      merged[key] = Number.POSITIVE_INFINITY;
+      continue;
+    }
     if (
       typeof supplied === "number" &&
-      Number.isFinite(supplied) &&
-      supplied > 0
+      !Number.isNaN(supplied) &&
+      supplied >= 0
     ) {
       merged[key] = supplied;
     }

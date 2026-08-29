@@ -290,6 +290,21 @@ function FilterChips({
   );
 }
 
+/**
+ * How many rows the manager mounts at once.
+ *
+ * A library may hold `MAX_NAMED_CLASSES`, and the `All` filter matches every
+ * one — so opening the panel on a large site would mount two thousand rows and
+ * two thousand text inputs synchronously. The selector caps its own results at
+ * fifty for exactly this reason; the manager needs a bound of the same kind,
+ * and a larger one because reading a list IS what this surface is for.
+ *
+ * The remainder is REPORTED rather than dropped quietly: a list that silently
+ * stops is a list an author believes is complete, and this one is the surface
+ * they would use to decide a class is safe to delete.
+ */
+const MAX_MANAGED_ROWS = 200;
+
 function ClassList({
   rows,
   library,
@@ -308,21 +323,30 @@ function ClassList({
   if (rows.length === 0) {
     return <p className="nx-inspector__note">No classes match this filter.</p>;
   }
+  const shown = rows.slice(0, MAX_MANAGED_ROWS);
+  const hidden = rows.length - shown.length;
   return (
-    <ul className="nx-classman__list">
-      {rows.map(row => (
-        <li key={row.id} className="nx-classman__row">
-          <ClassRowView
-            row={row}
-            library={library}
-            isSupplied={supplied.has(row.id)}
-            usageKnown={usageKnown}
-            onRename={onRename}
-            onDelete={onDelete}
-          />
-        </li>
-      ))}
-    </ul>
+    <>
+      {hidden > 0 ? (
+        <p className="nx-inspector__note">
+          {`Showing ${shown.length} of ${rows.length}. Filter to reach the rest.`}
+        </p>
+      ) : null}
+      <ul className="nx-classman__list">
+        {shown.map(row => (
+          <li key={row.id} className="nx-classman__row">
+            <ClassRowView
+              row={row}
+              library={library}
+              isSupplied={supplied.has(row.id)}
+              usageKnown={usageKnown}
+              onRename={onRename}
+              onDelete={onDelete}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -440,6 +464,14 @@ function NameField({
      * of the contract, and letting it escape the event handler left the draft
      * uncleared and the author told nothing at all.
      */
+    /*
+     * Superseded BEFORE the call, not after it. Advancing only once a promise
+     * came back meant a newer rename that returned synchronous `void`, or that
+     * threw, never took the number — so an older pending promise could resolve
+     * afterwards and overwrite or clear what the newer attempt had said.
+     */
+    attempt.current += 1;
+    const mine = attempt.current;
     let answered: ClassRenameAnswer;
     try {
       answered = onRename(row.id, outcome.slug);
@@ -458,8 +490,6 @@ function NameField({
     setDraft(null);
     setRefused(null);
     if (answered === undefined) return;
-    attempt.current += 1;
-    const mine = attempt.current;
     void answered
       .then(result => {
         // Superseded: a newer rename on this row is the one being awaited, and

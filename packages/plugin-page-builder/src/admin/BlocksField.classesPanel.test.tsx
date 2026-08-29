@@ -398,6 +398,40 @@ describe("the classes manager reaching an author", () => {
     );
   });
 
+  it("carries a ZERO limit rather than substituting the default", () => {
+    // A host that sets `maxNodes: 0` gets a renderer that draws nothing.
+    // Narrowing that away in the admin would mark classes as present on a page
+    // rendering none of them.
+    clientConfig = { limits: { maxNodes: 0 } };
+    openWith = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "core/text", props: {}, classes: ["id-card"] }],
+    };
+    storedRead = {
+      data: {
+        classes: [{ id: "id-card", slug: "card", orderIndex: 0, styles: {} }],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    const panel = screen.getByTestId("panel");
+    // The row is there (the control), and it is NOT marked as on this page.
+    expect(screen.getByLabelText("Name of card")).toBeTruthy();
+    expect(panel.textContent).not.toContain("on this page");
+  });
+
+  /*
+   * The DECODE of `null` back to an infinite bound is not asserted here, and
+   * that is deliberate rather than an oversight: separating it from the engine
+   * default needs a document larger than `MAX_NODES` (5000), which no test in
+   * this file can build cheaply. What is asserted instead is the half that
+   * actually breaks — the ENCODE, in `plugin.clientConfig.test`, because an
+   * unencoded `Infinity` fails the client-config round trip and takes boot
+   * down.
+   */
+
   it("says a failed read failed, rather than loading forever", () => {
     // A read that FAILED will not finish. A panel still saying "loading"
     // describes a state the site is not in, and the author waits for something

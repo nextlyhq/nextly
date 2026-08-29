@@ -618,3 +618,34 @@ describe("deleting while the index was never read", () => {
     expect(confirm?.textContent).not.toContain("knows of no document");
   });
 });
+
+describe("a library far larger than a screen", () => {
+  const many = Array.from({ length: 260 }, (_, index) => ({
+    id: `id-${index}`,
+    slug: `class-${index}`,
+    orderIndex: index,
+    styles: {},
+  }));
+
+  it("bounds what it mounts, and says how much it did not show", () => {
+    /*
+     * The `All` filter matches the whole library, so an unbounded list mounts
+     * a text input per class — two thousand of them on a site near the limit.
+     * The remainder is NAMED rather than dropped quietly: this is the surface
+     * an author uses to decide a class is unused, so a list that silently
+     * stops is one they would read as complete.
+     */
+    render(
+      <ClassManagerPanel
+        library={many}
+        usage={{}}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    const fields = screen.getAllByRole("textbox");
+    expect(fields.length).toBeLessThan(many.length);
+    expect(screen.getByText(/Showing \d+ of 260/)).toBeTruthy();
+  });
+});
