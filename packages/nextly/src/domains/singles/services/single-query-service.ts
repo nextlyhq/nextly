@@ -82,6 +82,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import { relationKey } from "../../collections/services/collection-relationship-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   populateCompanionFields,
   populateTranslationStatus,
@@ -99,6 +100,7 @@ import {
 } from "../../i18n/runtime/companion-io";
 import {
   isCompanionReady,
+  resolveCompanionColumn,
   resolveCompanionSchemaReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import {
@@ -2205,6 +2207,25 @@ export class SingleQueryService extends BaseService {
       // The Single's own row id keys the companion `_parent`, same as the collection path.
       idKey: "id",
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      // 🔴 Singles carry the signal too, and the same physical check gates it. Every companion
+      // write is stamped whatever the entity, so a Single's languages accumulate truthful
+      // timestamps and the comparison is as valid here as on a collection.
+      //
+      // What a Single does NOT get is the history back-fill — `versionScopeForEntityKind` returns
+      // nothing for it by scope, not by structure. That leaves languages written before this
+      // shipped with no stamp, and no stamp is absent from the answer rather than reported fresh.
+      // So a Single reports staleness for what it can vouch for and stays silent about the rest,
+      // which is the same conservative direction the whole feature takes.
+      staleness: (await resolveCompanionColumn(
+        this.adapter,
+        companion.companionTableName,
+        COMPANION_UPDATED_AT_COLUMN
+      ))
+        ? {
+            companionTableName: companion.companionTableName,
+            dialect: this.adapter.dialect,
+          }
+        : undefined,
     });
   }
 

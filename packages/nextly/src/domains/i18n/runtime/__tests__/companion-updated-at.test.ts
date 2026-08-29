@@ -28,6 +28,8 @@ import { VERSIONS_TABLE } from "../../../../schemas/versions/types";
 import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { splitStatements } from "../../../schema/pipeline/sql-statement-utils";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../companion-columns";
+import { populateTranslationStatus } from "../../companion-join";
+import { buildCompanionRuntimeTable } from "../companion-registration";
 import { buildCompanionReconcileStatements } from "../../migration/reconcile-companion";
 import {
   companionContentStamp,
@@ -784,6 +786,149 @@ describe("companion `_updated_at`", () => {
       // unavailable, and inventing one would be worse than leaving it unknown.
       expect(statements.some(s => s.includes("ADD COLUMN"))).toBe(true);
       expect(statements.some(s => s.includes(VERSIONS_TABLE))).toBe(false);
+    });
+  });
+
+  /**
+   * The comparison itself, against a real database.
+   *
+   * 🔴 THIS IS THE ONLY PLACE THE STALENESS RULE CAN BE ASSERTED. It used to have a JS twin that a
+   * unit test could drive with two `Date`s, and the twin's own comment admitted the hazard: two
+   * spellings of "is this stale" let the worklist tab and the per-row badge disagree about one
+   * document. The twin is gone and the database is the single oracle, so a fake that cannot
+   * evaluate a `WHERE` cannot test this — it would answer every locale stale and every assertion
+   * would pass for a reason unrelated to its name.
+   *
+   * Driven through `populateTranslationStatus` rather than the private reader, because the badge
+   * is what a person sees and the reader is an implementation detail of it.
+   */
+  describe("the staleness comparison, decided by the database", () => {
+    /** Write one locale with an explicit stamp, or with none at all. */
+    async function writeLocale(
+      locale: string,
+      title: string,
+      at: Date | null
+    ): Promise<void> {
+      await upsertCompanionRow(
+        adapter,
+        COMPANION,
+        "p1",
+        locale,
+        { title },
+        undefined,
+        at === null ? { updatedAt: "omit" } : { now: at }
+      );
+    }
+
+    /** The per-locale metadata the entry list and language panel render. */
+    async function metaForRow(): Promise<
+      Record<string, { translated: boolean; stale?: boolean }>
+    > {
+      const row: Record<string, unknown> = { id: "p1" };
+      await populateTranslationStatus({
+        db: adapter.getDrizzle(),
+        // 🔴 The REAL companion table, not the narrow stamp handle. The stamp handle declares
+        // three structural columns and no translated ones, so a row read through it carries no
+        // `title` — `hasContent` would be false for every locale and the badge would never be
+        // reached, which is a green that proves nothing.
+        companionTable: buildCompanionRuntimeTable({
+          slug: "posts",
+          tableName: MAIN,
+          fields: [{ name: "title", type: "text", localized: true }] as never,
+          dialect: "sqlite",
+          localized: true,
+        })?.table,
+        localizedFields: [{ name: "title", column: "title" }],
+        rows: [row],
+        locales: ["en", "fr"],
+        defaultLocale: "en",
+        hasStatus: false,
+        readiness: "ready",
+        staleness: { companionTableName: COMPANION, dialect: "sqlite" },
+      });
+      return row._translations as never;
+    }
+
+    it("reports the target stale when the source was written after it", async () => {
+      await createCompanion();
+      await writeLocale("fr", "Bonjour", new Date("2026-08-28T09:00:00.000Z"));
+      await writeLocale(
+        "en",
+        "Hello again",
+        new Date("2026-08-28T10:00:00.000Z")
+      );
+
+      const meta = await metaForRow();
+      expect(meta.fr.stale).toBe(true);
+      // Still translated. Staleness is a second fact, not a demotion.
+      expect(meta.fr.translated).toBe(true);
+    });
+
+    it("reports nothing stale when the target was written after the source", async () => {
+      await createCompanion();
+      await writeLocale("en", "Hello", new Date("2026-08-28T09:00:00.000Z"));
+      await writeLocale("fr", "Bonjour", new Date("2026-08-28T10:00:00.000Z"));
+
+      // The control. Without it, "always stale" satisfies the case above.
+      const meta = await metaForRow();
+      expect(meta.fr.stale).toBeUndefined();
+    });
+
+    it("reports nothing stale when the two were written in the same second", async () => {
+      await createCompanion();
+      const at = new Date("2026-08-28T09:00:00.000Z");
+      await writeLocale("en", "Hello", at);
+      await writeLocale("fr", "Bonjour", at);
+
+      // 🔴 STRICT, and on SQLite this is not a corner case: the column stores whole seconds, so a
+      // translation saved alongside its source lands on the same value. `>=` would report every
+      // such pair stale, and would also make the source locale stale against itself.
+      const meta = await metaForRow();
+      expect(meta.fr.stale).toBeUndefined();
+    });
+
+    it("never reports the SOURCE locale stale against itself", async () => {
+      await createCompanion();
+      await writeLocale("en", "Hello", new Date("2026-08-28T09:00:00.000Z"));
+      await writeLocale("fr", "Bonjour", new Date("2026-08-28T08:00:00.000Z"));
+
+      const meta = await metaForRow();
+      expect(meta.fr.stale).toBe(true);
+      // 🔴 TWO independent mechanisms produce this and THIS TEST CANNOT SEPARATE THEM, which is
+      // stated rather than implied because the obvious reading is wrong. The database compares the
+      // source row to itself and answers false only while the comparison stays strict; the caller
+      // also refuses to mark the default locale at all. Relaxing the comparison to `>=` leaves
+      // this case passing on the caller's guard alone — measured, not assumed. The strictness is
+      // pinned by the same-second case above, which the guard does not cover.
+      expect(meta.en.stale).toBeUndefined();
+    });
+
+    it("leaves a locale with NO stamp unknown rather than fresh", async () => {
+      await createCompanion();
+      await writeLocale("fr", "Bonjour", null);
+      await writeLocale(
+        "en",
+        "Hello again",
+        new Date("2026-08-28T10:00:00.000Z")
+      );
+
+      // 🔴 The reassuring direction is the dangerous one. `NULL > x` is UNKNOWN in SQL and no
+      // WHERE admits it, so a locale written before the column existed is absent from the answer
+      // and renders as unknown — never as up to date, which is the claim this feature must not
+      // make about a translation it cannot vouch for.
+      const meta = await metaForRow();
+      expect(meta.fr.stale).toBeUndefined();
+      expect(meta.fr.translated).toBe(true);
+    });
+
+    it("leaves a target unknown when the SOURCE has no stamp", async () => {
+      await createCompanion();
+      await writeLocale("fr", "Bonjour", new Date("2026-08-28T09:00:00.000Z"));
+      await writeLocale("en", "Hello", null);
+
+      // The other side of the same three-valued rule: nothing to compare against is not "fresh".
+      const meta = await metaForRow();
+      expect(meta.fr.stale).toBeUndefined();
     });
   });
 });

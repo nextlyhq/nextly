@@ -75,6 +75,15 @@ export type CompanionReadiness = "ready" | "pre-migration" | "broken";
  */
 interface ReadinessCacheBag {
   __nextly_companionReadiness?: WeakMap<object, Map<string, number>>;
+  /**
+   * Positive column verdicts, per adapter, by companion table and then by column.
+   *
+   * Nested rather than keyed on a joined `table:column` string so that forgetting one companion
+   * drops every column verdict for it in one operation. A provisioning path that replaces a
+   * companion invalidates a TABLE, and it must not leave behind a verdict claiming the
+   * replacement carries a column nobody has looked at.
+   */
+  __nextly_companionColumns?: WeakMap<object, Map<string, Map<string, number>>>;
 }
 
 /**
@@ -259,9 +268,14 @@ export function forgetCompanionReadiness(
 ): void {
   if (companionTableName === undefined) {
     readyTables(scope).clear();
+    columnVerdicts(scope).clear();
     return;
   }
   readyTables(scope).delete(companionTableName);
+  // Column verdicts describe THIS table, so they die with it. Keeping them would let a replaced
+  // companion inherit the shape of the one it replaced, which is the exact claim this whole
+  // module exists to stop being made from memory.
+  columnVerdicts(scope).delete(companionTableName);
 }
 
 /** Test seam: drop every verdict for this connection and re-verify on the next resolve. */
@@ -269,4 +283,88 @@ export function expireCompanionReadiness(scope: ReadinessScope): void {
   for (const table of readyTables(scope).keys()) {
     readyTables(scope).set(table, 0);
   }
+  for (const columns of columnVerdicts(scope).values()) {
+    for (const column of columns.keys()) columns.set(column, 0);
+  }
+}
+
+function columnVerdicts(
+  scope: ReadinessScope
+): Map<string, Map<string, number>> {
+  const bag = globalThis as ReadinessCacheBag;
+  bag.__nextly_companionColumns ??= new WeakMap<
+    object,
+    Map<string, Map<string, number>>
+  >();
+  let tables = bag.__nextly_companionColumns.get(scope);
+  if (!tables) {
+    tables = new Map<string, Map<string, number>>();
+    bag.__nextly_companionColumns.set(scope, tables);
+  }
+  return tables;
+}
+
+/**
+ * The remembered verdict for one column, or `undefined` when there is none. Never queries, so it
+ * is the only form safe to call from inside an open transaction.
+ *
+ * 🔴 `undefined` is NOT "the column is absent". It means nothing has established either way, and
+ * a caller that cannot find out must behave as it would for a companion that lacks the column:
+ * omit whatever names it. That is the conservative direction — omitting the staleness inputs
+ * reports UNKNOWN, while naming a column that is not there fails the whole query for that
+ * collection.
+ *
+ * Only `true` is ever returned, because only `true` is ever stored. See
+ * {@link resolveCompanionColumn}.
+ */
+export function cachedCompanionColumn(
+  scope: ReadinessScope,
+  companionTableName: string,
+  column: string
+): true | undefined {
+  const columns = columnVerdicts(scope).get(companionTableName);
+  return isFresh(columns?.get(column)) ? true : undefined;
+}
+
+/**
+ * Whether an existing companion physically carries `column`, remembering only that it does.
+ *
+ * 🔴 MUST NOT be called inside an open transaction. It queries, and a query that fails marks the
+ * whole PostgreSQL transaction aborted, after which the real statement dies with
+ * `current transaction is aborted` naming an innocent one. Callers resolve before they open one;
+ * inside a transaction they read {@link cachedCompanionColumn}, which cannot query.
+ *
+ * 🔴 ONLY THE POSITIVE ANSWER IS REMEMBERED, and the asymmetry is the whole design — the same one
+ * {@link resolveCompanionReadiness} makes about `ready`, for the same reason.
+ *
+ * A column is added by a migration and never removed: the reconcile is additive by policy, and a
+ * field that stops being localized leaves its column in place rather than dropping it. So `true`
+ * describes a state nothing ordinary undoes, and a stale `true` is bounded by the TTL anyway.
+ *
+ * `false` is the opposite. `nextly migrate` runs in a different process from the server, so a
+ * negative verdict can outlive the migration that made it wrong — and it would keep the staleness
+ * read switched off for that collection until the process reloads, which is a feature silently
+ * absent rather than an error anyone sees. Re-asking costs one introspection per resolve on a
+ * path that is not the request path.
+ */
+export async function resolveCompanionColumn(
+  adapter: CompanionIntrospectAdapter,
+  companionTableName: string,
+  column: string
+): Promise<boolean> {
+  if (cachedCompanionColumn(adapter, companionTableName, column)) return true;
+  const { companionHasColumn } = await import("./companion-io");
+  // Deliberately not caught. `companionHasColumn` answers from the table's own column list, so
+  // absent is absent and anything that stops the list being read is a failure rather than a claim
+  // about the schema — see its own comment. Swallowing here would rebuild exactly the collapse it
+  // was changed to remove.
+  const present = await companionHasColumn(adapter, companionTableName, column);
+  if (!present) return false;
+  let columns = columnVerdicts(adapter).get(companionTableName);
+  if (!columns) {
+    columns = new Map<string, number>();
+    columnVerdicts(adapter).set(companionTableName, columns);
+  }
+  columns.set(column, Date.now());
+  return true;
 }
