@@ -780,13 +780,27 @@ function classReadFailed(pending: boolean, error: unknown): boolean {
  * a surface cannot tell "nothing is stored" from "the read has not come back"
  * by looking at the value.
  */
+/**
+ * The empty library, as ONE value rather than a fresh array each time.
+ *
+ * `?? []` builds a new array on every render, and `useClassWrites` reads a
+ * changed identity as "the host has re-read" — so a site whose stored style
+ * declares no classes looked like it was re-reading continuously, and any
+ * render during an in-flight save reset the write base to the stale list. The
+ * next queued write then composed from it and discarded the edit before it,
+ * while reporting success.
+ */
+const NO_CLASSES: readonly NamedClass[] = Object.freeze([]);
+
 function readableClassLibrary(
   siteStyle: { classes?: readonly NamedClass[] } | undefined,
   pending: boolean,
   failed: boolean
 ): readonly NamedClass[] | undefined {
   if (pending || failed) return undefined;
-  return siteStyle?.classes ?? [];
+  // `undefined` above and `NO_CLASSES` here stay distinct: the first is a read
+  // that has not answered, the second is one that answered with nothing.
+  return siteStyle?.classes ?? NO_CLASSES;
 }
 
 function useClassSurface(

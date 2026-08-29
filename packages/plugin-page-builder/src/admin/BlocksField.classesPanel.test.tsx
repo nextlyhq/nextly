@@ -67,20 +67,36 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       renderPanel,
       availablePanels,
+      inspector,
     }: {
       renderPanel?: (panel: string) => React.ReactNode;
       availablePanels?: readonly string[];
+      inspector?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
         <div data-testid="panel">{renderPanel?.("classes")}</div>
+        {/* Rendered, not merely constructed: the inspector recorder only runs
+            when the element is actually drawn, and the class-creation callback
+            reaches the queue through it. */}
+        <div data-testid="inspector">{inspector}</div>
       </div>
     ),
     BlockKeyboardActions: passthrough,
     BlockToolbar: nothing,
     BreakpointManager: nothing,
     BreakpointSwitcher: nothing,
-    InspectorPanel: nothing,
+    /*
+     * Recorded rather than stubbed out: the class-CREATION callback reaches the
+     * author through the inspector, and it shares the write queue with the
+     * manager's rename. Some properties of that queue are only reachable
+     * through creation, because they need a site with no stored classes — a
+     * state in which the manager has no rows to drive.
+     */
+    InspectorPanel: (props: Record<string, unknown>): React.JSX.Element => {
+      seen.inspector = props;
+      return <div data-recorder="inspector" />;
+    },
     InsertPanel: nothing,
     LayersPanel: nothing,
     TokensStudio: nothing,
@@ -122,17 +138,40 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 const { BlocksField } = await import("./BlocksField");
 
-function Host(): React.JSX.Element {
+/**
+ * `tick` exists only to force a re-render from the test.
+ *
+ * Some properties of the write queue are about what happens when the editor
+ * RENDERS during an in-flight save, and nothing a test can click reaches that
+ * without also changing the state under test.
+ */
+function Host({ tick = 0 }: { tick?: number }): React.JSX.Element {
   const { control } = useForm({ defaultValues: { body: openWith } });
-  return <BlocksField name="body" control={control} />;
+  return (
+    <>
+      <span data-testid="tick">{tick}</span>
+      <BlocksField name="body" control={control} />
+    </>
+  );
 }
 
-function openEditor(): void {
-  render(<Host />);
+function openEditor(): ReturnType<typeof render> {
+  const view = render(<Host />);
   fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  return view;
 }
 
 /** What the inspector was handed for the class surface. */
+/** The inspector recorder's most recent props, for the class surface. */
+function seenInspector(): {
+  classLibrary?: readonly unknown[];
+  onCreateClass?: (
+    slug: string
+  ) => Promise<{ ok: true; classId: string } | { ok: false; reason: string }>;
+} {
+  return (seen.inspector ?? {}) as never;
+}
+
 function classProps(): {
   classLibrary?: readonly { id: string; slug: string }[];
   classLibraryAbsence?: "pending" | "failed";
@@ -431,6 +470,32 @@ describe("the classes manager reaching an author", () => {
    * unencoded `Infinity` fails the client-config round trip and takes boot
    * down.
    */
+
+  it("hands out the SAME empty library across renders", () => {
+    /*
+     * `?? []` built a new array every render. `useClassWrites` reads a changed
+     * identity as "the host has re-read" and resets the write base to it, so a
+     * site whose stored style declares no classes looked like it was re-reading
+     * continuously — and a render during an in-flight save could restore the
+     * stale list before the next queued write composed its payload.
+     *
+     * Asserted as the IDENTITY the surface is handed, which is the property the
+     * write base keys on. Driving two creations through a held-open save does
+     * not reach it: the composition callbacks run as microtasks and React has
+     * not flushed the effect that resets the base by then, so that test passed
+     * with the churn restored and was removed rather than kept as a green.
+     */
+    storedRead = { data: {}, isPending: false, error: null };
+    const view = openEditor();
+    const first = seenInspector().classLibrary;
+    view.rerender(<Host tick={1} />);
+    const second = seenInspector().classLibrary;
+
+    // The control: a read that answered must yield a library at all, or `toBe`
+    // below would be comparing undefined with undefined and pass on nothing.
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+  });
 
   it("says a failed read failed, rather than loading forever", () => {
     // A read that FAILED will not finish. A panel still saying "loading"
