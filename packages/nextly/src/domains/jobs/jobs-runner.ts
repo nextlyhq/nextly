@@ -14,7 +14,7 @@ import { nextly } from "../../direct-api/nextly";
 import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
 import type { RunAsDeps, RunAsUser } from "../../shared/lib/resolve-run-as";
 
-import type { JobRegistry } from "./job-registry";
+import { SWEEP_KEY_PREFIX, type JobRegistry } from "./job-registry";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
 import { runJobs, type RunJobsResult } from "./run-jobs";
 
@@ -162,7 +162,7 @@ export function databaseRunAs(
  * sweep instead of finding the key held forever by a job that has been and gone.
  */
 export function sweepDedupeKey(slug: string): string {
-  return `sweep:${slug}`;
+  return `${SWEEP_KEY_PREFIX}${slug}`;
 }
 
 /**

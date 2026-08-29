@@ -41,6 +41,19 @@ export const DEFAULT_MAX_ATTEMPTS = 5;
  */
 export const MAX_JOB_SLUG_LENGTH = 191;
 
+/**
+ * What a sweep's dedupe key is prefixed with.
+ *
+ * Lives here, with the validation that charges for it, rather than beside the
+ * function that builds the key: a sweep's key is DERIVED from its slug and held
+ * to the same portable length limit the slug is, so the prefix spends part of
+ * the slug's budget. Without accounting for it, a slug of 186-191 characters is
+ * accepted by `defineJob` and its key refused by `enqueue` — and because
+ * queueing a sweep is deliberately allowed to fail without failing the pass,
+ * the only symptom is a job type that never runs.
+ */
+export const SWEEP_KEY_PREFIX = "sweep:";
+
 /** What a handler is told about the run it is in. */
 export interface JobContext {
   /**
@@ -123,6 +136,19 @@ export function defineJob<TInput = unknown>(
   if (slug.length > MAX_JOB_SLUG_LENGTH) {
     throw NextlyError.invalidInput({
       message: `A job slug may be at most ${MAX_JOB_SLUG_LENGTH} characters.`,
+      logContext: { slug, length: slug.length },
+    });
+  }
+
+  // A sweep is charged for its own dedupe key here, where the slug is refused
+  // with a message naming the real budget — rather than at enqueue, which runs
+  // on a scheduler tick with nobody watching.
+  if (
+    input.sweep &&
+    SWEEP_KEY_PREFIX.length + slug.length > MAX_JOB_SLUG_LENGTH
+  ) {
+    throw NextlyError.invalidInput({
+      message: `A sweep's slug may be at most ${MAX_JOB_SLUG_LENGTH - SWEEP_KEY_PREFIX.length} characters, because its dedupe key is derived from it.`,
       logContext: { slug, length: slug.length },
     });
   }
