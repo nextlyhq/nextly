@@ -136,6 +136,52 @@ describe("the registered job types", () => {
 });
 
 describe("reportReleasesOutcome", () => {
+  it("reports DEFERRED work, so a truncated pass is not logged as a clean one", async () => {
+    // A bounded pass leaves scheduled work behind. Without this field in the
+    // report it logs exactly like an ordinary successful pass — same counts, no
+    // sign of a backlog — so an operator watching a drain stall sees a run of
+    // clean completions. Reporting `deferred` from the pass and dropping it here
+    // would defeat the reason it exists.
+    const log = logger();
+
+    reportReleasesOutcome(log, {
+      due: 5,
+      published: 1,
+      applied: 1,
+      failed: 0,
+      deferred: 4,
+      undischarged: 0,
+      outcomes: [],
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ deferred: 4 })
+    );
+  });
+
+  it("reports UNDISCHARGED releases, which `deferred` cannot show", async () => {
+    // A pass truncated during finalization omits no ACTION, so `deferred` is
+    // zero while releases stay scheduled. Reporting only `deferred` therefore
+    // logs the one case the finalization bound exists for as a clean pass.
+    const log = logger();
+
+    reportReleasesOutcome(log, {
+      due: 9,
+      published: 2,
+      applied: 2,
+      failed: 0,
+      deferred: 0,
+      undischarged: 7,
+      outcomes: [],
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ undischarged: 7 })
+    );
+  });
+
   it("reports each failed member individually, not just a count", async () => {
     // "3 failed" says something is wrong; the document and the reason are what
     // let an operator fix it. A release stuck on one deactivated author is

@@ -24,6 +24,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { ReleasesRepository } from "../releases-repository";
+import { seedLiveAuthor } from "./helpers/live-author";
 
 let current: TestNextly | undefined;
 
@@ -78,6 +79,9 @@ async function draftedSingleInRelease(
     entryId: row.id,
     locale: null,
     action: "publish",
+    // A live author: the read path projects a due member only when its author
+    // still exists and is active, matching the write path that runs AS them.
+    createdBy: await seedLiveAuthor(t),
   });
   if (scheduledAt !== null) {
     await repo.scheduleRelease(release.id, scheduledAt, "UTC");
@@ -108,6 +112,7 @@ async function publishedSingleInTakedown(
     entryId: row.id,
     locale: null,
     action: "unpublish",
+    createdBy: await seedLiveAuthor(t),
   });
   if (scheduledAt !== null) {
     await repo.scheduleRelease(release.id, scheduledAt, "UTC");

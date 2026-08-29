@@ -1,0 +1,181 @@
+{
+  "formatVersion": 1,
+  "kind": "page",
+  "nodes": [
+    {
+      "id": "dogfood-hero",
+      "type": "core/section",
+      "version": 1,
+      "props": { "as": "header", "contained": true },
+      "slots": {
+        "children": [
+          {
+            "id": "dogfood-title",
+            "type": "core/heading",
+            "version": 1,
+            "props": { "text": "Build pages, not pipelines", "level": "h1" }
+          },
+          {
+            "id": "dogfood-lede",
+            "type": "core/text",
+            "version": 1,
+            "props": {
+              "text": "Nextly gives editors a real page builder and gives developers a typed schema, one database and no bespoke CMS glue. This page is a block document, authored through the same API the editor writes with and served from a production build."
+            }
+          },
+          {
+            "id": "dogfood-hero-image",
+            "type": "core/image",
+            "version": 1,
+            "props": {
+              "mediaId": "@media:sample-1.webp",
+              "alt": "A page open in the Nextly editor, with the block palette beside the canvas",
+              "loading": "eager"
+            }
+          },
+          {
+            "id": "dogfood-cta",
+            "type": "core/button",
+            "version": 1,
+            "props": {
+              "label": "Read the documentation",
+              "href": "https://nextly.dev/docs",
+              "type": "primary"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "dogfood-body",
+      "type": "core/section",
+      "version": 1,
+      "props": { "as": "main", "contained": true },
+      "slots": {
+        "children": [
+          {
+            "id": "dogfood-features-title",
+            "type": "core/heading",
+            "version": 1,
+            "props": { "text": "What you get", "level": "h2" }
+          },
+          {
+            "id": "dogfood-columns",
+            "type": "core/columns",
+            "version": 1,
+            "props": { "as": "div", "contained": false },
+            "slots": {
+              "children": [
+                {
+                  "id": "dogfood-column-schema",
+                  "type": "core/column",
+                  "version": 1,
+                  "props": { "as": "div" },
+                  "slots": {
+                    "children": [
+                      {
+                        "id": "dogfood-column-schema-title",
+                        "type": "core/heading",
+                        "version": 1,
+                        "props": { "text": "A typed schema", "level": "h3" }
+                      },
+                      {
+                        "id": "dogfood-column-schema-body",
+                        "type": "core/text",
+                        "version": 1,
+                        "props": {
+                          "text": "Collections are declared in TypeScript and the generated types follow, so renaming a field is a compile error rather than a runtime surprise."
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "dogfood-column-editor",
+                  "type": "core/column",
+                  "version": 1,
+                  "props": { "as": "div" },
+                  "slots": {
+                    "children": [
+                      {
+                        "id": "dogfood-column-editor-title",
+                        "type": "core/heading",
+                        "version": 1,
+                        "props": { "text": "A real editor", "level": "h3" }
+                      },
+                      {
+                        "id": "dogfood-column-editor-body",
+                        "type": "core/text",
+                        "version": 1,
+                        "props": {
+                          "text": "The page builder writes the same block document the renderer reads, so what an author arranges is what a visitor is served."
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "id": "dogfood-column-database",
+                  "type": "core/column",
+                  "version": 1,
+                  "props": { "as": "div" },
+                  "slots": {
+                    "children": [
+                      {
+                        "id": "dogfood-column-database-title",
+                        "type": "core/heading",
+                        "version": 1,
+                        "props": { "text": "One database", "level": "h3" }
+                      },
+                      {
+                        "id": "dogfood-column-database-body",
+                        "type": "core/text",
+                        "version": 1,
+                        "props": {
+                          "text": "Postgres, MySQL or SQLite behind one adapter, with migrations generated from the schema you already wrote."
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "dogfood-body-image",
+            "type": "core/image",
+            "version": 1,
+            "props": {
+              "mediaId": "@media:sample-2.webp",
+              "alt": "The Nextly admin listing entries in a collection",
+              "loading": "lazy"
+            }
+          },
+          {
+            "id": "dogfood-quote",
+            "type": "core/quote",
+            "version": 1,
+            "props": {
+              "text": "The page a visitor gets is the page the author built.",
+              "citation": "Nextly design note"
+            }
+          },
+          {
+            "id": "dogfood-divider",
+            "type": "core/divider",
+            "version": 1,
+            "props": {}
+          },
+          {
+            "id": "dogfood-outro",
+            "type": "core/text",
+            "version": 1,
+            "props": {
+              "text": "Every element above is stored as a node in one block document and rendered on the server."
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

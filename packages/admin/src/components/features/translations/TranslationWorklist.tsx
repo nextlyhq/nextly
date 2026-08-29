@@ -187,6 +187,7 @@ function WorklistBody({
   source,
   stateLabel,
   complete,
+  state,
 }: {
   rows: readonly TranslationWorkRow[];
   target: string;
@@ -194,6 +195,8 @@ function WorklistBody({
   stateLabel: string;
   /** False when the server named collections it did not consult. */
   complete: boolean;
+  /** Which question was asked, because one of them cannot be answered completely. */
+  state: WorklistState;
 }) {
   if (rows.length === 0) {
     // Said, rather than shown as an empty list. A blank area under a filter
@@ -206,11 +209,24 @@ function WorklistBody({
     // for — the alert above warns that the answer is partial, but this
     // sentence would still assert the opposite, and a reader takes the
     // sentence in the table over the banner above it.
+    //
+    // 🔴 The review tab can NEVER make the unqualified claim, even when every collection was
+    // checked. Staleness compares two timestamps, and a language written before its collection
+    // began recording them has none to compare — so the comparison returns no match, exactly as it
+    // does for a language that is genuinely current. A fully checked collection can therefore hold
+    // rows nobody could compare, which makes "nothing needs review" a claim about documents the
+    // answer never reached.
+    //
+    // "Known to" is the whole fix and it costs nothing: the same qualifier the rest of this
+    // feature uses, where an unknown is never reported as up to date.
+    const scope = complete
+      ? "in this language"
+      : "in the collections that could be checked";
     return (
       <p className="px-4 py-10 text-center text-sm text-muted-foreground">
-        {complete
-          ? `Nothing ${stateLabel.toLowerCase()} in this language.`
-          : `Nothing ${stateLabel.toLowerCase()} in the collections that could be checked.`}
+        {state === "stale"
+          ? `Nothing is known to need review ${scope}.`
+          : `Nothing ${stateLabel.toLowerCase()} ${scope}.`}
       </p>
     );
   }
@@ -301,6 +317,49 @@ function NotConsultedNotice({ collections }: { collections: string[] }) {
   );
 }
 
+/**
+ * Collections that could not answer the question this tab asks, and what to do about it.
+ *
+ * 🔴 A SECOND notice rather than more names in the first, and the reason is the remedy. The one
+ * above ends with "Reload to see whether it was temporary", which is right for a fan-out cap and
+ * for a collection that could not be read — and wrong here, where reloading changes nothing and
+ * the operator would loop. This case has one specific fix and says it.
+ *
+ * 🔴 It also has to appear at all. A collection that cannot compare timestamps contributes no rows
+ * to this tab, and no rows is indistinguishable from "nothing here needs review" — the reassuring
+ * direction, and the exact claim this whole signal exists not to make by accident.
+ */
+function CannotAnswerNotice({
+  collections,
+  remedy,
+}: {
+  collections: string[];
+  remedy: "migrate" | "sync" | undefined;
+}) {
+  if (collections.length === 0) return null;
+  return (
+    <Alert>
+      <AlertTitle>Some collections can&rsquo;t be checked yet</AlertTitle>
+      <AlertDescription>
+        These collections don&rsquo;t record when each language was last
+        written, so nothing can tell whether their translations have fallen
+        behind: {collections.join(", ")}.{" "}
+        {remedy === "sync" ? (
+          <>
+            Restart the app (or re-run <code>nextly db:sync</code>) to add it
+          </>
+        ) : (
+          <>
+            Run <code>nextly migrate</code> to add it
+          </>
+        )}{" "}
+        — after that their languages are compared like everything else. Existing
+        translations keep working in the meantime.
+      </AlertDescription>
+    </Alert>
+  );
+}
+
 /** Loading, failed, or the list itself — the three a read can be in. */
 function WorklistResult({
   query,
@@ -308,12 +367,14 @@ function WorklistResult({
   source,
   stateLabel,
   complete,
+  state,
 }: {
   query: ReturnType<typeof useTranslationWorklist>;
   active: string | undefined;
   source: string;
   stateLabel: string;
   complete: boolean;
+  state: WorklistState;
 }) {
   if (query.isPending && active !== undefined) {
     return (
@@ -338,6 +399,7 @@ function WorklistResult({
       source={source}
       stateLabel={stateLabel}
       complete={complete}
+      state={state}
     />
   );
 }
@@ -416,6 +478,7 @@ export function TranslationWorklist({
   const stateLabel =
     WORKLIST_STATES.find(t => t.value === state)?.label ?? "outstanding";
   const notConsulted = query.data?.meta.notConsulted ?? [];
+  const unanswerable = query.data?.meta.unanswerable ?? [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -434,6 +497,10 @@ export function TranslationWorklist({
       />
 
       <NotConsultedNotice collections={notConsulted} />
+      <CannotAnswerNotice
+        collections={unanswerable}
+        remedy={query.data?.meta.unanswerableRemedy}
+      />
 
       <div className="rounded-md border border-border">
         <WorklistResult
@@ -441,7 +508,8 @@ export function TranslationWorklist({
           active={active}
           source={source}
           stateLabel={stateLabel}
-          complete={notConsulted.length === 0}
+          complete={notConsulted.length === 0 && unanswerable.length === 0}
+          state={state}
         />
       </div>
 

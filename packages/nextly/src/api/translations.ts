@@ -22,19 +22,22 @@ import {
 } from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { container } from "../di";
+import { getAdapterFromDI } from "../dispatcher/helpers/di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
 import type { UserContext } from "../domains/collections/services/collection-types";
+import { COMPANION_UPDATED_AT_COLUMN } from "../domains/i18n/companion-columns";
 import {
   TRANSLATION_FILTER_STATES,
   type TranslationFilterState,
 } from "../domains/i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import { isValidLocale } from "../domains/i18n/resolve-locale";
+import { resolveCompanionColumn } from "../domains/i18n/runtime/companion-readiness";
 import {
   authorizationGroups,
   countIsTrustworthy,
   byMostRecentlyUpdated,
-  eligibleCollections,
+  classifyForWorklist,
   hasTranslatableFields,
   notConsultedSources,
   planWorklistFanOut,
@@ -221,6 +224,7 @@ async function localizedCollections(): Promise<
   (LocalizedCollectionRef & {
     useAsTitle: string | undefined;
     hasStatus: boolean;
+    tableName: string;
   })[]
 > {
   const registry = container.get<CollectionRegistryService>(
@@ -234,7 +238,94 @@ async function localizedCollections(): Promise<
       label: c.labels?.plural ?? c.slug,
       useAsTitle: c.admin?.useAsTitle,
       hasStatus: c.status === true,
+      // The physical main table, carried so the staleness probe can name the companion without
+      // loading a schema. Required on the record, so there is nothing to fall back to.
+      tableName: c.tableName,
     }));
+}
+
+/**
+ * How many capability probes run at once.
+ *
+ * Each probe is a live-schema introspection — several catalogue queries per table — and this runs
+ * once per collection. `Promise.all` over every collection is the shape `drift-check` already had
+ * to abandon: against a pool of five, ten collections saturated it and queued requests behind the
+ * connection timeout. Three keeps the wall-time win over serial without competing with the
+ * fan-out's own reads, which follow immediately after.
+ */
+const STALENESS_PROBE_CONCURRENCY = 3;
+
+/**
+ * Ask each collection's translations table whether it physically records when a language was
+ * written, which is what the staleness question compares.
+ *
+ * 🔴 Scoped to collections the caller can READ before anything reaches the database. A probe for a
+ * collection whose rows this caller may never see is work whose answer is discarded, and on a site
+ * with many collections that is the difference between a handful of introspections and one per
+ * collection.
+ *
+ * 🔴 A failed probe is NOT an absent column. `resolveCompanionColumn` propagates rather than
+ * swallowing, precisely so a transient fault cannot be mistaken for a schema fact — so the failure
+ * is caught HERE, at the collection boundary, and the slug is reported as one this answer did not
+ * cover. Letting it reject the whole fan-out would discard every healthy collection's rows over
+ * one bad catalogue read; letting it read as `false` would tell the operator to migrate a table
+ * that is already migrated.
+ */
+async function resolveStalenessCapability<
+  T extends LocalizedCollectionRef & { tableName: string },
+>(
+  collections: readonly T[],
+  readable: ReadonlySet<string> | undefined
+): Promise<{
+  collections: (T & { canAnswerStaleness: boolean })[];
+  probeFailed: string[];
+}> {
+  const asked = collections.filter(
+    c => readable === undefined || readable.has(c.slug)
+  );
+  const adapter = getAdapterFromDI();
+  // No connection, no question. Reporting every collection as unable to answer is the honest
+  // reading and the conservative one: the alternative is claiming they can, which would emit SQL
+  // naming a column nothing has checked for.
+  if (!adapter) {
+    return {
+      collections: asked.map(c => ({ ...c, canAnswerStaleness: false })),
+      probeFailed: [],
+    };
+  }
+
+  const resolved: (T & { canAnswerStaleness: boolean })[] = [];
+  const probeFailed: string[] = [];
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < asked.length) {
+      const c = asked[cursor++];
+      try {
+        resolved.push({
+          ...c,
+          canAnswerStaleness: await resolveCompanionColumn(
+            adapter,
+            // Spelled as the twenty-two other sites that build this name spell it. A constant
+            // introduced here would be read by one caller while the rest kept their own literal,
+            // which states a rule the code does not follow — and the rule has two directions,
+            // since five further sites strip the suffix back off with a regex that would mangle a
+            // main table legitimately ending in it. Both belong in one helper or neither does.
+            `${c.tableName}_locales`,
+            COMPANION_UPDATED_AT_COLUMN
+          ),
+        });
+      } catch {
+        probeFailed.push(c.slug);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(STALENESS_PROBE_CONCURRENCY, asked.length) },
+      worker
+    )
+  );
+  return { collections: resolved, probeFailed };
 }
 
 /**
@@ -287,7 +378,26 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
     caller,
     localized.map(c => c.slug)
   );
-  const eligible = eligibleCollections(localized, state, readable);
+  // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a negative verdict is
+  // deliberately not remembered, so asking for every state would put one catalogue read per
+  // collection on every worklist request for a capability four of the five states never consult.
+  //
+  // For `stale` it is unavoidable and the cost is accepted: this is an admin screen that already
+  // fans out one query per collection, a collection that CAN answer is remembered and costs
+  // nothing after the first ask, and the cost ends when the operator migrates.
+  const staleCapability =
+    state === "stale"
+      ? await resolveStalenessCapability(localized, readable)
+      : null;
+  const withStaleCapability = staleCapability?.collections ?? localized;
+
+  // Classified once. The two lists are complements of one decision, so deriving them from two
+  // calls would let them disagree about a collection.
+  const { eligible, unanswerable } = classifyForWorklist(
+    withStaleCapability,
+    state,
+    readable
+  );
   const { queried, skippedCollections } = planWorklistFanOut(eligible);
   const bySlug = new Map(eligible.map(c => [c.slug, c]));
 
@@ -388,7 +498,14 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
   const unreadable = perCollection
     .map(r => r.slug)
     .filter((slug): slug is string => slug !== null);
-  const notConsulted = notConsultedSources(skippedCollections, unreadable);
+  // A collection whose capability probe failed belongs HERE and not in `unanswerable`: nothing
+  // was learned about its schema, so "run the migration" would be advice about a table that may
+  // already be migrated. "This answer did not cover it, look again" is the whole of what is known.
+  const notConsulted = notConsultedSources(
+    skippedCollections,
+    unreadable,
+    staleCapability?.probeFailed ?? []
+  );
 
   // Merged BEFORE the slice, which is the whole reason this fans out on the
   // server: ordered across collections rather than within each one.
@@ -426,6 +543,27 @@ export const getTranslationWorklist = withErrorHandler(async (req: Request) => {
       // Named, so the screen can say WHICH. Omitted entirely when the answer
       // covered everything, so the field's presence is itself the signal.
       ...(notConsulted.length === 0 ? {} : { notConsulted }),
+      // Kept apart from `notConsulted` on the wire for the same reason the service keeps them
+      // apart: this is the one with a remedy. A screen that merges them tells an operator to
+      // look again when what they need to do is migrate.
+      ...(unanswerable.length === 0
+        ? {}
+        : {
+            unanswerable,
+            // 🔴 WHICH remedy, decided where the environment is known. `nextly migrate` applies
+            // migration FILES, and a development database managed by the sync/HMR loop has no
+            // migration history containing this column — so that advice can leave the notice
+            // unchanged after the developer follows it. Core already makes this exact split in
+            // `companionNotReadyMessage`; this carries the same distinction to a screen that
+            // cannot see `NODE_ENV`.
+            //
+            // A discriminator rather than a sentence: the wording is an admin string and belongs
+            // with the other admin strings, while which case applies is a server fact.
+            unanswerableRemedy:
+              process.env.NODE_ENV === "production"
+                ? ("migrate" as const)
+                : ("sync" as const),
+          }),
     },
     { headers: PRIVATE_NO_STORE_HEADERS }
   );

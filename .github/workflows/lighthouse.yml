@@ -1,0 +1,184 @@
+name: Lighthouse
+
+# Nightly performance evidence for the page the product actually serves: a block
+# document, authored through the admin API the editor writes with, rendered by a
+# production build and measured as a signed-out visitor sees it.
+#
+# Scheduled rather than per-PR. A performance score moves with the runner it was
+# measured on, so a threshold tight enough to catch a real regression is also
+# loose enough to flake on a noisy machine — and a red required check blocks
+# every open pull request, including the ones that could fix it. A red night is
+# an issue in front of whoever caused it instead.
+#
+# The pull_request trigger is path-filtered to this job's own inputs. Those are
+# the only files that change what the run measures, and a harness whose own
+# edits are unchecked until the next night is one whose breakage is discovered
+# by the next person to read a stale report.
+
+on:
+  schedule:
+    # An hour after the package smoke, so the two nightlies do not contend for
+    # runners or for the same pnpm store cache.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/lighthouse.yml"
+      - "scripts/lighthouse/**"
+
+permissions:
+  contents: read
+
+# Keyed by ref for pull requests, so a new push supersedes the run under review.
+# Keyed by RUN for everything else, which makes the group unique and the
+# cancellation flag inert: a manual dispatch during a nightly evaluates to the
+# same commit, and keying by SHA would let the second kill the first.
+concurrency:
+  group: lighthouse-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure the dogfood page
+    runs-on: ubuntu-latest
+    # The production build is the bulk of this and takes minutes; the five
+    # Lighthouse runs take about one.
+    timeout-minutes: 30
+
+    env:
+      # Its own port, database and build directory, matching the production e2e
+      # suite's posture: nothing here may collide with another job's server or
+      # read another run's data.
+      LH_PORT: "3111"
+      DB_DIALECT: sqlite
+      DATABASE_URL: "file:./data/lighthouse.db"
+      NEXT_DIST_DIR: ".next-lighthouse"
+      # A production build refuses to boot without both of these. A literal
+      # test value rather than a generated one, so a failure never depends on
+      # which run produced the secret.
+      NEXTLY_SECRET: "lighthouse-nightly-secret-not-a-real-deployment-key"
+      NEXT_PUBLIC_APP_URL: "http://localhost:3111"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The app resolves the workspace packages through their build output, so
+      # this is what decides which renderer the measured page is drawn by.
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+
+      # Creates the user the authoring step signs in as, and the media library
+      # the fixture resolves its images against. Production hard-blocks dev
+      # auto-login, correctly, so there is no shortcut to fall back on.
+      - name: Seed the playground
+        run: pnpm --filter playground exec tsx scripts/seed.ts
+
+      - name: Build the playground for production
+        run: pnpm --filter playground exec next build
+
+      - name: Start the production server
+        run: |
+          PORT="$LH_PORT" pnpm --filter playground exec next start &
+          echo $! > /tmp/lighthouse-server.pid
+          for _ in $(seq 1 60); do
+            if curl -sf "http://localhost:$LH_PORT/api/health" > /dev/null; then
+              echo "server responded on port $LH_PORT"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "server never became healthy on port $LH_PORT"
+          exit 1
+
+      # Until this runs the route renders an empty document, and an empty page
+      # scores well for the wrong reason. The script fails rather than warns if
+      # the page it wrote is not served to a signed-out visitor.
+      - name: Author the dogfood page
+        id: author
+        run: node scripts/lighthouse/author-dogfood-page.mjs
+        env:
+          LH_BASE_URL: "http://localhost:${{ env.LH_PORT }}"
+
+      - name: Assert the desktop budget
+        run: npx --yes @lhci/cli@0.15.1 autorun --config=scripts/lighthouse/lighthouserc.json
+
+      # Recorded, never gated. The mobile preset models a slow connection and a
+      # quarter of the CPU, and the same page scores materially lower under it.
+      # Reporting only the number that passes would hide that gap from everyone
+      # reading the run; a warning keeps it on the page without blocking.
+      #
+      # Conditioned on the authoring rather than on `always()`: a desktop budget
+      # that fails is exactly when the mobile figure is worth having, but a
+      # fixture that never reached the page is not a slower page — it is no
+      # page, and measuring it would file the guard's rejection as performance
+      # evidence.
+      - name: Record the mobile profile
+        if: always() && steps.author.outcome == 'success'
+        run: npx --yes @lhci/cli@0.15.1 autorun --config=scripts/lighthouse/lighthouserc.mobile.json
+
+      # `always()`, because the reports are most wanted on the run that failed.
+      #
+      # The reports are written to a directory whose name does not begin with a
+      # dot. `upload-artifact` treats a dotted path as hidden and skips it by
+      # default, so a run can write every report, report success on both
+      # Lighthouse steps, and still upload an empty artifact — a failure that
+      # looks like the measurement never happened rather than like a path.
+      - name: Upload the reports
+        if: always() && steps.author.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lighthouse-reports-${{ github.run_id }}
+          path: lighthouse-reports/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Stop the server
+        if: always()
+        run: kill "$(cat /tmp/lighthouse-server.pid)" 2>/dev/null || true
+
+  # A red nightly must surface without anyone watching the Actions tab. A red
+  # pull request does not need an issue: it is already red in front of the
+  # person who caused it.
+  report-failure:
+    name: File an issue on failure
+    needs: [measure]
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --label ci-lighthouse-failure --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "The nightly Lighthouse run failed again: $RUN_URL"
+          else
+            body=$(printf 'The nightly Lighthouse workflow failed. Run: %s\n\nOne of four things: the playground no longer builds or boots for production, the dogfood page could not be authored (the seed, the sign-in or the media library changed under it), the desktop performance score fell below the asserted floor, or the page grew past its script/byte budget. The uploaded artifact holds every run as HTML and JSON, including the mobile profile, which is recorded but never gates.' "$RUN_URL")
+            gh issue create --repo "${{ github.repository }}" \
+              --title "Nightly Lighthouse is failing" \
+              --label ci-lighthouse-failure \
+              --body "$body"
+          fi

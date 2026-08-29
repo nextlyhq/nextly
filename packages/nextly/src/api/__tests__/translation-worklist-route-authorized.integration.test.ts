@@ -62,6 +62,10 @@ async function boot(read: () => boolean): Promise<{
       defineCollection({
         slug: "pages",
         localized: true,
+        // 🔴 `status` is what makes the lifecycle states reachable. Without it the eligibility
+        // pass drops this collection for `draft` and `published` before any query runs, so those
+        // iterations of the per-state smoke would return 200 having executed nothing.
+        status: true,
         access: { read: reads },
         fields: [text({ name: "title" })],
       }),
@@ -142,5 +146,48 @@ describe("the worklist endpoint itself", () => {
     // Exactly one: `canReadEntity`, before the fan-out. The list read must add
     // none.
     expect(reads).toHaveBeenCalledTimes(1);
+  });
+
+  it("🔴 answers the review state at all, rather than erroring before it starts", async () => {
+    // 🔴 THE STATE THAT TAKES A DIFFERENT PATH. `stale` is the only value that resolves a physical
+    // capability per collection before the fan-out, and it shipped asking a dependency-injection
+    // container for a key nothing registers — so the tab returned an internal error on every
+    // request while the other four states, which never enter that branch, stayed green.
+    //
+    // Every existing case here drives `state=missing`, which is why a whole broken tab passed a
+    // suite that exercised the endpoint. A per-STATE smoke is the cheapest thing that would have
+    // caught it, and it is cheap precisely because it asserts almost nothing: reaching a 200 is
+    // the claim.
+    const { getTranslationWorklist } = await import("../translations");
+    await boot(() => true);
+
+    for (const state of [
+      "missing",
+      "translated",
+      "draft",
+      "published",
+      "stale",
+    ] as const) {
+      const res = await getTranslationWorklist(
+        new Request(`http://t/api/translations?locale=de&state=${state}`)
+      );
+      expect(res.status, `state=${state} must not error`).toBe(200);
+    }
+
+    // 🔴 THE POSITIVE CONTROL, and it is deliberately ONE state rather than five. A 200 alone is
+    // satisfied by an endpoint that queried nothing — eligibility can drop every collection and
+    // still answer. `missing` is the state this fixture can prove reached the fan-out, because the
+    // seeded row has no German translation and must therefore come back.
+    //
+    // What this does NOT prove is that each of the other four executed its own query; `draft` and
+    // `published` return nothing here whether or not they ran. Which collections are eligible per
+    // state is asserted directly in the `classifyForWorklist` tests, which is where that question
+    // can be answered without a fixture for every lifecycle combination.
+    const missing = await getTranslationWorklist(
+      new Request("http://t/api/translations?locale=de&state=missing")
+    );
+    expect(await missing.json()).toMatchObject({
+      items: [{ collection: "pages" }],
+    });
   });
 });

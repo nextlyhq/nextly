@@ -17,6 +17,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { deactivate, seedLiveAuthor } from "./helpers/live-author";
+
 import { defineCollection, text } from "../../../config";
 import {
   createTestNextly,
@@ -482,6 +484,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // A live author. `findDueDecisions` projects a member only when its
+          // author still exists and is active, matching the write path that runs
+          // AS them — an unattributed member describes an effect no write could
+          // perform, so it is correctly invisible.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
@@ -501,6 +508,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, FUTURE, "UTC");
 
@@ -524,6 +536,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
 
         expect(
@@ -548,6 +565,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: up.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(
           up.id,
@@ -560,6 +582,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: down.id,
           ...ref("e1"),
           action: "unpublish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(
           down.id,
@@ -576,6 +603,165 @@ describe.each(getConfiguredTestDialects())(
         ).toMatchObject({ reveal: [] });
       });
 
+      it("does NOT project a release whose author was DEACTIVATED", async () => {
+        // The property the write path already enforces and this seam did not.
+        // Materialisation runs every action as the member's author precisely so
+        // that scheduling cannot become a privilege escalation with a delay on
+        // it. Withdrawing that authority has to stop the projection too —
+        // otherwise the write is refused while the read goes on showing the
+        // effect, and because a refused member holds its release open, it shows
+        // it forever.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const author = await seedLiveAuthor(app);
+        const release = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+          createdBy: author,
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        // Live author: the effect IS projected. Without this the case below
+        // could pass because the release was never projected for some other
+        // reason entirely.
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: ["e1"] });
+
+        await deactivate(app, author);
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: [], hide: [] });
+      });
+
+      it("projects NOTHING when the WINNING member's author was deactivated", async () => {
+        // The read and the write must pick the same winner. Materialisation
+        // resolves the winner over EVERY member and judges the author
+        // afterwards, so removing candidates before the winner rule lets this
+        // seam pick a different one: the earlier publish below beats the later
+        // takedown once the takedown is filtered out, while the write path still
+        // picks the takedown, fails it, and performs nothing. The release stays
+        // scheduled, so the older publish would be projected indefinitely
+        // against a document nothing ever writes.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const active = await seedLiveAuthor(app);
+        const gone = await seedLiveAuthor(app);
+
+        const earlier = await repo.createRelease({ title: "Publish" });
+        await repo.addMember({
+          releaseId: earlier.id,
+          ...ref("e1"),
+          action: "publish",
+          createdBy: active,
+        });
+        await repo.scheduleRelease(earlier.id, PAST, "UTC");
+
+        const later = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: later.id,
+          ...ref("e1"),
+          action: "unpublish",
+          createdBy: gone,
+        });
+        // Later than the publish, so it WINS the effect rule.
+        await repo.scheduleRelease(
+          later.id,
+          new Date(PAST.getTime() + 60_000),
+          "UTC"
+        );
+
+        // Precondition: with both authors live, the later takedown wins.
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ hide: ["e1"] });
+
+        await deactivate(app, gone);
+
+        // NOT `reveal: ["e1"]` — that is the older action the write path will
+        // never perform.
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toEqual({ reveal: [], hide: [] });
+      });
+
+      it("does NOT project a member with no recorded author", async () => {
+        // The same verdict the materialiser reaches: there is nobody to act as,
+        // and the only fallback is the privileged principal it refuses. So a
+        // member like this describes an effect no write could ever perform.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const release = await repo.createRelease({ title: "Go live" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: [], hide: [] });
+      });
+
+      it("does NOT project a TAKEDOWN whose author was deactivated either", async () => {
+        // Both directions, because they fail in opposite ways. A publish that
+        // still projects shows content the author may no longer publish; a
+        // takedown that still projects HIDES content on the say-so of somebody
+        // whose authority was withdrawn.
+        const app = await boot(dialect);
+        const repo = new ReleasesRepository(app.adapter);
+        const author = await seedLiveAuthor(app);
+        const release = await repo.createRelease({ title: "Take down" });
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "unpublish",
+          createdBy: author,
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ hide: ["e1"] });
+
+        await deactivate(app, author);
+
+        await expect(
+          repo.findDueDecisions({
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            now: new Date(),
+          })
+        ).resolves.toMatchObject({ reveal: [], hide: [] });
+      });
+
       it("names a document whose due release WITHDRAWS it", async () => {
         // The direction that was computed and then thrown away. `unpublish` was
         // resolved correctly and the id was simply left out of the reveal set,
@@ -588,6 +774,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "unpublish",
+          // A live author. `findDueDecisions` projects a member only when its
+          // author still exists and is active, matching the write path that runs
+          // AS them — an unattributed member describes an effect no write could
+          // perform, so it is correctly invisible.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
@@ -612,6 +803,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "unpublish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, FUTURE, "UTC");
 
@@ -640,6 +836,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1", "de"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
@@ -672,6 +873,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: up.id,
           ...ref("e1", null),
           action: "publish",
+          // A live author. `findDueDecisions` projects a member only when its
+          // author still exists and is active, matching the write path that runs
+          // AS them — an unattributed member describes an effect no write could
+          // perform, so it is correctly invisible.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(up.id, PAST, "UTC");
 
@@ -709,6 +915,11 @@ describe.each(getConfiguredTestDialects())(
           releaseId: release.id,
           ...ref("e1"),
           action: "publish",
+          // Attributed, so this negative case fails for its OWN reason. An
+          // authorless member is now filtered before the timing, state and
+          // winner logic runs, so without this the assertion holds even if
+          // that logic breaks entirely.
+          createdBy: await seedLiveAuthor(app),
         });
         await repo.scheduleRelease(release.id, PAST, "UTC");
 
