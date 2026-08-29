@@ -68,7 +68,8 @@ function deps(over: {
   return {
     repository: {
       findDueReleases: async () => releases,
-      listMembers: async id => members.filter(m => m.releaseId === id),
+      listMembersOf: async ids =>
+        members.filter(m => ids.includes(m.releaseId)),
       isStillDueAt: async (id: string, scheduledAt: Date) =>
         over.cancelled !== id &&
         (over.rescheduledTo === undefined ||
@@ -436,15 +437,84 @@ describe("applyDueReleases", () => {
   });
 
   it("asks nothing of the database when no release is due", async () => {
-    const listMembers = vi.fn(async () => []);
+    const listMembersOf = vi.fn(async () => []);
     const d = deps({ releases: [] });
     const result = await applyDueReleases({
       ...d,
-      repository: { ...d.repository, listMembers },
+      repository: { ...d.repository, listMembersOf },
     });
 
-    expect(listMembers).not.toHaveBeenCalled();
+    expect(listMembersOf).not.toHaveBeenCalled();
     expect(result).toMatchObject({ due: 0, published: 0, applied: 0 });
+  });
+
+  it("loads the members of EVERY due release in one query", async () => {
+    // The regression this guards is latency, not an answer: asking per release
+    // put one serial round trip per due release in front of the first content
+    // mutation. Counting the calls is the only way to observe that, because
+    // both shapes return the same members and every later assertion passes
+    // either way.
+    const listMembersOf = vi.fn(async (ids: string[]) =>
+      // DISTINCT documents. Two members of one document collapse to a single
+      // winning action, and the count assertion below would then pass on an
+      // implementation that had loaded only one release's members.
+      [
+        member({ releaseId: "r1", entryId: "e1" }),
+        member({ releaseId: "r2", entryId: "e2" }),
+      ].filter(m => ids.includes(m.releaseId))
+    );
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+    });
+    const result = await applyDueReleases({
+      ...d,
+      repository: { ...d.repository, listMembersOf },
+    });
+
+    expect(listMembersOf).toHaveBeenCalledTimes(1);
+    expect(listMembersOf).toHaveBeenCalledWith(["r1", "r2"]);
+    expect(result).toMatchObject({ due: 2, applied: 2, failed: 0 });
+  });
+
+  it("records a failed schedule check and STILL applies the other actions", async () => {
+    // The per-action "is this still scheduled?" read is an ordinary database
+    // read on the ordinary path. Unwrapped, one transient failure on the first
+    // action aborted the whole pass — every later action and every unrelated
+    // due release skipped, which reads exactly like nothing having been due.
+    const publish = vi.fn(async () => {});
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        member({ id: "bad", releaseId: "r1", entryId: "e1" }),
+        member({ id: "good", releaseId: "r2", entryId: "e2" }),
+      ],
+      mutations: { publish },
+    });
+    const result = await applyDueReleases({
+      ...d,
+      repository: {
+        ...d.repository,
+        isStillDueAt: async (id: string) => {
+          if (id === "r1") throw new Error("connection reset");
+          return true;
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ due: 2, applied: 1, failed: 1 });
+    expect(result.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          memberId: "bad",
+          failure: "SCHEDULE_CHECK_FAILED",
+          detail: "connection reset",
+        }),
+        expect.objectContaining({ memberId: "good", failure: null }),
+      ])
+    );
+    // The action that could not be checked is not evidence of cancellation, so
+    // its release is held open for the next pass.
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it("applies the WINNER when a document sits in two due releases", async () => {

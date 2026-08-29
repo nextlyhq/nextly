@@ -357,6 +357,29 @@ export class ReleasesRepository {
     });
   }
 
+  /**
+   * Members of many releases in ONE query.
+   *
+   * The materialisation pass loads every due release's members before it writes
+   * anything, and asking per release put N serial round trips in front of the
+   * first content mutation — worst exactly when N is large, which is when a
+   * deployment or an imported schedule leaves many releases due together.
+   *
+   * The empty case returns without asking: `IN ()` is a syntax error on every
+   * dialect this supports, and "no releases" is an ordinary state, not a
+   * caller's mistake.
+   */
+  async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
+    if (releaseIds.length === 0) return [];
+    return this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: {
+        and: [
+          { column: "releaseId", op: "IN", value: [...new Set(releaseIds)] },
+        ],
+      },
+    });
+  }
+
   async addMember(input: NewReleaseMember): Promise<ReleaseMemberRow> {
     const row: ReleaseMemberRow = {
       id: crypto.randomUUID(),
