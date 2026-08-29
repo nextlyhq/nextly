@@ -24,6 +24,12 @@ export const SYSTEM_RESOURCES = new Set([
   "email-templates",
   "api-keys",
   "webhooks",
+  // NOT "releases". The name is `content-releases` because registering a system
+  // resource RESERVES its name against collections and Singles, and a
+  // press-releases collection is one of the most common on a corporate site.
+  // See the note beside SYSTEM_RESOURCES in
+  // packages/nextly/src/schemas/_zod/rbac.ts before renaming it here.
+  "content-releases",
 ]);
 
 /**
