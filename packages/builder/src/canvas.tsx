@@ -355,6 +355,47 @@ function useReportedInlineWidth(
  * observer at all — there is nothing for it to answer, and one that exists
  * anyway fires on every pane drag for a number nobody reads.
  */
+/**
+ * The nearest ancestor that actually lays the canvas out.
+ *
+ * NOT `parentElement`, which is the DOM parent and not necessarily the element
+ * whose width the canvas is fitted into. `display: contents` leaves a node in
+ * the tree while generating no box at all, so its children are laid out by ITS
+ * parent — and a `ResizeObserver` on one reports an inline size of zero.
+ * Measured in a browser: a boxless wrapper inside a 911px container observes
+ * `0` while the container observes `911`.
+ *
+ * That is not hypothetical here. The block context menu wraps the canvas in
+ * Radix's trigger and gives it `display: contents` deliberately, so a `span`
+ * around a block box does not change the layout it is meant to be transparent
+ * over. Measuring through it made `canvasScale` see a region of zero, take its
+ * identity branch, and report a fit of `1` forever: an author who pinned Tablet
+ * at 1024 was editing at the region's own width with the control still showing
+ * Tablet selected, and no width readout to contradict it.
+ *
+ * Written as a WALK rather than as a check for that one wrapper. The wrapper
+ * arrived legitimately and nothing connected it to a measurement two files
+ * away; the next one would do the same. Skipping every boxless ancestor is the
+ * property the measurement actually needs.
+ *
+ * `display: none` is deliberately NOT skipped past — it is boxless too, but its
+ * children generate no box either, so there is no canvas being laid out
+ * anywhere and the honest answer is the hidden ancestor itself, whose zero
+ * leaves the scale at its identity.
+ */
+function layoutRegionOf(element: HTMLElement | null): HTMLElement | null {
+  const view = element?.ownerDocument.defaultView ?? null;
+  if (view === null) return null;
+  for (
+    let node = element?.parentElement ?? null;
+    node !== null;
+    node = node.parentElement
+  ) {
+    if (view.getComputedStyle(node).display !== "contents") return node;
+  }
+  return null;
+}
+
 function useRegionWidth(
   box: React.RefObject<HTMLElement | null>,
   scaling: boolean
@@ -362,7 +403,7 @@ function useRegionWidth(
   const [width, setWidth] = useState<number | undefined>(undefined);
   useEffect(() => {
     if (!scaling) return;
-    const region = box.current?.parentElement ?? null;
+    const region = layoutRegionOf(box.current);
     if (region === null) return;
     if (typeof ResizeObserver !== "function") return;
     const observer = new ResizeObserver(entries => {

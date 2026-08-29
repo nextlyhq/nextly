@@ -857,6 +857,90 @@ describe("what the canvas reports about the box it got", () => {
   const zoomOf = (root: HTMLElement): string =>
     String((root.style as { zoom?: string }).zoom ?? "");
 
+  describe("which ancestor the region is measured from", () => {
+    /*
+     * `parentElement` is the DOM parent and not necessarily the element the
+     * canvas is laid out by. `display: contents` leaves a node in the tree
+     * while generating no box, so its children are laid out by ITS parent — and
+     * a `ResizeObserver` on one reports an inline size of zero. Measured in a
+     * browser: a boxless wrapper inside a 911px container observes `0` while
+     * the container observes `911`.
+     *
+     * The block context menu wraps the canvas in exactly such a node, and
+     * deliberately: a `span` around a block box would change the layout it is
+     * meant to be transparent over. So the canvas measured zero, `canvasScale`
+     * took its identity branch, and the fit was `1` forever — an author who
+     * pinned Tablet at 1024 edited at the region's own width with the control
+     * still showing Tablet selected.
+     */
+    it("skips an ancestor that generates no box", () => {
+      const wrapper = document.createElement("div");
+      wrapper.style.display = "contents";
+      const laidOutBy = document.createElement("div");
+      laidOutBy.id = "laid-out-by";
+      laidOutBy.append(wrapper);
+      document.body.append(laidOutBy);
+
+      render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport", width: 1024 }}
+        />,
+        { container: wrapper }
+      );
+
+      const watched = regionObserver()?.observed ?? [];
+      // The element it measures is the one that HAS a box, not the DOM parent.
+      expect(watched.map(element => (element as HTMLElement).id)).toContain(
+        "laid-out-by"
+      );
+      expect(watched).not.toContain(wrapper);
+
+      laidOutBy.remove();
+    });
+
+    it("measures the DOM parent when that parent has a box", () => {
+      /*
+       * The control. A walk that skipped every ancestor, or that returned the
+       * document element, would satisfy the case above while measuring
+       * something the canvas is not laid out by — and the fit would be computed
+       * against the whole window rather than the pane the canvas sits in.
+       */
+      const parent = document.createElement("div");
+      parent.id = "ordinary-parent";
+      document.body.append(parent);
+
+      render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport", width: 1024 }}
+        />,
+        { container: parent }
+      );
+
+      const watched = regionObserver()?.observed ?? [];
+      expect(watched.map(element => (element as HTMLElement).id)).toContain(
+        "ordinary-parent"
+      );
+
+      parent.remove();
+    });
+  });
+
   describe("a tier wider than the region it has to fit in", () => {
     it("takes its FULL width and is scaled down to the region", () => {
       /*
