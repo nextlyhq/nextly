@@ -235,7 +235,8 @@ export async function applyDueReleases(
   const { outcomes, unfinished, applied } = await applyWithinBudget(
     deps,
     plan,
-    now
+    now,
+    at
   );
 
   // A release is discharged only when nothing attributed to it failed — AND
@@ -488,7 +489,8 @@ function messageOf(error: unknown): string {
 async function applyWithinBudget(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
-  now: () => Date
+  now: () => Date,
+  at: Date
 ): Promise<{
   outcomes: MaterialisationOutcome[];
   unfinished: Set<string>;
@@ -509,9 +511,27 @@ async function applyWithinBudget(
   // Ordered so a component's actions are contiguous. The planner's own order is
   // by document and provides no such grouping; without this the guard has
   // nothing left to defer by the time it first fires.
+  // ROTATED, so no component is permanently first.
+  //
+  // The first component is exempt from the deadline — something must run or a
+  // budget too small for one stalls everything. With a stable order that
+  // exemption becomes head-of-line blocking: a component that is slow, or whose
+  // action FAILS and holds it open, consumes the budget on every tick, and the
+  // healthy releases behind it are deferred forever. No process kill is needed;
+  // a cleanly returning failure is enough, and each tick reports success.
+  //
+  // Rotating by the pass's own instant costs nothing, needs no stored progress —
+  // which this domain has no record for — and makes every component reach the
+  // front within one rotation. A component that keeps failing still retries,
+  // which is the at-least-once contract; what it no longer does is starve the
+  // others while it fails.
+  const componentCount = Math.max(plan.overlappingReleases.length, 1);
+  const rotation = Math.floor(at.getTime() / 1000) % componentCount;
+  const rank = (releaseId: string): number =>
+    ((componentOf.get(releaseId) ?? 0) - rotation + componentCount) %
+    componentCount;
   const ordered = [...plan.actions].sort(
-    (a, b) =>
-      (componentOf.get(a.releaseId) ?? 0) - (componentOf.get(b.releaseId) ?? 0)
+    (a, b) => rank(a.releaseId) - rank(b.releaseId)
   );
   const startedComponents = new Set<number>();
   const applied = new Set<string>();
