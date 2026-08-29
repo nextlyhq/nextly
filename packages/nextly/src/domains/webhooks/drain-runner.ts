@@ -37,6 +37,27 @@ export type WebhookDrainRegistry = Pick<
   "getEnabledEndpointsFresh"
 >;
 
+/**
+ * What bounds one SCHEDULED drain pass.
+ *
+ * Published from the domain rather than held privately by the route, because
+ * there is now more than one scheduled trigger: the `/api/webhooks/drain` route
+ * and the `webhooks:drain` job the shared runner performs. Two triggers with two
+ * copies of these numbers is two answers to "how long may a tick take", and the
+ * first divergence would show up as deliveries retrying forever on whichever
+ * trigger was killed mid-pass.
+ *
+ * `maxDurationMs` is the hard bound a latency-bounded trigger relies on; the
+ * per-request timeout lives with the transport and is deliberately shorter, so a
+ * single hung receiver cannot stretch the pass much past it.
+ */
+export const SCHEDULED_DRAIN_BOUNDS = {
+  maxRounds: 10,
+  fanOutBatchSize: 50,
+  deliverBatchSize: 25,
+  maxDurationMs: 25_000,
+} as const;
+
 export interface RunWebhookDrainOptions {
   /** HTTP transport override; the engine defaults to the SSRF-safe safeFetch. */
   transport?: DeliverTransport;

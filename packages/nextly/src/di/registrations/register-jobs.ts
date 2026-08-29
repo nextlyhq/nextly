@@ -25,6 +25,13 @@ import { JobsRepository } from "../../domains/jobs/jobs-repository";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import { createReleasesDrainJob } from "../../domains/releases/releases-drain-job";
+import type {
+  RunWebhookDrainOptions,
+  WebhookDrainDatabase,
+} from "../../domains/webhooks/drain-runner";
+import type { WebhookEndpointRegistry } from "../../domains/webhooks/endpoint-registry";
+import type { RunDrainResult } from "../../domains/webhooks/run-drain";
+import { createWebhooksDrainJob } from "../../domains/webhooks/webhooks-drain-job";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
 
@@ -97,6 +104,44 @@ export function reportReleasesOutcome(
   }
 }
 
+/**
+ * Report what a webhook drain pass did, and say so when deliveries failed.
+ *
+ * Same requirement, same reason as the releases reporter: the job row completes
+ * while individual deliveries fail, so without this the only trace of an
+ * endpoint that has stopped receiving anything is a returned object nobody read.
+ *
+ * Reported per pass rather than per delivery, unlike releases. A delivery
+ * already has its own durable row in the delivery log with its own error, so a
+ * line per failure would duplicate what an operator can already page through;
+ * what the log cannot show is that a whole pass finished with failures in it.
+ */
+export function reportWebhookDrainOutcome(
+  logger: Logger,
+  result: RunDrainResult
+): void {
+  if (result.eventsProcessed === 0 && result.attempted === 0) return;
+
+  logger.info("Webhook drain pass completed", {
+    rounds: result.rounds,
+    eventsProcessed: result.eventsProcessed,
+    deliveriesCreated: result.deliveriesCreated,
+    attempted: result.attempted,
+    delivered: result.delivered,
+    retried: result.retried,
+    failed: result.failed,
+    abandoned: result.abandoned,
+  });
+
+  if (result.failed > 0) {
+    logger.error("A webhook drain pass ended with failed deliveries", {
+      failed: result.failed,
+      retried: result.retried,
+      attempted: result.attempted,
+    });
+  }
+}
+
 export function registerJobServices(ctx: RegistrationContext): void {
   const { adapter, logger } = ctx;
 
@@ -133,6 +178,29 @@ export function registerJobServices(ctx: RegistrationContext): void {
         // runs behind while leaving room for the pass to discharge what it did.
         budgetMs: RELEASES_DRAIN_BUDGET_MS,
         onOutcome: result => reportReleasesOutcome(logger, result),
+      })
+    );
+
+    // Webhook delivery, consumer #1 of the runner and the workload the jobs
+    // domain was extracted FROM. `/api/webhooks/drain` still exists and still
+    // works; this means an installation scheduling `/api/jobs/run` gets its
+    // webhooks drained too, so a new deployment needs one cron entry rather than
+    // one per subsystem.
+    //
+    // Resolved lazily inside the factory: the webhook registrations run before
+    // this one, but resolving at registry-construction time rather than at
+    // module load keeps the order a fact about the container rather than about
+    // import graphs.
+    registry.register(
+      createWebhooksDrainJob({
+        db: container.get<WebhookDrainDatabase>("adapter"),
+        registry: container.get<WebhookEndpointRegistry>(
+          "webhookEndpointRegistry"
+        ),
+        retention: container.get<RunWebhookDrainOptions["retention"]>(
+          "webhookRetentionDeps"
+        ),
+        onOutcome: result => reportWebhookDrainOutcome(logger, result),
       })
     );
 

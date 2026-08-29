@@ -1052,14 +1052,20 @@ export async function registerServices(
   // lazily when a write flushes its intents.
   registerRevalidationServices(ctx);
   registerCollectionServices(ctx);
-  // After collections: the releases job type registered here reaches content
-  // through the Direct API, so the services that back it must already exist.
-  registerJobServices(ctx);
   registerMediaServices(ctx);
   registerMetaServices(ctx);
   registerSingleServices(ctx);
   registerVersionServices(ctx);
   registerWebhookServices(ctx);
+  // LAST of the domain registrations, because the job registry is where every
+  // domain's job types are constructed and it therefore reads the widest set of
+  // dependencies — content services for the releases drain, the endpoint
+  // registry and retention deps for the webhook drain.
+  //
+  // Singleton factories are lazy, so this would work in any position. Ordering
+  // it anyway keeps the reason a fact about this file rather than a property of
+  // the container that a future refactor could remove without noticing.
+  registerJobServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
