@@ -229,10 +229,10 @@ function canvasRootOf(container: HTMLElement): HTMLElement {
   return root;
 }
 
-function pressRow(row: HTMLElement, x: number, y: number): void {
+function pressRow(row: HTMLElement, x: number, y: number, pointerId = 7): void {
   fireEvent.pointerDown(row, {
     button: 0,
-    pointerId: 7,
+    pointerId,
     clientX: x,
     clientY: y,
   });
@@ -735,21 +735,78 @@ describe("dragging a block from the palette onto the canvas", () => {
   });
 
   it("still abandons the drag when the OWNING pointer is cancelled", () => {
-    // The must-differ control. A cancel handler that ignored every pointer
-    // would satisfy the case above while breaking what cancel is FOR — the
-    // browser has taken the gesture away, and continuing to draw a drag it
-    // no longer owns leaves an indicator the author cannot dismiss.
-    const { container, row } = renderTwo();
-    pressRow(row, 300, 500);
-    moveTo(200, 154);
+    // The must-differ control, and it drives a NODE-origin drag on purpose.
+    //
+    // A palette drag is followed on the document, and that capture listener
+    // runs BEFORE the canvas's own handler for the same event — so cancelling
+    // a palette drag through the canvas resets it either way, and the case
+    // passes even when `handlers.onPointerCancel` ignores every pointer.
+    // Measured: with that handler emptied, every case in this file still
+    // passed. A control reached by the wrong transport controls nothing.
+    //
+    // A node-origin drag installs no document listeners, so cancelling it is
+    // the only route that exercises the canvas handler.
+    const { container } = renderTwo();
+    const canvas = canvasRootOf(container);
+    const block = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="a"]`
+    );
+    expect(block, "no rendered node to press").not.toBeNull();
 
-    fireEvent.pointerCancel(canvasRootOf(container), { pointerId: 7 });
+    fireEvent.pointerDown(block!, {
+      button: 0,
+      pointerId: 7,
+      clientX: 200,
+      clientY: 40,
+    });
+    fireEvent.pointerMove(canvas, {
+      pointerId: 7,
+      clientX: 200,
+      clientY: 154,
+    });
+    // Population: the drag has to be in flight, or "it was abandoned" is a
+    // statement about a gesture that never started.
+    expect(dragState.draggingId).toBe("a");
 
-    expect(dragState.draggingBlockName).toBeNull();
-    // And a release afterwards commits nothing, because there is no gesture.
-    release(200, 154);
+    fireEvent.pointerCancel(canvas, { pointerId: 7 });
+
+    expect(dragState.draggingId).toBeNull();
+    // And a release afterwards moves nothing, because there is no gesture.
+    fireEvent.pointerUp(canvas, { pointerId: 7, clientX: 200, clientY: 154 });
     expect(ids()).toEqual(["a", "b"]);
     expect(editorRef?.undoDepth).toBe(0);
+  });
+
+  it("a press that never became a drag does not lock out later presses", () => {
+    // A press beginning within the activation threshold of the canvas edge
+    // takes no capture — capture waits for activation, so an ordinary click
+    // still resolves against the element it landed on. If that pointer then
+    // leaves the root, its move and release are delivered somewhere these
+    // handlers never see, and the inactive gesture is stranded.
+    //
+    // Admission asks whether a drag is IN FLIGHT rather than whether a gesture
+    // object exists, so a stranded press blocks nothing. Gated on existence,
+    // dragging stays locked until the host unmounts.
+    const { container, row } = renderTwo();
+    const block = container.querySelector<HTMLElement>(
+      `[${NODE_ID_ATTRIBUTE}="a"]`
+    );
+    fireEvent.pointerDown(block!, {
+      button: 0,
+      pointerId: 7,
+      clientX: 200,
+      clientY: 40,
+    });
+    // No move, so it never activates; and no release, because the pointer left.
+    expect(dragState.draggingId).toBeNull();
+
+    // A later press must still be able to start a drag.
+    pressRow(row, 300, 500, 9);
+    moveTo(200, 154, 9);
+    expect(dragState.draggingBlockName).toBe("test/heading");
+
+    release(200, 154, 9);
+    expect(ids()).toEqual(["a", "b", INSERTED]);
   });
 
   it("starts no drag at all when the host supplied no canvas", () => {

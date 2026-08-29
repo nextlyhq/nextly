@@ -253,6 +253,42 @@ function committedTarget(drag: Gesture): DropTarget | undefined {
   return committed === null ? undefined : drag.targets.get(committed);
 }
 
+/**
+ * The gesture this pointer owns, or `null` when it owns none.
+ *
+ * The one answer to "may this event drive the drag", asked by every transport:
+ * the canvas's React handlers for a pointer over the canvas, and the document
+ * listeners for one anywhere else. Written once because it was written three
+ * times — move, release and cancel each compared the id themselves, and a
+ * change to what ownership means would have had to find all three.
+ */
+function gestureOwnedBy(
+  current: Gesture | null,
+  pointerId: number
+): Gesture | null {
+  if (current === null) return null;
+  return current.owner === pointerId ? current : null;
+}
+
+/**
+ * Whether a press may begin a gesture.
+ *
+ * A drag ALREADY IN FLIGHT keeps the pointer that started it: a second finger
+ * must not take it over, or the first gesture is left with no ending of its own
+ * — its release unheard, its click never suppressed.
+ *
+ * An INACTIVE gesture is a different thing and must not block anything. It is a
+ * press that has not yet travelled far enough to mean a drag, and one can be
+ * stranded: a press beginning within the activation threshold of the canvas
+ * edge takes no capture, so if the pointer leaves the root its move and release
+ * are delivered somewhere these handlers never see. Refusing later presses
+ * because of it would lock dragging until the host unmounted, and there is
+ * nothing to protect — no drag was in progress.
+ */
+function admitsPress(current: Gesture | null): boolean {
+  return current === null || !current.active;
+}
+
 /** What a drag needs to remember, none of which renders. */
 interface Gesture {
   readonly subject: DragSubject;
@@ -453,16 +489,11 @@ export function useCanvasDrag({
       // middle-click scrolls, and starting a drag from either takes a gesture
       // the browser has already given a meaning.
       if (event.button !== 0) return;
-      // ONE gesture at a time. A second finger pressing while another owns the
-      // drag must not take it over: the first gesture would be replaced with
-      // no ending of its own, so its release goes unheard, its click is never
-      // suppressed, and the row it started from inserts through the ordinary
-      // click path — a block the author never dropped.
-      //
-      // Ignored rather than cancelled, so the drag already in flight survives
-      // the stray touch. The pressed row keeps its own click, because nothing
-      // here consumed the press.
-      if (gesture.current !== null) return;
+      // One drag at a time, asked through the shared rule. Ignored rather than
+      // cancelled, so the drag already in flight survives a stray touch, and
+      // the pressed element keeps its own click because nothing here consumed
+      // the press.
+      if (!admitsPress(gesture.current)) return;
 
       const root = event.currentTarget;
       const nodeId = nodeIdFromEvent(event.target);
@@ -665,10 +696,10 @@ export function useCanvasDrag({
       pointerId: number,
       captureHost: HTMLElement | null
     ) => {
-      const drag = gesture.current;
+      const drag = gestureOwnedBy(gesture.current, pointerId);
+      // Null for no gesture at all, and for another finger moving anywhere:
+      // neither may re-aim this one.
       if (drag === null) return;
-      // Another finger, moving anywhere. It may not re-aim this gesture.
-      if (pointerId !== drag.owner) return;
 
       /*
        * ONE measurement of the root, answering this move in both spaces.
@@ -910,11 +941,10 @@ export function useCanvasDrag({
    */
   const endGesture = React.useCallback(
     (pointerId: number, captureHost: HTMLElement | null) => {
-      const drag = gesture.current;
+      // Null for another finger lifting, too: ending here would commit THIS
+      // gesture's target while the finger that owns it is still down.
+      const drag = gestureOwnedBy(gesture.current, pointerId);
       if (drag === null) return;
-      // Another finger lifting. Ending here would commit THIS gesture's target
-      // while the finger that owns it is still down.
-      if (pointerId !== drag.owner) return;
       releaseCapture(captureHost, pointerId);
 
       const target = committedTarget(drag);
@@ -946,9 +976,7 @@ export function useCanvasDrag({
    */
   const cancelGesture = React.useCallback(
     (pointerId: number) => {
-      const drag = gesture.current;
-      if (drag === null) return;
-      if (pointerId !== drag.owner) return;
+      if (gestureOwnedBy(gesture.current, pointerId) === null) return;
       reset();
     },
     [reset]
@@ -965,16 +993,11 @@ export function useCanvasDrag({
     (event: React.PointerEvent<HTMLElement>, entry: InsertDragEntry) => {
       // The primary button only, for the reason `onPointerDown` gives.
       if (event.button !== 0) return;
-      // ONE gesture at a time. A second finger pressing while another owns the
-      // drag must not take it over: the first gesture would be replaced with
-      // no ending of its own, so its release goes unheard, its click is never
-      // suppressed, and the row it started from inserts through the ordinary
-      // click path — a block the author never dropped.
-      //
-      // Ignored rather than cancelled, so the drag already in flight survives
-      // the stray touch. The pressed row keeps its own click, because nothing
-      // here consumed the press.
-      if (gesture.current !== null) return;
+      // One drag at a time, asked through the shared rule. Ignored rather than
+      // cancelled, so the drag already in flight survives a stray touch, and
+      // the pressed element keeps its own click because nothing here consumed
+      // the press.
+      if (!admitsPress(gesture.current)) return;
       const root = canvasRoot?.current ?? null;
       // Nothing to drop onto. The press is left entirely alone rather than
       // half-started, so the row's click still inserts by the ordinary path.
