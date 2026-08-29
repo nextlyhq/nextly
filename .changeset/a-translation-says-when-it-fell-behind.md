@@ -42,6 +42,11 @@ has not run `nextly migrate` yet sees nothing new instead of an error, and every
 language there reports as unknown -- never as up to date, because a translation
 the system cannot vouch for must not be described as current.
 
+Singles carry the signal too. Their languages are stamped on every write like
+any other, so the comparison is as valid there -- but a Single's history is not
+seeded, so languages written before this shipped have no timestamp and stay
+unknown rather than being described as current.
+
 Nothing here asks a person to keep the signal honest. It is derived from when
 each language was last written, so re-saving a translation clears it as a
 consequence of the save, and no flag is left behind for someone to remember to

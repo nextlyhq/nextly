@@ -474,6 +474,14 @@ export class CollectionQueryService extends BaseService {
       //
       // Resolved on the pool BEFORE any transaction opens — a failed probe inside one marks the
       // whole PostgreSQL transaction aborted and the error then names an innocent statement.
+      //
+      // Unconditional here, unlike the filter path, and the difference is that this read NEEDS the
+      // answer: there is no badge without it. A companion that already carries the column answers
+      // from the remembered verdict and costs nothing; one that predates it pays an introspection
+      // per list read, because a negative is deliberately not remembered and the migration that
+      // would end that cost runs in another process. That is the same trade `companion-readiness`
+      // already makes for an entity in a `pre-migration` state, and it is bounded the same way —
+      // it stops the moment the operator migrates.
       staleness: (await resolveCompanionColumn(
         this.adapter,
         companion.companionTableName,
@@ -610,11 +618,19 @@ export class CollectionQueryService extends BaseService {
       //
       // False leaves the `stale` arm answering `1=0` — nothing is KNOWN to be stale — which is
       // the defined answer for "cannot ask" rather than a claim that nothing is.
-      hasUpdatedAt: await resolveCompanionColumn(
-        this.adapter,
-        companion.companionTableName,
-        COMPANION_UPDATED_AT_COLUMN
-      ),
+      //
+      // 🔴 Resolved ONLY for the state that reads it. The probe introspects, and a NEGATIVE verdict
+      // is deliberately not cached — so on a companion that predates the column, asking here
+      // unconditionally would put a catalogue query on every filtered list, twice per page, for a
+      // capability the other four states never consult. The one state that needs it pays for it.
+      hasUpdatedAt:
+        filter.state === "stale"
+          ? await resolveCompanionColumn(
+              this.adapter,
+              companion.companionTableName,
+              COMPANION_UPDATED_AT_COLUMN
+            )
+          : undefined,
       defaultLocale: this.localization.defaultLocale,
       filter,
     });
