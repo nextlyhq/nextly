@@ -156,14 +156,15 @@ function detailedErrorMessage(error: unknown): string {
 }
 
 /**
- * The message returned accounting may carry: a typed NextlyError's own
- * public message, because its cause may hold raw driver or adapter detail
- * that belongs in the operator log alone; and for anything untyped, the
- * deepest cause message — a bare error ships no envelope to protect.
+ * The message returned accounting may carry. A typed NextlyError
+ * contributes its public envelope message; anything untyped gets the
+ * generic message, because a bare error carries no public contract — its
+ * message or cause may be raw driver text with hostnames or credentials,
+ * which belongs in the operator log alone.
  */
 function batchErrorMessage(error: unknown): string {
   if (NextlyError.is(error)) return error.publicMessage;
-  return detailedErrorMessage(error);
+  return "An unexpected error occurred.";
 }
 
 /**

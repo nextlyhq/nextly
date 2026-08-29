@@ -991,6 +991,26 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           expect(messages).not.toContain("ECONNREFUSED");
         });
 
+        it("keeps an untyped worker error's detail out of the returned accounting", async () => {
+          // An untyped error carries no public contract at all — its
+          // message may be raw driver text — so the accounting answers
+          // with the generic envelope message and leaves the detail to
+          // the operator log.
+          scriptWorker(op, [
+            okFor(op, 0),
+            new Error(
+              "connect ECONNREFUSED 127.0.0.1:5432 postgres://internal"
+            ),
+          ]);
+
+          const result = await op.self();
+
+          const messages = result.errors.map(e => e.error).join("\n");
+          expect(result.failed).toBeGreaterThan(0);
+          expect(messages).toContain("An unexpected error occurred.");
+          expect(messages).not.toContain("ECONNREFUSED");
+        });
+
         it("survives a worker error whose cause graph cycles", async () => {
           const cyclic = new Error("cyclic");
           (cyclic as { cause?: Error }).cause = cyclic;
@@ -1065,8 +1085,20 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             expect(result.successful).toBe(0);
             expect(result.ids).toEqual([]);
             expect(result.failed).toBe(2);
+            // An untyped error ships no public contract, so the rebuilt
+            // accounting answers with the generic message on every index —
+            // the raw text stays in the operator log.
             expect(result.errors[0].error).toContain("Batch rolled back");
-            expect(result.errors[1]).toMatchObject({ index: 1, error: "boom" });
+            expect(result.errors[0].error).toContain(
+              "An unexpected error occurred."
+            );
+            expect(result.errors[1]).toMatchObject({
+              index: 1,
+              error: "An unexpected error occurred.",
+            });
+            expect(result.errors.every(e => !e.error.includes("boom"))).toBe(
+              true
+            );
             expect(result.eventRecorded).toBe(false);
             // Rolled-back deletes bust no tags either.
             expect(result.revalidationIntents).toBeUndefined();
