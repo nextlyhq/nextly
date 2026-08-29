@@ -58,7 +58,7 @@ describe("which states report that they carry values", () => {
     render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
 
     expect(marked()).toEqual([]);
-    expect(stateHasOwnValues(styles, "active")).toBe(false);
+    expect(stateHasOwnValues(styles, "active", undefined)).toBe(false);
   });
 
   it("leaves the base state unmarked even when it carries values", () => {
@@ -110,7 +110,7 @@ describe("which states report that they carry values", () => {
     render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
 
     expect(marked()).toEqual([]);
-    expect(stateHasOwnValues(styles, "hover")).toBe(false);
+    expect(stateHasOwnValues(styles, "hover", undefined)).toBe(false);
   });
 
   it("does NOT mark an ARRAY-shaped tier the compiler will emit nothing for", () => {
@@ -136,6 +136,52 @@ describe("which states report that they carry values", () => {
     // `active` is the control: a real record beside the two bad shapes, so this
     // case cannot pass by the marker never appearing at all.
     expect(marked()).toEqual(["Pressed"]);
+  });
+
+  it("does NOT mark a value stored under a tier the sheet no longer has", () => {
+    /*
+     * Deleting a breakpoint leaves values behind under its id. The compiler
+     * iterates the breakpoint contexts it was given and never looks at the
+     * rest — measured, the same node compiles to 73 bytes under a known tier
+     * and to an empty sheet under an unknown one — so marking that state sends
+     * an author looking for an appearance no visitor can see.
+     *
+     * `active` is the control: a value at a tier that DOES exist, in the same
+     * render, so this cannot pass by nothing being marked at all.
+     */
+    const styles = {
+      hover: { "deleted-tier": { color: "#000001" } },
+      active: { base: { color: "#000002" } },
+    } as unknown as NodeStyles;
+
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={{
+          viewport: [{ id: "base", label: "Desktop" }],
+          container: [],
+        }}
+      />
+    );
+
+    expect(marked()).toEqual(["Pressed"]);
+  });
+
+  it("counts every stored tier when the site's breakpoints are not known", () => {
+    /*
+     * The question "which tiers exist" has not been asked, and treating an
+     * unasked question as "none exist" would report every state as unstyled —
+     * an absence answering as a verdict.
+     */
+    const styles = {
+      hover: { "some-tier": { color: "#000001" } },
+    } as unknown as NodeStyles;
+
+    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+
+    expect(marked()).toEqual(["Hover"]);
   });
 
   it("marks nothing when the host supplies no styles at all", () => {

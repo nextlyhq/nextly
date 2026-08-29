@@ -423,6 +423,7 @@ export function InspectorPanel({
             state={styleState?.state}
             onSelect={styleState?.onChange}
             node={styleNode}
+            breakpoints={breakpoints}
           />
           <StyleInspectorPanel
             editor={editor}

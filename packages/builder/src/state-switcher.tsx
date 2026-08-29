@@ -23,6 +23,7 @@
  */
 
 import {
+  type BreakpointSet,
   type NodeStyles,
   STYLE_STATES,
   type StyleState,
@@ -85,12 +86,20 @@ export interface StateSwitcherProps {
    * unstyled.
    */
   styles?: NodeStyles | undefined;
+  /**
+   * The site's breakpoints, so a marker counts only tiers the sheet has.
+   *
+   * A value stored under a deleted tier reaches no visitor, and marking it
+   * sends an author looking for an appearance nobody can see.
+   */
+  breakpoints?: BreakpointSet | undefined;
 }
 
 export function StateSwitcher({
   state,
   onSelect,
   styles,
+  breakpoints,
 }: StateSwitcherProps): React.JSX.Element {
   const radios = React.useRef<Array<HTMLButtonElement | null>>([]);
   const index = STYLE_STATES.indexOf(state);
@@ -143,7 +152,8 @@ export function StateSwitcher({
          * always lit is read as decoration, which costs the other three the
          * meaning they depend on.
          */
-        const marked = option !== "base" && stateHasOwnValues(styles, option);
+        const marked =
+          option !== "base" && stateHasOwnValues(styles, option, breakpoints);
         return (
           <button
             key={option}
@@ -230,6 +240,8 @@ export interface StyleStateFieldProps {
    * then knows it separately.
    */
   node?: { styles?: NodeStyles } | null | undefined;
+  /** The site's breakpoints, so a marker counts only tiers the sheet has. */
+  breakpoints?: BreakpointSet | undefined;
 }
 
 /**
@@ -250,11 +262,17 @@ export function StyleStateField({
   state = "base",
   onSelect,
   node,
+  breakpoints,
 }: StyleStateFieldProps): React.JSX.Element | null {
   if (onSelect === undefined) return null;
   return (
     <div className="nx-inspector__state">
-      <StateSwitcher state={state} onSelect={onSelect} styles={node?.styles} />
+      <StateSwitcher
+        state={state}
+        onSelect={onSelect}
+        styles={node?.styles}
+        breakpoints={breakpoints}
+      />
     </div>
   );
 }
