@@ -23,15 +23,6 @@ export const COMPANION_DEFAULT_STATUS = "draft";
 export const COMPANION_STATUS_COLUMN = "_status";
 
 /**
- * What a companion table's name adds to its entity's table name.
- *
- * The rule is one string in three places already — the reconcile builds `<table>_locales`, the
- * readiness resolver strips it back off, and the runtime registration repeats it. Named here so a
- * caller deriving one name from the other is reading the rule rather than retyping it.
- */
-export const COMPANION_TABLE_SUFFIX = "_locales";
-
-/**
  * When THIS locale was last written (i18n B2 — "changed since translated").
  *
  * Nullable with NO default, and both halves are load-bearing. A translation that has gone stale

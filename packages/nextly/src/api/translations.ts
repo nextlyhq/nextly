@@ -25,10 +25,7 @@ import { container } from "../di";
 import { getAdapterFromDI } from "../dispatcher/helpers/di";
 import type { CollectionRegistryService } from "../domains/collections/services/collection-registry-service";
 import type { UserContext } from "../domains/collections/services/collection-types";
-import {
-  COMPANION_TABLE_SUFFIX,
-  COMPANION_UPDATED_AT_COLUMN,
-} from "../domains/i18n/companion-columns";
+import { COMPANION_UPDATED_AT_COLUMN } from "../domains/i18n/companion-columns";
 import {
   TRANSLATION_FILTER_STATES,
   type TranslationFilterState,
@@ -308,7 +305,10 @@ async function resolveStalenessCapability<
           ...c,
           canAnswerStaleness: await resolveCompanionColumn(
             adapter,
-            `${c.tableName}${COMPANION_TABLE_SUFFIX}`,
+            // Spelled as the other twenty-two sites that build this name spell it. A constant
+            // used by one caller would read as the canonical rule while twenty-two others
+            // ignored it, which is a wider claim than the code — see the convergence task.
+            `${c.tableName}_locales`,
             COMPANION_UPDATED_AT_COLUMN
           ),
         });
