@@ -61,9 +61,9 @@ const WORKLIST_ORDER = [
  * replacing it.
  *
  * A FILTER, though, is a question rather than a classification, and "which documents need review"
- * is as legitimate a question as "which are drafts". That is why {@link WorklistState} is one
- * member wider than the language-state catalog even though {@link WORKLIST_STATES} currently
- * offers a tab for each of the four states alone.
+ * is as legitimate a question as "which are drafts". So {@link WorklistState} carries a member
+ * the language-state catalog does not, and {@link WORKLIST_STATES} offers a tab for each of the
+ * four states alone.
  */
 
 /** Sentence wording into a button label: "not translated" -> "Not translated". */
@@ -86,18 +86,24 @@ export const WORKLIST_STATES: readonly {
   // tab that is always empty is worse than no tab: it reads as "this site has no stale
   // translations", which is a claim, and the wrong one.
   //
-  // The type stays wider than this array — see `WorklistState` below — so a saved link naming the
-  // state still resolves and the server still answers it honestly rather than rejecting it as
-  // unknown.
+  // The absence reaches the URL as well, and that is deliberate rather than a gap:
+  // `worklistStateFrom` resolves only what this array offers, so a saved link naming `stale`
+  // falls back to the question this page leads with. A page filtered by a state whose tab is not
+  // shown would highlight nothing while listing a subset the reader cannot account for, which is
+  // worse than answering a different question visibly. Offering the tab is an edit to this array
+  // and nothing else.
 ];
 
 /**
- * A state the worklist can show: any language state, plus staleness.
+ * A state the worklist may ASK FOR: any language state, plus staleness.
+ *
+ * This is the value that goes on the wire — `useTranslationWorklist` puts it in
+ * `/translations?state=` — so it mirrors the set the server accepts, which carries `stale`
+ * alongside the four language states. The tab strip offers a subset of it, not the whole of it,
+ * and that is the direction the two differ in.
  *
  * The language half is an ALIAS rather than a restatement, so a state added or removed there is a
- * compile error here rather than a tab that quietly stops matching. The second member is wider
- * than {@link WORKLIST_STATES} deliberately: a FILTER is a question, and "which documents need
- * review" is as legitimate a question as "which are drafts", even while no tab asks it.
+ * compile error here rather than a tab that quietly stops matching.
  */
 export type WorklistState = LanguageState | "stale";
 

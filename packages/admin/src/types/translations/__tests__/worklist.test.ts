@@ -90,15 +90,17 @@ describe("WORKLIST_STATES", () => {
     }
   });
 
-  it("keeps `stale` expressible even while no tab offers it", () => {
-    // The TYPE stays wider than the tab list on purpose: the worklist state a
-    // URL can name is `LanguageState | "stale"`, so a saved link naming it
-    // still type-checks and resolves, and the server still answers it honestly
-    // with nothing rather than rejecting it as unknown.
+  it("keeps `stale` askable while refusing to route a URL to it", () => {
+    // Two different facts, and the pairing is the point. `WorklistState` is
+    // what goes on the wire, so it carries every state the server accepts --
+    // `stale` included, which is why a caller holding one can name it.
     const resolved: WorklistState = "stale";
     expect(resolved).toBe("stale");
-    // And it falls back to the question this page exists for, since no tab
-    // matches it today.
+    // But a URL is resolved against the TAB LIST, not against the wire
+    // vocabulary, so a saved link naming `stale` does NOT reach the server as
+    // `stale`: it falls back to the question this page leads with. A page
+    // filtered by a state whose tab is not shown would highlight nothing while
+    // listing a subset the reader cannot account for.
     expect(worklistStateFrom("stale")).toBe("missing");
   });
 
