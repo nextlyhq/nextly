@@ -189,6 +189,14 @@ export interface ApplyDueReleasesResult {
   applied: number;
   failed: number;
   /**
+   * Releases left SCHEDULED because finalization ran out of time.
+   *
+   * Counted separately from `deferred`, which counts actions never started. A
+   * truncated pass over a backlog of empty releases omits no action at all, so
+   * `deferred` is zero and the only sign that work was left behind is this.
+   */
+  undischarged: number;
+  /**
    * Actions this pass did not start, because it ran out of time.
    *
    * Reported rather than implied. A pass that stopped early and one that had
@@ -214,6 +222,7 @@ export async function applyDueReleases(
       applied: 0,
       failed: 0,
       deferred: 0,
+      undischarged: 0,
       outcomes: [],
     };
   }
@@ -258,7 +267,7 @@ export async function applyDueReleases(
     }
   }
 
-  const published = await dischargeSettledComponents(
+  const { published, undischarged } = await dischargeSettledComponents(
     deps,
     plan,
     heldOpen,
@@ -274,6 +283,7 @@ export async function applyDueReleases(
     applied: outcomes.length - failed,
     failed,
     deferred,
+    undischarged,
     outcomes,
   };
 }
@@ -581,7 +591,7 @@ async function dischargeSettledComponents(
   heldOpen: ReadonlySet<string>,
   applied: ReadonlySet<string>,
   now: () => Date
-): Promise<number> {
+): Promise<{ published: number; undischarged: number }> {
   let published = 0;
   // Discharged by COMPONENT, for the reason the planner states: splitting one
   // reverses work. If the deadline fell between two members of a component, the
@@ -594,6 +604,7 @@ async function dischargeSettledComponents(
   // leaves the counter at zero and every row gets a serial write with the budget
   // long gone.
   let finalizedComponents = 0;
+  let undischarged = 0;
   for (const group of plan.overlappingReleases) {
     const settleable = group.filter(
       id => !heldOpen.has(id) && plan.releaseIds.includes(id)
@@ -617,7 +628,17 @@ async function dischargeSettledComponents(
       finalizedComponents > 0 &&
       now().getTime() >= deps.deadline.getTime()
     ) {
-      break;
+      // SKIPPED, not broken out of. The exemption above is only reached when a
+      // group is, so breaking here strands every applied component that happens
+      // to sit behind an untouched one — and a stranded applied component is the
+      // replay this exemption exists to prevent: its mutations, hooks and outbox
+      // writes all run again next tick.
+      //
+      // Continuing costs one comparison per remaining group and guarantees every
+      // applied component is reached. Only untouched ones are deferred, which is
+      // what the bound is for.
+      undischarged += settleable.length;
+      continue;
     }
     finalizedComponents += 1;
     for (const id of settleable) {
@@ -628,5 +649,5 @@ async function dischargeSettledComponents(
       if (await deps.repository.markReleasePublished(id, now())) published += 1;
     }
   }
-  return published;
+  return { published, undischarged };
 }

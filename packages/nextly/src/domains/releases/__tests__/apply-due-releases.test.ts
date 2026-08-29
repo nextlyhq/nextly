@@ -644,6 +644,39 @@ describe("applyDueReleases", () => {
     expect(result.deferred).toBe(1);
   });
 
+  it("reaches an applied component sitting BEHIND untouched ones", async () => {
+    // The exemption for applied components is only reached when a group is. So
+    // breaking out of finalization strands every applied component behind an
+    // untouched one — and a stranded applied component is the replay the
+    // exemption exists to prevent: its mutations, hooks and outbox writes all
+    // run again on the next tick, while `deferred` reports zero.
+    //
+    // Two empty releases first, then the one this pass actually performed.
+    const marked: string[] = [];
+    let tick = 0;
+    const d = deps({
+      releases: [
+        release({ id: "empty1" }),
+        release({ id: "empty2" }),
+        release({ id: "rApplied" }),
+      ],
+      members: [member({ id: "a", releaseId: "rApplied", entryId: "e1" })],
+      marked,
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 1500),
+    });
+
+    // Reached despite the budget being spent on the empty ones before it.
+    expect(marked).toContain("rApplied");
+    // And what WAS skipped is reported — `deferred` cannot show it, because no
+    // action was omitted.
+    expect(result.deferred).toBe(0);
+    expect(result.undischarged).toBeGreaterThan(0);
+  });
+
   it("bounds discharging of releases it did NOT apply", async () => {
     // `plan.releaseIds` carries every due release "whether or not it contributed
     // a winner", so a release with no due members reaches finalization having

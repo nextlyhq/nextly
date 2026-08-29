@@ -75,6 +75,10 @@ export function reportReleasesOutcome(
     // reason it exists — an operator watching a backlog stall would see a run
     // of clean completions.
     deferred: result.deferred,
+    // Distinct from `deferred`: a truncated pass over empty releases omits no
+    // ACTION, so `deferred` is zero while releases stay scheduled. Without this
+    // the one case the finalization bound handles is the one it cannot report.
+    undischarged: result.undischarged,
   });
 
   for (const outcome of result.outcomes) {
