@@ -909,6 +909,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             expect(result.errors).toHaveLength(2);
             expect(result.errors[0].index).toBe(0);
             expect(result.errors[0].error).toContain("Batch rolled back");
+            // The note must still NAME the failing index: the abort is a
+            // typed NextlyError whose own message is wire-generic, so the
+            // note reads its cause rather than degrading every rolled-back
+            // id to the generic text.
+            expect(result.errors[0].error).toContain("Entry at index 1 failed");
             expect(result.errors[1]).toMatchObject({ index: 1, error: "nope" });
           } else {
             // Create/update annotate the first recorded error instead.

@@ -135,6 +135,24 @@ function failureFromThrown(
 }
 
 /**
+ * The most specific message an error carries, for rollback notes, log lines,
+ * and batch accounting that must name WHAT failed rather than stay
+ * wire-safe. NextlyError keeps its own message public-facing and moves the
+ * operational detail onto the cause chain, so this reads the deepest
+ * cause's message and falls back to the thrown message.
+ */
+function detailedErrorMessage(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  let message = error.message;
+  let cause: Error | undefined = error;
+  while (cause.cause instanceof Error) {
+    cause = cause.cause;
+    message = cause.message;
+  }
+  return message;
+}
+
+/**
  * Partition Promise.allSettled outcomes into the canonical
  * BulkOperationResult shape.
  *
@@ -328,9 +346,14 @@ async function runLegacyBatchItem<TItem>(
     }
   } catch (error: unknown) {
     state.failed++;
+    // Read the cause chain so the record keeps the abort's own detail when
+    // the thrown wrapper is a wire-generic NextlyError.
     state.errors.push({
       index,
-      error: error instanceof Error ? error.message : "Unknown error occurred",
+      error:
+        error instanceof Error
+          ? detailedErrorMessage(error)
+          : "Unknown error occurred",
     });
 
     if (abortOnError(error)) {
@@ -1790,7 +1813,7 @@ export class CollectionBulkService extends BaseService {
         this.logger.warn("Bulk delete rolled back", {
           collectionName: params.collectionName,
           successfulBeforeRollback: rolledBackCount,
-          error: error instanceof Error ? error.message : String(error),
+          error: detailedErrorMessage(error),
         });
       }
       state.successful = 0;
@@ -1801,7 +1824,10 @@ export class CollectionBulkService extends BaseService {
       // their intents go with them — an undone delete busts no tags.
       state.eventRecorded = false;
       state.intents.length = 0;
-      const batchError = error instanceof Error ? error.message : String(error);
+      // The note names the failing index, so read the abort's cause chain:
+      // a typed NextlyError's own message is the wire-generic text and this
+      // result never reaches the dispatcher to widen it.
+      const batchError = detailedErrorMessage(error);
       const rollbackNote = `Batch rolled back; no entries were deleted: ${batchError}`;
       // Rebuild errors as exactly one entry per requested id, in index order.
       // A `stopOnError` returned-failure pushes both the item error and a thrown
@@ -1955,7 +1981,9 @@ export class CollectionBulkService extends BaseService {
     operationLabel: string,
     error: unknown
   ): void {
-    const errorText = error instanceof Error ? error.message : String(error);
+    // Log lines name WHAT aborted the batch, so read the abort's cause
+    // chain: a typed NextlyError's own message is the wire-generic text.
+    const errorText = detailedErrorMessage(error);
     if (state.integrityAbort) {
       this.logger.warn(`${operationLabel} rolled back`, {
         collectionName,
