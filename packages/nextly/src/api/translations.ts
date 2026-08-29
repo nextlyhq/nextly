@@ -305,9 +305,11 @@ async function resolveStalenessCapability<
           ...c,
           canAnswerStaleness: await resolveCompanionColumn(
             adapter,
-            // Spelled as the other twenty-two sites that build this name spell it. A constant
-            // used by one caller would read as the canonical rule while twenty-two others
-            // ignored it, which is a wider claim than the code — see the convergence task.
+            // Spelled as the twenty-two other sites that build this name spell it. A constant
+            // introduced here would be read by one caller while the rest kept their own literal,
+            // which states a rule the code does not follow — and the rule has two directions,
+            // since five further sites strip the suffix back off with a regex that would mangle a
+            // main table legitimately ending in it. Both belong in one helper or neither does.
             `${c.tableName}_locales`,
             COMPANION_UPDATED_AT_COLUMN
           ),

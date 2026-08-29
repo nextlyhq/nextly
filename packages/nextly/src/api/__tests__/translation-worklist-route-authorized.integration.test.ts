@@ -62,6 +62,10 @@ async function boot(read: () => boolean): Promise<{
       defineCollection({
         slug: "pages",
         localized: true,
+        // 🔴 `status` is what makes the lifecycle states reachable. Without it the eligibility
+        // pass drops this collection for `draft` and `published` before any query runs, so those
+        // iterations of the per-state smoke would return 200 having executed nothing.
+        status: true,
         access: { read: reads },
         fields: [text({ name: "title" })],
       }),
@@ -169,5 +173,21 @@ describe("the worklist endpoint itself", () => {
       );
       expect(res.status, `state=${state} must not error`).toBe(200);
     }
+
+    // 🔴 THE POSITIVE CONTROL, and it is deliberately ONE state rather than five. A 200 alone is
+    // satisfied by an endpoint that queried nothing — eligibility can drop every collection and
+    // still answer. `missing` is the state this fixture can prove reached the fan-out, because the
+    // seeded row has no German translation and must therefore come back.
+    //
+    // What this does NOT prove is that each of the other four executed its own query; `draft` and
+    // `published` return nothing here whether or not they ran. Which collections are eligible per
+    // state is asserted directly in the `classifyForWorklist` tests, which is where that question
+    // can be answered without a fixture for every lifecycle combination.
+    const missing = await getTranslationWorklist(
+      new Request("http://t/api/translations?locale=de&state=missing")
+    );
+    expect(await missing.json()).toMatchObject({
+      items: [{ collection: "pages" }],
+    });
   });
 });
