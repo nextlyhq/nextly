@@ -804,7 +804,14 @@ export function PageRenderer({
           // class and a block-type default are emitted here, so an editor that
           // asked only the page compile for forceable states gets a selected
           // block whose hover appearance comes from a class showing nothing.
-          ...(shared.previewStates === true ? { previewStates: true } : {}),
+          // ALWAYS written, rather than only when it is true. `siteInput` is
+          // spread above and can carry a preview flag of its own, so a
+          // conditional override is silently one-directional: a route turning
+          // the option OFF resolves correctly here and then loses to the value
+          // already in the spread, leaving the page sheet on published
+          // selectors while the class and block-default tiers use preview ones.
+          // Route-wins precedence has to be able to win downwards too.
+          previewStates: shared.previewStates === true,
           ...(shared.previewContainer == null
             ? {}
             : { previewContainer: shared.previewContainer }),

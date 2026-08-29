@@ -293,3 +293,76 @@ describe("a node's named-class references", () => {
     expect(out).toContain(".nx-c-accent");
   });
 });
+
+describe("which preview answer the site sheet is compiled with", () => {
+  /**
+   * A named class carrying a hover style, which is the tier that separates the
+   * two sheets: it is emitted HERE and not with the page, so it is the only
+   * place the two compiles can disagree about what a state selector looks like.
+   */
+  const HOVER_CLASS = [
+    {
+      id: "c1",
+      slug: "card",
+      orderIndex: 0,
+      styles: { hover: { base: { color: "#000002" } } },
+    },
+  ];
+
+  function sheetFor(
+    route: boolean | undefined,
+    stored: boolean | undefined
+  ): string {
+    return renderToStaticMarkup(
+      <PageRenderer
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [
+              {
+                id: "n1",
+                type: "core/box",
+                version: 1,
+                props: {},
+                classes: ["c1"],
+              },
+            ],
+          } as unknown as BlockDocument
+        }
+        blocks={createBlockResolver([box])}
+        styleContext={{
+          breakpoints: BREAKPOINTS,
+          ...(route === undefined ? {} : { previewStates: route }),
+        }}
+        siteStyles={
+          {
+            breakpoints: BREAKPOINTS,
+            classes: HOVER_CLASS,
+            ...(stored === undefined ? {} : { previewStates: stored }),
+          } as never
+        }
+      />
+    );
+  }
+
+  const MARKER = "nx-pb-state-hover";
+
+  it("emits the forceable form when the route asks for it", () => {
+    // The control. Without it the refusal below could be a class that never
+    // reached the sheet at all, and every assertion here would agree.
+    expect(sheetFor(true, undefined)).toContain(MARKER);
+  });
+
+  it("obeys a route that turns the preview OFF over a stored sheet that had it ON", () => {
+    /*
+     * The route is reconciled as the winner, and a stored artifact saying
+     * otherwise must lose in BOTH directions. Overriding only when the resolved
+     * answer is `true` leaves the stored `true` standing in the spread the site
+     * sheet is built from — so the page's own rules compile to published
+     * selectors while the class tier compiles to preview ones, and one document
+     * carries two answers to what `:hover` means.
+     */
+    expect(sheetFor(false, true)).not.toContain(MARKER);
+  });
+});

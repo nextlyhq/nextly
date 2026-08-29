@@ -52,6 +52,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CanvasDragHandlers } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
+import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
 
@@ -672,114 +673,153 @@ function useSelectionMarkers(
   useEffect(() => {
     const container = box.current;
     if (container === null) return;
-    // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
-    // that declares its iterator, and this package compiles without one — so the
-    // loop that reads more naturally does not type-check here.
-    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
-      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
-      if (id === null || !marked.includes(id)) {
-        element.removeAttribute(SELECTED_ATTRIBUTE);
-        return;
-      }
-      // The VALUE carries which member the panels answer for. A boolean
-      // attribute could not, and a second attribute for the primary would be a
-      // state where a block is primary without being selected.
-      element.setAttribute(
-        SELECTED_ATTRIBUTE,
-        id === selectedId ? "primary" : ""
-      );
-    });
-
     /*
-     * The forced interaction state, in the SAME walk rather than a second one.
-     * Both answer "what is marked on this element right now", and two walks
-     * over one question drift — one runs on a change the other does not.
+     * NAMED and re-run rather than written straight into the effect, because
+     * the dependency list is not the only thing that changes the answer.
      *
-     * On the PRIMARY alone. A page cannot force a pseudo-class on itself, so
-     * the compiler emits a class alternative beside each one and this puts it
-     * on the element the panel is editing. Forcing it page-wide would show
-     * every other block in a state nobody asked about.
-     *
-     * Cleared from everything first, including the primary: a state that
-     * changes from hover to focus, or a selection that moves, must not leave
-     * the previous class behind on an element nothing is editing.
+     * A block whose `render` returns a promise commits its Suspense fallback
+     * first and its resolved root later. That second commit inserts the element
+     * carrying the node id while changing no prop, no state and no id in this
+     * list — so an effect that ran once would have marked a tree the resolved
+     * block was not in yet, and would leave it unmarked until an unrelated
+     * selection or document change happened to run this again. Selecting a
+     * `core/collection-loop` showed exactly that: no outline and no forced
+     * state, on an ordinary shipping block.
      */
-    /*
-     * WHICH ELEMENTS a forced state belongs on, ASKED of the engine rather
-     * than decided here.
-     *
-     * Whether a state propagates follows from the pseudo-class the compiler
-     * emits for it — an ancestor matches `:hover` and `:active` and does not
-     * match `:focus-visible` — so the two facts live together beside that
-     * definition. Encoding the rule here as well would be a second opinion
-     * about the CSS: changing `focus` to `:focus-within` would move the
-     * published rules and leave this canvas marking the wrong chain, with both
-     * sides type-correct.
-     *
-     * Where a state does propagate the chain is required rather than tidy: the
-     * page tier compiles onto the RENDERED page root, and a marker on a
-     * descendant cannot make its ancestor match.
-     */
-    const chain = new Set<Element>();
-    if (forcedState !== undefined && forcedState !== "base") {
-      const primary = container.querySelector(
-        `[${SELECTED_ATTRIBUTE}="primary"]`
-      );
-      if (primary !== null) {
-        chain.add(primary);
-        if (statePropagatesToAncestors(forcedState)) {
-          for (
-            let node: Element | null = primary.parentElement;
-            node !== null && container.contains(node);
-            node = node.parentElement
-          ) {
-            chain.add(node);
-          }
+    const mark = (): void => {
+      // `forEach` rather than `for…of`: a `NodeList` is only iterable under a lib
+      // that declares its iterator, and this package compiles without one — so the
+      // loop that reads more naturally does not type-check here.
+      container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+        const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+        if (id === null || !marked.includes(id)) {
+          element.removeAttribute(SELECTED_ATTRIBUTE);
+          return;
         }
-      }
-    }
-
-    /*
-     * Every element a marker can land on OR has to be cleared from. The
-     * rendered PAGE ROOT is in the list explicitly: `PageRenderer` draws
-     * `.nx-pb-page` as a child of this container, and the page tier compiles
-     * onto that element rather than onto the canvas wrapper — so marking the
-     * wrapper leaves page-level state rules unmatched while looking correct.
-     */
-    const marks: Element[] = [container];
-    container
-      .querySelectorAll(`.${PAGE_ROOT_CLASS}, [${NODE_ID_ATTRIBUTE}]`)
-      .forEach(element => marks.push(element));
-
-    marks.forEach(element => {
-      // `base` is not a state anything forces: it is what applies when nothing
-      // else does, and the compiler emits no marker for it.
-      const wanted =
-        chain.has(element) && forcedState !== undefined
-          ? previewStateClass(forcedState)
-          : undefined;
+        // The VALUE carries which member the panels answer for. A boolean
+        // attribute could not, and a second attribute for the primary would be a
+        // state where a block is primary without being selected.
+        //
+        // Compared before writing, for the reason the class below is: this walk
+        // re-runs on every change to the rendered tree, and `setAttribute`
+        // queues a mutation record even when the value it writes is the value
+        // already there. Unguarded, marking a tree that did not change is
+        // itself a change — the spacing overlay observes this subtree and
+        // re-measures on one, so its own output would arrive back here as a
+        // reason to write again.
+        const value = id === selectedId ? "primary" : "";
+        if (element.getAttribute(SELECTED_ATTRIBUTE) !== value) {
+          element.setAttribute(SELECTED_ATTRIBUTE, value);
+        }
+      });
 
       /*
-       * WRITTEN ONLY WHEN IT CHANGES, which is not a micro-optimisation.
+       * The forced interaction state, in the SAME walk rather than a second one.
+       * Both answer "what is marked on this element right now", and two walks
+       * over one question drift — one runs on a change the other does not.
        *
-       * `classList.remove` of a token that is not present still touches the
-       * attribute, and this canvas is observed: the empty-container appender
-       * watches its subtree for layout-relevant mutations and re-measures on
-       * one. An unconditional clear across every marked element therefore made
-       * every selection change schedule a re-measure of the whole overlay,
-       * which its own test caught — it asserts the control does NOT move for a
-       * mutation of its own output, and it moved.
+       * On the PRIMARY alone. A page cannot force a pseudo-class on itself, so
+       * the compiler emits a class alternative beside each one and this puts it
+       * on the element the panel is editing. Forcing it page-wide would show
+       * every other block in a state nobody asked about.
+       *
+       * Cleared from everything first, including the primary: a state that
+       * changes from hover to focus, or a selection that moves, must not leave
+       * the previous class behind on an element nothing is editing.
        */
-      for (const state of STYLE_STATES) {
-        const marker = previewStateClass(state);
-        if (marker !== wanted && element.classList.contains(marker)) {
-          element.classList.remove(marker);
+      /*
+       * WHICH ELEMENTS a forced state belongs on, ASKED of the engine rather
+       * than decided here.
+       *
+       * Whether a state propagates follows from the pseudo-class the compiler
+       * emits for it — an ancestor matches `:hover` and `:active` and does not
+       * match `:focus-visible` — so the two facts live together beside that
+       * definition. Encoding the rule here as well would be a second opinion
+       * about the CSS: changing `focus` to `:focus-within` would move the
+       * published rules and leave this canvas marking the wrong chain, with both
+       * sides type-correct.
+       *
+       * Where a state does propagate the chain is required rather than tidy: the
+       * page tier compiles onto the RENDERED page root, and a marker on a
+       * descendant cannot make its ancestor match.
+       */
+      const chain = new Set<Element>();
+      if (forcedState !== undefined && forcedState !== "base") {
+        /*
+         * EVERY rendering of the primary node, not the first one found.
+         *
+         * A node id is unique in a DOCUMENT and not in the tree drawn from it:
+         * `core/collection-loop` draws its children once per entry, so one
+         * selected node is many elements, and the walk above has already marked
+         * all of them primary. Taking `querySelector` here would preview the
+         * state on whichever copy came first in DOM order — the outline on ten
+         * rows and the hover appearance on one, which reads as the state being
+         * broken rather than as the preview being partial.
+         */
+        container
+          .querySelectorAll(`[${SELECTED_ATTRIBUTE}="primary"]`)
+          .forEach(primary => {
+            chain.add(primary);
+            if (!statePropagatesToAncestors(forcedState)) return;
+            for (
+              let node: Element | null = primary.parentElement;
+              node !== null && container.contains(node);
+              node = node.parentElement
+            ) {
+              chain.add(node);
+            }
+          });
+      }
+
+      /*
+       * Every element a marker can land on OR has to be cleared from. The
+       * rendered PAGE ROOT is in the list explicitly: `PageRenderer` draws
+       * `.nx-pb-page` as a child of this container, and the page tier compiles
+       * onto that element rather than onto the canvas wrapper — so marking the
+       * wrapper leaves page-level state rules unmatched while looking correct.
+       */
+      const marks: Element[] = [container];
+      container
+        .querySelectorAll(`.${PAGE_ROOT_CLASS}, [${NODE_ID_ATTRIBUTE}]`)
+        .forEach(element => marks.push(element));
+
+      marks.forEach(element => {
+        // `base` is not a state anything forces: it is what applies when nothing
+        // else does, and the compiler emits no marker for it.
+        const wanted =
+          chain.has(element) && forcedState !== undefined
+            ? previewStateClass(forcedState)
+            : undefined;
+
+        /*
+         * WRITTEN ONLY WHEN IT CHANGES, which is not a micro-optimisation.
+         *
+         * `classList.remove` of a token that is not present still touches the
+         * attribute, and this canvas is observed: the empty-container appender
+         * watches its subtree for layout-relevant mutations and re-measures on
+         * one. An unconditional clear across every marked element therefore made
+         * every selection change schedule a re-measure of the whole overlay,
+         * which its own test caught — it asserts the control does NOT move for a
+         * mutation of its own output, and it moved.
+         */
+        for (const state of STYLE_STATES) {
+          const marker = previewStateClass(state);
+          if (marker !== wanted && element.classList.contains(marker)) {
+            element.classList.remove(marker);
+          }
         }
-      }
-      if (wanted !== undefined && !element.classList.contains(wanted)) {
-        element.classList.add(wanted);
-      }
-    });
+        if (wanted !== undefined && !element.classList.contains(wanted)) {
+          element.classList.add(wanted);
+        }
+      });
+    };
+
+    mark();
+    // Subscribed AFTER the first pass, because an observer reports what changes
+    // from the moment it attaches and says nothing about the tree already
+    // there. Writing the markers cannot re-enter this: what counts as the tree
+    // changing excludes every attribute `mark` writes.
+    return observeRenderedTree(container, mark);
   }, [box, selectedId, marked, page, forcedState]);
 }
 

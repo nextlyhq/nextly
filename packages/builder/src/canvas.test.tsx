@@ -2238,3 +2238,131 @@ describe("forcing the interaction state the panel is editing", () => {
     }
   });
 });
+
+describe("forcing a state onto a tree React commits over time", () => {
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+        {
+          /*
+           * A block that draws ITS OWN CHILD TWICE, which is what makes one
+           * node id many elements. `core/collection-loop` renders its children
+           * slot once per entry, so this is the shape of a shipping block
+           * rather than an invented one — and it is built here rather than
+           * inserted after the fact so that this case separates "reaches every
+           * copy" from "re-reads when the tree changes". A test that injected
+           * the second copy late would pass on either fix alone.
+           */
+          name: "acme/twice",
+          version: 1,
+          description: "A block that repeats its child.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                key: "one",
+                [NODE_ID_ATTRIBUTE]: "child",
+              }),
+              createElement("div", {
+                key: "two",
+                [NODE_ID_ATTRIBUTE]: "child",
+              })
+            ),
+        },
+      ] as never,
+      { source: "canvas-late-state-test" }
+    );
+  });
+  afterAll(clearBlocks);
+
+  const copiesOf = (id: string) =>
+    Array.from(document.querySelectorAll(`[${NODE_ID_ATTRIBUTE}="${id}"]`));
+
+  it("marks EVERY rendering of the selected node, not the first one found", async () => {
+    /*
+     * A node id is unique in a document and not in the tree drawn from it. The
+     * selection walk already marks every copy primary, so a forced state that
+     * stopped at the first would outline ten rows and preview the hover
+     * appearance on one — which reads as the state being broken.
+     *
+     * Asserted over the whole set rather than on copy two alone, so the case
+     * still separates if the order the copies are found in changes.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "loop", type: "acme/twice", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="child"
+        forcedState="hover"
+      />
+    );
+    await act(async () => undefined);
+
+    const copies = copiesOf("child");
+    expect(copies).toHaveLength(2);
+    for (const copy of copies) {
+      expect(copy.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+      expect(copy.className).toContain(previewStateClass("hover"));
+    }
+  });
+
+  it("marks a node that arrives AFTER the commit the effect ran on", async () => {
+    /*
+     * The Suspense case, driven at the DOM rather than through a real promise:
+     * what the effect can observe is an element carrying the node id being
+     * inserted, and a resolving block is one way that happens. Nothing in the
+     * dependency list moves — same document, same selection, same forced state
+     * — so an effect that ran once and stopped leaves this element unmarked
+     * until an unrelated change happens to run it again.
+     *
+     * The block selected here is the one that does NOT exist at first render,
+     * which is what makes the assertion about arrival rather than about
+     * marking in general.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="late"
+        forcedState="hover"
+      />
+    );
+    await act(async () => undefined);
+    expect(copiesOf("late")).toHaveLength(0);
+
+    const host = document.querySelector(`.${PAGE_ROOT_CLASS}`);
+    expect(host).not.toBeNull();
+    await act(async () => {
+      const arrived = document.createElement("div");
+      arrived.setAttribute(NODE_ID_ATTRIBUTE, "late");
+      host?.appendChild(arrived);
+    });
+
+    const [late] = copiesOf("late");
+    expect(late?.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+    expect(late?.className).toContain(previewStateClass("hover"));
+  });
+});
