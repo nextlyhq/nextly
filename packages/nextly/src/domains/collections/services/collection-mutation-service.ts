@@ -14,7 +14,10 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  TransactionContext,
+  WhereCondition,
+} from "@nextlyhq/adapter-drizzle/types";
 import { eq, ne, and, like, ilike } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
@@ -102,11 +105,17 @@ import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
+  COMPANION_LOCALE_COLUMN,
+  COMPANION_PARENT_COLUMN,
+  COMPANION_STATUS_COLUMN,
+} from "../../i18n/companion-columns";
+import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import { COMPANION_DEFAULT_STATUS } from "../../i18n/migration/generate-up";
 import {
   isValidLocale,
@@ -3649,6 +3658,63 @@ export class CollectionMutationService extends BaseService {
    * @returns Updated entry or error
    */
   /**
+   * Set the per-locale lifecycle status on a document's companion rows.
+   *
+   * ## Why the locale is a SELECTOR
+   *
+   * "Which locales does this transition reach?" is ONE question, and a method
+   * per scope answers it once per verb. `publishAllLocales` stated this UPDATE
+   * for publishing; an `unpublishAllLocales` would have stated the same UPDATE
+   * again for withdrawing, and a third lifecycle verb a third time — the shape
+   * AGENTS.md names as one question with several implementations. Taking the
+   * locale as `"*"` or a single locale collapses them: a new verb picks a status
+   * and a scope and writes no SQL of its own. Strapi's document service settled
+   * on the same shape (`publish`/`unpublish` with `locale: '*'`) after shipping
+   * the per-scope form first.
+   *
+   * ## Why Drizzle
+   *
+   * This replaces an interpolated statement that hand-rolled identifier quoting
+   * and placeholders per dialect — `isMysql ? backtick : quote`, `postgresql ?
+   * $n : "?"` — which AGENTS.md:273 forbids in product code. Writing the
+   * withdrawal direction the same way would have been a second opportunity to
+   * get MySQL's quoting wrong, in the path where being wrong leaves content
+   * readable after a takedown reported success.
+   *
+   * Writes ONLY `_status`. `_status` is a structural column, so no `_updated_at`
+   * stamp belongs here: that column answers "when was this language last
+   * WRITTEN", and a lifecycle transition writes no language. Stamping it would
+   * move the source past every target and report the whole site as needing
+   * review for an action that changed not one word.
+   */
+  private async writeCompanionStatus(
+    tx: TransactionContext,
+    args: {
+      companionTableName: string;
+      parentId: string;
+      status: string;
+      /** {@link EVERY_LOCALE}, or one locale code. */
+      locale: string;
+    }
+  ): Promise<void> {
+    const conditions: WhereCondition[] = [
+      { column: COMPANION_PARENT_COLUMN, op: "=", value: args.parentId },
+    ];
+    if (args.locale !== EVERY_LOCALE) {
+      conditions.push({
+        column: COMPANION_LOCALE_COLUMN,
+        op: "=",
+        value: args.locale,
+      });
+    }
+    await tx.update(
+      args.companionTableName,
+      { [COMPANION_STATUS_COLUMN]: args.status },
+      { and: conditions }
+    );
+  }
+
+  /**
    * Publish ALL languages of an entry at once (i18n M7, spec §10). Atomically sets the main
    * `status` to 'published' and — when the collection has per-locale status (M6) — every companion
    * row's `_status` to 'published', in a single transaction. For a non-localized / no-status
@@ -3800,9 +3866,6 @@ export class CollectionMutationService extends BaseService {
           )
         : null;
 
-      const isMysql = this.dialect === "mysql";
-      const q = (id: string) => (isMysql ? `\`${id}\`` : `"${id}"`);
-      const ph = (i: number) => (this.dialect === "postgresql" ? `$${i}` : "?");
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
       // getTableName would hardcode the default dc_<slug> and target the wrong
@@ -4021,10 +4084,12 @@ export class CollectionMutationService extends BaseService {
             );
           }
           if (companion && companionPublishable) {
-            await tx.execute(
-              `UPDATE ${q(companion.companionTableName)} SET ${q("_status")} = ${ph(1)} WHERE ${q("_parent")} = ${ph(2)}`,
-              ["published", params.entryId]
-            );
+            await this.writeCompanionStatus(tx, {
+              companionTableName: companion.companionTableName,
+              parentId: params.entryId,
+              status: "published",
+              locale: EVERY_LOCALE,
+            });
           }
 
           if (needsFreshParent) {
