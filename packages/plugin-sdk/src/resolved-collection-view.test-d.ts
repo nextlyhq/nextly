@@ -63,10 +63,17 @@ const anUnrelatedShapeIsRejected: {
   ? true
   : false = false;
 
-/** The projection accepts an unknown, because the producer's type under-states it. */
-const projectionAcceptsUnknown: Parameters<
+/**
+ * The projection accepts an unknown, because the producer's type under-states it.
+ *
+ * Asked as "is `unknown` assignable to the parameter", not the reverse. Every
+ * type extends `unknown`, so the reverse form is true for a parameter of
+ * `string` as readily as for one of `unknown` — it would go on passing after
+ * the signature narrowed, which is the one change it exists to catch.
+ */
+const projectionAcceptsUnknown: unknown extends Parameters<
   typeof resolvedCollectionView
->[0] extends unknown
+>[0]
   ? true
   : false = true;
 

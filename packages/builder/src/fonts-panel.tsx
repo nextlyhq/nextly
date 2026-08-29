@@ -100,6 +100,16 @@ const SCRIPT_SPECIMENS: readonly string[] = [
   "우리가 알기도 전에 땅을 떠났다",
 ];
 
+/**
+ * The highest codepoint that exists.
+ *
+ * `validateFontFace` checks a `unicode-range` for characters that could break
+ * out of the stylesheet; it does not check that the numbers name real
+ * codepoints, and `U+110000-110010` passes it. `String.fromCodePoint` THROWS on
+ * anything above this, which took down the whole panel rather than the one row.
+ */
+const MAX_CODEPOINT = 0x10ffff;
+
 /** One interval of a `unicode-range`, inclusive at both ends. */
 interface CodepointRange {
   readonly from: number;
@@ -136,21 +146,42 @@ function parseUnicodeRange(
   return parsed.length > 0 ? parsed : undefined;
 }
 
+/**
+ * An interval, or nothing when it names no codepoints that exist.
+ *
+ * REFUSED rather than clamped. A descriptor reaching past the end of Unicode is
+ * not a range with a typo in it — nothing can be concluded about what the face
+ * covers — and clamping would invent a range the author never wrote and then
+ * draw a specimen from it. Refusing sends the whole descriptor to the unreadable
+ * path, where the Latin sentence is used and no claim is made.
+ */
+function readableInterval(
+  from: number,
+  to: number
+): CodepointRange | undefined {
+  if (Number.isNaN(from) || Number.isNaN(to)) return undefined;
+  if (from > MAX_CODEPOINT || to > MAX_CODEPOINT) return undefined;
+  // An inverted interval names nothing, and iterating it yields nothing while
+  // reading as though a range had been declared.
+  if (from > to) return undefined;
+  return { from, to };
+}
+
 /** One comma-separated item of a `unicode-range`. */
 function parseRangeItem(item: string): CodepointRange | undefined {
   const wildcard = WILDCARD_ITEM.exec(item);
   if (wildcard?.[1] !== undefined) {
     const digits = wildcard[1];
-    return {
-      from: Number.parseInt(digits.replace(/\?/g, "0"), 16),
-      to: Number.parseInt(digits.replace(/\?/g, "F"), 16),
-    };
+    return readableInterval(
+      Number.parseInt(digits.replace(/\?/g, "0"), 16),
+      Number.parseInt(digits.replace(/\?/g, "F"), 16)
+    );
   }
   const match = RANGE_ITEM.exec(item);
   if (match?.[1] === undefined) return undefined;
   const from = Number.parseInt(match[1], 16);
   const to = match[2] === undefined ? from : Number.parseInt(match[2], 16);
-  return Number.isNaN(from) || Number.isNaN(to) ? undefined : { from, to };
+  return readableInterval(from, to);
 }
 
 /**

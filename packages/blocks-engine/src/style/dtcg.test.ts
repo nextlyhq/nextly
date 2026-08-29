@@ -1330,6 +1330,27 @@ describe("a var() substitution CSS will actually make", () => {
     expect(readFamilyList("var(--brand serif)").kind).toBe("invalid");
   });
 
+  it("refuses a call that never closes", () => {
+    // Checking the first argument alone accepted this: the name and its comma
+    // are both well formed, and the declaration is still a syntax error the
+    // browser drops.
+    expect(readFamilyList("var(--brand, serif").kind).toBe("invalid");
+    expect(readFamilyList("var(--brand").kind).toBe("invalid");
+    // A close with nothing open is as broken as one that never closes.
+    expect(readFamilyList("var(--brand))").kind).toBe("invalid");
+  });
+
+  it("keeps an ESCAPED space inside a custom-property name", () => {
+    /*
+     * `--brand\ face` is one identifier to a browser. The reader decodes that
+     * escape before the name exists, where a literal space is indistinguishable
+     * from the whitespace that ends an argument — so the check reads the RAW
+     * spelling, where the backslash is still there.
+     */
+    const escaped = `var(--brand${String.fromCharCode(92)} face)`;
+    expect(readFamilyList(escaped).kind).toBe("dynamic");
+  });
+
   it("lets one malformed call spoil the list it sits in", () => {
     // A declaration is dropped whole, so a good call beside a bad one does not
     // rescue it.

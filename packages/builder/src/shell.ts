@@ -400,6 +400,14 @@ export type { SelectionBreadcrumbProps } from "./breadcrumb";
  */
 export { ClassSelector } from "./class-selector";
 export type { ClassSelectorProps } from "./class-selector";
+/*
+ * The notice surface, published because a HOST embedding the shell may want to
+ * place the region itself — the shell renders one by default, and a host that
+ * owns its own chrome can render the region where its layout wants it and drive
+ * it from the same queue. `useNoticeSink` is deliberately NOT exported: raising
+ * a notice is for controls inside the shell, and a host reaching past the
+ * builder to raise one would be reporting about work the builder did not do.
+ */
 export { BuilderNoticeRegion, useNoticeQueue } from "./builder-notices";
 export type { BuilderNotice } from "./builder-notices";
 export { ClassManagerPanel } from "./class-manager-panel";

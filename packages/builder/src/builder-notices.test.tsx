@@ -32,6 +32,7 @@ import {
   useNoticeQueue,
 } from "./builder-notices";
 import { ClassSelector } from "./class-selector";
+import { BUILDER_CHROME_CLASS } from "./shell-state";
 
 afterEach(cleanup);
 
@@ -152,6 +153,32 @@ describe("the queue", () => {
       </>
     );
   }
+
+  it("carries the builder theme class, so its tokens resolve", () => {
+    /*
+     * The region is a SIBLING of the shell's regions, and every `--nx-builder-*`
+     * token is defined on `.nx-builder-chrome`, which sits on the regions rather
+     * than on a common ancestor. Custom properties inherit down, never across,
+     * so without this the border, background and text declarations resolve to
+     * nothing — a transparent box with host-default text, unreadable in dark
+     * mode. jsdom computes no cascade, so the CLASS is what can be asserted.
+     */
+    render(<Queue />);
+    fireEvent.click(screen.getByRole("button", { name: "raise" }));
+    expect(screen.getByRole("status").className).toContain(
+      BUILDER_CHROME_CLASS
+    );
+  });
+
+  it("does not re-announce every notice when one is added", () => {
+    // `role="status"` is atomic by default, so a second notice makes a screen
+    // reader read the first one again.
+    render(<Queue />);
+    fireEvent.click(screen.getByRole("button", { name: "raise" }));
+    expect(screen.getByRole("status").getAttribute("aria-atomic")).toBe(
+      "false"
+    );
+  });
 
   it("draws nothing at all while it is empty", () => {
     render(<Queue />);

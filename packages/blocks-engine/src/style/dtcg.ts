@@ -609,14 +609,50 @@ const VAR_CALL_ARGUMENT = new RegExp(
 );
 
 /**
+ * Whether every parenthesis in the text is closed.
+ *
+ * A `var()` that never closes is a syntax error and the browser drops the
+ * declaration, so checking the first argument alone accepted
+ * `var(--brand, serif` as a working substitution. Escapes are stepped over:
+ * `\(` is a literal character rather than a nesting level, and counting it
+ * would report a balanced value as broken.
+ */
+function parensBalanced(text: string): boolean {
+  let depth = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "\\") {
+      // The escaped character cannot open or close anything.
+      at += 1;
+      continue;
+    }
+    if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      // A close with nothing open is as broken as one that never closes.
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0;
+}
+
+/**
  * Whether every `var(` in the text opens a call CSS will actually make.
  *
  * Answers for the whole text rather than per call, because one malformed call
  * spoils the declaration however many well-formed ones sit beside it. A
  * fallback carrying its own `var()` is reached by the same scan, so nesting
  * needs no separate rule.
+ *
+ * Read against the RAW spelling rather than the decoded name. A custom property
+ * may legitimately carry an escaped space — `var(--brand\ face)` names one
+ * identifier to a browser — and the reader has already turned that escape into
+ * a literal space by the time the name exists, where it is indistinguishable
+ * from the whitespace that ends an argument. The raw text still has the
+ * backslash, so the two cases stay apart.
  */
 function varCallsWellFormed(text: string): boolean {
+  if (!parensBalanced(text)) return false;
   const calls = new RegExp(VAR_CALL_SOURCE, "gi");
   for (let call = calls.exec(text); call !== null; call = calls.exec(text)) {
     const argument = text.slice(call.index + call[0].length);
@@ -644,7 +680,7 @@ export function familyPartKind(part: FamilyPart): FamilyPartKind {
   // all-clear, which is the same shape as reading a dropped declaration as a
   // working keyword.
   if (hasVarCall(part.name)) {
-    return varCallsWellFormed(part.name) ? "dynamic" : "invalid";
+    return varCallsWellFormed(part.raw) ? "dynamic" : "invalid";
   }
   if (CSS_WIDE_KEYWORDS.has(lower)) return "keyword";
   // Reserved, and not a whole-value keyword: bare `default` names no family and

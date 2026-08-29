@@ -32,10 +32,21 @@
  * teaches them to ignore the region, so a control still mounted reports for
  * itself and stays silent here.
  *
+ * ## It carries the builder's own theme class
+ *
+ * The region is a SIBLING of the shell's regions, and every `--nx-builder-*`
+ * token is defined on `.nx-builder-chrome`, which sits on the regions rather
+ * than on a common ancestor. Custom properties inherit down, never across, so
+ * without the class here the border, background and text declarations resolve
+ * to nothing — leaving a transparent box with host-default text, which in dark
+ * mode is a failure message the author cannot read.
+ *
  * @module builder-notices
  */
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
+
+import { BUILDER_CHROME_CLASS } from "./shell-state";
 
 /** One thing that failed, in the words an author reads. */
 export interface BuilderNotice {
@@ -144,7 +155,17 @@ export function BuilderNoticeRegion({
 }): React.ReactElement | null {
   if (notices.length === 0) return null;
   return (
-    <div className="nx-notices" role="status" aria-live="polite">
+    <div
+      className={`${BUILDER_CHROME_CLASS} nx-notices`}
+      role="status"
+      aria-live="polite"
+      /*
+       * `role="status"` is atomic by default, so adding one notice makes a
+       * screen reader read every notice on screen again. False announces the
+       * row that changed and leaves the rest alone.
+       */
+      aria-atomic="false"
+    >
       {notices.map(notice => (
         <div className="nx-notices__item" key={notice.id}>
           <p className="nx-notices__text">{notice.message}</p>

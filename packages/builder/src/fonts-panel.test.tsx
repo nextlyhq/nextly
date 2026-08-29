@@ -204,14 +204,34 @@ describe("the panel over a site that has been read", () => {
   });
 
   it("reads a comma-separated range as the union of its intervals", () => {
-    // A subset commonly declares several disjoint intervals, and the sentence
-    // has to be covered by their union rather than by any one of them.
-    const greekPlusLatin: FontFaceDef = {
+    /*
+     * Split so that NEITHER interval covers the sentence alone: the Cyrillic
+     * specimen opens with a capital, which lives in the first, and every other
+     * letter lives in the second. A test whose first interval already covered
+     * the whole sentence would pass while the parser silently discarded the
+     * rest, which is the reading it exists to rule out.
+     */
+    const split: FontFaceDef = {
       family: "Brand",
-      src: [{ url: "/fonts/brand-mixed.woff2", format: "woff2" }],
-      unicodeRange: "U+0020-007F, U+0370-03FF",
+      src: [{ url: "/fonts/brand-cyrillic.woff2", format: "woff2" }],
+      unicodeRange: "U+0410-042F, U+0430-044F",
     };
-    render(<FontsPanel faces={[greekPlusLatin]} tokens={{ tokens: [] }} />);
+    render(<FontsPanel faces={[split]} tokens={{ tokens: [] }} />);
+    expect(screen.getByText(/Почти/)).toBeTruthy();
+  });
+
+  it("refuses a range reaching past the end of Unicode", () => {
+    // `validateFontFace` accepts `U+110000-110010` — it checks the characters,
+    // not the numbers — and `String.fromCodePoint` throws above U+10FFFF, which
+    // took the whole panel down rather than the one row.
+    const impossible: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand.woff2", format: "woff2" }],
+      unicodeRange: "U+110000-110010",
+    };
+    render(<FontsPanel faces={[impossible]} tokens={{ tokens: [] }} />);
+    // It renders at all, and falls back to the sentence rather than sampling a
+    // codepoint that does not exist.
     expect(
       screen.getByText("Almost before we knew it, we had left the ground")
     ).toBeTruthy();
