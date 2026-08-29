@@ -13,7 +13,7 @@
  *
  * @module __tests__/use-rendered-tag
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -43,6 +43,49 @@ describe("reading the tag from a canvas", () => {
     // as a ref it would not be, and the hook would never look again.
     view.rerender(<Reader root={canvas} />);
     expect(screen.getByTestId("tag").textContent).toBe("h1");
+  });
+
+  it("answers when an ASYNC block resolves inside a canvas already mounted", async () => {
+    /*
+     * A block whose `render` returns a promise commits its Suspense fallback
+     * first and its resolved root later. Nothing in this hook's arguments
+     * changes across that: the canvas element is the same, the selection is the
+     * same, the document is the same. So a dependency-driven read runs only
+     * BEFORE the marked element exists, and an async block resolving to a
+     * heading reports its size as unset for as long as it stays selected.
+     */
+    const canvas = document.createElement("div");
+    // The state during suspense: the canvas is mounted and the node is not
+    // drawn yet.
+    canvas.innerHTML = "<div>loading</div>";
+
+    render(<Reader root={canvas} />);
+    expect(screen.getByTestId("tag").textContent).toBe("unknown");
+
+    // The block resolves. No prop changes — only the DOM.
+    canvas.innerHTML = '<h1 data-nx-node="n1">A title</h1>';
+    await waitFor(() =>
+      expect(screen.getByTestId("tag").textContent).toBe("h1")
+    );
+  });
+
+  it("follows a node id that MOVES to a different element", async () => {
+    // Structure alone is not the whole question: a re-render can put the same
+    // id on a different element without adding or removing one, and the answer
+    // changes. That is why the observer watches the attribute too.
+    const canvas = document.createElement("div");
+    canvas.innerHTML =
+      '<h1 data-nx-node="n1">A title</h1><p id="other">text</p>';
+
+    render(<Reader root={canvas} />);
+    expect(screen.getByTestId("tag").textContent).toBe("h1");
+
+    const heading = canvas.querySelector("h1");
+    heading?.removeAttribute("data-nx-node");
+    canvas.querySelector("#other")?.setAttribute("data-nx-node", "n1");
+    await waitFor(() =>
+      expect(screen.getByTestId("tag").textContent).toBe("p")
+    );
   });
 
   it("goes back to unknown when the canvas goes away", () => {
