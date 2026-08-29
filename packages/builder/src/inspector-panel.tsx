@@ -254,6 +254,18 @@ export function editedStyleState(
   return binding.state ?? "base";
 }
 
+/**
+ * Which tab a mount opens on, given the state the host restored.
+ *
+ * `content` unless a state is in effect, which is the ordinary case and the
+ * behaviour every existing caller already has: a host that names no state, or
+ * names `base`, or supplies no setter — in which case {@link editedStyleState}
+ * has already resolved the state to `base` and there is nothing to explain.
+ */
+function openingTabFor(binding: StyleStateBinding | undefined): string {
+  return editedStyleState(binding) === "base" ? "content" : "style";
+}
+
 function tabChangeHandler(
   setTab: (next: string) => void,
   onStyleStateChange: ((state: StyleState) => void) | undefined
@@ -302,9 +314,23 @@ export function InspectorPanel({
    */
   const styleNode = selectedNode(editor.document, editor.selectedId);
 
-  // Declared before the early returns below, because a hook has to run on every
-  // render of this component and "no selection" is one of them.
-  const [tab, setTab] = React.useState<string>("content");
+  /*
+   * Declared before the early returns below, because a hook has to run on every
+   * render of this component and "no selection" is one of them.
+   *
+   * OPENS ON STYLE when a host mounts with a state already chosen. A binding
+   * naming a non-base state is a host restoring what an author was editing, and
+   * this panel's contract is that such a state and `Canvas.forcedState` are the
+   * same value — so opening on Content would leave the canvas drawing a block
+   * mid-hover with the only control that explains or clears it behind a tab
+   * nobody was told to open. The tab handler cannot catch that: it fires on a
+   * CHANGE, and a mount is not one.
+   *
+   * Honouring the state rather than clearing it, for the reason the multi-
+   * selection case does the same: the host asked for it deliberately, and
+   * resetting would silently discard what it restored.
+   */
+  const [tab, setTab] = React.useState<string>(() => openingTabFor(styleState));
 
   const commit = React.useCallback(
     (name: string, value: unknown) => {

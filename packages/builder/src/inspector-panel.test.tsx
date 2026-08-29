@@ -264,6 +264,51 @@ describe("what InspectorPanel forwards to the style tab", () => {
     );
   });
 
+  it("OPENS on Style when a host mounts with a state already chosen", () => {
+    /*
+     * A host restoring what an author was editing supplies a non-base state at
+     * mount. The tab handler cannot catch that — it fires on a CHANGE, and a
+     * mount is not one — so opening on Content would leave the canvas drawing
+     * the block mid-hover with the only control that explains or clears it
+     * behind a tab nobody was told to open.
+     *
+     * Asserted on the switcher being REACHABLE rather than on the tab's own
+     * state, because what the author needs is the control, and a test on the
+     * internal value would pass on a panel that opened the right tab and
+     * rendered nothing in it.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ state: "hover", onChange: vi.fn() }}
+      />
+    );
+
+    expect(
+      screen.getByRole("radiogroup", { name: "Interaction state" })
+    ).toBeDefined();
+  });
+
+  it("still opens on Content for an ordinary mount", () => {
+    /*
+     * The control, and it carries the whole default: every existing caller
+     * names no state, and a panel that opened on Style for them would move a
+     * surface nobody asked to move.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ onChange: vi.fn() }}
+      />
+    );
+
+    expect(
+      screen.queryByRole("radiogroup", { name: "Interaction state" })
+    ).toBeNull();
+  });
+
   it("reports the state the author chose", () => {
     register();
     const onStyleStateChange = vi.fn();
