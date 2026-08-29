@@ -124,6 +124,22 @@ export interface ApplyDueReleasesDeps {
   runAs: RunAsDeps;
   now?: () => Date;
   /**
+   * Where the pass's fairness rotation comes from.
+   *
+   * Injected so a pass stays deterministic under test, and RANDOM by default
+   * because every deterministic source available here is either constant or
+   * cadence-coupled. Deriving it from the clock looked right and is not: a cron
+   * whose period divides the component count produces the same rotation every
+   * time, and 30s, 60s and 300s all do for two or three components. Deriving it
+   * from the due set is worse — that set is exactly what does not change while a
+   * component keeps failing.
+   *
+   * Expected fairness rather than a guaranteed round-robin, which is the honest
+   * trade for holding no state: the chance a given component is missed decays
+   * geometrically, and this domain has nowhere to persist a cursor.
+   */
+  random?: () => number;
+  /**
    * When this pass must stop starting new actions.
    *
    * A drain runs behind a serverless cron tick as often as on a long-lived
@@ -245,7 +261,7 @@ export async function applyDueReleases(
     deps,
     plan,
     now,
-    at
+    deps.random ?? Math.random
   );
 
   // A release is discharged only when nothing attributed to it failed — AND
@@ -500,7 +516,7 @@ async function applyWithinBudget(
   deps: ApplyDueReleasesDeps,
   plan: ReturnType<typeof planReleaseMaterialisation>,
   now: () => Date,
-  at: Date
+  random: () => number
 ): Promise<{
   outcomes: MaterialisationOutcome[];
   unfinished: Set<string>;
@@ -523,20 +539,25 @@ async function applyWithinBudget(
   // nothing left to defer by the time it first fires.
   // ROTATED, so no component is permanently first.
   //
-  // The first component is exempt from the deadline — something must run or a
+  // The first component is exempt from the deadline — something must run, or a
   // budget too small for one stalls everything. With a stable order that
   // exemption becomes head-of-line blocking: a component that is slow, or whose
   // action FAILS and holds it open, consumes the budget on every tick, and the
   // healthy releases behind it are deferred forever. No process kill is needed;
   // a cleanly returning failure is enough, and each tick reports success.
   //
-  // Rotating by the pass's own instant costs nothing, needs no stored progress —
-  // which this domain has no record for — and makes every component reach the
-  // front within one rotation. A component that keeps failing still retries,
-  // which is the at-least-once contract; what it no longer does is starve the
-  // others while it fails.
+  // The rotation is RANDOM, and the obvious alternative is a trap. Deriving it
+  // from the pass instant reads as deterministic and fair, and is neither: a
+  // cron whose period divides the component count repeats the same rotation
+  // forever, and 30s, 60s and 300s all do for two or three components — so the
+  // failing component keeps the exempt position under every realistic cadence.
+  // Deriving it from the due set is worse still, because that set is precisely
+  // what does not change while a component keeps failing.
+  //
+  // A component that keeps failing still retries, which is the at-least-once
+  // contract; what it no longer does is starve the others while it fails.
   const componentCount = Math.max(plan.overlappingReleases.length, 1);
-  const rotation = Math.floor(at.getTime() / 1000) % componentCount;
+  const rotation = Math.floor(random() * componentCount) % componentCount;
   const rank = (releaseId: string): number =>
     ((componentOf.get(releaseId) ?? 0) - rotation + componentCount) %
     componentCount;

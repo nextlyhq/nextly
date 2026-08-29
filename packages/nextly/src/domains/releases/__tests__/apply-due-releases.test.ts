@@ -68,6 +68,10 @@ function deps(over: {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
   return {
+    // Pinned, so every case below observes a STABLE component order and asserts
+    // about the mechanism it names rather than about which rotation came up.
+    // The starvation case overrides it, because rotating is the thing it tests.
+    random: () => 0,
     repository: {
       findDueReleases: async () => releases,
       listMembersOf: async ids =>
@@ -531,18 +535,21 @@ describe("applyDueReleases", () => {
     // on every tick, while the healthy releases behind it are deferred forever.
     // Each pass reports success.
     //
-    // Two passes at instants one rotation apart. The first component differs
-    // between them, so the healthy release runs on the second even though the
-    // failing one is still there.
+    // The passes are a FIXED 60-SECOND CADENCE apart, which is the shape a cron
+    // actually has. A rotation derived from the pass instant repeats forever
+    // whenever the period divides the component count — 30s, 60s and 300s all do
+    // for two components — so a test advancing one second per pass would pass
+    // against a fix that does nothing in production.
     const publish = vi.fn(async (input: { ref: { entryId: string } }) => {
       if (input.ref.entryId === "broken") throw new Error("refused");
     });
+    // Deterministic stand-in for the random source, cycling the rotation.
+    let call = 0;
+    const rotations = [0, 0.5];
     const seen: string[][] = [];
-    for (const at of [
-      new Date(NOW.getTime()),
-      new Date(NOW.getTime() + 1000),
-    ]) {
+    for (let pass = 0; pass < 2; pass += 1) {
       publish.mockClear();
+      const at = new Date(NOW.getTime() + pass * 60_000);
       const d = deps({
         releases: [release({ id: "rBad" }), release({ id: "rGood" })],
         members: [
@@ -552,22 +559,23 @@ describe("applyDueReleases", () => {
         mutations: {
           publish:
             publish as unknown as ApplyDueReleasesDeps["mutations"]["publish"],
-          // The read-back must not rescue the failed write, or the failure
-          // never reaches the outcome and there is nothing to starve behind.
+          // The read-back must not rescue the failed write, or the failure never
+          // reaches the outcome and there is nothing to starve behind.
           applied: async () => false,
         },
       });
       await applyDueReleases({
         ...d,
         now: () => at,
+        random: () => rotations[call++ % rotations.length],
         // Already spent, so only the exempt first component runs.
         deadline: new Date(at.getTime() - 60_000),
       });
       seen.push(publish.mock.calls.map(c => c[0].ref.entryId));
     }
 
-    // The healthy document is reached on one of the two passes. With a stable
-    // order it would be reached on neither, forever.
+    // The healthy document is reached on one of the two passes. Pinned to a
+    // single rotation it is reached on neither, forever.
     expect(seen.flat()).toContain("healthy");
   });
 
