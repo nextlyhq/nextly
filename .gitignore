@@ -61,6 +61,9 @@ coverage
 # (see e2e/playwright.production.config.ts). A separate directory because two
 # Next processes on one app fight over the same one.
 .next-e2e-prod/
+# And for the nightly Lighthouse run, which builds the playground for
+# production on its own port (see .github/workflows/lighthouse.yml).
+.next-lighthouse/
 out/
 build
 dist
@@ -143,3 +146,9 @@ tsup.config.bundled_*.mjs
 tsup.config.bundled_*.cjs
 tsup.*.config.bundled_*.mjs
 tsup.*.config.bundled_*.cjs
+
+# Working directory and dumped reports from the nightly Lighthouse run; the run
+# uploads them as an artifact rather than committing them.
+.lighthouseci/
+.lighthouseci-report/
+.lighthouseci-report-mobile/

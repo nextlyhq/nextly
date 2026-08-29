@@ -1,0 +1,22 @@
+{
+  "ci": {
+    "collect": {
+      "url": ["http://localhost:3111/"],
+      "numberOfRuns": 3,
+      "settings": {
+        "throttlingMethod": "simulate",
+        "chromeFlags": "--no-sandbox --disable-gpu --headless=new"
+      }
+    },
+    "assert": {
+      "assertions": {
+        "categories:performance": ["warn", { "minScore": 0.95 }]
+      }
+    },
+    "upload": {
+      "target": "filesystem",
+      "outputDir": ".lighthouseci-report-mobile",
+      "reportFilenamePattern": "mobile-%%DATETIME%%-report.%%EXTENSION%%"
+    }
+  }
+}
