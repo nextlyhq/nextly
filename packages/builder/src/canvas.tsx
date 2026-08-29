@@ -31,8 +31,11 @@
 
 import {
   previewContainerName,
+  previewStateClass,
+  STYLE_STATES,
   type BlockDocument,
   type BreakpointSet,
+  type StyleState,
 } from "@nextlyhq/blocks-engine";
 import {
   NODE_ID_ATTRIBUTE,
@@ -661,7 +664,8 @@ function useSelectionMarkers(
   box: React.RefObject<HTMLElement | null>,
   marked: readonly string[],
   selectedId: string | null,
-  page: React.ReactNode
+  page: React.ReactNode,
+  forcedState: StyleState | undefined
 ): void {
   useEffect(() => {
     const container = box.current;
@@ -683,7 +687,52 @@ function useSelectionMarkers(
         id === selectedId ? "primary" : ""
       );
     });
-  }, [box, selectedId, marked, page]);
+
+    /*
+     * The forced interaction state, in the SAME walk rather than a second one.
+     * Both answer "what is marked on this element right now", and two walks
+     * over one question drift — one runs on a change the other does not.
+     *
+     * On the PRIMARY alone. A page cannot force a pseudo-class on itself, so
+     * the compiler emits a class alternative beside each one and this puts it
+     * on the element the panel is editing. Forcing it page-wide would show
+     * every other block in a state nobody asked about.
+     *
+     * Cleared from everything first, including the primary: a state that
+     * changes from hover to focus, or a selection that moves, must not leave
+     * the previous class behind on an element nothing is editing.
+     */
+    container.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`).forEach(element => {
+      const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+      // `base` is not a state anything forces: it is what applies when nothing
+      // else does, and the compiler emits no marker for it.
+      const wanted =
+        id === selectedId && forcedState !== undefined && forcedState !== "base"
+          ? previewStateClass(forcedState)
+          : undefined;
+
+      /*
+       * WRITTEN ONLY WHEN IT CHANGES, which is not a micro-optimisation.
+       *
+       * `classList.remove` of a token that is not present still touches the
+       * attribute, and this canvas is observed: the empty-container appender
+       * watches its subtree for layout-relevant mutations and re-measures on
+       * one. An unconditional clear across every marked element therefore made
+       * every selection change schedule a re-measure of the whole overlay,
+       * which its own test caught — it asserts the control does NOT move for a
+       * mutation of its own output, and it moved.
+       */
+      for (const state of STYLE_STATES) {
+        const marker = previewStateClass(state);
+        if (marker !== wanted && element.classList.contains(marker)) {
+          element.classList.remove(marker);
+        }
+      }
+      if (wanted !== undefined && !element.classList.contains(wanted)) {
+        element.classList.add(wanted);
+      }
+    });
+  }, [box, selectedId, marked, page, forcedState]);
 }
 
 /**
@@ -1068,8 +1117,30 @@ export interface CanvasProps {
    * element, so handing it over is more honest than a caller finding it by
    * class name: a query would be a second place that decides which element the
    * canvas root is.
+   *
+   * READ IT IN A HANDLER, NOT AN EFFECT, and that is a property of the call
+   * site rather than of this prop — so it travels with nothing and has to be
+   * said here. A ref answers "where is the canvas now" at press time, long
+   * after mount. An effect asking the same ref reads `null` on its first run
+   * and is never told otherwise, because assigning `.current` changes no
+   * dependency and this canvas mounts only once styles have loaded. Anything
+   * that must REACT to the canvas arriving takes {@link CanvasProps.onRoot}.
    */
   rootRef?: React.RefObject<HTMLDivElement | null>;
+  /**
+   * The interaction state the panel is editing, forced on the primary
+   * selection so an author can SEE what they are editing.
+   *
+   * A page cannot force a pseudo-class on itself — there is no CSS or DOM way
+   * to make an element match `:hover` without a pointer. So the sheet has to be
+   * compiled with `previewStates`, which gives each state a class alternative
+   * beside its pseudo-class, and this canvas puts that class on one element.
+   * Passed a state without that compile, nothing happens and nothing breaks:
+   * the class is simply in no selector.
+   *
+   * `base` forces nothing. It is what applies when no state does.
+   */
+  forcedState?: StyleState;
   /**
    * The same element, published as a VALUE so a caller can react to it
    * appearing.
@@ -1203,6 +1274,7 @@ export function Canvas({
   document,
   rootRef,
   onRoot,
+  forcedState,
   siteStyles,
   selectedId = null,
   selectedIds,
@@ -1218,25 +1290,32 @@ export function Canvas({
 }: CanvasProps) {
   const root = useRef<HTMLDivElement | null>(null);
 
-  // Published after paint rather than through a merged ref callback: the
-  // element is the same for the life of the mount, and one assignment here is
-  // easier to follow than a callback that has to keep two refs agreeing.
+  /*
+   * ONE assignment site for both publications.
+   *
+   * They are two APIs because they answer two questions — `rootRef` is read in
+   * a pointer handler and asks "where is the canvas now"; `onRoot` is a value
+   * so a reader can REACT to the canvas arriving, which a ref cannot express
+   * because assigning `.current` changes no dependency. Neither can serve the
+   * other's caller.
+   *
+   * But two effects deciding what the element is could drift: an edit to one is
+   * invisible to the other, and the two would then hand out different answers
+   * with nothing to report it. One effect, one element, published twice.
+   *
+   * After paint rather than through a merged ref callback: the element is the
+   * same for the life of the mount, and one assignment here is easier to follow
+   * than a callback keeping two refs agreeing.
+   */
   useEffect(() => {
-    if (rootRef === undefined) return;
-    rootRef.current = root.current;
+    const element = root.current;
+    if (rootRef !== undefined) rootRef.current = element;
+    onRoot?.(element);
     return () => {
-      rootRef.current = null;
+      if (rootRef !== undefined) rootRef.current = null;
+      onRoot?.(null);
     };
-  }, [rootRef]);
-
-  // The same element as a value, for readers that must react to it arriving.
-  useEffect(() => {
-    if (onRoot === undefined) return;
-    onRoot(root.current);
-    return () => {
-      onRoot(null);
-    };
-  }, [onRoot]);
+  }, [rootRef, onRoot]);
 
   /*
    * What to mark. The primary alone when a host has not adopted the set yet,
@@ -1285,7 +1364,7 @@ export function Canvas({
     [rendered, document, sheet]
   );
 
-  useSelectionMarkers(root, marked, selectedId, page);
+  useSelectionMarkers(root, marked, selectedId, page, forcedState);
 
   return (
     <div
