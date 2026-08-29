@@ -45,6 +45,14 @@ function executorOf(db: UsersReadDb): unknown {
     : undefined;
 }
 
+/**
+ * The database surface one pass needs: the jobs table plus the users read the
+ * identity resolver performs. Named as the minimal intersection, rather than the
+ * concrete adapter type, so a caller resolves it from the DI container as
+ * exactly what a pass uses — the same reason `WebhookDrainDatabase` exists.
+ */
+export type JobsPassDatabase = JobsDatabase & UsersReadDb;
+
 /** How long a finished job row is kept before a pass may remove it. */
 export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 
@@ -143,7 +151,7 @@ export function databaseRunAs(
  * budget is spent; jobs scheduled for a future retry are left for a later pass.
  */
 export async function runJobsPass(
-  adapter: JobsDatabase & UsersReadDb,
+  adapter: JobsPassDatabase,
   registry: JobRegistry,
   options?: RunJobsPassOptions
 ): Promise<RunJobsResult> {

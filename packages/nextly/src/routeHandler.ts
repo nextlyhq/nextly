@@ -54,6 +54,7 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
+import { runJobsRoute } from "./api/jobs-run-route";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
@@ -1018,6 +1019,13 @@ async function handleServiceRequest(
   // before they can read it.
   if (service === "webhooks") {
     return handleWebhookRequest(req, method, routeParams);
+  }
+
+  // ==================== JOBS DIRECT DISPATCH ====================
+  // Beside the webhook drain and for the same reason: the handler owns its own
+  // authorization, and it must stay above the shared body read below.
+  if (service === "jobs") {
+    return runJobsRoute(req);
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================

@@ -196,6 +196,7 @@ import {
   registerComponentServices,
   registerDashboardServices,
   registerEmailServices,
+  registerJobServices,
   registerMediaServices,
   registerMetaServices,
   registerRevalidationServices,
@@ -1051,6 +1052,9 @@ export async function registerServices(
   // lazily when a write flushes its intents.
   registerRevalidationServices(ctx);
   registerCollectionServices(ctx);
+  // After collections: the releases job type registered here reaches content
+  // through the Direct API, so the services that back it must already exist.
+  registerJobServices(ctx);
   registerMediaServices(ctx);
   registerMetaServices(ctx);
   registerSingleServices(ctx);

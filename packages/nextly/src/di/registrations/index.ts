@@ -10,6 +10,7 @@ export { registerCollectionServices } from "./register-collections";
 export { registerComponentServices } from "./register-components";
 export { registerDashboardServices } from "./register-dashboard";
 export { registerEmailServices } from "./register-email";
+export { registerJobServices } from "./register-jobs";
 export { registerMediaServices } from "./register-media";
 export { registerMetaServices } from "./register-meta";
 export { registerRevalidationServices } from "./register-revalidation";

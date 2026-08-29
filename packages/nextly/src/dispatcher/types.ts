@@ -23,6 +23,7 @@ export type ServiceType =
   | "emailTemplates"
   | "apiKeys"
   | "webhooks"
+  | "jobs"
   | "generalSettings"
   | "previewLinks"
   | "previewUrl"
