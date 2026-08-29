@@ -75,6 +75,7 @@ import {
   EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
+  selectionIsInspectable,
   pageStyleTrace,
   LayersPanel,
   TokensPanel,
@@ -890,12 +891,19 @@ function isSaveChord(event: KeyboardEvent): boolean {
  * The interaction state to SHOW, given the state being edited and how many
  * blocks are selected.
  *
- * Suppressed rather than reset while several are selected. The inspector
- * replaces its whole tab strip with a multi-selection summary, so the state
- * control goes with it — and the panel's own tab handler cannot catch that,
- * because the stored tab value is still `style` and no tab change happens. A
- * forced state outliving its control is a canvas drawn mid-hover with nothing
- * on screen explaining why.
+ * Suppressed rather than reset whenever the switcher is not on screen. The
+ * inspector replaces its whole tab strip — for a multi-selection, and for a
+ * selection it cannot inspect at all — so the state control goes with it, and
+ * the panel's own tab handler cannot catch either case because the stored tab
+ * value is still `style` and no tab change happens. A forced state outliving
+ * its control is a canvas drawn mid-hover with nothing on screen explaining
+ * why.
+ *
+ * Decides WHETHER THE CONTROL IS THERE rather than taking a selection count,
+ * because a count cannot see the second case: an unregistered block type reads
+ * as one ordinary selection while the panel shows no tabs for it. The
+ * inspectability half is asked of the same predicate the panel's own early
+ * return uses, so the two cannot disagree about what is inspectable.
  *
  * Derived rather than written back, so the author's choice SURVIVES: they
  * shift-click a second block, the canvas returns to the normal appearance, and
@@ -904,9 +912,13 @@ function isSaveChord(event: KeyboardEvent): boolean {
  */
 function shownStyleStateFor(
   editing: StyleState,
-  selectedCount: number
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  selectedId: string | null
 ): StyleState {
-  return selectedCount > 1 ? "base" : editing;
+  const switcherIsOnScreen =
+    selectedIds.length <= 1 && selectionIsInspectable(document, selectedId);
+  return switcherIsOnScreen ? editing : "base";
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
@@ -993,7 +1005,9 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   // canvas showing the same thing. See `shownStyleStateFor`.
   const shownStyleState = shownStyleStateFor(
     styleState,
-    editor.selection.ids.length
+    editor.document,
+    editor.selection.ids,
+    editor.selectedId
   );
   const styleStateBinding = useMemo(
     () => ({ state: shownStyleState, onChange: setStyleState }),

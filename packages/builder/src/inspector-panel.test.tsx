@@ -208,6 +208,16 @@ describe("what InspectorPanel forwards to the style tab", () => {
           } as Partial<BlockNode>)
         )}
         styleState={{ onChange: vi.fn() }}
+        /*
+         * The site's tiers, because the marker answers "set here, and
+         * expressible by this site" — without them it refuses rather than
+         * guessing, so a case omitting them would assert the refusal instead of
+         * the forwarding it is named for.
+         */
+        breakpoints={{
+          viewport: [{ id: "base", label: "Desktop" }],
+          container: [],
+        }}
       />
     );
 

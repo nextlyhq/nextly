@@ -22,9 +22,37 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
+import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+
+/*
+ * REAL nodes, and one of them of a type the registry does not know.
+ *
+ * An empty document was the first shape here and it made the wiring cases green
+ * about a selection that did not exist: nothing was inspectable, so a
+ * derivation counting ids could not tell the difference. The unregistered node
+ * is the case a count cannot see at all — it reads as one ordinary selection
+ * while the panel shows no tabs for it.
+ */
+const DOCUMENT = {
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    { id: "a", type: "acme/leaf", version: 1, props: {} },
+    { id: "b", type: "acme/leaf", version: 1, props: {} },
+    { id: "unknown", type: "acme/not-registered", version: 1, props: {} },
+  ],
+};
 
 const seen: {
   inspector: Record<string, unknown> | undefined;
@@ -164,6 +192,23 @@ function chooseState(next: string): void {
   });
 }
 
+beforeAll(() => {
+  clearBlocks();
+  registerBlocks(
+    [
+      {
+        name: "acme/leaf",
+        version: 1,
+        description: "A block.",
+        example: { props: {} },
+        render: () => null,
+      },
+    ] as never,
+    { source: "blocksfield-state-test" }
+  );
+});
+afterAll(clearBlocks);
+
 beforeEach(() => {
   selectionIds = ["a"];
   seen.inspector = undefined;
@@ -212,6 +257,27 @@ describe("the interaction state reaching both surfaces", () => {
 
     expect(canvasState()).toBe("base");
     expect(panelState()).toBe("base");
+  });
+
+  it("suppresses the state for a block the inspector cannot show", () => {
+    /*
+     * `inspectSelection` returns null for an unregistered block type, so the
+     * panel replaces its whole tab strip and the switcher goes with it — while
+     * the selection is a perfectly ordinary single id. A derivation counting
+     * ids therefore keeps forwarding the state, and the placeholder is drawn
+     * mid-hover with nothing on screen explaining why.
+     *
+     * The control is the SAME state on a registered block, immediately before,
+     * so this cannot pass by the state never reaching the canvas at all.
+     */
+    const view = openEditor();
+    chooseState("hover");
+    expect(canvasState()).toBe("hover");
+
+    selectionIds = ["unknown"];
+    view.rerender();
+
+    expect(canvasState()).toBe("base");
   });
 
   it("RESTORES the chosen state when the selection narrows again", () => {

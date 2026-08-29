@@ -23,7 +23,6 @@
 import {
   breakpointContexts,
   isPlainRecord,
-  MAX_SCANNED_KEYS,
   isTokenRef,
   validateStyleValues,
   type BreakpointId,
@@ -296,9 +295,25 @@ function hasOwnKeys(value: unknown): value is Record<string, never> {
 /**
  * Whether a record carries at least one own key.
  *
- * `Object.keys(...).length > 0` answers the same question and reads every key
- * to do it. These records arrive from storage, so the width is not ours to
- * assume, and the answer is known at the first own key.
+ * The LOOP stops at the first own key; the ENUMERATION does not, and the
+ * difference is worth stating because it is easy to read this as bounded and it
+ * is not. `for...in` asks the engine for the record's key list before the body
+ * runs, so this is O(n) in the record's width however early it returns —
+ * measured here at 0.08ms for a thousand keys, 10.75ms for a hundred thousand
+ * and 103ms for a million. `Object.keys(...).length > 0` costs the same and
+ * allocates as well, which is the only reason to prefer this form.
+ *
+ * No bounded alternative exists at this layer: JavaScript has no O(1) emptiness
+ * test for a plain object, and this package publishes no list of style property
+ * names to probe instead. The width is therefore a property of the DOCUMENT,
+ * and the place to bound it is where a document is admitted.
+ *
+ * What makes that acceptable rather than merely unavoidable: the compiler
+ * enumerates the same record the same way — `validateStyleValues` iterates it
+ * with a bare `for...in` — so a values record wide enough to cost this marker
+ * anything has already cost the compile that produced the page. The bound the
+ * engine DOES apply, `MAX_SCANNED_KEYS` in `boundedKeys`, is over the
+ * breakpoint DEFINITIONS record, which this no longer walks at all.
  */
 function hasAnyOwnKey(record: object): boolean {
   for (const key in record) {
@@ -403,23 +418,27 @@ export function stateHasOwnValues(
   }
 
   /*
-   * With no breakpoints known, the stored keys are the only list there is, and
-   * every one of them counts — the question "which tiers exist" has not been
-   * asked, and treating an unasked question as "none exist" would report every
-   * state as unstyled.
+   * With no breakpoints known there is NO ANSWER, and this returns false rather
+   * than guessing one.
    *
-   * Read with an early break rather than through `Object.keys`, and stopped
-   * where `boundedKeys` stops. A reader walking the same untrusted records has
-   * to stop where the compiler stops, or a corrupt row costs this the unbounded
-   * scan that bound exists to prevent while compilation pays 256.
+   * The marker means "you have set something here that this site can express",
+   * and without the site's tiers that question cannot be asked at all — a value
+   * under a tier the sheet lacks reaches nobody, and which tiers the sheet has
+   * is exactly what is missing. Reporting from the stored keys instead would
+   * answer a different question and read as the same dot.
+   *
+   * It is also what makes this bounded BY CONSTRUCTION rather than by a cap.
+   * The stored record arrives from storage and can be arbitrarily wide, and
+   * every way of walking it — `Object.keys`, `for...in` with an early break —
+   * asks the engine for the whole key list first, so an early exit bounds the
+   * BODY and not the enumeration. Measured by review: a plain-object probe
+   * breaking after 256 entries still grew from ~32ms at 100,000 keys to ~573ms
+   * at 1,000,000. A cap cannot fix that; not enumerating can.
+   *
+   * The product always supplies them — `BlocksField` passes the same
+   * breakpoints it compiles the canvas against — so this is the path for a host
+   * that has not adopted the marker rather than a case an author reaches.
    */
-  let scanned = 0;
-  for (const tier in tiers) {
-    if (!Object.hasOwn(tiers, tier)) continue;
-    if (scanned >= MAX_SCANNED_KEYS) break;
-    scanned += 1;
-    if (holdsValues(tier)) return true;
-  }
   return false;
 }
 

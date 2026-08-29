@@ -21,6 +21,18 @@ import { stateHasOwnValues } from "./style-values";
 
 afterEach(cleanup);
 
+/**
+ * The site's tiers, supplied to every marker case.
+ *
+ * The marker answers "set here, and expressible by this site", so it needs the
+ * tiers to answer at all — a case that omitted them would be asserting the
+ * refusal below rather than the marking it names.
+ */
+const SITE = {
+  viewport: [{ id: "base", label: "Desktop" }],
+  container: [],
+};
+
 const marked = (): string[] =>
   screen
     .getAllByRole("radio")
@@ -39,7 +51,14 @@ describe("which states report that they carry values", () => {
       focus: {},
     } as unknown as NodeStyles;
 
-    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
 
     expect(marked()).toEqual(["Hover"]);
   });
@@ -55,10 +74,17 @@ describe("which states report that they carry values", () => {
       active: { base: {} },
     } as unknown as NodeStyles;
 
-    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
 
     expect(marked()).toEqual([]);
-    expect(stateHasOwnValues(styles, "active", undefined)).toBe(false);
+    expect(stateHasOwnValues(styles, "active", SITE)).toBe(false);
   });
 
   it("leaves the base state unmarked even when it carries values", () => {
@@ -70,7 +96,14 @@ describe("which states report that they carry values", () => {
       hover: { base: { color: "#000002" } },
     } as unknown as NodeStyles;
 
-    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
 
     expect(marked()).toEqual(["Hover"]);
   });
@@ -94,7 +127,14 @@ describe("which states report that they carry values", () => {
     } as unknown as NodeStyles;
 
     expect(() =>
-      render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />)
+      render(
+        <StateSwitcher
+          state="base"
+          onSelect={vi.fn()}
+          styles={styles}
+          breakpoints={SITE}
+        />
+      )
     ).not.toThrow();
 
     expect(marked()).toEqual(["Pressed"]);
@@ -107,10 +147,17 @@ describe("which states report that they carry values", () => {
       hover: { base: { color: "#000001" } },
     }) as NodeStyles;
 
-    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
 
     expect(marked()).toEqual([]);
-    expect(stateHasOwnValues(styles, "hover", undefined)).toBe(false);
+    expect(stateHasOwnValues(styles, "hover", SITE)).toBe(false);
   });
 
   it("does NOT mark an ARRAY-shaped tier the compiler will emit nothing for", () => {
@@ -131,7 +178,14 @@ describe("which states report that they carry values", () => {
       active: { base: { color: "#000003" } },
     } as unknown as NodeStyles;
 
-    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
 
     // `active` is the control: a real record beside the two bad shapes, so this
     // case cannot pass by the marker never appearing at all.
@@ -169,18 +223,39 @@ describe("which states report that they carry values", () => {
     expect(marked()).toEqual(["Pressed"]);
   });
 
-  it("counts every stored tier when the site's breakpoints are not known", () => {
+  it("marks NOTHING when the site's tiers are not known", () => {
     /*
-     * The question "which tiers exist" has not been asked, and treating an
-     * unasked question as "none exist" would report every state as unstyled —
-     * an absence answering as a verdict.
+     * A deliberate refusal rather than a default. The marker means "set here,
+     * and expressible by this site", and without the site's tiers that question
+     * cannot be asked: a value under a tier the sheet lacks reaches nobody, and
+     * which tiers the sheet has is exactly what is missing.
+     *
+     * It is also what bounds this by construction. A stored record arrives from
+     * storage and can be arbitrarily wide, and every way of walking it —
+     * `Object.keys`, `for...in` with an early break — asks the engine for the
+     * whole key list first, so an early exit bounds the body and not the
+     * enumeration. Measured: 0.08ms at a thousand keys, 10.75ms at a hundred
+     * thousand, 103ms at a million. Not walking it is the only fix.
+     *
+     * The control is the SAME styles marked when tiers ARE known, immediately
+     * below, so this cannot pass by the marker never appearing.
      */
     const styles = {
-      hover: { "some-tier": { color: "#000001" } },
+      hover: { base: { color: "#000001" } },
     } as unknown as NodeStyles;
 
     render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    expect(marked()).toEqual([]);
 
+    cleanup();
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
     expect(marked()).toEqual(["Hover"]);
   });
 
@@ -191,10 +266,8 @@ describe("which states report that they carry values", () => {
    * the code under test rather than a detail: `ownData` reads through
    * `Object.getOwnPropertyDescriptor` and returns `part.value`, so an accessor
    * has no `value` and reads as ABSENT without ever being invoked. A counter
-   * built from getters therefore stays at zero and every bound assertion passes
-   * against an unbounded reader — measured, both breaks survived it.
-   *
-   * The descriptor lookup itself is the work, so that is what is counted.
+   * built from getters stays at zero and every bound assertion passes against
+   * an unbounded reader — measured, both breaks survived it.
    */
   function countingTiers(width: number, valueAt: number) {
     const target: Record<string, unknown> = {};
@@ -210,50 +283,6 @@ describe("which states report that they carry values", () => {
     });
     return { proxy, counted };
   }
-
-  it("stops reading a wide stored map where the COMPILER stops", () => {
-    /*
-     * A stored record arrives from storage and can be arbitrarily wide. The
-     * compiler caps its own reads of these records at `MAX_SCANNED_KEYS`, so a
-     * payload it handles boundedly must not cost the Style tab an unbounded
-     * walk on every render, once per non-base state.
-     *
-     * The only value sits past the bound, so a bounded reader cannot see it —
-     * and `active` is the control, holding one within reach, so this cannot
-     * pass by nothing being marked at all.
-     */
-    const read = (width: number): number => {
-      const { proxy, counted } = countingTiers(width, width - 1);
-      render(
-        <StateSwitcher
-          state="base"
-          onSelect={vi.fn()}
-          styles={
-            {
-              hover: proxy,
-              active: { base: { color: "#000002" } },
-            } as unknown as NodeStyles
-          }
-        />
-      );
-      return counted.reads;
-    };
-
-    /*
-     * Asserted as INDEPENDENCE from the width rather than against a constant,
-     * because the constant is not the property. A bounded reader still costs
-     * several descriptor lookups per key it examines — measured, three — so
-     * pinning a number here would encode that arithmetic and fail the next time
-     * a guard is added, while an unbounded reader would still be caught only by
-     * accident. Two widths, four times apart, must cost the same.
-     */
-    const narrow = read(5000);
-    cleanup();
-    const wide = read(20000);
-
-    expect(wide).toBe(narrow);
-    expect(marked()).toEqual(["Pressed"]);
-  });
 
   it("asks only the tiers the SHEET has when breakpoints are known", () => {
     /*
@@ -287,7 +316,9 @@ describe("which states report that they carry values", () => {
   it("marks nothing when the host supplies no styles at all", () => {
     // Absent styles is "the question was not asked", which must not read as
     // "every state is unstyled" the way an empty object would.
-    render(<StateSwitcher state="base" onSelect={vi.fn()} />);
+    render(
+      <StateSwitcher state="base" onSelect={vi.fn()} breakpoints={SITE} />
+    );
 
     expect(marked()).toEqual([]);
   });
@@ -298,7 +329,14 @@ describe("which states report that they carry values", () => {
     // click through four states to find out.
     const styles = { hover: { base: { color: "#000001" } } } as NodeStyles;
 
-    render(<StateSwitcher state="base" onSelect={vi.fn()} styles={styles} />);
+    render(
+      <StateSwitcher
+        state="base"
+        onSelect={vi.fn()}
+        styles={styles}
+        breakpoints={SITE}
+      />
+    );
 
     expect(
       screen.getByRole("radio", { name: /Hover.*has styles/ })

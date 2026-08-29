@@ -39,6 +39,7 @@ export type { BuilderShellProps } from "./builder-shell";
  * keeps the cascade from being walked per control; `style-trace.ts` says why it
  * is compiled a second time.
  */
+export { selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
