@@ -436,6 +436,95 @@ describe("applyDueReleases", () => {
     expect(marked).toEqual([]);
   });
 
+  it("STOPS starting actions once the deadline has passed", async () => {
+    // The handler being written to fit a tick. The jobs runner cannot bound
+    // this: `maxDurationMs` is checked before each CLAIM, so it bounds how many
+    // JOBS a pass starts, not how long one already-running handler takes.
+    const publish = vi.fn(async () => {});
+    // A clock that advances a second per reading, so the deadline is crossed
+    // deterministically rather than by wall time. The deadline sits BELOW the
+    // first in-loop reading on purpose: `at = now()` consumes the first tick
+    // before the loop, so a deadline above it would never be reached and this
+    // case would pass for the wrong reason.
+    let tick = 0;
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
+      ],
+      mutations: { publish },
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    expect(result.deferred).toBe(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT discharge a release whose actions it never started", async () => {
+    // The trap a naive cap walks into. An unattempted action leaves NO outcome,
+    // and the discharge test reads outcomes — so without holding it open, the
+    // release is marked published, loses its read-time projection, and loses
+    // the members that never ran. A pass that reported success having done half
+    // the work looks exactly like one that had less to do.
+    const marked: string[] = [];
+    let tick = 0;
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
+      ],
+      marked,
+    });
+    await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() + 500),
+    });
+
+    // r1 was performed and may discharge; r2 was never started and must not.
+    expect(marked).toEqual(["r1"]);
+  });
+
+  it("makes progress even when the budget is already spent", async () => {
+    // A budget too small for a single action must still move, or a backlog
+    // stalls forever while every pass reports success.
+    const publish = vi.fn(async () => {});
+    const d = deps({ mutations: { publish } });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => NOW,
+      deadline: new Date(NOW.getTime() - 60_000),
+    });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(result.deferred).toBe(0);
+  });
+
+  it("defers nothing when no deadline is set — the control", async () => {
+    // Absent means unbounded, which is right for a CLI and a test. A deadline
+    // that applied by default would make every case above pass while silently
+    // truncating ordinary passes.
+    const publish = vi.fn(async () => {});
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        member({ id: "a", releaseId: "r1", entryId: "e1" }),
+        member({ id: "b", releaseId: "r2", entryId: "e2" }),
+      ],
+      mutations: { publish },
+    });
+    const result = await applyDueReleases(d);
+
+    expect(result.deferred).toBe(0);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
   it("asks nothing of the database when no release is due", async () => {
     const listMembersOf = vi.fn(async () => []);
     const d = deps({ releases: [] });

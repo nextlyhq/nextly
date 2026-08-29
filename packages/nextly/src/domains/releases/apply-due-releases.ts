@@ -123,6 +123,20 @@ export interface ApplyDueReleasesDeps {
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
   now?: () => Date;
+  /**
+   * When this pass must stop starting new actions.
+   *
+   * A drain runs behind a serverless cron tick as often as on a long-lived
+   * process, and a platform kills a tick at a fixed limit. The jobs runner
+   * cannot bound this for us and says so: `maxDurationMs` is checked before
+   * each CLAIM, so it bounds how many JOBS a pass starts, not how long one
+   * already-running handler takes. It names the handler being written to fit a
+   * tick as what bounds this instead. This is that.
+   *
+   * Absent means unbounded, which is right for a CLI or a test and wrong for a
+   * tick.
+   */
+  deadline?: Date;
 }
 
 /** Why one action did not happen. Recorded, never swallowed. */
@@ -174,6 +188,15 @@ export interface ApplyDueReleasesResult {
   published: number;
   applied: number;
   failed: number;
+  /**
+   * Actions this pass did not start, because it ran out of time.
+   *
+   * Reported rather than implied. A pass that stopped early and one that had
+   * less to do return the same counts otherwise, so a caller could not tell a
+   * completed drain from a truncated one — and "success" on a partial pass is
+   * the reading that turns a backlog into a silent stall.
+   */
+  deferred: number;
   outcomes: MaterialisationOutcome[];
 }
 
@@ -185,7 +208,14 @@ export async function applyDueReleases(
 
   const releases = await deps.repository.findDueReleases(at);
   if (releases.length === 0) {
-    return { due: 0, published: 0, applied: 0, failed: 0, outcomes: [] };
+    return {
+      due: 0,
+      published: 0,
+      applied: 0,
+      failed: 0,
+      deferred: 0,
+      outcomes: [],
+    };
   }
 
   const members = await deps.repository.listMembersOf(releases.map(r => r.id));
@@ -203,9 +233,34 @@ export async function applyDueReleases(
   });
 
   const outcomes: MaterialisationOutcome[] = [];
-  for (const action of plan.actions) {
+  // Releases this pass could not finish. Kept separately from the failures
+  // below because an unattempted action leaves NO outcome, and the discharge
+  // test reads outcomes — so a release whose remaining members were never
+  // started would otherwise look like one whose members all succeeded, be
+  // marked published, lose its read-time projection, and lose those members
+  // permanently. That is the same discharge-what-did-not-happen failure this
+  // module already refuses for a failed member.
+  const unfinished = new Set<string>();
+  for (let i = 0; i < plan.actions.length; i += 1) {
+    const action = plan.actions[i];
+    // Checked BEFORE starting, never mid-action: nothing here can interrupt a
+    // content mutation, and abandoning one half-done outside the database is
+    // worse than being late. `outcomes.length > 0` guarantees progress — a
+    // budget too small for even one action must still move, or a backlog stalls
+    // forever while every pass reports success.
+    if (
+      deps.deadline !== undefined &&
+      outcomes.length > 0 &&
+      now().getTime() >= deps.deadline.getTime()
+    ) {
+      for (let j = i; j < plan.actions.length; j += 1) {
+        unfinished.add(plan.actions[j].releaseId);
+      }
+      break;
+    }
     outcomes.push(await applyOne(deps, action));
   }
+  const deferred = plan.actions.length - outcomes.length;
 
   // A release is discharged only when nothing attributed to it failed — AND
   // nothing failed in any release it shares a document with.
@@ -216,9 +271,14 @@ export async function applyDueReleases(
   // becomes the winner for their shared document and undoes it. Holding the
   // whole overlapping set open keeps every member of that argument present
   // until all of them can be settled together.
-  const brokenReleases = new Set(
-    outcomes.filter(o => o.failure !== null).map(o => o.releaseId)
-  );
+  const brokenReleases = new Set([
+    ...outcomes.filter(o => o.failure !== null).map(o => o.releaseId),
+    // Not started is not succeeded. Folded in here rather than checked
+    // separately so the overlapping-set expansion below covers it too: a
+    // release sharing a document with an unfinished one must stay open for the
+    // same reason a failed one does, or the pair reverses itself.
+    ...unfinished,
+  ]);
   const heldOpen = new Set<string>();
   for (const group of plan.overlappingReleases) {
     if (group.some(id => brokenReleases.has(id))) {
@@ -242,6 +302,7 @@ export async function applyDueReleases(
     published,
     applied: outcomes.length - failed,
     failed,
+    deferred,
     outcomes,
   };
 }
