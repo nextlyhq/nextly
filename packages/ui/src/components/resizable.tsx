@@ -35,6 +35,9 @@
  * **Accessibility**:
  * - The handle is a `separator` with `aria-valuenow`/`aria-valuemin`/`aria-valuemax`, supplied by
  *   the library, so a screen reader announces the split as a percentage
+ * - Its accessible NAME is required by the type, because the library supplies everything except
+ *   that: a focusable separator with a position and no name announces "74" and leaves a keyboard
+ *   user to guess what is at 74. Only the caller knows what the two panels hold
  * - Arrow keys resize, Home/End collapse and expand, Enter toggles a collapsible panel
  * - The hit area is larger than the visible line, so the target is reachable without precision
  *   pointing (WCAG 2.5.8 Target Size)
@@ -49,11 +52,11 @@
  *   <ResizablePanel id="layers" minSize="15%" collapsible>
  *     <LayersPanel />
  *   </ResizablePanel>
- *   <ResizableHandle withGrip />
+ *   <ResizableHandle withGrip aria-label="Layers and canvas" />
  *   <ResizablePanel id="canvas">
  *     <Canvas />
  *   </ResizablePanel>
- *   <ResizableHandle withGrip />
+ *   <ResizableHandle withGrip aria-label="Canvas and inspector" />
  *   <ResizablePanel id="inspector" minSize="20%">
  *     <Inspector />
  *   </ResizablePanel>
@@ -70,6 +73,24 @@ import type * as React from "react";
 import * as ResizablePrimitive from "react-resizable-panels";
 
 import { cn } from "../lib/utils";
+
+/**
+ * A splitter's accessible name, which the caller must supply one way or the
+ * other.
+ *
+ * REQUIRED rather than documented, because the handle is focusable: a keyboard
+ * user lands on it whether or not anyone remembered, and an unnamed separator
+ * announces its position — "74" — with nothing saying what is at 74. The
+ * caller is the only one who can name it, since only the caller knows what the
+ * two panels hold, so the type is the only place the requirement can live.
+ *
+ * Either attribute satisfies it and neither may be paired with the other: two
+ * names on one element is not a stronger label, it is an ambiguity resolved by
+ * precedence rules nobody writing the call site is thinking about.
+ */
+type SplitterName =
+  | { "aria-label": string; "aria-labelledby"?: never }
+  | { "aria-labelledby": string; "aria-label"?: never };
 
 /**
  * A group of resizable panels, laid out horizontally or vertically.
@@ -107,9 +128,13 @@ const ResizableHandle = ({
   className,
   children,
   ...props
-}: React.ComponentProps<typeof ResizablePrimitive.Separator> & {
-  withGrip?: boolean;
-}) => (
+}: Omit<
+  React.ComponentProps<typeof ResizablePrimitive.Separator>,
+  "aria-label" | "aria-labelledby"
+> &
+  SplitterName & {
+    withGrip?: boolean;
+  }) => (
   <ResizablePrimitive.Separator
     className={cn(
       // The drawn line is 1px; the element around it is wider and transparent, so the pointer

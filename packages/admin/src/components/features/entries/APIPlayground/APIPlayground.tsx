@@ -907,7 +907,11 @@ export function APIPlayground({
               <ResizablePanel id="request" minSize="25%">
                 {requestPane}
               </ResizablePanel>
-              <ResizableHandle withGrip className="mx-4" />
+              <ResizableHandle
+                withGrip
+                className="mx-4"
+                aria-label="Request and response"
+              />
               <ResizablePanel id="response" minSize="30%">
                 {responsePane}
               </ResizablePanel>

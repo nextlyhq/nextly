@@ -1054,7 +1054,13 @@ function ShellRegions({
                   </React.Fragment>
                 </section>
               </ResizablePanel>
-              <ResizableHandle withGrip />
+              {/* Named for what it DIVIDES rather than for itself. A keyboard
+                  user lands here between two regions and hears its position;
+                  "Panel and canvas" is what makes the position mean something.
+                  The panel side is named by its role rather than by which
+                  panel is open, because the name would otherwise change under
+                  a user who is standing on it. */}
+              <ResizableHandle withGrip aria-label="Panel and canvas" />
             </>
           ) : null}
 
@@ -1106,7 +1112,7 @@ function ShellRegions({
             </div>
           </ResizablePanel>
 
-          <ResizableHandle withGrip />
+          <ResizableHandle withGrip aria-label="Canvas and inspector" />
 
           <ResizablePanel
             id="inspector"
