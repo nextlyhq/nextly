@@ -8,7 +8,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { DtcgNode } from "./dtcg";
-import { NEXTLY_EXTENSION, dtcgToTokens, tokensToDtcg } from "./dtcg";
+import {
+  NEXTLY_EXTENSION,
+  dtcgToTokens,
+  readFamilyList,
+  tokensToDtcg,
+} from "./dtcg";
 import type { SiteToken } from "./site-tokens";
 
 import { isTokenName } from "./declarations";
@@ -1291,5 +1296,44 @@ describe("this system's own extension, on the way in", () => {
     expect(read.tokens[0]?.extensions).toEqual({
       "com.figma": { anything: "at all" },
     });
+  });
+});
+
+describe("a var() substitution CSS will actually make", () => {
+  it("reads a well-formed call as dynamic, closed either way", () => {
+    // The two legal terminators: the closing paren, and a comma opening a
+    // fallback. Both are values a browser substitutes into, so neither is a
+    // fault to report.
+    expect(readFamilyList("var(--brand)").kind).toBe("dynamic");
+    expect(readFamilyList("var(--brand, serif)").kind).toBe("dynamic");
+    expect(readFamilyList("var(--a, var(--b))").kind).toBe("dynamic");
+  });
+
+  it("refuses a name that is not a custom property", () => {
+    // `--` is what makes an identifier a custom property. `var(foo)` computes
+    // to nothing, so the declaration is dropped rather than falling through.
+    expect(readFamilyList("var(foo)").kind).toBe("invalid");
+  });
+
+  it("refuses a space between the name and the paren", () => {
+    // CSS produces a function token only when the identifier TOUCHES the `(`.
+    // `var (--brand)` is an identifier beside a parenthesised block, which the
+    // font-family grammar has no reading for at all.
+    expect(readFamilyList("var (--brand)").kind).toBe("invalid");
+  });
+
+  it("refuses a first argument that never terminates", () => {
+    // After the custom-property name only a comma or the closing paren may
+    // follow; anything else is a syntax error, and the browser drops the
+    // declaration rather than reading the name and ignoring the rest.
+    expect(readFamilyList("var(--brand extra)").kind).toBe("invalid");
+    expect(readFamilyList("var(--brand serif)").kind).toBe("invalid");
+  });
+
+  it("lets one malformed call spoil the list it sits in", () => {
+    // A declaration is dropped whole, so a good call beside a bad one does not
+    // rescue it.
+    expect(readFamilyList("var(--ok), var(bad)").kind).toBe("invalid");
+    expect(readFamilyList("var(--ok), var (--also-ok)").kind).toBe("invalid");
   });
 });
