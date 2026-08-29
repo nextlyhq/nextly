@@ -70,8 +70,8 @@ async function seedCompanion(
 /**
  * The companion as it stands on an install that was localized BEFORE
  * Draft/Published was enabled: physically present, and with no `_status`.
- * `reconcileCompanionColumns` declines to add the column to an already
- * provisioned companion, so this state persists until `nextly migrate` runs.
+ * The runtime reconcile never emits the ADD, and `nextly migrate` does not
+ * either — measured — so this state persists.
  */
 async function seedCompanionWithoutStatus(
   t: TestNextly,
@@ -220,7 +220,7 @@ describe("unpublishAllLocales", () => {
     });
 
     expect(res.success).toBe(false);
-    expect(res.message).toContain("nextly migrate");
+    expect(res.message).toContain("no per-language status column");
     // Changed NOTHING — asserted against the STORED row, not through `getEntry`.
     // The read path is degraded by the very column this test removes, so asking
     // it would be asking a witness with the same defect: it answers `undefined`

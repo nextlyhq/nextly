@@ -29,11 +29,11 @@ clearing it would make a later republish report a first publication that had
 already happened.
 
 A takedown REFUSES rather than half-performing when a collection's translation
-table physically lacks its status column — the state left by enabling
-Draft/Published on a collection that was already localized, which `nextly
-migrate` repairs. Publishing into that state fails loudly and loses nothing; a
-withdrawal that reported success would leave every translation readable, so this
-one names the collection, says what to run, and changes nothing.
+table physically lacks its per-language status column — the state left by
+enabling Draft/Published on a collection that was already localized. Publishing
+into that state fails loudly and loses nothing; a withdrawal that reported
+success would leave every translation readable, so this one names the
+collection, explains the state, and changes nothing.
 
 Per-language writes are unaffected, and a locale-scoped member is never widened
 into a document-wide one.

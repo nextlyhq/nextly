@@ -4535,11 +4535,20 @@ export class CollectionMutationService extends BaseService {
    * ## Why this refuses instead of half-performing
    *
    * `_status` can be physically ABSENT from a companion that was localized
-   * before Draft/Published was enabled on it: `reconcileCompanionColumns`
-   * deliberately declines to add the column to an already-provisioned companion,
-   * because ADD-then-backfill is not retryable from physical shape alone, and
-   * tells the operator to run `nextly migrate` instead. In production, where
-   * boot refuses DDL, that state persists.
+   * before Draft/Published was enabled on it. ADD-then-back-fill is not
+   * retryable from physical shape alone — if the ADD lands and the back-fill
+   * does not, every later run sees the column and concludes the table is in
+   * step, leaving published content reading as draft — so the runtime companion
+   * reconcile never emits it: `ensureLocalizedCompanions` passes the SAME status
+   * on both sides deliberately, "so the builder sees no status change and emits
+   * only the column difference — never an ADD or DROP of `_status`".
+   *
+   * MEASURED, because the obvious remedy is the wrong one: `nextly migrate`
+   * does NOT add this column. The only path that does is the Schema Builder's
+   * own companion transition, which introspects the physical shape and is
+   * reached by saving the collection. A code-first collection in this state has
+   * no automated remedy at all, which is why the refusal describes the
+   * situation rather than naming one command.
    *
    * The gate the publish path uses cannot see it. `hasStatus` is
    * `metadata.status === true` — the DECLARED shape — and `isCompanionReady`
@@ -4574,9 +4583,10 @@ export class CollectionMutationService extends BaseService {
         statusCode: 409,
         message:
           `Cannot unpublish every language of '${params.collectionName}': its translation table ` +
-          `is missing the per-language status column, so the translations cannot be taken down. ` +
-          `This collection was localized before Draft/Published was enabled on it. ` +
-          `Run \`nextly migrate\` to add the column, then retry. ` +
+          `has no per-language status column, so the translations cannot be taken down. ` +
+          `This happens when Draft/Published is enabled on a collection that was already ` +
+          `localized. For a Schema Builder collection, saving the collection again applies the ` +
+          `change. For a code-first collection the column must be added before this will work. ` +
           `Nothing was changed.`,
         data: null,
       };
