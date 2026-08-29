@@ -132,6 +132,47 @@ describe("reading a font-family value against the faces a site loads", () => {
     }
   });
 
+  it("reads a MALFORMED var() as invalid, not as dynamic", () => {
+    // CSS requires the first argument to be a custom-property name, so
+    // `var(foo)` computes to an invalid font-family and the browser drops the
+    // declaration rather than falling through to `serif`. Reading every `var(`
+    // as dynamic gave a dropped declaration an all-clear.
+    expect(readStack("var(foo), serif", []).kind).toBe("invalid");
+    expect(readStack("var(--ok), serif", []).kind).toBe("dynamic");
+    // One malformed call spoils the value however many good ones sit beside it.
+    expect(readStack("var(--a), var(bad)", []).kind).toBe("invalid");
+  });
+
+  it("keeps the whitespace inside a QUOTED family name", () => {
+    // Inside quotes the spaces are part of the name, so `" Brand "` names a
+    // different family from `Brand` and must not match a face called `Brand`.
+    expect(readStack('" Brand "', [face("Brand")]).families[0]).toEqual({
+      family: " Brand ",
+      source: "not-provided",
+    });
+    // The control: whitespace OUTSIDE the quotes is separation, and still trims.
+    expect(readStack(' "Brand" ', [face("Brand")]).families[0]).toEqual({
+      family: "Brand",
+      source: "hosted",
+    });
+  });
+
+  it("reports only tokens the compiler actually writes", () => {
+    // `emitTokenBlocks` refuses a token whose name is not a token name, so it
+    // reaches no page. Reporting on it would describe a typeface the site never
+    // emits — and claim its hosted family renders when nothing references it.
+    const rows = fontTokenRows(
+      {
+        tokens: [
+          { name: "bad name", kind: "fontFamily", values: { light: "Brand" } },
+          { name: "brand.ok", kind: "fontFamily", values: { light: "Brand" } },
+        ],
+      },
+      [face("Brand")]
+    );
+    expect(rows.map(r => r.token.name)).toEqual(["brand.ok"]);
+  });
+
   it("counts only faces the compiler will actually emit", () => {
     // A remote src is refused by `validateFontFace`, so no `@font-face` reaches
     // the sheet. Counting it as hosted marks a token healthy against a file the

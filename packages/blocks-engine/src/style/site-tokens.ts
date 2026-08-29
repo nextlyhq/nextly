@@ -969,13 +969,24 @@ function tokenNamingRefusal(token: SiteToken): string | undefined {
 export function emitTokenBlocks(
   set: SiteTokenSet,
   selector: string
-): { css: string; issues: ValidationIssue[] } {
+): { css: string; issues: ValidationIssue[]; emitted: readonly SiteToken[] } {
   const { prefix, issue } = resolveTokenPrefix(set.prefix);
   const issues: ValidationIssue[] = issue ? [issue] : [];
 
   const light: string[] = [];
   const dark: string[] = [];
   const seen = new Map<string, string>();
+  /*
+   * The tokens this call actually WROTE.
+   *
+   * Reported rather than left to be re-derived, because the refusals above are
+   * five separate conditions — a name that is not a token name, no light value,
+   * a value the guard rejects, a value that fetches, and two identities landing
+   * on one custom property — and a caller asking "which tokens does this site
+   * emit" would have to restate all five. A second statement of them agrees
+   * today and drifts the first time one changes.
+   */
+  const emitted: SiteToken[] = [];
 
   for (const token of set.tokens) {
     const naming = tokenNamingRefusal(token);
@@ -1051,6 +1062,7 @@ export function emitTokenBlocks(
       continue;
     }
     seen.set(property, token.name);
+    emitted.push(token);
 
     // Reported, and then written anyway. A value that does not match its kind
     // is dropped by the browser where it is USED, which costs the author the
@@ -1087,9 +1099,11 @@ export function emitTokenBlocks(
         `The selector these tokens would be written under is longer than ${MAX_TOKEN_SELECTOR_LENGTH} characters, so none were written.`
       )
     );
-    return { css: "", issues };
+    // Nothing is written under an unusable selector, so nothing was emitted —
+    // whatever survived the per-token refusals above.
+    return { css: "", issues, emitted: [] };
   }
-  if (light.length === 0) return { css: "", issues };
+  if (light.length === 0) return { css: "", issues, emitted: [] };
 
   let css = `${selector}{${light.join(";")}}`;
   if (dark.length > 0) {
@@ -1099,5 +1113,5 @@ export function emitTokenBlocks(
         ? `@media (prefers-color-scheme:dark){${body}}`
         : `[${DARK_MODE_ATTRIBUTE}="dark"] ${body}`;
   }
-  return { css, issues };
+  return { css, issues, emitted };
 }

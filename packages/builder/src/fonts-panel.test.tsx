@@ -147,6 +147,29 @@ describe("the panel over a site that has been read", () => {
     expect(duplicateKey).toBe(false);
   });
 
+  it("draws a subset face with glyphs that face can actually render", () => {
+    // A face limited to the Greek range covers none of the Latin sentence, so
+    // the browser would draw the row from another subset or a fallback — the
+    // row would claim to demonstrate a file whose glyphs are nowhere on screen.
+    const greek: FontFaceDef = {
+      family: "Brand",
+      src: [{ url: "/fonts/brand-greek.woff2", format: "woff2" }],
+      unicodeRange: "U+0370-03FF",
+    };
+    render(<FontsPanel faces={[greek]} tokens={{ tokens: [] }} />);
+    expect(screen.getByText(/Αλμοστ/)).toBeTruthy();
+    expect(
+      screen.queryByText("Almost before we knew it, we had left the ground")
+    ).toBeNull();
+  });
+
+  it("keeps the Latin specimen for a face declaring no range", () => {
+    render(<FontsPanel faces={[face("Brand")]} tokens={{ tokens: [] }} />);
+    expect(
+      screen.getByText("Almost before we knew it, we had left the ground")
+    ).toBeTruthy();
+  });
+
   it("says a site with no faces has none, rather than staying silent", () => {
     render(<FontsPanel faces={[]} tokens={{ tokens: [] }} />);
     expect(screen.getByText(/loads no font files of its own/)).toBeTruthy();

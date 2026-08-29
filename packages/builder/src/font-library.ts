@@ -18,6 +18,7 @@
  * @module font-library
  */
 import {
+  emitTokenBlocks,
   readFamilyList,
   validateFontFace,
   type FamilyListKind,
@@ -129,7 +130,10 @@ function sourceOf(
   // claim. So a site loading a face it called `serif` still gets the browser
   // default from a bare `serif`, and only a quoted value reaches its file.
   if (entry.kind === "generic") return "generic";
-  const key = entry.part.name.trim().toLowerCase();
+  // NOT trimmed. The reader already removed the separation around an unquoted
+  // name and kept a quoted one verbatim, so trimming here would undo that and
+  // match `" Brand "` — a different family — against a face called `Brand`.
+  const key = entry.part.name.toLowerCase();
   return hosted.has(key) ? "hosted" : "not-provided";
 }
 
@@ -201,8 +205,22 @@ export function fontTokenRows(
   tokens: SiteTokenSet | undefined,
   faces: readonly FontFaceDef[]
 ): FontTokenRow[] {
-  const all = tokens?.tokens ?? [];
-  return all
+  /*
+   * The tokens the compiler WRITES, not every token in the set.
+   *
+   * `emitTokenBlocks` refuses a token on five separate grounds — a name that is
+   * not a token name, no light value, a value its guard rejects, a value that
+   * fetches, and two identities landing on one custom property — and a refused
+   * token reaches no page. Reporting on it would describe a typeface the site
+   * never emits, and say its hosted family renders when nothing references it.
+   *
+   * Asked of the emitter rather than re-derived here: five conditions restated
+   * in a second place agree today and drift the first time one changes. The
+   * selector is the one the sheet uses, so the answer is the sheet's own.
+   */
+  if (tokens === undefined) return [];
+  const emitted = emitTokenBlocks(tokens, ":root").emitted;
+  return emitted
     .filter(token => token.kind === "fontFamily")
     .map(token => ({
       token,

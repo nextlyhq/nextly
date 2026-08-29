@@ -75,6 +75,50 @@ export interface FontsPanelProps {
 /** The specimen, one sentence with ascenders, descenders and round forms. */
 const SPECIMEN = "Almost before we knew it, we had left the ground";
 
+/**
+ * Specimen text for a face limited to one script.
+ *
+ * A face subset to a non-Latin `unicodeRange` covers none of the Latin sentence
+ * above, so the browser draws that row from another subset of the family or
+ * from a fallback — the row would claim to demonstrate a file whose glyphs are
+ * nowhere on screen. Ranges are matched by their START codepoint, which is what
+ * a `unicodeRange` names first and is enough to choose a script.
+ *
+ * Latin faces and faces declaring no range keep the sentence: it exercises
+ * ascenders, descenders and round forms, which is what a specimen is for.
+ */
+const SCRIPT_SPECIMENS: readonly {
+  readonly from: number;
+  readonly to: number;
+  readonly text: string;
+}[] = [
+  { from: 0x0370, to: 0x03ff, text: "Αλμοστ πριν το καταλάβουμε" },
+  { from: 0x0400, to: 0x04ff, text: "Почти прежде чем мы поняли" },
+  { from: 0x0590, to: 0x05ff, text: "כמעט לפני שידענו זאת" },
+  { from: 0x0600, to: 0x06ff, text: "تقريبا قبل أن ندرك ذلك" },
+  { from: 0x0900, to: 0x097f, text: "इससे पहले कि हमें पता चलता" },
+  { from: 0x0e00, to: 0x0e7f, text: "เกือบก่อนที่เราจะรู้ตัว" },
+  { from: 0x3040, to: 0x30ff, text: "気づく前に地面を離れていた" },
+  { from: 0xac00, to: 0xd7af, text: "우리가 알기도 전에 땅을 떠났다" },
+];
+
+/** The first codepoint a `unicodeRange` names, or nothing when unreadable. */
+function firstCodepoint(range: string | undefined): number | undefined {
+  if (range === undefined) return undefined;
+  const match = /U\+([0-9A-F]{1,6})/i.exec(range);
+  if (match?.[1] === undefined) return undefined;
+  const value = Number.parseInt(match[1], 16);
+  return Number.isNaN(value) ? undefined : value;
+}
+
+/** What to draw for one face, so the row demonstrates the file it names. */
+function specimenFor(face: FontFaceDef): string {
+  const start = firstCodepoint(face.unicodeRange);
+  if (start === undefined) return SPECIMEN;
+  const script = SCRIPT_SPECIMENS.find(s => start >= s.from && start <= s.to);
+  return script?.text ?? SPECIMEN;
+}
+
 /** The stack as CSS, so a specimen renders in the family it names. */
 function specimenStyle(value: string): React.CSSProperties {
   return { fontFamily: value };
@@ -246,7 +290,7 @@ function FaceList({
         <li className="nx-fonts__face" key={faceKey(face)}>
           <span className="nx-fonts__face-name">{face.family}</span>
           <span className="nx-fonts__specimen" style={faceSpecimenStyle(face)}>
-            {SPECIMEN}
+            {specimenFor(face)}
           </span>
         </li>
       ))}
