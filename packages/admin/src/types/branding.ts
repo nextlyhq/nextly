@@ -54,7 +54,26 @@ export interface PluginPageMeta {
   section?: PluginNavSectionMeta;
 }
 
-/** A plugin dashboard widget, delivered via `/admin-meta`. */
+/**
+ * A plugin dashboard widget, delivered via `/admin-meta`.
+ *
+ * `buildPluginAdminMeta` assigns `contributes.admin.widgets` to the meta
+ * verbatim, so this and the server's `PluginAdminWidget` are one shape --
+ * declared twice, which is why they were free to drift. They had: the server
+ * made `component` OPTIONAL while this kept it required, and nothing compared
+ * the two, so a plugin adopting the server's shape reached `PluginSlot` with
+ * `path === undefined` and rendered an empty grid cell silently.
+ *
+ * `component` is required on BOTH sides again, and `admin-contributions.test-d.ts`
+ * pins it there -- so widening it in core is now a compile error at the
+ * declaration rather than an empty cell at runtime. That is a DECLARED
+ * dependency rather than a structural one: deriving this from
+ * `PluginAdminWidget` would be better and is not reachable today, because this
+ * package's tsconfig maps the bare `nextly` specifier to `../nextly/src` and so
+ * shadows the package exports, pulling core's whole source tree in with
+ * internal path aliases this project does not carry. Whoever changes either
+ * declaration must change both.
+ */
 export interface PluginWidgetMeta {
   id: string;
   component: string;

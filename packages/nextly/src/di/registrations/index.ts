@@ -19,4 +19,5 @@ export { registerSingleServices } from "./register-singles";
 export { registerUserServices } from "./register-users";
 export { registerVersionServices } from "./register-versions";
 export { registerWebhookServices } from "./register-webhooks";
+export { resetWidgetRegistries } from "./register-widgets";
 export type { RegistrationContext } from "./types";

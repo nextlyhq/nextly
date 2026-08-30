@@ -28,6 +28,7 @@ import type {
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
+import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -324,8 +325,16 @@ export function buildPluginAdminMeta(
         };
       }
       if (slot) meta.headerSlot = slot;
-      if (admin.widgets && admin.widgets.length > 0)
-        meta.widgets = admin.widgets;
+      // Validated rather than copied, the same way `clientConfig` is above and
+      // for a wider blast radius. A widget declaration never passes through
+      // `registerWidget`, so nothing else stands between it and the single
+      // `JSON.stringify` that serializes this whole payload -- and a value that
+      // throws there fails `/api/admin-meta/workspace` for every admin, not
+      // just this card. The same validator boot runs, so this path cannot
+      // accept what boot rejected; called again here because the reduced value
+      // is what publishes.
+      const widgets = validatedAdminWidgets(plugin);
+      if (widgets && widgets.length > 0) meta.widgets = widgets;
       if (admin.schemaBuilderSlot)
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
       if (admin.entryFormToolbarSlot)

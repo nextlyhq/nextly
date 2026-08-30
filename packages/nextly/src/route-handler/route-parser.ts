@@ -2441,18 +2441,40 @@ function parseTranslationRoutes(
 /**
  * Parse dashboard-related routes.
  *
- *   GET /api/dashboard/stats          → getDashboardStats
- *   GET /api/dashboard/recent-entries → getDashboardRecentEntries
- *   GET /api/dashboard/activity       → getDashboardActivity
+ *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
+ *   GET  /api/dashboard/activity       → getDashboardActivity
+ *   POST /api/dashboard/query          → postWidgetQuery
  *
- * All dashboard endpoints are GET-only and require authentication
- * (no specific permission). Handlers manage their own auth.
+ * All require authentication (no specific permission). Handlers manage their
+ * own auth.
  */
 function parseDashboardRoutes(
   id: string | undefined,
+  subresource: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // Nothing deeper than the top-level id segment exists under `/dashboard`.
+  // Guarded once, so a longer path 404s instead of matching a shorter route
+  // and silently ignoring the tail — which would let
+  // `/api/dashboard/query/extra` reach the widget-query executor. Segments
+  // are contiguous, so a truthy `subresource` is the only way a sub-id or
+  // anything past it could exist — the same shape `parseJobRoutes` uses.
+  if (subresource) return null;
+
+  if (httpMethod === "POST") {
+    if (id === "query") {
+      return {
+        service: "dashboard",
+        operation: "list",
+        method: "postWidgetQuery",
+        routeParams,
+      };
+    }
+    return null;
+  }
+
   if (httpMethod !== "GET") return null;
 
   if (id === "stats") {
@@ -2817,7 +2839,12 @@ export function parseRestRoute(
 
   // Handle Dashboard endpoints
   if (resource === "dashboard") {
-    const result = parseDashboardRoutes(id, httpMethod, routeParams);
+    const result = parseDashboardRoutes(
+      id,
+      subresource,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

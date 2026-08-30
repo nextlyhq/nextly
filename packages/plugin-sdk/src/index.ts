@@ -423,3 +423,45 @@ export type {
   QueueJobArgs,
   QueueJobResult,
 } from "nextly";
+
+/**
+ * @experimental Dashboard widgets (D22/C9) — the registry a widget declares
+ * itself to, the source registry a query names, and the declarative query
+ * contract itself.
+ *
+ * Forwarded here for the reason the Singles surface above is: a plugin imports
+ * only from `@nextlyhq/plugin-sdk` and `@nextlyhq/ui`, never from core, so a
+ * registry exported from the `nextly` root alone is one an author following the
+ * documented surface cannot reach at all. There is no `nextly/widgets` subpath,
+ * so this is the only supported spelling.
+ *
+ * Every contract a published shape NAMES travels with it, the way core's own
+ * root export does: `WidgetDefinition.defaultHeight` is a `WidgetHeight`, and a
+ * `WidgetSource` is built out of `WidgetSourceField`, `WidgetSourceKind` and
+ * `WidgetOp` — a public property whose type has no public name can be inferred
+ * but never annotated.
+ *
+ * Held `@experimental` alongside `PluginAdminWidget`, which is the same feature
+ * seen from the contributions side: the widget contract graduates per D55 once a
+ * first-party plugin ships one. See STABILITY.md.
+ */
+export {
+  WIDGET_SIZES,
+  WIDGET_HEIGHTS,
+  WIDGET_ARCHETYPES,
+  WIDGET_OPS,
+  WIDGET_SOURCE_KINDS,
+  WIDGET_SOURCE_FIELD_TYPES,
+  registerWidget,
+  registerSource,
+  type WidgetDefinition,
+  type WidgetQuery,
+  type WidgetSize,
+  type WidgetHeight,
+  type WidgetArchetype,
+  type WidgetSource,
+  type WidgetSourceField,
+  type WidgetSourceFieldType,
+  type WidgetSourceKind,
+  type WidgetOp,
+} from "nextly";

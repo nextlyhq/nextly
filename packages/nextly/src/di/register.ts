@@ -207,6 +207,7 @@ import {
   registerUserServices,
   registerVersionServices,
   registerWebhookServices,
+  resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
 
@@ -685,6 +686,22 @@ export async function registerServices(
   // `webhooks: false` collection (e.g. form submissions) would silently record
   // PII-bearing events despite the opt-out.
   publishWebhookRecordingPolicies(transformedConfig);
+
+  // Empty the `globalThis`-pinned widget registries before anything registers
+  // into them, so a dev-server hot reload re-registering the same ids never
+  // collides with itself while a genuine duplicate within one boot still
+  // fails loudly. This is the one place both of Nextly's boot paths funnel
+  // through, so it is the one place the reset needs wiring.
+  //
+  // Deliberately a reset and nothing more. Collection sources are DERIVED from
+  // the collection registry, which is registered in Layer 3 and populated by
+  // Layer 4's sync -- both after this point -- and which keeps changing
+  // afterwards as the Schema Builder creates collections in a running process.
+  // `domains/widgets/collection-sources.ts` reads it where the answer is
+  // needed. Building them from `transformedConfig.collections` here was the
+  // defect: a Builder-authored collection has no config entry at all, so one
+  // of the framework's two schema modes had no queryable source.
+  resetWidgetRegistries();
 
   // Then layer in the registry-stored opt-outs. Builder-authored collections and
   // singles have no code-first config to publish from, so without this read their

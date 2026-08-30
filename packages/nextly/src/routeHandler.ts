@@ -83,6 +83,7 @@ import {
   redeliverWebhookDelivery,
   drainWebhooks,
 } from "./api/webhooks";
+import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
@@ -99,6 +100,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
@@ -480,6 +482,8 @@ async function handleDashboardRequest(
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
       return getDashboardActivity(req);
+    case "postWidgetQuery":
+      return postWidgetQuery(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -1084,8 +1088,10 @@ async function handleServiceRequest(
   }
 
   // ==================== DASHBOARD DIRECT DISPATCH ====================
-  // Dashboard handlers own their auth (requireAuthentication). Read-only
-  // endpoints — no body to consume, but keeping consistent dispatch pattern.
+  // Dashboard handlers own their auth (requireAuthentication). Intercepting
+  // here keeps the pattern consistent with API keys and general settings; the
+  // GET endpoints have no body, and postWidgetQuery reads its own via
+  // req.json() before anything else touches the stream.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
   }
@@ -1753,6 +1759,11 @@ export function createDynamicHandlers(options?: {
     // instead of at startup. This module runs when the route file is imported,
     // which is the earliest deterministic point the config exists.
     assertClientConfigs(options.config.plugins ?? []);
+    // And the widgets beside it. `/api/admin-meta/workspace` serializes both
+    // halves through one `JSON.stringify`, so a widget carrying a bigint takes
+    // the whole authenticated workspace payload down for every admin -- a
+    // wider failure than a bad `clientConfig`, reached the same way.
+    assertAdminWidgets(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 
