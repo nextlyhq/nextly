@@ -17,6 +17,8 @@ const args = (props: Record<string, unknown>, alt?: string) =>
   ({
     props,
     className: undefined,
+    // Required by the render contract; these fixtures declare no parts.
+    partClass: () => "",
     ctx: ctxWith(alt),
   }) as never;
 

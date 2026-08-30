@@ -28,6 +28,8 @@ async function draw(caption: string) {
         ...(caption === "" ? {} : { caption }),
       },
       className: `nx-pb-node1 ${TYPE_CLASS}`,
+      // Required by the render contract; these fixtures declare no parts.
+      partClass: () => "",
     } as never)
   );
   return container;
