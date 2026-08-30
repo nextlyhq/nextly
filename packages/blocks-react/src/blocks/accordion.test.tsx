@@ -25,6 +25,8 @@ function args(props: Record<string, unknown>, slot = "BODY") {
     props,
     node: { id: "n1", type: ACCORDION_ITEM_BLOCK, version: 1, props },
     className: "cls",
+    // Required by the render contract; these fixtures declare no parts.
+    partClass: () => "",
     renderSlot: (name: string) => (name === "children" ? slot : null),
   } as never;
 }

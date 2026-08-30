@@ -37,6 +37,8 @@ function args(props: FormProps, nodeId = "n1"): BlockRenderArgs<FormProps> {
     props,
     node,
     className: "nx-n1",
+    // Required by the render contract; these fixtures declare no parts.
+    partClass: () => "",
     ctx: context(),
     renderSlot: () => null,
   } as unknown as BlockRenderArgs<FormProps>;

@@ -43,6 +43,7 @@ export async function renderImage({
   className,
   ctx,
   hostPolicy,
+  partClass,
 }: BlockRenderArgs<ImageProps>): Promise<ReactElement | null> {
   const mediaId = text(props.mediaId);
   // A resolver that throws must not take the page with it: media lives behind
@@ -132,7 +133,7 @@ export async function renderImage({
   return (
     <figure className={className}>
       {image}
-      <figcaption>{caption}</figcaption>
+      <figcaption className={partClass("caption")}>{caption}</figcaption>
     </figure>
   );
 }
@@ -176,6 +177,26 @@ const IMAGE_BASE_STYLES = {
   },
 } as const;
 
+/**
+ * The caption, which only the captioned branch renders.
+ *
+ * Unstyled, it drew at the body's own size directly beneath the picture, so a
+ * caption read as another paragraph that happened to follow an image. These are
+ * the two things that make it read as a caption instead.
+ */
+const IMAGE_PARTS = {
+  caption: {
+    baseStyles: {
+      base: {
+        base: {
+          fontSize: "0.875em",
+          margin: { blockStart: "0.5em" },
+        },
+      },
+    },
+  },
+} as const;
+
 export const image = defineBlock<ImageProps, PageContext>({
   name: IMAGE_BLOCK,
   version: 1,
@@ -191,6 +212,7 @@ export const image = defineBlock<ImageProps, PageContext>({
     keywords: ["picture", "photo", "img", "media"],
   },
   baseStyles: IMAGE_BASE_STYLES,
+  parts: IMAGE_PARTS,
   props: {
     mediaId: { type: "media" },
     src: { type: "url" },

@@ -34,6 +34,7 @@ export function renderQuote({
   props,
   className,
   markProp,
+  partClass,
 }: BlockRenderArgs<QuoteProps>): ReactElement {
   const quoted = text(props.text);
   const attribution = text(props.attribution);
@@ -50,19 +51,17 @@ export function renderQuote({
   const markText = markProp?.("text");
   const markSource = markProp?.("source");
 
-  // Deliberately UNCLASSED. The attributed branch wraps this in a `<figure>`
-  // that already takes the block's class, and giving the same class to the
-  // quotation inside it applies the whole default twice — the indent as well as
-  // the reset — so an attributed quote steps in further than a bare one and a
-  // node-local override reaches the figure while the nested copy stays put.
-  //
-  // The cost is that this element keeps whatever inline margin a user agent
-  // gives it in a host with no reset. That is one rule short of correct rather
-  // than two applications of it, and closing it needs a way for a block to
-  // state a rule for an element INSIDE itself, which a block-type default is
-  // not.
+  // Marked as a PART rather than given the block's own class. The attributed
+  // branch wraps this in a `<figure>` that already takes that class, and giving
+  // the same one to the quotation inside applies the whole default twice — the
+  // indent as well as the reset — so an attributed quote would step in further
+  // than a bare one. A part carries only what this element needs, which is the
+  // user-agent margin removed.
   const blockquote = (
-    <blockquote {...(citeUrl === undefined ? {} : { cite: citeUrl })}>
+    <blockquote
+      className={partClass("quotation")}
+      {...(citeUrl === undefined ? {} : { cite: citeUrl })}
+    >
       <p {...markText}>{quoted}</p>
     </blockquote>
   );
@@ -82,7 +81,7 @@ export function renderQuote({
   return (
     <figure className={className}>
       {blockquote}
-      <figcaption>
+      <figcaption className={partClass("attribution")}>
         {attribution}
         {attribution !== "" && source !== "" ? ", " : null}
         {source === "" ? null : <cite {...markSource}>{source}</cite>}
@@ -146,6 +145,48 @@ const QUOTE_BASE_STYLES = {
   },
 } as const;
 
+/**
+ * The elements the attributed branch renders inside its `<figure>`.
+ *
+ * Only that branch has them: with nothing to attribute, the `<blockquote>` IS
+ * the block and wears the block's own class, so the same element is a root in
+ * one shape and a part in the other. The class it carries says which.
+ */
+const QUOTE_PARTS = {
+  quotation: {
+    baseStyles: {
+      base: {
+        base: {
+          // The whole point of the part. A user agent gives `<blockquote>` a
+          // margin of its own — about 40px inline and 1em block — and inside
+          // the figure that ADDS to what the block already states, so in a host
+          // with no reset the same quote sat at 24px bare and 64px attributed.
+          // Typing an attribution moved the text.
+          margin: {
+            blockStart: "0",
+            blockEnd: "0",
+            inlineStart: "0",
+            inlineEnd: "0",
+          },
+        },
+      },
+    },
+  },
+  attribution: {
+    baseStyles: {
+      base: {
+        base: {
+          // A caption for the quotation, not a second paragraph of it. Smaller
+          // and set apart, so the reader can tell the speaker from the speech
+          // without the two running together.
+          fontSize: "0.875em",
+          margin: { blockStart: "0.75em" },
+        },
+      },
+    },
+  },
+} as const;
+
 export const quote = defineBlock<QuoteProps, PageContext>({
   name: QUOTE_BLOCK,
   version: 1,
@@ -161,6 +202,7 @@ export const quote = defineBlock<QuoteProps, PageContext>({
     keywords: ["blockquote", "pull quote", "citation"],
   },
   baseStyles: QUOTE_BASE_STYLES,
+  parts: QUOTE_PARTS,
   props: {
     text: { type: "textarea", inline: true },
     attribution: { type: "text" },

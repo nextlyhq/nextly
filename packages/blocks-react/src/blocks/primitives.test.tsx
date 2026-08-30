@@ -163,7 +163,10 @@ describe("core/quote", () => {
     // and leaving the inner copy standing when a node-local style overrides
     // the root.
     expect(out).not.toMatch(/<blockquote[^>]*nx-bt-core--quote/);
-    expect(out).toContain("<figcaption>Ada, <cite>A Book</cite></figcaption>");
+    // The figcaption is a PART now, so it carries a class. Asserted on the
+    // content and the element rather than on the exact opening tag, which is
+    // what made this pin markup the block is free to change.
+    expect(out).toContain("Ada, <cite>A Book</cite></figcaption>");
   });
 
   it("is a bare blockquote when there is nothing to attribute", () => {
@@ -404,7 +407,7 @@ describe("core/image", () => {
       await renderImage(args({ src: "/a.jpg", caption: "A view" }))
     );
     expect(out).toContain('<figure class="nx-n1">');
-    expect(out).toContain("<figcaption>A view</figcaption>");
+    expect(out).toContain("A view</figcaption>");
     expect(out).not.toContain('<img class="nx-n1"');
   });
 });
@@ -633,7 +636,7 @@ describe("through the boundary", () => {
 
     expect(html).toContain("<figure");
     expect(html).toContain("nx-node");
-    expect(html).toContain("<figcaption>A view</figcaption>");
+    expect(html).toContain("A view</figcaption>");
   });
 
   it("awaits an async primitive rather than rendering its promise", async () => {
