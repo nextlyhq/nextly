@@ -203,10 +203,11 @@ test("a stored token reaches the published page's site sheet, both modes", async
 test("a stored font face reaches the published page as a rule a browser would act on", async ({
   request,
 }) => {
-  // The third authorable tier. Tokens and classes are asserted above; a font
-  // is the one the phase's exit criterion names alongside them, and it travels
-  // a different road — it is emitted as an AT-RULE rather than as a custom
-  // property or a class selector, so neither assertion above covers it.
+  // The third authorable tier, and the one neither assertion above reaches. A
+  // token becomes a custom property and a class becomes a selector; a font
+  // becomes an AT-RULE, which is emitted by different code down a different
+  // path, so a break between stored font data and the served sheet shows up
+  // here or nowhere.
   const response = await request.get(`/blocks/${PAGE_SLUG}`);
   await expectOk(response, "fetching the published page");
   const sheet = siteSheetOf(await response.text());

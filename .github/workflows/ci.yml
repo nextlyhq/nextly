@@ -766,8 +766,11 @@ jobs:
   #
   # POST-MERGE ONLY, which is the whole design of this job. It needs `next build`
   # before `next start`, and that is not a variation on the dev-server suite
-  # above — it is the environment the suite exists for, since task 179's
-  # 500-on-every-path reproduced only under a production build and never in dev.
+  # above — it is the environment the suite exists for. A production build
+  # resolves modules, bundles and prerenders differently enough that a route can
+  # answer 500 on every path there while serving correctly under `next dev`, so
+  # a suite that boots a dev server certifies the one environment in which that
+  # class of failure cannot appear.
   #
   # Running it on every pull request would roughly double the most expensive job
   # in this pipeline: `Browser tests` already spends 10.8-14.7 minutes against a
@@ -848,12 +851,15 @@ jobs:
       - name: Run production browser tests
         run: pnpm --filter @nextlyhq/e2e test:e2e:prod
 
+      # Its own folder, matching the port and database this config already keeps
+      # separate: run both suites on one machine and a shared folder means
+      # whichever finished last is the only report either of them has.
       - name: Upload report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report-production
-          path: e2e/.playwright/report
+          path: e2e/.playwright/report-production
           retention-days: 7
 
       - name: Save Turbo cache
