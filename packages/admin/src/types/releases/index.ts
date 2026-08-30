@@ -9,24 +9,23 @@
  * @module types/releases
  */
 
+import type { ReleaseMemberAction, ReleaseState } from "nextly/schemas";
+
 /**
- * The release lifecycle, in order.
+ * The release lifecycle and the member actions, taken from the engine.
  *
- * Four states and no more. Sanity offers a release "type" — ASAP, at time,
- * undecided — which reads well but has no counterpart in this engine, and a UI
- * vocabulary the server cannot answer to is a UI that eventually lies.
+ * Re-exported rather than restated. A second tuple here would compile happily
+ * after the server gained a fifth state, and every screen that switches on the
+ * state would silently render nothing for it — the failure would appear as a
+ * blank cell, not as a type error. `import type` erases at build time, so this
+ * costs the admin bundle nothing.
+ *
+ * Sanity offers a release "type" — ASAP, at time, undecided — which reads well
+ * but has no counterpart in this engine, and a UI vocabulary the server cannot
+ * answer to is a UI that eventually lies. Deriving from the engine is what makes
+ * inventing one impossible rather than merely discouraged.
  */
-export const RELEASE_STATES = [
-  "draft",
-  "scheduled",
-  "published",
-  "cancelled",
-] as const;
-
-export type ReleaseState = (typeof RELEASE_STATES)[number];
-
-/** What a member does to its document when the release takes effect. */
-export type ReleaseMemberAction = "publish" | "unpublish";
+export type { ReleaseMemberAction, ReleaseState };
 
 export interface Release {
   id: string;

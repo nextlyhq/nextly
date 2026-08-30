@@ -10,6 +10,7 @@
  * @module components/features/releases/release-schedule
  */
 
+import { formatGlobalDateTime, isValidTimezone } from "@admin/lib/dates/format";
 import type { Release, ReleaseState } from "@admin/types/releases";
 
 /** What each state means to an editor, in their words rather than the schema's. */
@@ -31,6 +32,16 @@ export const RELEASE_STATE_LABEL: Record<ReleaseState, string> = {
  *
  * The zone is NAMED alongside, because a time without one is exactly the
  * ambiguity this avoids.
+ *
+ * Rendered through the admin's own formatter so an installation's configured
+ * date and time format still applies; only the ZONE is overridden here, which
+ * is the one part of the presentation the release itself decides. A second
+ * `Intl.DateTimeFormat` would ignore those settings and make this the one screen
+ * that spells a date differently from every other.
+ *
+ * The zone is validated before it is NAMED, because the formatter falls back to
+ * the reader's own zone for one it cannot use — sensible for rendering, and a
+ * lie once a label claims the time is Berlin's.
  */
 export function formatScheduledAt(release: Release): string | null {
   if (!release.scheduledAt) return null;
@@ -38,20 +49,17 @@ export function formatScheduledAt(release: Release): string | null {
   if (Number.isNaN(at.getTime())) return null;
 
   const zone = release.timezone ?? "UTC";
-  try {
-    const formatted = new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone: zone,
-    }).format(at);
-    return `${formatted} (${zone})`;
-  } catch {
-    // A zone the platform cannot format is not a reason to show nothing. The
-    // route validates zones on the way in, so this is a stored value from
-    // before that guard or from another writer — and an editor is better served
-    // by the instant in UTC than by a blank where a date should be.
-    return `${at.toISOString()} (UTC)`;
-  }
+  // A zone the platform cannot format is not a reason to show nothing. The
+  // route validates zones on the way in, so this is a stored value from before
+  // that guard or from another writer — and an editor is better served by the
+  // instant in UTC, said so, than by a blank where a date should be.
+  const usable = isValidTimezone(zone) ? zone : "UTC";
+  const formatted = formatGlobalDateTime(
+    at,
+    { timeZone: usable, dateStyle: "medium", timeStyle: "short" },
+    at.toISOString()
+  );
+  return `${formatted} (${usable})`;
 }
 
 /**
@@ -66,8 +74,14 @@ export function describeRelease(release: Release): string {
     case "scheduled":
       return at ? `Goes live ${at}` : "Scheduled";
     case "published":
+      // The reader's own zone, unlike the schedule above: this is a record of
+      // when something happened rather than a promise made from somewhere, so
+      // the useful question is "how long ago for me", not "when there".
       return release.publishedAt
-        ? `Published ${new Date(release.publishedAt).toLocaleString()}`
+        ? `Published ${formatGlobalDateTime(release.publishedAt, {
+            dateStyle: "medium",
+            timeStyle: "short",
+          })}`
         : "Published";
     case "cancelled":
       return "Cancelled — nothing will go live";

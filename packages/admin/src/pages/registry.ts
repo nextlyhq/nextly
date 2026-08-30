@@ -32,6 +32,7 @@ import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
 import SinglesLandingRedirect from "./dashboard/redirects/SinglesLandingRedirect";
+import ReleaseDetailPage from "./dashboard/releases/[id]";
 import ReleasesPage from "./dashboard/releases/index";
 import RolesPage from "./dashboard/roles";
 import RolesCreatePage from "./dashboard/roles/create";
@@ -193,9 +194,17 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     // Gated on the SEEDED slug. The resource is `content-releases`, not
     // `releases`: registering the shorter name would reserve a word real sites
-    // use for content. Naming a permission that is not seeded would hide this
-    // page from everyone including an administrator, which is the failure
-    // #1375 fixed for background jobs.
+    // use for content. A permission that is not seeded matches nobody, so
+    // naming one here would hide the page from every user including an
+    // administrator, with nothing erroring to say so.
+    requiredPermission: "read-content-releases",
+    section: overridableBy("releases"),
+  },
+  [ROUTES.RELEASES_DETAIL]: {
+    component: ReleaseDetailPage,
+    type: "private",
+    // The same slug as the list. A detail route gated more loosely than the
+    // list it is reached from would be a way around the list's own gate.
     requiredPermission: "read-content-releases",
     section: overridableBy("releases"),
   },

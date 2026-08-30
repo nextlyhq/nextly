@@ -11,10 +11,23 @@
  * @module components/features/releases/ReleaseList
  */
 
+import { useState } from "react";
+
 import { CalendarClock } from "@admin/components/icons";
-import { Badge, Button, Card } from "@admin/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@admin/components/ui";
+import { Link } from "@admin/components/ui/link";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleases } from "@admin/hooks/queries/useReleases";
-import type { Release, ReleaseState } from "@admin/types/releases";
+import type { ReleaseState } from "@admin/types/releases";
 
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
 
@@ -29,12 +42,35 @@ const STATE_VARIANT: Record<
   "default" | "outline" | "success" | "warning"
 > = {
   draft: "outline",
-  // The only state with a consequence still ahead of it, and the one an editor
-  // is scanning for.
   scheduled: "warning",
   published: "success",
   cancelled: "outline",
 };
+
+/**
+ * The states offered as a filter, derived from the labels rather than listed.
+ *
+ * A second list would compile after the engine gained a state and quietly leave
+ * it unfilterable — the one release nobody could find would be the one in the
+ * new state.
+ */
+const FILTERABLE_STATES = Object.keys(RELEASE_STATE_LABEL) as ReleaseState[];
+
+/** The sentinel for "every state", which is not itself a state. */
+const ANY_STATE = "all";
+
+/**
+ * How many rows a window asks for, and how far it can be widened.
+ *
+ * The route's own default is 50 and its ceiling 200. Widening in one step
+ * rather than paging is deliberate: the read port behind this exposes `where`,
+ * `orderBy` and `limit` and no offset, and an offset over a list whose rows move
+ * would skip and repeat releases rather than page through them. Narrowing by
+ * state is what makes the far end reachable; the wider window is what makes the
+ * near end complete.
+ */
+const PAGE = 50;
+const MAX_PAGE = 200;
 
 /**
  * What an editor sees before they have ever made a release.
@@ -63,20 +99,84 @@ function NoReleasesYet({ onCreate }: { onCreate?: () => void }) {
   );
 }
 
+/**
+ * The empty result of a FILTER, which is a different fact from having none.
+ *
+ * Showing the teaching empty state here would tell an editor who has fifty
+ * releases that they have never made one.
+ */
+function NoneInThisState({ onClear }: { onClear: () => void }) {
+  return (
+    <Card className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+      <p className="text-sm text-muted-foreground">
+        No releases in this state.
+      </p>
+      <Button variant="outline" size="sm" onClick={onClear}>
+        Show all releases
+      </Button>
+    </Card>
+  );
+}
+
 export interface ReleaseListProps {
   /** Offered only to a caller who may assemble a release. */
   onCreate?: () => void;
-  onOpen: (release: Release) => void;
 }
 
-export function ReleaseList({ onCreate, onOpen }: ReleaseListProps) {
-  const { data, isPending, isError } = useReleases();
+export function ReleaseList({ onCreate }: ReleaseListProps) {
+  const [state, setState] = useState<ReleaseState | typeof ANY_STATE>(
+    ANY_STATE
+  );
+  const [limit, setLimit] = useState(PAGE);
+
+  const { data, isPending, isError } = useReleases({
+    ...(state === ANY_STATE ? {} : { state }),
+    limit,
+  });
+
+  const filtering = state !== ANY_STATE;
+
+  const filter = (
+    <div className="mb-4 flex items-center gap-2">
+      <label
+        htmlFor="release-state-filter"
+        className="text-sm text-muted-foreground"
+      >
+        State
+      </label>
+      <Select
+        value={state}
+        onValueChange={next => {
+          setState(next as ReleaseState | typeof ANY_STATE);
+          // A narrower question deserves a fresh window. Carrying a widened
+          // limit across filters asks the server for 200 rows of a state that
+          // may have three.
+          setLimit(PAGE);
+        }}
+      >
+        <SelectTrigger id="release-state-filter" className="w-44">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ANY_STATE}>All releases</SelectItem>
+          {FILTERABLE_STATES.map(value => (
+            <SelectItem key={value} value={value}>
+              {RELEASE_STATE_LABEL[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 
   if (isPending) {
     return (
-      <p className="text-sm text-muted-foreground" role="status">
-        Loading releases…
-      </p>
+      <>
+        {filter}
+        <p className="text-sm text-muted-foreground" role="status">
+          Loading releases…
+        </p>
+      </>
     );
   }
 
@@ -84,52 +184,91 @@ export function ReleaseList({ onCreate, onOpen }: ReleaseListProps) {
     // The list failing and the list being empty are different facts, and an
     // editor who cannot tell them apart concludes nothing is scheduled.
     return (
-      <p className="text-sm text-destructive" role="alert">
-        Releases could not be loaded.
-      </p>
+      <>
+        {filter}
+        <p className="text-sm text-destructive" role="alert">
+          Releases could not be loaded.
+        </p>
+      </>
     );
   }
 
   const releases = data?.items ?? [];
-  if (releases.length === 0) return <NoReleasesYet onCreate={onCreate} />;
+  if (releases.length === 0) {
+    return (
+      <>
+        {filter}
+        {filtering ? (
+          <NoneInThisState onClear={() => setState(ANY_STATE)} />
+        ) : (
+          <NoReleasesYet onCreate={onCreate} />
+        )}
+      </>
+    );
+  }
+
+  const truncated = data?.meta.hasNext ?? false;
+  const canWiden = truncated && limit < MAX_PAGE;
 
   return (
-    <ul className="flex flex-col gap-2">
-      {releases.map(release => (
-        <li key={release.id}>
-          <Card className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Badge variant={STATE_VARIANT[release.state]}>
-                  {RELEASE_STATE_LABEL[release.state]}
-                </Badge>
-                <span className="truncate font-medium">{release.title}</span>
-              </div>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {describeRelease(release)}
-              </p>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onOpen(release)}
-              // Named, not "Open": a screen reader hears the rows in sequence
-              // and "Open, Open, Open" identifies none of them.
-              aria-label={`Open release ${release.title}`}
-            >
-              Open
-            </Button>
-          </Card>
-        </li>
-      ))}
-      {data?.meta.hasNext ? (
+    <>
+      {filter}
+      <ul className="flex flex-col gap-2">
+        {releases.map(release => (
+          <li key={release.id}>
+            <Card className="p-0">
+              {/* The whole row is the link. A separate "Open" button beside a
+                  title reads as two destinations, and it cannot be
+                  middle-clicked or opened in a new tab — which is how anyone
+                  compares two releases. */}
+              <Link
+                href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-[inherit] px-4 py-3 no-underline outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={STATE_VARIANT[release.state]}>
+                      {RELEASE_STATE_LABEL[release.state]}
+                    </Badge>
+                    <span className="truncate font-medium text-foreground">
+                      {release.title}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {describeRelease(release)}
+                  </p>
+                </div>
+              </Link>
+            </Card>
+          </li>
+        ))}
+      </ul>
+
+      {truncated ? (
         // Truncation is stated rather than implied. The server over-fetches one
         // row to know this, precisely so a partial schedule is never presented
         // as the whole one.
-        <li className="px-1 pt-1 text-sm text-muted-foreground">
-          More releases match than are shown here.
-        </li>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-muted-foreground">
+            More releases match than are shown here.
+          </p>
+          {canWiden ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLimit(MAX_PAGE)}
+            >
+              Show more
+            </Button>
+          ) : (
+            // At the ceiling the honest instruction is to ask a narrower
+            // question, because no larger window exists to offer.
+            <p className="text-sm text-muted-foreground">
+              Filter by state to narrow the list.
+            </p>
+          )}
+        </div>
       ) : null}
-    </ul>
+    </>
   );
 }
