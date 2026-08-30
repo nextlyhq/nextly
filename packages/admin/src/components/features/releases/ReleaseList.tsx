@@ -202,8 +202,10 @@ function NoReleasesYet({ onCreate }: { onCreate?: () => void }) {
 function NoneInThisState({ onClear }: { onClear: () => void }) {
   return (
     <Card className="flex flex-col items-center gap-3 px-6 py-10 text-center">
+      {/* Names the FILTERS rather than the state: a date-only window reaches
+          this too, and "no releases in this state" is then simply untrue. */}
       <p className="text-sm text-muted-foreground">
-        No releases in this state.
+        No releases match these filters.
       </p>
       <Button variant="outline" size="sm" onClick={onClear}>
         Show all releases

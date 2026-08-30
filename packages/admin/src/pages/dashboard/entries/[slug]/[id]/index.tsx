@@ -540,6 +540,11 @@ export default function EditEntryPage({
             scopeKind="collection"
             scopeSlug={slug}
             entryId={id}
+            // The same flag the editor's own publish controls read. A release
+            // member performs a publish or unpublish, and the route refuses a
+            // collection whose schema declares no lifecycle.
+            lifecycleEnabled={collection.status === true}
+            onDefaultLocale={!isNonDefaultLocale}
           />
         </div>
         <EntryForm

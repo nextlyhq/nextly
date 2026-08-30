@@ -55,10 +55,15 @@ export function CreateReleaseDialog({
   // storage contract moves.
   const canSubmit = trimmed.length > 0 && !create.isPending;
 
-  const reset = () => {
+  // ONE close path. The visible Cancel button called the setter directly and so
+  // skipped this — and the dialog stays mounted on the releases page, so
+  // reopening restored a name the editor had discarded, along with the error
+  // from any previous attempt.
+  const close = () => {
     setTitle("");
     setDescription("");
     create.reset();
+    onOpenChange(false);
   };
 
   const submit = (event: React.FormEvent) => {
@@ -74,8 +79,7 @@ export function CreateReleaseDialog({
       },
       {
         onSuccess: result => {
-          reset();
-          onOpenChange(false);
+          close();
           onCreated?.(result.item);
         },
       }
@@ -89,8 +93,8 @@ export function CreateReleaseDialog({
         // Closing discards the draft. Keeping it would offer a half-typed title
         // back the next time somebody opened this from a different page, which
         // reads as the form remembering something it was never told to keep.
-        if (!next) reset();
-        onOpenChange(next);
+        if (!next) close();
+        else onOpenChange(true);
       }}
     >
       <DialogContent>
@@ -145,11 +149,7 @@ export function CreateReleaseDialog({
           </div>
 
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => onOpenChange(false)}
-            >
+            <Button type="button" variant="outline" onClick={close}>
               Cancel
             </Button>
             <Button type="submit" disabled={!canSubmit}>

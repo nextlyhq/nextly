@@ -348,6 +348,8 @@ export default function SingleEditPage({
             scopeKind="single"
             scopeSlug={slug ?? ""}
             entryId={document.id}
+            lifecycleEnabled={schema?.status === true}
+            onDefaultLocale={!isNonDefaultLocale}
           />
         </div>
         <SingleForm

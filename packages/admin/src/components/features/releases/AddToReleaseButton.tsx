@@ -103,6 +103,25 @@ export interface AddToReleaseButtonProps {
   scopeKind: "collection" | "single";
   scopeSlug: string;
   entryId: string;
+  /**
+   * Whether this document type HAS a publish lifecycle.
+   *
+   * A release member performs a publish or unpublish, and the route refuses a
+   * document whose schema declares no lifecycle at all. `useCan` answers true
+   * for the synthetic `publish-<slug>` check regardless, so a super-admin
+   * editing a collection with `status` disabled would otherwise be offered a
+   * control whose every submission is rejected.
+   */
+  lifecycleEnabled: boolean;
+  /**
+   * Whether the editor is on the document's DEFAULT locale.
+   *
+   * A member is whole-document: the service refuses a locale-scoped one
+   * outright, so adding from a translation would schedule every locale while
+   * every other control on that screen acts on the one being edited. The
+   * control is withheld rather than silently widened.
+   */
+  onDefaultLocale: boolean;
 }
 
 /**
@@ -121,10 +140,14 @@ export interface AddToReleaseButtonProps {
  * every scheduled and published release and would fall outside an unfiltered
  * first window on any site with a history.
  */
-function useAssemblableReleases() {
+function useAssemblableReleases(enabled: boolean) {
+  // Not fetched until the dialog is open AND the caller may read releases.
+  // These are protected endpoints, so mounting them unconditionally made every
+  // editor visit by an unentitled user issue two 403s — six, once the retry
+  // policy is counted — for a control that then renders nothing.
   const queries = [
-    useReleases({ state: "draft" }),
-    useReleases({ state: "scheduled" }),
+    useReleases({ state: "draft" }, enabled),
+    useReleases({ state: "scheduled" }, enabled),
   ];
 
   return {
@@ -141,8 +164,14 @@ export function AddToReleaseButton({
   scopeKind,
   scopeSlug,
   entryId,
+  lifecycleEnabled,
+  onDefaultLocale,
 }: AddToReleaseButtonProps) {
   const canAssemble = useCan("create-content-releases");
+  // The picker reads `/api/releases`, which is gated. Asked separately from
+  // `canAssemble` because the two are different questions and the query must
+  // not fire for someone who holds neither.
+  const canRead = useCan("read-content-releases");
   // The DOCUMENT's own lifecycle grants, which `addMember` requires in addition
   // to the release authority — scheduling a publish must not become a way to
   // perform a write the caller could not perform now. Without these the dialog
@@ -157,7 +186,7 @@ export function AddToReleaseButton({
   const [action, setAction] = useState<ReleaseMemberAction>(
     canPublishDocument ? "publish" : "unpublish"
   );
-  const releases = useAssemblableReleases();
+  const releases = useAssemblableReleases(open && canRead);
   const add = useAddReleaseMember(releaseId);
 
   // Assembling authority alone is not enough to do anything here: every member
@@ -166,6 +195,23 @@ export function AddToReleaseButton({
   if (!canAssemble || (!canPublishDocument && !canUnpublishDocument)) {
     return null;
   }
+  // Withheld where the write would be refused or would mean more than it looks
+  // like it means. Both are decisions the caller supplies, because only the
+  // editor around this control knows them.
+  if (!lifecycleEnabled || !onDefaultLocale) return null;
+
+  // ONE close path. The visible Cancel button called the setter directly, so it
+  // skipped the reset that lives in `onOpenChange` — and this dialog stays
+  // mounted, so reopening restored a name the editor had discarded along with
+  // any error from the last attempt.
+  const close = () => {
+    setReleaseId("");
+    // Back to whichever action the caller can actually perform, not "publish":
+    // reopening on a disabled choice leaves submission dead until they notice.
+    setAction(canPublishDocument ? "publish" : "unpublish");
+    add.reset();
+    setOpen(false);
+  };
 
   const permitted =
     action === "publish" ? canPublishDocument : canUnpublishDocument;
@@ -181,12 +227,8 @@ export function AddToReleaseButton({
       <Dialog
         open={open}
         onOpenChange={next => {
-          if (!next) {
-            setReleaseId("");
-            setAction("publish");
-            add.reset();
-          }
-          setOpen(next);
+          if (!next) close();
+          else setOpen(true);
         }}
       >
         <DialogContent>
@@ -196,7 +238,7 @@ export function AddToReleaseButton({
               if (!canSubmit) return;
               add.mutate(
                 { scopeKind, scopeSlug, entryId, action },
-                { onSuccess: () => setOpen(false) }
+                { onSuccess: close }
               );
             }}
           >
@@ -280,11 +322,7 @@ export function AddToReleaseButton({
             </div>
 
             <DialogFooter>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setOpen(false)}
-              >
+              <Button type="button" variant="outline" onClick={close}>
                 Cancel
               </Button>
               <Button type="submit" disabled={!canSubmit}>

@@ -47,10 +47,15 @@ export const releaseKeys = {
   members: (id: string) => ["releases", "members", id] as const,
 };
 
-export function useReleases(params: ReleaseListParams = {}) {
+export function useReleases(params: ReleaseListParams = {}, enabled = true) {
   return useQuery({
     queryKey: releaseKeys.list(params),
     queryFn: () => fetchReleases(params),
+    // A caller can decline to ask. `/api/releases` is gated, so a component
+    // that will not render its result — because the reader lacks the grant, or
+    // because the surface is closed — would otherwise issue a request whose
+    // only outcome is a 403 in everyone's network log.
+    enabled,
   });
 }
 

@@ -41,6 +41,7 @@ import type {
 } from "@admin/types/releases";
 
 import { CancelReleaseButton } from "./CancelReleaseButton";
+import { releaseErrorMessage } from "./release-error";
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
 import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
 
@@ -77,6 +78,10 @@ function MemberRow({
 }) {
   const remove = useRemoveReleaseMember(releaseId);
   const [confirming, setConfirming] = useState(false);
+  // Held open while the removal is FAILING. `AlertDialogAction` closes on
+  // click, so without this the row still shows the document, the editor reads
+  // that as the removal not having applied yet, and nothing ever says it failed.
+  const open = confirming || remove.isError;
 
   return (
     <li>
@@ -107,7 +112,13 @@ function MemberRow({
         </div>
 
         {removable ? (
-          <AlertDialog open={confirming} onOpenChange={setConfirming}>
+          <AlertDialog
+            open={open}
+            onOpenChange={next => {
+              if (!next) remove.reset();
+              setConfirming(next);
+            }}
+          >
             <Button
               variant="ghost"
               size="sm"
@@ -127,6 +138,14 @@ function MemberRow({
                   of what goes live with this release.
                 </AlertDialogDescription>
               </AlertDialogHeader>
+              {remove.isError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {releaseErrorMessage(
+                    remove.error,
+                    "This document was not removed — it is still in the release."
+                  )}
+                </p>
+              ) : null}
               <AlertDialogFooter>
                 <AlertDialogCancel>Keep it</AlertDialogCancel>
                 <AlertDialogAction onClick={() => remove.mutate(member.id)}>
