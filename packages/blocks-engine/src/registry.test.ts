@@ -152,6 +152,63 @@ describe("registration rules", () => {
     expect(allBlocks()).toHaveLength(1);
   });
 
+  it("registers a block declaring well-formed parts", () => {
+    // The control every rejection below needs: a gate that refused every parts
+    // record would pass all of them while making the feature unusable.
+    registerBlocks([
+      block({
+        name: "core/captioned",
+        parts: { caption: { baseStyles: {} } },
+      } as never),
+    ]);
+    expect(hasBlock("core/captioned")).toBe(true);
+  });
+
+  it("rejects parts that are not a record, at BOOT rather than at render", () => {
+    // Unchecked, a `null` reaches the compile context and `Object.keys` throws
+    // during page-style resolution — a long way from the definition that caused
+    // it, naming neither the block nor the field.
+    expect(() =>
+      registerBlocks([block({ name: "core/d1", parts: null } as never)])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*parts/s);
+    expect(() =>
+      registerBlocks([block({ name: "core/d2", parts: [] } as never)])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*parts/s);
+  });
+
+  it("rejects a part name the compiler would refuse to emit", () => {
+    // Registration and emission ask the SAME predicate. A name accepted here
+    // and refused there registers a block whose part is silently never styled.
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/e1", parts: { "a--b": {} } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*a--b/s);
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/e2", parts: { Caption: {} } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*Caption/s);
+  });
+
+  it("rejects a part name Object.prototype already owns", () => {
+    // `constructor` passes the slug grammar, and a record cannot store it and
+    // read it back: the lookup answers with the inherited member.
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/f", parts: { constructor: {} } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*constructor/s);
+  });
+
+  it("rejects a part whose declaration is not a record", () => {
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/g", parts: { caption: null } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*caption/s);
+  });
+
   it("rejects a non-namespaced name", () => {
     expect(() => registerBlocks([block({ name: "heading" })])).toThrow(
       /NEXTLY_BLOCK_INVALID/

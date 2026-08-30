@@ -528,7 +528,15 @@ export function isPartName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length <= MAX_BLOCK_PART_LENGTH &&
-    BLOCK_PART_NAME_RE.test(value)
+    BLOCK_PART_NAME_RE.test(value) &&
+    // A name `Object.prototype` already owns cannot be stored in a record and
+    // read back: the lookup answers with the inherited member instead of
+    // `undefined`, and assigning it sets the prototype rather than creating an
+    // own property. `constructor` passes the grammar above, which is exactly
+    // why this is asked of the prototype rather than matched against a written
+    // list — the list everyone writes is `__proto__` and `constructor` while
+    // `valueof` behaves identically.
+    !Object.prototype.hasOwnProperty.call(Object.prototype, value)
   );
 }
 

@@ -10,7 +10,7 @@
  * at boot with a named error rather than producing broken pages later.
  */
 import type { AnyBlockDefinition, BlockSupports } from "./block";
-import { COMPONENT_INSTANCE_TYPE, isBlockType } from "./document";
+import { COMPONENT_INSTANCE_TYPE, isBlockType, isPartName } from "./document";
 import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
@@ -225,6 +225,42 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
   // validation, repair or insertion lookup, a long way from the definition that caused it and
   // naming neither. Checked here for the same reason `parent` is: the type rejects it at the
   // authoring site, and definitions also arrive from JavaScript plugins and from JSON.
+  // Checked here for the reason `slots` below is: the TYPE rejects a bad
+  // declaration at the authoring site, and definitions also arrive from
+  // JavaScript plugins and from JSON, where nothing has. Unchecked, a `null`
+  // reaches the compile context and `Object.keys` throws during page-style
+  // resolution — a long way from the definition that caused it, naming neither
+  // the block nor the field, and at render time rather than at boot.
+  if (def.parts !== undefined) {
+    if (!isPlainRecord(def.parts)) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" parts must be a plain object keyed by part name.`
+      );
+    }
+    for (const [partName, spec] of Object.entries(def.parts)) {
+      // Bound before the check rather than read after it. `isPartName` narrows
+      // a `string` to `never` on its false branch, so the failure message —
+      // the one place the name has to be readable — would hold a value the
+      // template cannot render.
+      const named = `${partName}`;
+      // The SAME predicate the compiler emits against, so the two gates cannot
+      // answer differently: a name accepted here and refused there registers a
+      // block whose part is silently never styled.
+      if (!isPartName(partName)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" part "${named}" must be a lowercase slug such as "caption", with no doubled dash.`
+        );
+      }
+      if (!isPlainRecord(spec)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" part "${named}" must be a plain object.`
+        );
+      }
+    }
+  }
   if (def.slots !== undefined) {
     if (!isPlainRecord(def.slots)) {
       fail(

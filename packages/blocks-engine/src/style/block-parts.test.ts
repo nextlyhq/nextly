@@ -167,6 +167,9 @@ describe("a part whose NAME is not a name", () => {
     ["a leading dash", "-caption"],
     ["a trailing dash", "caption-"],
     ["an empty string", ""],
+    // Passes the slug grammar and still cannot be stored in a record and read
+    // back, so the compiler refuses it exactly as registration does.
+    ["a name Object.prototype owns", "constructor"],
   ] as const;
 
   it.each(REFUSED)("refuses %s", (_why, name) => {
