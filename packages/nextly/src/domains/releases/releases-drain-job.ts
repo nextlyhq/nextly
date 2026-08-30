@@ -30,7 +30,6 @@ import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { JobContentSource } from "../jobs/job-content-api";
 import { defineJob } from "../jobs/job-registry";
 import type { JobDefinition } from "../jobs/job-registry";
-import { remainingPassMs } from "../jobs/remaining-pass";
 
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
@@ -72,34 +71,26 @@ export function createReleasesDrainJob(deps: {
     sweep: true,
     handler: async (_input, context) => {
       const startedAt = Date.now();
-      // What is LEFT of the pass, never a fixed budget of this job's own.
-      // `runJobs` checks its budget before starting a handler and cannot
-      // interrupt a running one, so a drain that begins late has less pass
-      // remaining than any constant could know: an earlier job that overran
-      // leaves this one starting with seconds rather than a whole tick. Taking a
-      // full budget anyway means outliving the invocation and being killed
-      // part-way. Shared with the webhook drain, so the two answer "how long
-      // have I got" with one implementation rather than two that agree today.
-      const remainingMs = remainingPassMs(context);
       const result = await applyDueReleases({
-        // ONE clock for both halves. The deadline is derived from the runner's
-        // `context.now`, so the comparison has to read the same source — left to
-        // its default, `applyDueReleases` compares a virtual deadline against
-        // real wall time, and a runner clock behind wall time stops after the
-        // first release while one ahead never stops at all.
-        //
-        // `context.now` is the instant the runner is treating as now, so it does
-        // not advance during the pass; elapsed time comes from the real clock
-        // offset by the difference. That keeps a virtual clock authoritative for
-        // WHEN the pass thinks it is, without making the budget unmeasurable.
+        // ONE origin for both sides of the pass's `now() >= deadline` test.
+        // `context.now` is the instant the runner is treating as now and does
+        // not advance during the pass, so elapsed time comes from the real clock
+        // offset by the difference: a virtual clock stays authoritative for WHEN
+        // the pass thinks it is, without making the budget unmeasurable.
         now: () => new Date(context.now.getTime() + (Date.now() - startedAt)),
-        // The remaining SPAN re-anchored to this handler's clock, rather than
-        // `context.deadline` passed through. The clock above advances with real
-        // elapsed time from `context.now`, so a deadline must share that origin
-        // to be comparable — and `context.deadline`'s origin is the runner's
-        // clock, which a caller may have injected. Re-anchoring keeps the two
-        // sides of `now() >= deadline` on one timebase whether or not it was.
-        deadline: new Date(context.now.getTime() + remainingMs),
+        // The runner's own deadline, passed through. It needs no arithmetic:
+        // `runJobs` derives it and `context.now` from one clock, and the clock
+        // above is anchored to `context.now`, so the two sides already share an
+        // origin. Re-expressing it as `context.now + (deadline - context.now)`
+        // would cancel to this exact value — a no-op that reads as load-bearing.
+        //
+        // What this DOES replace is a budget of the job's own. `runJobs` checks
+        // its budget before starting a handler and cannot interrupt a running
+        // one, so a drain that begins late has less pass left than any constant
+        // could know: an earlier job that overran leaves this one with seconds
+        // rather than a whole tick, and taking a fixed budget anyway means
+        // outliving the invocation and being killed part-way.
+        deadline: context.deadline,
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({ contentApi: deps.contentApi }),
         runAs: deps.runAs,

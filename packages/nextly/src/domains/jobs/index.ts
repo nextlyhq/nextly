@@ -35,7 +35,6 @@ export {
   type RunAsResult,
   type RunAsUser,
 } from "../../shared/lib/resolve-run-as";
-export { remainingPassMs } from "./remaining-pass";
 export {
   DEFAULT_BATCH_SIZE,
   DEFAULT_MAX_DURATION_MS,
