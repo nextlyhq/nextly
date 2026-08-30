@@ -171,6 +171,22 @@ describe("the content-width rule", () => {
     expect(css).toContain("var(--site-content-width)");
   });
 
+  it("writes nothing when the width token's VALUE does not suit its kind", () => {
+    // A token may declare itself a dimension and carry a colour. The emitter
+    // writes it as given and says so in a warning — so the property is
+    // declared and useless, `max-width` drops, and `margin-inline: auto`
+    // beside it centres a node with nothing bounding it.
+    const badValue = {
+      id: "content.width",
+      name: "content.width",
+      kind: "dimension",
+      values: { light: "#fff" },
+    } as never;
+    const css = sheet({ tokens: { tokens: [badValue] } }).css;
+    expect(css).not.toContain("nx-pb-contained");
+    expect(css).not.toContain("margin-inline");
+  });
+
   it("writes nothing when the width token is not a dimension", () => {
     // The emitter declares whatever it is given, so a colour carrying this
     // identity still produces `--site-content-width`. `max-width: #ff0000` is

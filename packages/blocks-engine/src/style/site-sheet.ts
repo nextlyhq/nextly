@@ -23,6 +23,7 @@ import type { NamedClass } from "./named-class";
 import { CONTENT_WIDTH_CLASS, hashId, PAGE_ROOT_CLASS } from "./node-class";
 import type { FontFaceDef, SiteToken, SiteTokenSet } from "./site-tokens";
 import {
+  checkTokenKind,
   emitFontFaces,
   emitTokenBlocks,
   resolveTokenPrefix,
@@ -191,7 +192,18 @@ function emitContentWidth(
   const declared = declaredTokens.some(
     token =>
       tokenIdentity(token) === CONTENT_WIDTH_TOKEN &&
-      token.kind === CONTENT_WIDTH_KIND
+      token.kind === CONTENT_WIDTH_KIND &&
+      // And every mode's VALUE has to suit that kind. A token may declare
+      // itself a dimension and carry `#fff` or `12ms`; the emitter writes it as
+      // given and says so in a warning, so the property is declared and useless
+      // — `max-width` drops in the affected mode while `margin-inline: auto`
+      // beside it does not. The same verdict the emitter reaches is asked for
+      // here rather than restated.
+      Object.values(token.values ?? {}).every(
+        value =>
+          typeof value === "string" &&
+          checkTokenKind(token.kind, value) === undefined
+      )
   );
   if (!declared) return "";
 

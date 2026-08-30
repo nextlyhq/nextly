@@ -505,9 +505,33 @@ describe("emitTokenBlocks", () => {
       },
       SCOPE
     );
-    expect(css).toContain(
-      `[${DARK_MODE_ATTRIBUTE}="dark"] ${SCOPE}{--site-color-text:#eee}`
+    // BOTH forms, because the selector decides which one can match and this
+    // function serves two. A scoped selector is matched by the ancestor form,
+    // which is the flexible one — a host may carry the switch anywhere above
+    // it. A site sheet declares on `:root`, which IS the document element and
+    // has no ancestor, so only the attached form can reach it.
+    expect(css).toContain(`[${DARK_MODE_ATTRIBUTE}="dark"] ${SCOPE}`);
+    expect(css).toContain(`${SCOPE}[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    expect(css).toContain("--site-color-text:#eee");
+  });
+
+  it("reaches tokens declared on the document root, which has no ancestor", () => {
+    // The defect the attached form exists for: `:root` is `<html>`, so
+    // `[data-nx-theme="dark"] :root` cannot match however a host sets the
+    // switch, and every dark value under a site sheet was silently inert.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ":root"
     );
+    expect(css).toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
   });
 
   it("follows the operating system when the site asks for that instead", () => {

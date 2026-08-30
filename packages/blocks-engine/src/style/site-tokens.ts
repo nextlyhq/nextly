@@ -1111,7 +1111,18 @@ export function emitTokenBlocks(
     css +=
       (set.darkMode ?? "attribute") === "media"
         ? `@media (prefers-color-scheme:dark){${body}}`
-        : `[${DARK_MODE_ATTRIBUTE}="dark"] ${body}`;
+        : // BOTH forms, because the selector these tokens are declared under
+          // decides which one can match and this function serves two.
+          //
+          // A scoped selector — a per-document class on an element inside the
+          // page — is matched by the ancestor form, and that is the flexible
+          // one: a host may carry the switch anywhere above it. But a site
+          // sheet declares its tokens on `:root`, which IS the document element
+          // and has no ancestor to carry anything, so the ancestor form cannot
+          // match however the host sets it and every dark value was silently
+          // inert. Verified in a browser: with the attribute on `<html>` only
+          // the attached form applies.
+          `[${DARK_MODE_ATTRIBUTE}="dark"] ${selector},${selector}[${DARK_MODE_ATTRIBUTE}="dark"]{${dark.join(";")}}`;
   }
   return { css, issues, emitted };
 }
