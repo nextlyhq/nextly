@@ -49,7 +49,7 @@ interface PluginContributions {
     pages?:    PluginAdminPage[];              // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
     views?:    Record<string, PluginCollectionView>; // list/edit/before*/after* by collection slug
-    // widgets?: RESERVED (M8 / D58) — not rendered yet
+    widgets?:  PluginAdminWidget[];             // rendered on the dashboard; @experimental
   };
 }
 ```

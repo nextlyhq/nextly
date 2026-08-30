@@ -10,8 +10,9 @@ A plugin can extend the Nextly admin in two complementary ways:
 - **`admin`** (on the plugin definition) — *placement & appearance*: where the
   plugin's items sit in the sidebar and how they look (D20).
 
-Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are reserved
-but not yet rendered — they remain [`@experimental`](/docs/plugins/stability) until M8.
+Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
+on the admin dashboard today, but the contract remains
+[`@experimental`](/docs/plugins/stability) while its shape settles.
 
 ## Component paths
 
@@ -179,12 +180,7 @@ contributes: {
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
 
-## Dashboard widgets (reserved)
-
-`contributes.admin.widgets` (D22) is a **forward-looking contract**: the `PluginAdminWidget`
-shape is published so plugin authors can design against it, but **widget rendering and the
-dashboard grid are deferred to a later milestone (M8)** — declaring widgets has **no effect
-yet**. It stays [`@experimental`](/docs/plugins/stability) until the dashboard ships.
+## Dashboard widgets
 
 ```ts
 contributes: {
@@ -201,8 +197,19 @@ contributes: {
 }
 ```
 
-Declaring widgets now is safe (it's validated but ignored); they'll light up when the
-dashboard lands. Everything else on this page is `@public` today.
+Widgets declared in `contributes.admin.widgets` are rendered on the admin dashboard by
+`PluginWidgetGrid`, in a 12-column grid, and hidden from users who lack
+`requiredPermission`.
+
+The contract is still `@experimental` and is expected to grow: a title, a declarative
+query, a size beyond `full`/`half`, and a per-instance config schema. Pin your Nextly
+version while it settles.
+
+`requiredPermission` gates whether the widget renders. It does **not** constrain the data
+your widget reads — fetch through the access-controlled API so a viewer only ever sees
+rows they may read.
+
+Everything else on this page is `@public` today.
 
 ## Placement & appearance
 
