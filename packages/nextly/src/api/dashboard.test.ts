@@ -29,6 +29,10 @@ vi.mock("../di", () => ({
 vi.mock("../services/lib/permissions", () => ({
   isSuperAdmin: vi.fn(),
   listEffectivePermissions: vi.fn(),
+  // `readCaller` (via `authenticated-read.ts`) resolves this to build the
+  // caller it hands the dashboard service. Unmocked, it falls through to a
+  // real database lookup that has nothing to connect to in this suite.
+  resolveRoleSlugs: vi.fn(),
 }));
 
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
@@ -36,6 +40,7 @@ import { container } from "../di";
 import {
   isSuperAdmin,
   listEffectivePermissions,
+  resolveRoleSlugs,
 } from "../services/lib/permissions";
 
 import {
@@ -57,6 +62,7 @@ beforeEach(() => {
   });
   (isErrorResponse as ReturnType<typeof vi.fn>).mockReturnValue(false);
   (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+  (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
 describe("getDashboardStats", () => {

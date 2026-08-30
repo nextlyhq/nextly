@@ -14,6 +14,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import { getNextly } from "../../direct-api/nextly";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
@@ -162,17 +163,21 @@ export class DashboardService extends BaseService {
    * @param limit - Maximum number of entries to return (default: 5, max: 20)
    * @param scope - What the caller may read. Defaults to nothing rather than
    *   everything -- see {@link getStats}.
-   * @param caller - Unused in this task. Filled in by a follow-up that needs
-   *   to know who is asking rather than only what they may read; declared now
-   *   so the signature settles once instead of widening twice.
+   * @param caller - Who is asking. Required to make an access decision at all:
+   *   see the no-caller guard below, which refuses rather than reading with
+   *   `user: undefined`.
    */
   async getRecentEntries(
     limit: number = 5,
     scope: ReadableResources = someResources([]),
-    // `_caller` is intentionally unused today; preserved for a follow-up that
-    // needs to know who is asking (not only what they may read).
-    _caller?: ReadCaller
+    caller?: ReadCaller
   ): Promise<RecentEntriesResponse> {
+    // No caller, no access decision. Reading anyway with `user: undefined`
+    // and `overrideAccess: false` is the shape most likely to be mishandled
+    // downstream (some paths treat a missing `user` as "trusted"), so refuse
+    // outright rather than hand an ambiguous read on.
+    if (!caller) return { entries: [] };
+
     const clampedLimit = Math.min(Math.max(limit, 1), 20);
     const collections = await this.getRegisteredCollections(scope);
 
@@ -186,7 +191,7 @@ export class DashboardService extends BaseService {
     }
 
     const entryPromises = collectionsToQuery.map(coll =>
-      this.getRecentFromCollection(coll, clampedLimit)
+      this.getRecentFromCollection(coll, clampedLimit, caller)
     );
     const results = await Promise.all(entryPromises);
 
@@ -529,70 +534,90 @@ export class DashboardService extends BaseService {
     }
   }
 
+  /**
+   * Recent entries from ONE collection, read through the ordinary
+   * access-controlled path.
+   *
+   * This used to be a hand-built `SELECT ... ORDER BY updated_at DESC
+   * LIMIT n` against the physical table. That skipped field-level access
+   * control, the collection's own access `where` constraints, the
+   * draft/publish lifecycle (it string-matched a `status` column, so a
+   * localized collection's per-locale `_status` companion was invisible),
+   * locale scoping and hooks -- and returned the titles of entries the
+   * caller could not read.
+   *
+   * `overrideAccess: false` plus `user` is what enforces all of it, and is
+   * the same path a REST read takes.
+   */
   private async getRecentFromCollection(
     coll: CollectionInfo,
-    limit: number
+    limit: number,
+    caller: ReadCaller
   ): Promise<RecentEntry[]> {
     try {
-      const q = this.dialect === "mysql" ? "`" : '"';
-      const titleCol = coll.useAsTitle ?? "title";
+      const titleField = coll.useAsTitle ?? "title";
+      const result = await getNextly().find({
+        collection: coll.slug,
+        limit,
+        sort: "-updatedAt",
+        overrideAccess: false,
+        // The caller WHOLE: `user` carries resolved role slugs, and `actor`
+        // (translated internally to `authenticatedScope`) keeps an API key
+        // judged on its own stamped grant rather than its minter's roles.
+        // Reducing either to an id is how a read silently answers as
+        // somebody with different rights.
+        user: caller.user,
+        ...(caller.authenticatedScope
+          ? { actor: caller.authenticatedScope }
+          : {}),
+        // The dashboard shows what the editor can act on, drafts included.
+        // The lifecycle filter -- not a `where` on a status column -- is
+        // what makes this correct for localized collections too.
+        status: "all",
+        select: {
+          id: true,
+          updatedAt: true,
+          [titleField]: true,
+          ...(coll.hasStatus ? { status: true } : {}),
+        },
+      });
 
-      const selectCols = [`${q}id${q}`, `${q}updated_at${q}`];
+      const rows = result.items ?? [];
 
-      // Try to select the title column; if it doesn't exist the query
-      // will just return NULL for it — we fall back to the entry ID.
-      selectCols.push(`${q}${titleCol}${q}`);
-
-      if (coll.hasStatus) {
-        selectCols.push(`${q}status${q}`);
-      }
-
-      const sql =
-        `SELECT ${selectCols.join(", ")} ` +
-        `FROM ${q}${coll.tableName}${q} ` +
-        `ORDER BY ${q}updated_at${q} DESC ` +
-        `LIMIT ${limit}`;
-
-      const rows = await this.adapter.executeQuery<Record<string, unknown>>(
-        sql,
-        []
-      );
-
-      /* eslint-disable @typescript-eslint/no-base-to-string */
       return rows.map(row => {
-        const title =
-          row[titleCol] != null
-            ? String(row[titleCol])
-            : row.title != null
-              ? String(row.title)
-              : row.name != null
-                ? String(row.name)
-                : String(row.id);
-
+        const rawTitle = row[titleField] ?? row.title ?? row.name ?? row.id;
+        // `??` against an `unknown` value narrows the checked side to `{}`,
+        // which still has nothing but `Object.prototype.toString` -- calling
+        // `String()` on that renders `[object Object]` instead of failing
+        // loudly. Narrow by `typeof`/`instanceof` first so every branch that
+        // reaches `String()` (or a bare `.toLowerCase()`) is already known to
+        // be a real primitive.
         const updatedAt =
-          row.updated_at instanceof Date
-            ? row.updated_at.toISOString()
-            : String(row.updated_at ?? "");
+          row.updatedAt instanceof Date
+            ? row.updatedAt.toISOString()
+            : typeof row.updatedAt === "string"
+              ? row.updatedAt
+              : "";
 
         let status: "published" | "draft" | "none" = "none";
-        if (coll.hasStatus && row.status != null) {
-          const s = String(row.status).toLowerCase();
-          status = s === "draft" ? "draft" : "published";
+        if (coll.hasStatus && typeof row.status === "string") {
+          status = row.status.toLowerCase() === "draft" ? "draft" : "published";
         }
 
         return {
           id: String(row.id),
-          title,
+          title: String(rawTitle),
           collectionSlug: coll.slug,
           collectionLabel: coll.label,
           status,
           updatedAt,
         };
       });
-      /* eslint-enable @typescript-eslint/no-base-to-string */
     } catch (error) {
-      // Silently skip collections that fail (e.g., table doesn't exist yet)
-      this.logger.debug(`Failed to get recent entries from ${coll.tableName}`, {
+      // A collection whose table is not yet created, or which the caller
+      // may not read at all, contributes nothing rather than failing the
+      // feed.
+      this.logger.debug(`Failed to get recent entries from ${coll.slug}`, {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];

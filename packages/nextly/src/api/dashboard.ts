@@ -34,6 +34,7 @@ import {
   listEffectivePermissions,
 } from "../services/lib/permissions";
 
+import { readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -118,7 +119,12 @@ export const getDashboardRecentEntries = withErrorHandler(
 
     const service = await getDashboardService();
     const scope = await resolveReadableResources(auth.userId);
-    const entries = await service.getRecentEntries(limit, scope);
+    // The caller WHOLE, not an id: `readCaller` resolves role IDs to the
+    // SLUGS a role-based access rule matches, and carries an API key's own
+    // stamped scope separately so it is judged on that rather than on
+    // whoever minted it. See `getRecentFromCollection`'s use of it.
+    const caller = await readCaller(auth);
+    const entries = await service.getRecentEntries(limit, scope, caller);
 
     // Service returns `{ entries: [...] }` (a named-field object). This is a
     // capped non-paginated read (no total / page / limit semantics), so the
