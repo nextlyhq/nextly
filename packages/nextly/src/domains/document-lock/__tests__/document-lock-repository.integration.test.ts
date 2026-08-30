@@ -41,6 +41,7 @@ import {
   readDocumentLock,
   releaseDocumentLock,
   renewDocumentLock,
+  sweepExpiredDocumentLocks,
 } from "../document-lock-repository";
 import { documentLockKey } from "../lock-key";
 
@@ -65,7 +66,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   return current;
 }
 
-const DOC = { collection: "posts", entryId: "entry-1" } as const;
+const DOC = {
+  scopeKind: "collection",
+  slug: "posts",
+  entryId: "entry-1",
+} as const;
 const ADA = { ownerId: "user-ada", ownerLabel: "Ada" };
 const GRACE = { ownerId: "user-grace", ownerLabel: "Grace" };
 
@@ -80,12 +85,12 @@ const GRACE = { ownerId: "user-grace", ownerLabel: "Grace" };
  */
 async function expireClaim(app: TestNextly): Promise<void> {
   const dialect = app.adapter.getCapabilities().dialect;
-  const key = documentLockKey(DOC.collection, DOC.entryId);
+  const key = documentLockKey(DOC.scopeKind, DOC.slug, DOC.entryId);
   await app.adapter.transaction(async ctx => {
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
           SET ${sql.identifier("expires_at")} = ${futureExpression(dialect, -600)}
-          WHERE ${sql.identifier("lock_key")} = ${key}`
+          WHERE ${sql.identifier("id")} = ${key}`
     );
   });
 }
@@ -100,17 +105,29 @@ async function expireClaim(app: TestNextly): Promise<void> {
  */
 async function setRemaining(app: TestNextly, seconds: number): Promise<void> {
   const dialect = app.adapter.getCapabilities().dialect;
-  const key = documentLockKey(DOC.collection, DOC.entryId);
+  const key = documentLockKey(DOC.scopeKind, DOC.slug, DOC.entryId);
   await app.adapter.transaction(async ctx => {
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
           SET ${sql.identifier("expires_at")} = ${futureExpression(dialect, seconds)}
-          WHERE ${sql.identifier("lock_key")} = ${key}`
+          WHERE ${sql.identifier("id")} = ${key}`
     );
   });
 }
 
 describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
+  /** Acquire as `who`, failing loudly rather than returning an unusable token. */
+  async function claim(
+    app: TestNextly,
+    who: typeof ADA
+  ): Promise<{ token: string }> {
+    const got = await acquireDocumentLock(app.adapter, DOC, who);
+    if (got.status !== "acquired") {
+      throw new Error(`expected to acquire, got ${got.status}`);
+    }
+    return { token: got.claimToken };
+  }
+
   it("gives the first author the claim, and says how long it has", async () => {
     const app = await boot(d);
     const got = await acquireDocumentLock(app.adapter, DOC, ADA);
@@ -126,7 +143,7 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("refuses a second author and names who is editing", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
 
     const got = await acquireDocumentLock(app.adapter, DOC, GRACE);
     expect(got.status).toBe("held");
@@ -138,15 +155,42 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("lets the SAME author re-acquire, so reopening a tab is not a conflict", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
 
     const again = await acquireDocumentLock(app.adapter, DOC, ADA);
     expect(again.status).toBe("acquired");
   });
 
+  it("does not let one tab's release free the claim its own author holds in another", async () => {
+    const app = await boot(d);
+    const first = await claim(app, ADA);
+    const second = await claim(app, ADA);
+    expect(second.token).not.toBe(first.token);
+
+    // The first tab closes. Fenced on OWNER alone this would delete the row the
+    // second tab is editing under, leaving that tab believing it is protected
+    // while anybody could take the document.
+    await releaseDocumentLock(app.adapter, DOC, first.token);
+
+    expect((await readDocumentLock(app.adapter, DOC))?.ownerId).toBe(
+      "user-ada"
+    );
+    const beat = await renewDocumentLock(app.adapter, DOC, second.token);
+    expect(beat.status).toBe("renewed");
+  });
+
+  it("ignores a heartbeat from a tab whose claim was replaced", async () => {
+    const app = await boot(d);
+    const first = await claim(app, ADA);
+    await claim(app, ADA);
+
+    const stale = await renewDocumentLock(app.adapter, DOC, first.token);
+    expect(stale.status).toBe("lost");
+  });
+
   it("hands an EXPIRED claim to the next author without asking for a takeover", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
     await expireClaim(app);
 
     // No takeover flag. A holder that crashed, closed the laptop or went
@@ -157,18 +201,63 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
     expect(got.holder.ownerId).toBe("user-grace");
   });
 
+  it("refuses to revive a claim whose lease already expired", async () => {
+    const app = await boot(d);
+    const ada = await claim(app, ADA);
+    await expireClaim(app);
+
+    // A delayed heartbeat arriving after expiry, before anyone else acquired.
+    // Fenced on ownership alone this would extend the row by another full lease
+    // and report success — resurrecting a claim that was already free, and
+    // refusing the author who was about to take it.
+    const beat = await renewDocumentLock(app.adapter, DOC, ada.token);
+    expect(beat.status).toBe("lost");
+
+    const next = await acquireDocumentLock(app.adapter, DOC, GRACE);
+    expect(next.status).toBe("acquired");
+  });
+
   it("reports nobody editing once a claim has expired", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
     expect(await readDocumentLock(app.adapter, DOC)).toBeDefined();
 
     await expireClaim(app);
     expect(await readDocumentLock(app.adapter, DOC)).toBeUndefined();
   });
 
+  it("deletes lapsed claims when swept, so the table tracks documents open now", async () => {
+    const app = await boot(d);
+    await claim(app, ADA);
+    await expireClaim(app);
+
+    await sweepExpiredDocumentLocks(app.adapter);
+
+    // Gone from the table, not merely hidden by the liveness test. Without the
+    // sweep every document ever opened and abandoned would leave a row forever.
+    const rows = await app.adapter.queryStatement<{ n: unknown }>(
+      sql`SELECT COUNT(*) AS ${sql.identifier("n")}
+          FROM ${sql.identifier(DOCUMENT_LOCK_TABLE)}`
+    );
+    expect(Number(rows[0]?.n)).toBe(0);
+  });
+
+  it("does not sweep a claim that is still live", async () => {
+    const app = await boot(d);
+    await claim(app, ADA);
+
+    await sweepExpiredDocumentLocks(app.adapter);
+
+    // The control for the case above: a sweep that deleted everything would
+    // pass that test while destroying every active editing session.
+    expect((await readDocumentLock(app.adapter, DOC))?.ownerId).toBe(
+      "user-ada"
+    );
+  });
+
   it("transfers the document on a deliberate takeover", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
 
     const stolen = await acquireDocumentLock(app.adapter, DOC, GRACE, {
       takeover: true,
@@ -182,10 +271,10 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("tells the ousted author it lost the claim, and to whom", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    const ada = await claim(app, ADA);
     await acquireDocumentLock(app.adapter, DOC, GRACE, { takeover: true });
 
-    const beat = await renewDocumentLock(app.adapter, DOC, ADA);
+    const beat = await renewDocumentLock(app.adapter, DOC, ada.token);
     expect(beat.status).toBe("lost");
     // Naming the new holder is what lets the interface say "Grace took over"
     // rather than only that something happened.
@@ -194,10 +283,10 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("reports a lapsed claim as lost with NOBODY holding it", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
-    await releaseDocumentLock(app.adapter, DOC, ADA);
+    const ada = await claim(app, ADA);
+    await releaseDocumentLock(app.adapter, DOC, ada.token);
 
-    const beat = await renewDocumentLock(app.adapter, DOC, ADA);
+    const beat = await renewDocumentLock(app.adapter, DOC, ada.token);
     expect(beat.status).toBe("lost");
     // Absent rather than present-and-empty. "Nobody has it" leads the editor to
     // offer resuming; "Grace has it" leads it to offer requesting access, and
@@ -207,7 +296,7 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("does not let a heartbeat from a non-owner extend the owner's claim", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
     // Wind the lease down first. Asserting on the OWNER after an unfenced
     // renewal proves nothing — an unfenced UPDATE sets `expires_at` and leaves
     // `owner_id` alone, so Ada still owns it either way and the defect is
@@ -215,7 +304,7 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
     // Grace does not hold, and only the remaining span shows that.
     await setRemaining(app, 30);
 
-    const beat = await renewDocumentLock(app.adapter, DOC, GRACE);
+    const beat = await renewDocumentLock(app.adapter, DOC, "not-a-real-token");
     expect(beat.status).toBe("lost");
 
     const held = await readDocumentLock(app.adapter, DOC);
@@ -227,11 +316,9 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("does not let a non-owner release somebody else's claim", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
+    await claim(app, ADA);
 
-    await releaseDocumentLock(app.adapter, DOC, GRACE);
-    // A late release from a previous holder must not free the document out from
-    // under whoever took it over.
+    await releaseDocumentLock(app.adapter, DOC, "not-a-real-token");
     expect((await readDocumentLock(app.adapter, DOC))?.ownerId).toBe(
       "user-ada"
     );
@@ -239,11 +326,26 @@ describe.each(getConfiguredTestDialects())("document soft lock (%s)", d => {
 
   it("frees the document when its owner releases it", async () => {
     const app = await boot(d);
-    await acquireDocumentLock(app.adapter, DOC, ADA);
-    await releaseDocumentLock(app.adapter, DOC, ADA);
+    const ada = await claim(app, ADA);
+    await releaseDocumentLock(app.adapter, DOC, ada.token);
 
     expect(await readDocumentLock(app.adapter, DOC)).toBeUndefined();
     const next = await acquireDocumentLock(app.adapter, DOC, GRACE);
     expect(next.status).toBe("acquired");
+  });
+
+  it("gives the document to exactly one of two simultaneous first claims", async () => {
+    const app = await boot(d);
+
+    // Both find no row and both insert. The loser must not raise: on PostgreSQL
+    // a unique-violation aborts the whole transaction, so a caught constraint
+    // error would leave the read that reports the winner failing with 25P02.
+    const [first, second] = await Promise.all([
+      acquireDocumentLock(app.adapter, DOC, ADA),
+      acquireDocumentLock(app.adapter, DOC, GRACE),
+    ]);
+
+    const outcomes = [first.status, second.status].sort();
+    expect(outcomes).toEqual(["acquired", "held"]);
   });
 });

@@ -293,10 +293,12 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_jobs_dedupe_idx"
       ON "nextly_jobs" ("dedupe_key")`,
     `CREATE TABLE IF NOT EXISTS "nextly_document_lock" (
-      "lock_key" TEXT PRIMARY KEY NOT NULL,
-      "collection" TEXT NOT NULL,
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "slug" TEXT NOT NULL,
       "entry_id" TEXT NOT NULL,
       "owner_id" TEXT NOT NULL,
+      "claim_token" TEXT NOT NULL,
       "owner_label" TEXT,
       "acquired_at" INTEGER NOT NULL,
       "expires_at" INTEGER NOT NULL
@@ -306,8 +308,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     // would never appear on a database built by an earlier boot.
     `CREATE INDEX IF NOT EXISTS "ndl_expires_at_idx"
       ON "nextly_document_lock" ("expires_at")`,
-    `CREATE INDEX IF NOT EXISTS "ndl_collection_idx"
-      ON "nextly_document_lock" ("collection")`,
+    `CREATE INDEX IF NOT EXISTS "ndl_scope_idx"
+      ON "nextly_document_lock" ("scope_kind", "slug")`,
     // No REFERENCES to "email_providers": that table is not bootstrapped here,
     // and SQLite resolves a foreign key at insert time rather than at CREATE,
     // so declaring one would turn every recorded delivery into a failure on a

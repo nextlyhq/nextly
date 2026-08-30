@@ -9,12 +9,14 @@ export {
   readDocumentLock,
   releaseDocumentLock,
   renewDocumentLock,
+  sweepExpiredDocumentLocks,
   type DocumentLockClaimant,
 } from "./document-lock-repository";
 export {
   DOCUMENT_LOCK_KEY_SEPARATOR,
   MAX_DOCUMENT_LOCK_KEY_LENGTH,
   documentLockKey,
+  type DocumentScopeKind,
 } from "./lock-key";
 export {
   DOCUMENT_LOCK_HEARTBEAT_INTERVAL_MS,

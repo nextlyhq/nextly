@@ -13,14 +13,22 @@
  * lock. Asking the database for both sides puts every comparison in one frame
  * of reference.
  *
+ * ## A claim is an ACQUISITION, not a person
+ *
+ * Every claim carries a token minted when it was taken, and every heartbeat and
+ * release must present it. Ownership alone is not enough: one author with the
+ * document open in two tabs holds two claims under one user id, and a release
+ * from the tab they closed would otherwise delete the claim the other tab is
+ * still editing under — leaving that tab believing it is protected while
+ * somebody else takes the document.
+ *
  * ## Why a takeover is allowed here and refused by the migration lock
  *
  * They share a clock and a TTL derivation, and nothing else. That lock guards
  * DDL, where stealing a live claim means two concurrent migrations corrupting a
  * schema, so it never steals. This one mediates two people, where refusing
  * forever would mean a closed laptop locking a document until its lease runs
- * out with no way to ask for it back. Different questions, different answers,
- * deliberately not shared.
+ * out with no way to ask for it back.
  *
  * ## No flush on takeover
  *
@@ -33,6 +41,8 @@
  *
  * @module domains/document-lock/document-lock-repository
  */
+
+import { randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type {
@@ -48,7 +58,6 @@ import {
 } from "../../database/lease-clock";
 import { NextlyError } from "../../errors/nextly-error";
 import { DOCUMENT_LOCK_TABLE } from "../../schemas/document-lock";
-import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
 import { documentLockKey } from "./lock-key";
 import {
@@ -77,13 +86,11 @@ export interface DocumentLockClaimant {
  * before its holder asks again", which is what a claimant needs before it starts
  * editing: a claim shorter than that is live now and gone before anything
  * re-checks it.
- *
- * Both are computed in the same statement as the read, so no caller can hold a
- * holder and a liveness verdict that disagree.
  */
 interface LockRow {
   readonly ownerId: string;
   readonly ownerLabel: string | null;
+  readonly claimToken: string;
   readonly expiresInSeconds: number;
   readonly live: boolean;
   readonly usable: boolean;
@@ -92,6 +99,7 @@ interface LockRow {
 interface RawLockRow {
   readonly owner_id: string | null;
   readonly owner_label: string | null;
+  readonly claim_token: string | null;
   readonly expires_in: unknown;
   readonly live: unknown;
   readonly usable: unknown;
@@ -114,13 +122,14 @@ interface RawLockRow {
 function lockRowQuery(dialect: SupportedDialect, key: string): SQL {
   return sql`SELECT ${sql.identifier("owner_id")},
       ${sql.identifier("owner_label")},
+      ${sql.identifier("claim_token")},
       ${remainingSecondsExpression(dialect, "expires_at")} AS ${sql.identifier("expires_in")},
       CASE WHEN ${sql.identifier("expires_at")} > ${nowExpression(dialect)}
            THEN 1 ELSE 0 END AS ${sql.identifier("live")},
       CASE WHEN ${sql.identifier("expires_at")} > ${futureExpression(dialect, DOCUMENT_LOCK_RENEW_MARGIN_SECONDS)}
            THEN 1 ELSE 0 END AS ${sql.identifier("usable")}
       FROM ${sql.identifier(DOCUMENT_LOCK_TABLE)}
-      WHERE ${sql.identifier("lock_key")} = ${key}`;
+      WHERE ${sql.identifier("id")} = ${key}`;
 }
 
 /** The row, or `undefined` when no claim on this document exists at all. */
@@ -129,9 +138,10 @@ function toLockRow(row: RawLockRow | undefined): LockRow | undefined {
   return {
     ownerId: row.owner_id,
     ownerLabel: row.owner_label,
+    claimToken: row.claim_token ?? "",
     // Every driver reports this differently — a number on SQLite, a string from
     // PostgreSQL's `EXTRACT` on some drivers, a number from MySQL — so it is
-    // coerced once here rather than at each of the three call sites.
+    // coerced once here rather than at each call site.
     expiresInSeconds: Math.trunc(Number(row.expires_in)),
     live: Number(row.live) === 1,
     usable: Number(row.usable) === 1,
@@ -146,33 +156,19 @@ function toHolder(row: LockRow): DocumentLockHolder {
   };
 }
 
-/**
- * The row this claim was just written to is gone.
- *
- * Only a release landing in the same instant produces this. Reported as a
- * conflict the caller may retry rather than as "somebody else is editing",
- * which would be false — nobody holds the document, including us.
- */
-function lockRowVanished(key: string, at: string): never {
-  throw NextlyError.conflict({
-    reason: "state",
-    message: "Could not start editing just now. Please try again.",
-    logContext: { reason: "lock row vanished", at, key },
-  });
-}
-
 /** The key for this document, or a refusal naming why there is not one. */
 function keyFor(ref: DocumentRef): string {
-  const key = documentLockKey(ref.collection, ref.entryId);
+  const key = documentLockKey(ref.scopeKind, ref.slug, ref.entryId);
   if (key !== undefined) return key;
-  // `invalidInput` rather than `internal`: a collection slug or entry id can
-  // reach here from a request, so this is a caller mistake rather than a
-  // programming one, and it must not read as a server fault in the log.
+  // `invalidInput` rather than `internal`: a slug or entry id can reach here
+  // from a request, so this is a caller mistake rather than a programming one,
+  // and it must not read as a server fault in the log.
   throw NextlyError.invalidInput({
     message: "This document cannot be locked for editing.",
     logContext: {
       reason: "document reference does not form a portable lock key",
-      collection: ref.collection,
+      scopeKind: ref.scopeKind,
+      slug: ref.slug,
       entryId: ref.entryId,
     },
   });
@@ -204,6 +200,88 @@ export async function readDocumentLock(
 }
 
 /**
+ * An insert that yields to a concurrent winner instead of raising.
+ *
+ * 🔴 Deliberately NOT a caught unique violation. On PostgreSQL a constraint
+ * error aborts the whole transaction, so catching `23505` leaves a context in
+ * which every later statement fails with `25P02` — the read that was supposed
+ * to report the winner cannot run. Letting the database ignore the conflict
+ * keeps the transaction usable, and the read-back that follows is then the one
+ * thing that decides the outcome.
+ *
+ * MySQL cannot express `ON CONFLICT`, and PostgreSQL and SQLite cannot express
+ * `INSERT IGNORE`; the spelling differs per dialect but the semantics are the
+ * same on all three.
+ */
+function insertIfAbsent(
+  dialect: SupportedDialect,
+  key: string,
+  ref: DocumentRef,
+  claimant: DocumentLockClaimant,
+  claimToken: string
+): SQL {
+  const columns = sql`(${sql.identifier("id")}, ${sql.identifier("scope_kind")},
+      ${sql.identifier("slug")}, ${sql.identifier("entry_id")},
+      ${sql.identifier("owner_id")}, ${sql.identifier("claim_token")},
+      ${sql.identifier("owner_label")}, ${sql.identifier("acquired_at")},
+      ${sql.identifier("expires_at")})`;
+  const values = sql`VALUES (${key}, ${ref.scopeKind}, ${ref.slug}, ${ref.entryId},
+      ${claimant.ownerId}, ${claimToken}, ${claimant.ownerLabel ?? null},
+      ${nowExpression(dialect)},
+      ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)})`;
+
+  if (dialect === "mysql") {
+    return sql`INSERT IGNORE INTO ${sql.identifier(DOCUMENT_LOCK_TABLE)} ${columns} ${values}`;
+  }
+  return sql`INSERT INTO ${sql.identifier(DOCUMENT_LOCK_TABLE)} ${columns} ${values}
+      ON CONFLICT (${sql.identifier("id")}) DO NOTHING`;
+}
+
+/**
+ * The row this claim was just written to is gone.
+ *
+ * Only a release or a sweep landing in the same instant produces this. Reported
+ * as a conflict the caller may retry rather than as "somebody else is editing",
+ * which would be false — nobody holds the document, including us.
+ */
+function lockRowVanished(key: string): never {
+  throw NextlyError.conflict({
+    reason: "state",
+    message: "Could not start editing just now. Please try again.",
+    logContext: { reason: "lock row vanished during acquisition", key },
+  });
+}
+
+/** Whether this existing claim may be replaced by the caller's. */
+function isTakeable(
+  existing: LockRow,
+  claimant: DocumentLockClaimant,
+  takeover: boolean
+): boolean {
+  // Lapsed, ours to renew, or deliberately taken over by a person who was told
+  // who held it.
+  return (
+    !existing.live || existing.ownerId === claimant.ownerId || takeover === true
+  );
+}
+
+/** Replace whatever claim the row carries with this one. */
+function writeClaim(
+  dialect: SupportedDialect,
+  key: string,
+  claimant: DocumentLockClaimant,
+  claimToken: string
+): SQL {
+  return sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
+      SET ${sql.identifier("owner_id")} = ${claimant.ownerId},
+          ${sql.identifier("claim_token")} = ${claimToken},
+          ${sql.identifier("owner_label")} = ${claimant.ownerLabel ?? null},
+          ${sql.identifier("acquired_at")} = ${nowExpression(dialect)},
+          ${sql.identifier("expires_at")} = ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)}
+      WHERE ${sql.identifier("id")} = ${key}`;
+}
+
+/**
  * Claim this document for editing.
  *
  * Returns `held` rather than throwing when somebody else has it, because that is
@@ -224,118 +302,63 @@ export async function acquireDocumentLock(
 ): Promise<AcquireDocumentLockOutcome> {
   const dialect = adapter.getCapabilities().dialect;
   const key = keyFor(ref);
-  const label = claimant.ownerLabel ?? null;
+  const claimToken = randomUUID();
 
   return adapter.transaction(async ctx => {
-    // Serializes contenders that find an existing row. A row that does NOT yet
-    // exist cannot be locked, which is why the insert below is written to
-    // survive losing that race rather than to assume it won.
+    // 🔴 INSERT FIRST, then lock. `lockRow` issues `SELECT ... FOR UPDATE`, and
+    // on a row that does not exist yet InnoDB answers that with a GAP lock —
+    // two contenders opening the same fresh document then deadlock, which is a
+    // failed acquisition on a path with no conflict in it. Creating the row
+    // first is atomic on every dialect and needs no prior lock, so by the time
+    // anything is locked the row is a real row and the lock is an ordinary one.
+    await ctx.runStatement(
+      insertIfAbsent(dialect, key, ref, claimant, claimToken)
+    );
     await ctx.lockRow(DOCUMENT_LOCK_TABLE, key);
 
     const existing = await readRow(ctx, dialect, key);
 
-    if (existing === undefined) {
-      const inserted = await insertClaim(ctx, dialect, key, ref, claimant);
-      if (inserted !== undefined) return inserted;
-      // Another contender inserted between our read and our write. Re-reading
-      // rather than reporting failure: they may hold it, or their claim may
-      // already have lapsed, and only the row can say which.
-      const after = await readRow(ctx, dialect, key);
-      if (after === undefined) lockRowVanished(key, "contended-insert");
-      return acquisitionOf(after, claimant);
+    // Ours already: the insert above found no row and wrote this claim. Nothing
+    // to update, and no other outcome is possible for this token.
+    if (existing !== undefined && existing.claimToken === claimToken) {
+      return { status: "acquired", holder: toHolder(existing), claimToken };
     }
 
-    const mine = existing.ownerId === claimant.ownerId;
-    const takeable = !existing.live || mine || options?.takeover === true;
-    if (!takeable) return { status: "held", holder: toHolder(existing) };
+    if (existing === undefined) lockRowVanished(key);
+    if (!isTakeable(existing, claimant, options?.takeover === true)) {
+      return { status: "held", holder: toHolder(existing) };
+    }
 
-    await ctx.runStatement(
-      sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
-          SET ${sql.identifier("owner_id")} = ${claimant.ownerId},
-              ${sql.identifier("owner_label")} = ${label},
-              ${sql.identifier("acquired_at")} = ${nowExpression(dialect)},
-              ${sql.identifier("expires_at")} = ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)}
-          WHERE ${sql.identifier("lock_key")} = ${key}`
-    );
+    await ctx.runStatement(writeClaim(dialect, key, claimant, claimToken));
 
-    // Read back rather than trusting the update's affected-row count, which the
-    // dialects report inconsistently — and which counts a row matched but
-    // unchanged differently again.
+    // Read back rather than trusting an affected-row count, which the dialects
+    // report inconsistently — and which counts a row matched but unchanged
+    // differently again.
     const after = await readRow(ctx, dialect, key);
-    if (after === undefined) lockRowVanished(key, "acquisition");
-    return acquisitionOf(after, claimant);
+    if (after === undefined) lockRowVanished(key);
+
+    // 🔴 The TOKEN decides, not the owner. A concurrent acquisition by the same
+    // author writes a different token, so comparing owners would report both
+    // callers as holders of one claim and let either release the other's.
+    if (after.claimToken !== claimToken || !after.usable) {
+      return { status: "held", holder: toHolder(after) };
+    }
+    return { status: "acquired", holder: toHolder(after), claimToken };
   });
-}
-
-/**
- * Is this row a claim the caller may rely on?
- *
- * 🔴 OWNERSHIP AND USABILITY, never ownership alone. A row can name this
- * claimant and still be spent: a transaction suspended or merely slow between
- * writing the expiry and reading it back can burn more than the TTL inside
- * itself. Reporting success on that hands back a claim a contender may take the
- * instant it commits, while the editor carries on believing it is protected.
- *
- * Returns a boolean rather than an outcome because the two callers name the same
- * verdict differently — acquiring calls it `acquired`/`held`, confirming calls it
- * `renewed`/`lost` — and one function returning both unions could only do it
- * through a cast that erases the difference it exists to preserve.
- */
-function holdsIt(row: LockRow, claimant: DocumentLockClaimant): boolean {
-  return row.ownerId === claimant.ownerId && row.usable;
-}
-
-/** The same verdict, named the way an acquisition names it. */
-function acquisitionOf(
-  row: LockRow,
-  claimant: DocumentLockClaimant
-): AcquireDocumentLockOutcome {
-  return holdsIt(row, claimant)
-    ? { status: "acquired", holder: toHolder(row) }
-    : { status: "held", holder: toHolder(row) };
-}
-
-/** Insert a first claim, or `undefined` when another contender won the race. */
-async function insertClaim(
-  ctx: TransactionContext,
-  dialect: SupportedDialect,
-  key: string,
-  ref: DocumentRef,
-  claimant: DocumentLockClaimant
-): Promise<AcquireDocumentLockOutcome | undefined> {
-  try {
-    await ctx.runStatement(
-      sql`INSERT INTO ${sql.identifier(DOCUMENT_LOCK_TABLE)}
-          (${sql.identifier("lock_key")}, ${sql.identifier("collection")},
-           ${sql.identifier("entry_id")}, ${sql.identifier("owner_id")},
-           ${sql.identifier("owner_label")}, ${sql.identifier("acquired_at")},
-           ${sql.identifier("expires_at")})
-          VALUES (${key}, ${ref.collection}, ${ref.entryId},
-                  ${claimant.ownerId}, ${claimant.ownerLabel ?? null},
-                  ${nowExpression(dialect)},
-                  ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)})`
-    );
-  } catch (error) {
-    // A duplicate key reaches here in several shapes, nested a couple of
-    // wrappers deep; this is the one place that knows all of them.
-    if (!isUniqueViolation(error)) throw error;
-    return undefined;
-  }
-  const after = await readRow(ctx, dialect, key);
-  if (after === undefined) lockRowVanished(key, "insert");
-  return acquisitionOf(after, claimant);
 }
 
 /**
  * Confirm a claim this editor believes it still holds.
  *
- * Fenced on ownership in the statement itself, so a heartbeat that arrives after
- * somebody took the document over extends THEIR claim by nothing.
+ * Fenced in the statement itself on the acquisition token AND on the claim still
+ * being live, so a heartbeat that arrives after somebody took the document over,
+ * from a tab whose claim was replaced, or after the lease already lapsed,
+ * extends nothing.
  */
 export async function renewDocumentLock(
   adapter: DrizzleAdapter,
   ref: DocumentRef,
-  claimant: DocumentLockClaimant
+  claimToken: string
 ): Promise<RenewDocumentLockOutcome> {
   const dialect = adapter.getCapabilities().dialect;
   const key = keyFor(ref);
@@ -345,42 +368,76 @@ export async function renewDocumentLock(
     await ctx.runStatement(
       sql`UPDATE ${sql.identifier(DOCUMENT_LOCK_TABLE)}
           SET ${sql.identifier("expires_at")} = ${futureExpression(dialect, DOCUMENT_LOCK_TTL_SECONDS)}
-          WHERE ${sql.identifier("lock_key")} = ${key}
-            AND ${sql.identifier("owner_id")} = ${claimant.ownerId}`
+          WHERE ${sql.identifier("id")} = ${key}
+            AND ${sql.identifier("claim_token")} = ${claimToken}
+            AND ${sql.identifier("expires_at")} > ${nowExpression(dialect)}`
     );
     const after = await readRow(ctx, dialect, key);
-    // No row at all means the claim lapsed and was cleared, or its holder
+    // No row at all means the claim lapsed and was swept, or its holder
     // released it. Reported as lost WITHOUT a holder, which is a different
     // answer from "somebody else has it" and leads the interface to offer
     // resuming rather than requesting access.
     if (after === undefined) return { status: "lost" };
-    return holdsIt(after, claimant)
-      ? { status: "renewed", holder: toHolder(after) }
-      : { status: "lost", holder: toHolder(after) };
+    // 🔴 Liveness is a PRECONDITION of renewal, not a consequence of it. Without
+    // the clause above, a heartbeat arriving after expiry — but before anyone
+    // else acquired — would revive a claim that was already free for the taking,
+    // and the author who was about to acquire would be refused by a lease that
+    // should not have existed.
+    if (after.claimToken !== claimToken || !after.usable) {
+      return { status: "lost", holder: toHolder(after) };
+    }
+    return { status: "renewed", holder: toHolder(after) };
   });
 }
 
 /**
  * Give up a claim.
  *
- * Fenced on ownership so a late release from a previous holder cannot free the
- * document out from under whoever took it over. Silent when there is nothing to
+ * Fenced on the acquisition token so neither a late release from a previous
+ * holder nor one from the author's own closed second tab can free the document
+ * out from under whoever is editing now. Silent when there is nothing to
  * release: an editor closing a tab whose claim already lapsed has nothing to
- * apologise for, and reporting an error there would be noise on a path nobody
- * is watching.
+ * apologise for, and an error there would be noise on a path nobody watches.
  */
 export async function releaseDocumentLock(
   adapter: DrizzleAdapter,
   ref: DocumentRef,
-  claimant: DocumentLockClaimant
+  claimToken: string
 ): Promise<void> {
   const key = keyFor(ref);
   await adapter.transaction(async ctx => {
     await ctx.lockRow(DOCUMENT_LOCK_TABLE, key);
     await ctx.runStatement(
       sql`DELETE FROM ${sql.identifier(DOCUMENT_LOCK_TABLE)}
-          WHERE ${sql.identifier("lock_key")} = ${key}
-            AND ${sql.identifier("owner_id")} = ${claimant.ownerId}`
+          WHERE ${sql.identifier("id")} = ${key}
+            AND ${sql.identifier("claim_token")} = ${claimToken}`
+    );
+  });
+}
+
+/**
+ * Delete every claim that has lapsed.
+ *
+ * A released claim deletes its own row, so this only ever collects the ones
+ * nobody came back from — a crashed tab, a closed laptop, a lost connection.
+ * Without it the table would keep one row per document ever OPENED rather than
+ * per document open now, and the docblock's bound would be a claim nothing
+ * enforced.
+ *
+ * Bounded by the database's clock like every other comparison here, so a sweep
+ * running on an instance whose clock is behind cannot delete a live claim.
+ *
+ * @returns nothing — a sweep that deletes nothing is the ordinary case, and a
+ * count nobody reads would only invite treating it as a health signal.
+ */
+export async function sweepExpiredDocumentLocks(
+  adapter: DrizzleAdapter
+): Promise<void> {
+  const dialect = adapter.getCapabilities().dialect;
+  await adapter.transaction(async ctx => {
+    await ctx.runStatement(
+      sql`DELETE FROM ${sql.identifier(DOCUMENT_LOCK_TABLE)}
+          WHERE ${sql.identifier("expires_at")} <= ${nowExpression(dialect)}`
     );
   });
 }

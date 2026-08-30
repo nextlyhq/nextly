@@ -1,7 +1,8 @@
 /**
  * `nextly_document_lock` — one editor's claim on one document, MySQL.
  *
- * See `./postgres.ts` for what the table is and why the key is synthetic.
+ * See `./postgres.ts` for what the table is, why `id` is a composite string and
+ * why the scope kind is part of it.
  *
  * @module schemas/document-lock/mysql
  */
@@ -11,11 +12,13 @@ import { datetime, index, mysqlTable, varchar } from "drizzle-orm/mysql-core";
 export const nextlyDocumentLock = mysqlTable(
   "nextly_document_lock",
   {
-    lockKey: varchar("lock_key", { length: 191 }).primaryKey(),
-    collection: varchar("collection", { length: 191 }).notNull(),
+    id: varchar("id", { length: 191 }).primaryKey(),
+    scopeKind: varchar("scope_kind", { length: 32 }).notNull(),
+    slug: varchar("slug", { length: 191 }).notNull(),
     entryId: varchar("entry_id", { length: 191 }).notNull(),
     ownerId: varchar("owner_id", { length: 191 }).notNull(),
-    ownerLabel: varchar("owner_label", { length: 191 }),
+    claimToken: varchar("claim_token", { length: 36 }).notNull(),
+    ownerLabel: varchar("owner_label", { length: 255 }),
     // `datetime` stores no zone, which is why every value written to and read
     // from these two columns comes from `UTC_TIMESTAMP()` rather than `NOW()`.
     // A holder whose session is UTC and a contender whose session is UTC+05
@@ -25,6 +28,6 @@ export const nextlyDocumentLock = mysqlTable(
   },
   t => [
     index("ndl_expires_at_idx").on(t.expiresAt),
-    index("ndl_collection_idx").on(t.collection),
+    index("ndl_scope_idx").on(t.scopeKind, t.slug),
   ]
 );

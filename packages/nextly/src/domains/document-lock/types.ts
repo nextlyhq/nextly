@@ -4,9 +4,13 @@
  * @module domains/document-lock/types
  */
 
+import type { DocumentScopeKind } from "./lock-key";
+
 /** The document a claim is about. */
 export interface DocumentRef {
-  readonly collection: string;
+  /** Whether this is a collection entry or a Single. Part of the identity. */
+  readonly scopeKind: DocumentScopeKind;
+  readonly slug: string;
   readonly entryId: string;
 }
 
@@ -31,9 +35,18 @@ export interface DocumentLockHolder {
  * and a countdown in it — not an exception. The HTTP layer turns `held` into a
  * 409 carrying the same holder; a thrown error would have to smuggle that
  * through log context, which is not public.
+ *
+ * 🔴 `claimToken` is returned ONLY on success, and only to the caller that
+ * succeeded. It identifies this acquisition, and every later heartbeat and
+ * release must present it. Handing it out with a `held` refusal would let the
+ * refused caller act on somebody else's claim.
  */
 export type AcquireDocumentLockOutcome =
-  | { readonly status: "acquired"; readonly holder: DocumentLockHolder }
+  | {
+      readonly status: "acquired";
+      readonly holder: DocumentLockHolder;
+      readonly claimToken: string;
+    }
   | { readonly status: "held"; readonly holder: DocumentLockHolder };
 
 /**

@@ -11,11 +11,23 @@
  */
 
 /**
- * What separates the two halves of a key.
+ * Which kind of thing is being edited.
  *
- * A colon rather than a hyphen or a dot, because collection slugs are kebab-case
- * and entry ids are uuids: both may contain a hyphen, neither may contain a
- * colon, so this is the one character that cannot appear inside either half.
+ * Part of the key rather than a detail beside it: a collection and a Single may
+ * carry the same slug, and their entries live in different tables, so an entry
+ * id is unique only within its own kind. Without this, a Single and a
+ * collection entry sharing both would be ONE lock — taking over the one would
+ * silently release the other, and each author would be told they held a
+ * document the other was editing.
+ */
+export type DocumentScopeKind = "collection" | "single";
+
+/**
+ * What separates the parts of a key.
+ *
+ * A colon rather than a hyphen or a dot, because slugs are kebab-case and entry
+ * ids are uuids: both may contain a hyphen, neither may contain a colon, so
+ * this is the one character that cannot appear inside any part.
  */
 export const DOCUMENT_LOCK_KEY_SEPARATOR = ":";
 
@@ -35,22 +47,23 @@ export const MAX_DOCUMENT_LOCK_KEY_LENGTH = 191;
  * programming mistake, and those are different responses. Throwing would make
  * that choice on the caller's behalf.
  *
- * A half containing the separator is refused rather than escaped. Escaping
+ * A part containing the separator is refused rather than escaped. Escaping
  * would make the key non-obvious to read in a database session — which is where
  * anybody debugging "who holds this lock" actually looks — and no supported
- * collection slug or entry id can contain one.
+ * slug or entry id can contain one.
  */
 export function documentLockKey(
-  collection: string,
+  scopeKind: DocumentScopeKind,
+  slug: string,
   entryId: string
 ): string | undefined {
-  if (collection === "" || entryId === "") return undefined;
+  if (slug === "" || entryId === "") return undefined;
   if (
-    collection.includes(DOCUMENT_LOCK_KEY_SEPARATOR) ||
+    slug.includes(DOCUMENT_LOCK_KEY_SEPARATOR) ||
     entryId.includes(DOCUMENT_LOCK_KEY_SEPARATOR)
   ) {
     return undefined;
   }
-  const key = `${collection}${DOCUMENT_LOCK_KEY_SEPARATOR}${entryId}`;
+  const key = [scopeKind, slug, entryId].join(DOCUMENT_LOCK_KEY_SEPARATOR);
   return key.length > MAX_DOCUMENT_LOCK_KEY_LENGTH ? undefined : key;
 }
