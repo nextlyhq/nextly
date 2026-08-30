@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import {
   clearSources,
   getSource,
@@ -220,6 +221,88 @@ describe("a source id's namespace and its kind are one fact", () => {
       replaceSourcesOfKind("collection", [VALID_SOURCE])
     ).not.toThrow();
     expect(getSource("collection:posts")?.label).toBe("Posts");
+  });
+});
+
+describe("replacing a kind is all-or-nothing", () => {
+  // `refreshCollectionSources` runs once per dashboard batch, before any slot,
+  // and rebuilds EVERY collection source from the live registry. Deleting the
+  // previous set and then registering the new one entry by entry meant a single
+  // malformed member -- one collection with a duplicate field name, one slug a
+  // plugin had squatted -- aborted the pass partway and left the store holding
+  // whatever had been registered before the throw. Sources that worked a moment
+  // earlier were then simply gone, and every widget addressing one answered
+  // "unavailable source" until a later refresh happened to succeed.
+  const goodPosts: WidgetSource = {
+    id: "collection:posts",
+    label: "Posts",
+    kind: "collection",
+    supports: ["count"],
+    fields: [{ name: "title", type: "string" }],
+  };
+
+  /** Malformed in a way `validateWidgetSource` refuses: no fields at all. */
+  const malformed = {
+    id: "collection:pages",
+    label: "Pages",
+    kind: "collection",
+    supports: ["count"],
+    fields: [],
+  } as unknown as WidgetSource;
+
+  beforeEach(() => {
+    clearSources();
+    replaceSourcesOfKind("collection", [goodPosts]);
+    registerSource({
+      id: "plugin:acme/revenue",
+      label: "Revenue",
+      kind: "plugin",
+      supports: ["count"],
+      fields: [{ name: "total", type: "number" }],
+    });
+  });
+
+  it("leaves the PREVIOUS set standing when a later member is refused", () => {
+    // `collection:tags` is ordered BEFORE the malformed entry, so a
+    // delete-then-register pass has already published it when the throw lands.
+    const tags: WidgetSource = {
+      id: "collection:tags",
+      label: "Tags",
+      kind: "collection",
+      supports: ["count"],
+      fields: [{ name: "name", type: "string" }],
+    };
+
+    expect(() => replaceSourcesOfKind("collection", [tags, malformed])).toThrow(
+      NextlyError
+    );
+
+    // The old set, intact: the refused pass published nothing.
+    expect(getSource("collection:posts")?.label).toBe("Posts");
+    expect(getSource("collection:tags")).toBeUndefined();
+    expect(getSource("collection:pages")).toBeUndefined();
+  });
+
+  it("still leaves the other kinds alone", () => {
+    expect(() => replaceSourcesOfKind("collection", [malformed])).toThrow();
+    expect(getSource("plugin:acme/revenue")?.label).toBe("Revenue");
+  });
+
+  // The control. Without it the two refusals above are satisfied by a
+  // `replaceSourcesOfKind` that publishes nothing at all.
+  it("publishes the whole set when every member is usable", () => {
+    const tags: WidgetSource = {
+      id: "collection:tags",
+      label: "Tags",
+      kind: "collection",
+      supports: ["count"],
+      fields: [{ name: "name", type: "string" }],
+    };
+    replaceSourcesOfKind("collection", [tags]);
+    // Replaced, not merged: a collection that left the registry loses its
+    // source, which is the direction that matters.
+    expect(getSource("collection:tags")?.label).toBe("Tags");
+    expect(getSource("collection:posts")).toBeUndefined();
   });
 });
 

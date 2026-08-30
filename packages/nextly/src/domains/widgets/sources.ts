@@ -253,16 +253,31 @@ function snapshot(source: WidgetSource): WidgetSource {
   );
 }
 
-/** Register a source. Throws if it is malformed, or if the id is already taken. */
-export function registerSource(source: WidgetSource): void {
+/**
+ * Validates `source` and returns the detached copy the store would hold,
+ * refusing when `isTaken` says its id is already spoken for.
+ *
+ * Separated from the write so a caller replacing a whole KIND can prepare every
+ * member before publishing any of them. Both callers ask the same two
+ * questions in the same order; only WHICH ids count as taken differs.
+ */
+function preparedSource(
+  source: WidgetSource,
+  isTaken: (id: string) => boolean
+): WidgetSource {
   validateWidgetSource(source);
-  const existing = store().get(source.id);
-  if (existing) {
+  if (isTaken(source.id)) {
     throw NextlyError.conflict({
       message: `Widget source "${source.id}" is already registered.`,
     });
   }
-  store().set(source.id, snapshot(source));
+  return snapshot(source);
+}
+
+/** Register a source. Throws if it is malformed, or if the id is already taken. */
+export function registerSource(source: WidgetSource): void {
+  const prepared = preparedSource(source, id => store().has(id));
+  store().set(prepared.id, prepared);
 }
 
 export function getSource(id: string): WidgetSource | undefined {
@@ -291,10 +306,36 @@ export function replaceSourcesOfKind(
   next: readonly WidgetSource[]
 ): void {
   const map = store();
-  for (const [id, source] of map) {
+
+  // Every member is validated and detached BEFORE anything is deleted, and the
+  // swap that follows cannot fail. Deleting first and registering one at a time
+  // meant a single refused member left the store holding a partial rebuild:
+  // `refreshCollectionSources` runs once per dashboard batch over EVERY
+  // collection, so one malformed source unpublished the sources beside it and
+  // every widget addressing one answered "unavailable source" until a later
+  // refresh happened to succeed. A failed rebuild now leaves the previous set
+  // standing, which is the same reading `refreshCollectionSources` already
+  // takes of an unreachable registry.
+  const staged = new Map<string, WidgetSource>();
+  // A source of the KIND being replaced is on its way out, so it does not claim
+  // its own id against the incoming set -- that is what makes a rebuild
+  // idempotent. A source of ANY OTHER kind does claim it, and so does an id this
+  // same pass has already staged: a duplicate inside one pass is a real mistake
+  // and stays refused.
+  const isTaken = (id: string): boolean => {
+    if (staged.has(id)) return true;
+    const existing = map.get(id);
+    return existing !== undefined && existing.kind !== kind;
+  };
+  for (const source of next) {
+    const prepared = preparedSource(source, isTaken);
+    staged.set(prepared.id, prepared);
+  }
+
+  for (const [id, source] of [...map]) {
     if (source.kind === kind) map.delete(id);
   }
-  for (const source of next) registerSource(source);
+  for (const [id, source] of staged) map.set(id, source);
 }
 
 /**
