@@ -670,3 +670,63 @@ describe("a geo filter means what it says or is refused", () => {
     ).toThrow(/is not a valid near filter/);
   });
 });
+
+describe("a geo filter cannot be counted", () => {
+  // `countEntries` refuses a geo predicate unconditionally: it evaluates them in
+  // memory over rows a count never fetches, and `buildWhereClause` emits no SQL
+  // for them, so a total that ignored one would describe every candidate the
+  // filter was meant to exclude. A VALID geo value therefore used to pass this
+  // validator and fail its batch slot at execution -- the contract's promise is
+  // that an accepted query is one the executor will run, so the refusal belongs
+  // here.
+  beforeEach(() => {
+    registerSource({
+      id: "collection:places",
+      label: "Places",
+      kind: "collection",
+      supports: ["count", "list"],
+      fields: [{ name: "location", type: "string" }],
+    });
+  });
+
+  const counting = (where: unknown) => () =>
+    validateWidgetQuery({
+      source: "collection:places",
+      op: "count",
+      where,
+    });
+
+  it("refuses a valid near filter under count", () => {
+    expect(counting({ location: { near: "-74.006,40.7128,10000" } })).toThrow(
+      /where operator "near" on field "location" cannot be counted/
+    );
+  });
+
+  it("refuses a valid within filter under count", () => {
+    expect(counting({ location: { within: "-74.006,40.7128,5000" } })).toThrow(
+      /where operator "within" on field "location" cannot be counted/
+    );
+  });
+
+  it("refuses a geo filter a combinator hides under count", () => {
+    expect(
+      counting({ and: [{ location: { near: "-74.006,40.7128,10000" } }] })
+    ).toThrow(/cannot be counted/);
+  });
+
+  // The controls. Without them the refusals above are satisfied by a validator
+  // that refuses every geo operator, or every `count`.
+  it("still accepts the same geo filter under list", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:places",
+        op: "list",
+        where: { location: { near: "-74.006,40.7128,10000" } },
+      })
+    ).not.toThrow();
+  });
+
+  it("still accepts a non-geo filter under count", () => {
+    expect(counting({ location: { equals: "here" } })).not.toThrow();
+  });
+});
