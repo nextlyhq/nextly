@@ -114,8 +114,9 @@ export interface SiteSheetArtifact {
  */
 const TOKEN_SELECTOR = ":root";
 
-/** The token the content-width rule reads. */
+/** The token the content-width rule reads, and the kind it must be. */
 const CONTENT_WIDTH_TOKEN = "content.width";
+const CONTENT_WIDTH_KIND = "dimension";
 
 /**
  * A document that uses every block type and styles nothing itself.
@@ -181,8 +182,16 @@ function emitContentWidth(
   // that renames this token keeps the identity and therefore keeps
   // `--site-content-width`, so a name check would withdraw containment from
   // every opted-in section while the property it reads was still declared.
+  //
+  // The KIND is part of the question, not decoration. A token carrying this
+  // identity with a colour kind is emitted happily — the emitter's job is to
+  // declare what it was given — and `max-width: #ff0000` is invalid at
+  // computed-value time, so it drops while `margin-inline: auto` beside it does
+  // not. Same half-rule, arrived at from a third direction.
   const declared = declaredTokens.some(
-    token => tokenIdentity(token) === CONTENT_WIDTH_TOKEN
+    token =>
+      tokenIdentity(token) === CONTENT_WIDTH_TOKEN &&
+      token.kind === CONTENT_WIDTH_KIND
   );
   if (!declared) return "";
 

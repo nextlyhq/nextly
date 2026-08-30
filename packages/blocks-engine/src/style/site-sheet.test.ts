@@ -157,6 +157,22 @@ describe("the content-width rule", () => {
     expect(css).toContain("var(--site-content-width)");
   });
 
+  it("writes nothing when the width token is not a dimension", () => {
+    // The emitter declares whatever it is given, so a colour carrying this
+    // identity still produces `--site-content-width`. `max-width: #ff0000` is
+    // then invalid and drops, while `margin-inline: auto` beside it survives —
+    // centring a contained node with nothing bounding it.
+    const wrongKind = {
+      id: "content.width",
+      name: "content.width",
+      kind: "color",
+      values: { light: "#ff0000" },
+    } as never;
+    const css = sheet({ tokens: { tokens: [wrongKind] } }).css;
+    expect(css).not.toContain("nx-pb-contained");
+    expect(css).not.toContain("margin-inline");
+  });
+
   it("writes nothing when the emitter REFUSED the width token", () => {
     // Derived from what the emitter wrote rather than from what the caller
     // passed. A token the emitter rejects declares no property, so the rule
