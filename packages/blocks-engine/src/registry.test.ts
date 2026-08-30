@@ -152,6 +152,51 @@ describe("registration rules", () => {
     expect(allBlocks()).toHaveLength(1);
   });
 
+  it("registers a block that says why it needs JavaScript", () => {
+    // The must-pass control for the rejections below: a gate refusing every
+    // island would pass all of them while making the declaration unusable.
+    registerBlocks([
+      block({
+        name: "core/ticker",
+        island: { reason: "counts down to a date the server cannot know." },
+      } as never),
+    ]);
+    expect(hasBlock("core/ticker")).toBe(true);
+  });
+
+  it("refuses an island that states no reason", () => {
+    // The reason is the whole value of the field. A block that declares
+    // interactivity without saying what it is for records the cost on every
+    // visitor and hides the justification from the next reviewer.
+    for (const island of [{}, { reason: "" }, { reason: "   " }]) {
+      expect(() =>
+        registerBlocks([block({ name: "core/h1", island } as never)])
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*reason/s);
+    }
+  });
+
+  it("refuses an unknown key inside island, as the manifest schema does", () => {
+    // The two gates disagreeing is the failure either exists to prevent:
+    // accepting it here and refusing it during manifest generation lets a
+    // plugin boot successfully and then break `generate`.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/tick2",
+          island: { reason: "counts down.", budgetBytes: 100 },
+        } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*budgetBytes/s);
+  });
+
+  it("refuses an island that is not a record", () => {
+    for (const island of [null, [], true, "yes"]) {
+      expect(() =>
+        registerBlocks([block({ name: "core/h2", island } as never)])
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*island/s);
+    }
+  });
+
   it("registers a block declaring well-formed parts", () => {
     // The control every rejection below needs: a gate that refused every parts
     // record would pass all of them while making the feature unusable.

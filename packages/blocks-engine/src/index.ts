@@ -179,6 +179,7 @@ export type {
   BlockDefinition,
   BlockEditorMeta,
   BlockIcon,
+  BlockIsland,
   BlockExample,
   BlockSeoContribution,
   BlockSeoImage,

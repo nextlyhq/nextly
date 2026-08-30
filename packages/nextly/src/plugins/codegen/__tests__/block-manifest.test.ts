@@ -90,6 +90,65 @@ describe("buildBlockManifest", () => {
     });
   });
 
+  it("carries the island declaration, so a reader can tell an interactive block", () => {
+    // This artifact is what an editor build, the docs and an agent read to tell
+    // an interactive block from an inert one WITHOUT importing it. Dropped, all
+    // three believe no block on the page needs JavaScript — which is the one
+    // thing the field exists to say.
+    const manifest = buildBlockManifest([
+      consumer(),
+      declaring("@acme/a", [
+        block("acme/ticker", {
+          island: { reason: "counts down to a date the server cannot know." },
+        }),
+      ]),
+    ]);
+
+    expect(manifest.blocks[0]).toMatchObject({
+      island: { reason: "counts down to a date the server cannot know." },
+    });
+  });
+
+  it("omits it entirely for a block that needs no JavaScript", () => {
+    // The control the assertion above needs: an emitter that stamped a field on
+    // every block would satisfy it while saying nothing about any of them.
+    const manifest = buildBlockManifest([
+      consumer(),
+      declaring("@acme/a", [block("acme/still")]),
+    ]);
+
+    expect(manifest.blocks[0]).not.toHaveProperty("island");
+  });
+
+  it("refuses an unknown key inside island, as the JSON Schema does", () => {
+    // Zod strips an unknown key by default while `blockManifestJsonSchema()`
+    // declares `additionalProperties: false` and refuses it. Left loose, the
+    // two published validators answer differently about one manifest — and the
+    // object one accepts is not the object the other describes.
+    expect(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [
+          block("acme/x", { island: { reason: "r", extra: true } }),
+        ]),
+      ])
+    ).toThrow();
+  });
+
+  it("refuses a blank reason here, as registration does at boot", () => {
+    // The two gates answering differently is how a manifest generates cleanly
+    // for a block the engine then refuses to register — generation succeeding
+    // for a configuration that cannot run.
+    for (const island of [{ reason: "" }, { reason: "   " }, {}]) {
+      expect(() =>
+        buildBlockManifest([
+          consumer(),
+          declaring("@acme/a", [block("acme/bad", { island })]),
+        ])
+      ).toThrow();
+    }
+  });
+
   it("sorts blocks by name so the artifact is stable", () => {
     // Reordering plugins must not rewrite the file, or every unrelated config
     // edit shows a diff and a drift test cannot tell a change from a shuffle.

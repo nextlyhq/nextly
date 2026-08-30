@@ -391,6 +391,19 @@ describe("the published JSON Schema", () => {
                   ],
                   "type": "object",
                 },
+                "island": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "reason": {
+                      "pattern": "\\S",
+                      "type": "string",
+                    },
+                  },
+                  "required": [
+                    "reason",
+                  ],
+                  "type": "object",
+                },
                 "name": {
                   "maxLength": 128,
                   "pattern": "^(?!(?:nextly\\/component-instance)$)[a-z0-9]+(?:-[a-z0-9]+)*\\/[a-z0-9]+(?:-[a-z0-9]+)*$",
@@ -461,7 +474,7 @@ describe("the published JSON Schema", () => {
             "type": "array",
           },
           "manifestVersion": {
-            "const": 2,
+            "const": 3,
             "type": "number",
           },
         },
