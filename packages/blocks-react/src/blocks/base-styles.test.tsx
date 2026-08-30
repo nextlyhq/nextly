@@ -103,8 +103,16 @@ function leafCount(styles: NodeStyles, property: string): number {
 }
 
 /**
- * How many declarations inside THIS block's rule name the given css property or
- * a property extending it.
+ * How many declarations inside THIS block's rule belong to the given css
+ * property — its own expansions, and not a SIBLING property whose name happens
+ * to extend it.
+ *
+ * `borderRadius` compiles to `border-radius`, which a plain `border-` prefix
+ * counts as one of `border`'s own leaves. On `core/button` that inflated five
+ * expected border declarations to six matches, so a border side that stopped
+ * compiling still reached the expected count and the case passed while a
+ * default it names was absent. Sibling properties the block also declares are
+ * therefore subtracted by name.
  *
  * Scoped to the rule carrying the block's own selector, because the compiled
  * sheet holds every block in the document — a `padding` counted from a
@@ -113,14 +121,23 @@ function leafCount(styles: NodeStyles, property: string): number {
 function declarationsFor(
   css: string,
   selector: string,
-  cssName: string
+  cssName: string,
+  siblings: readonly string[]
 ): number {
   const rules = css
     .split("}")
     .filter(rule => rule.includes(`.${selector}`))
     .join("}");
-  const pattern = new RegExp(`(^|[;{\\s])${cssName}(-[a-z-]+)?\\s*:`, "g");
-  return [...rules.matchAll(pattern)].length;
+  const count = (name: string, expanded: boolean): number => {
+    const tail = expanded ? "(-[a-z-]+)?" : "";
+    return [
+      ...rules.matchAll(new RegExp(`(^|[;{\\s])${name}${tail}\\s*:`, "g")),
+    ].length;
+  };
+  const owned = siblings
+    .filter(other => other !== cssName && other.startsWith(`${cssName}-`))
+    .reduce((total, other) => total + count(other, true), 0);
+  return count(cssName, true) - owned;
 }
 
 function cssNameOf(property: string): string {
@@ -303,7 +320,12 @@ describe("every default the core library declares", () => {
           leaves: scalar
             ? 1
             : leafCount(block.baseStyles as NodeStyles, property),
-          emitted: declarationsFor(css, selector, cssName),
+          emitted: declarationsFor(
+            css,
+            selector,
+            cssName,
+            declared.map(cssNameOf)
+          ),
         };
       });
 

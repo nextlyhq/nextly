@@ -197,6 +197,15 @@ function expectedMarkers(node) {
     ) {
       markers.push(props.alt);
     }
+    // A list's text is a PROP rather than child nodes, so a walk that only
+    // descended into slots would collect nothing from it — and a list that
+    // stopped rendering would leave the page shorter, the guard satisfied by
+    // the prose around it, and the measurement BETTER for having lost content.
+    if (current.type === "core/list" && Array.isArray(props.items)) {
+      for (const item of props.items) {
+        if (typeof item === "string" && item !== "") markers.push(item);
+      }
+    }
     for (const children of Object.values(current.slots ?? {})) {
       for (const child of children) visit(child);
     }
