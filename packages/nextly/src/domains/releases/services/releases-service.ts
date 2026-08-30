@@ -214,6 +214,24 @@ function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
   return true;
 }
 
+/**
+ * One member standing between a release and its instant.
+ *
+ * Named per MEMBER rather than per release, because the fix is per member —
+ * remove that document, or restore that user — and a release-level "something
+ * is wrong" leaves an operator opening every row to find which.
+ */
+export interface ReleaseBlocker {
+  memberId: string;
+  reason:
+    /** The member carries no author, so the drain has nobody to act as. */
+    | "NO_AUTHOR"
+    /** The recorded author has been deleted or deactivated. */
+    | "AUTHOR_GONE"
+    /** The member names one locale, which the engine cannot materialise. */
+    | "LOCALE_SCOPED";
+}
+
 export interface FindReleasesQuery {
   /**
    * Restrict to one lifecycle state.
@@ -539,6 +557,57 @@ export class ReleasesService {
       );
     }
     return this.deps.repository.findReleases(query);
+  }
+
+  /**
+   * Why this release cannot proceed, worked out from its members right now.
+   *
+   * DERIVED rather than stored, and that is the whole design. Every reason a
+   * release blocks is a fact about a member that is still true when the row is
+   * read — no author recorded, an author who is gone, a locale-scoped member —
+   * so recording the reason at block time would create a second copy that goes
+   * stale the moment somebody fixes the cause. An operator who restores the
+   * deleted user would still be told the author is missing, and the only way
+   * out would be to reschedule and watch it block again.
+   *
+   * Answered for any release, not only a blocked one. The same predicate over a
+   * DRAFT is a preview of what would block it, which is the cheaper place to
+   * learn it — and having one implementation means the preview and the verdict
+   * cannot disagree.
+   *
+   * `liveAuthors` is asked ONCE for every author in the release rather than per
+   * member, so a release of fifty documents costs one lookup.
+   */
+  async blockingReasons(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<ReleaseBlocker[]> {
+    await this.authorize(actor, "read");
+    const members = await this.deps.repository.listMembers(releaseId);
+    if (members.length === 0) return [];
+
+    const authors = members
+      .map(member => member.createdBy)
+      .filter((id): id is string => id !== null);
+    const live =
+      authors.length === 0
+        ? new Set<string>()
+        : await this.deps.repository.liveAuthors(authors);
+
+    return members.flatMap<ReleaseBlocker>(member => {
+      // Ordered as the drain checks them, so the reason reported is the one it
+      // would actually stop on rather than whichever this loop noticed first.
+      if (member.locale !== null) {
+        return [{ memberId: member.id, reason: "LOCALE_SCOPED" as const }];
+      }
+      if (member.createdBy === null) {
+        return [{ memberId: member.id, reason: "NO_AUTHOR" as const }];
+      }
+      if (!live.has(member.createdBy)) {
+        return [{ memberId: member.id, reason: "AUTHOR_GONE" as const }];
+      }
+      return [];
+    });
   }
 
   async listMembers(

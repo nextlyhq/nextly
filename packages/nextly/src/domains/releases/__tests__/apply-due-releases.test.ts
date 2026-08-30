@@ -944,3 +944,50 @@ describe("applyDueReleases", () => {
     expect(publish).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a release nothing about retrying could fix is STOPPED", () => {
+  /** The releases this pass moved to `blocked`. */
+  function blockedBy(d: ReturnType<typeof deps>): string[] {
+    return vi.mocked(d.repository.blockRelease).mock.calls.map(call => call[0]);
+  }
+
+  it("blocks a member whose author was never recorded", async () => {
+    // Left scheduled it is replanned every tick forever, and reads as healthy
+    // the whole time — the operator learns nothing until the launch does not
+    // happen.
+    const d = deps({ members: [member({ createdBy: null })] });
+    const result = await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual(["r1"]);
+    expect(result.blocked).toBe(1);
+  });
+
+  it("blocks a locale-scoped member", async () => {
+    const d = deps({ members: [member({ locale: "de" })] });
+    await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual(["r1"]);
+  });
+
+  it("does NOT block when the write merely failed", async () => {
+    // The control that carries the whole design. "Refused or errored" covers a
+    // dropped connection as well as a permission nobody will ever gain, and the
+    // two are indistinguishable here — so a momentary blip must not permanently
+    // halt a launch the next pass would have completed.
+    // The fixture's own way to say the write did not land, per its comment.
+    const d = deps({ mutations: { applied: async () => false } });
+    const result = await applyDueReleases(d);
+    // It still FAILED — the release is held open and retried, which is the
+    // point. It is simply not stopped.
+    expect(result.failed).toBeGreaterThan(0);
+    expect(blockedBy(d)).toEqual([]);
+    expect(result.blocked).toBe(0);
+  });
+
+  it("blocks nothing when every member applies", async () => {
+    // The other control: without it, a pass that blocked everything it touched
+    // would satisfy the two positive cases above.
+    const d = deps({});
+    const result = await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual([]);
+    expect(result.blocked).toBe(0);
+  });
+});
