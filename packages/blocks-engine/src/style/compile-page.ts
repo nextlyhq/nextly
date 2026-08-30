@@ -1919,6 +1919,22 @@ export function compilePageCss(
       );
     if (!hasParts) continue;
     const parts = partsByType[type];
+    // Registration refuses a malformed record, and registration is NOT the only
+    // door: `createBlockResolver` stores definitions directly, so a JavaScript
+    // caller reaches this with whatever it was given. Enumerating a `null` here
+    // throws before a single block renders and takes the whole page with it —
+    // so this answers for the value it is HANDED rather than for the value the
+    // type promised, exactly as the node-type check above does.
+    if (!isPlainRecord(parts)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/blockParts", type),
+        code: "invalid-block-part",
+        severity: "warning",
+        message: `"${describeValue(parts)}" is not a set of parts, so no part of "${type}" was styled.`,
+        suggestion: "Use a plain object keyed by part name.",
+      });
+      continue;
+    }
     // Sorted so one document always serializes the same way, exactly as the
     // type loop above and `groupByDescendant` below both do.
     for (const name of Object.keys(parts).sort()) {

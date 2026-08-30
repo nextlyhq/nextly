@@ -244,7 +244,7 @@ export const ISSUE_CODES = {
   "invalid-scope":
     "The compile scope is not a single class, so the document's rules were not scoped.",
   "invalid-block-part":
-    "A block names an element it renders, and the name is not a plain HTML tag, so that part's default styles were not written.",
+    "A block names an element it renders, and the name is not a lowercase slug, so that part's default styles were not written.",
   // Spelled the same as the `NestingRefusal` members they report, so the code a
   // caller matches on and the reason the rule gave are one string rather than a
   // mapping that has to be kept in step.

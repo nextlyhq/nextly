@@ -190,6 +190,25 @@ describe("a part whose NAME is not a name", () => {
     expect(out.warnings[0]?.message).toContain(TYPE);
   });
 
+  it("refuses a parts value that is not a record, rather than throwing", () => {
+    // Registration refuses this, and registration is not the only door:
+    // `createBlockResolver` stores definitions directly, so a JavaScript caller
+    // can put a `null` on the context. Enumerating it here would throw before a
+    // single block rendered and take the whole page with it — so the compiler
+    // answers for the value it is handed rather than for the value it was
+    // promised.
+    for (const parts of [null, [], 7, "caption"]) {
+      const out = compilePageCss(doc(), {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        blockParts: { [TYPE]: parts },
+      } as unknown as StyleCompileContext);
+      expect(out.css).toBe("");
+      expect(out.warnings.map(issue => issue.code)).toEqual([
+        "invalid-block-part",
+      ]);
+    }
+  });
+
   it("refuses only the bad part, leaving its siblings styled", () => {
     // A block loses one part, not all of them — otherwise a typo in one
     // silently unstyles everything else the block declares.
