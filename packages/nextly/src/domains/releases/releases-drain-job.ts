@@ -61,28 +61,6 @@ export function createReleasesDrainJob(deps: {
    * than defaulted to silence.
    */
   onOutcome: (result: ApplyDueReleasesResult) => void | Promise<void>;
-  /**
-   * How long one pass may spend STARTING content mutations.
-   *
-   * A drain runs behind a serverless cron tick as often as on a long-lived
-   * process, and a platform kills a tick at a fixed limit. The runner cannot
-   * bound this — `maxDurationMs` is checked before each CLAIM, so it bounds how
-   * many JOBS a pass starts, not how long one handler takes — and `run-jobs`
-   * names the handler being written to fit a tick as what bounds it instead.
-   *
-   * Taken here rather than read from `JobContext`, which carries `user`, `now`
-   * and `content` but no deadline: a handler is asked to fit a tick and told
-   * nothing about how long one is. Wiring a budget per job is the smaller
-   * change; giving every handler its run's deadline is the better one, and it
-   * belongs to the jobs domain rather than here.
-   *
-   * REQUIRED, for the same reason `onOutcome` is: optional, every existing
-   * wiring site keeps the unbounded behaviour this exists to remove, and the
-   * fix is opt-in for exactly the callers who do not know they need it. A
-   * default would be a number invented here for a tick length only the wiring
-   * site knows.
-   */
-  budgetMs: number;
 }): JobDefinition {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
@@ -93,6 +71,15 @@ export function createReleasesDrainJob(deps: {
     sweep: true,
     handler: async (_input, context) => {
       const startedAt = Date.now();
+      // What is LEFT of the pass, never a fixed budget of this job's own.
+      // `runJobs` checks its budget before starting a handler and cannot
+      // interrupt a running one, so a drain that begins late has less pass
+      // remaining than any constant could know: an earlier job that overran
+      // leaves this one starting with seconds rather than a whole tick. Taking a
+      // full budget anyway means outliving the invocation and being killed
+      // part-way. The webhook drain fits itself inside the same field the same
+      // way, so the two answer "how long have I got" identically.
+      const remainingMs = Math.max(0, context.deadline.getTime() - startedAt);
       const result = await applyDueReleases({
         // ONE clock for both halves. The deadline is derived from the runner's
         // `context.now`, so the comparison has to read the same source — left to
@@ -105,7 +92,14 @@ export function createReleasesDrainJob(deps: {
         // offset by the difference. That keeps a virtual clock authoritative for
         // WHEN the pass thinks it is, without making the budget unmeasurable.
         now: () => new Date(context.now.getTime() + (Date.now() - startedAt)),
-        deadline: new Date(context.now.getTime() + deps.budgetMs),
+        // The remaining pass expressed on THAT clock, rather than passed
+        // through. `context.deadline` is a REAL instant — `runJobs` derives it
+        // from the wall clock at the start of the pass — while `now` above is
+        // virtual, `context.now` offset by elapsed time. Handing the field
+        // across unchanged would compare two timebases: a runner clock behind
+        // wall time would stop the pass after the first release, and one ahead
+        // would never stop it at all.
+        deadline: new Date(context.now.getTime() + remainingMs),
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({ contentApi: deps.contentApi }),
         runAs: deps.runAs,

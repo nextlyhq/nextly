@@ -58,14 +58,6 @@ import type { RegistrationContext } from "./types";
  * required parameter rather than an optional one, and a reporter whose only
  * guard is a comment is a guarantee nobody can prove still holds.
  */
-/**
- * How long a `releases:drain` pass may spend starting releases.
- *
- * Under the shortest serverless limit this trigger runs behind, with room left
- * for the pass to discharge the releases it did finish. A pass that runs out
- * defers the rest to the next tick rather than being killed part-way.
- */
-const RELEASES_DRAIN_BUDGET_MS = 10_000;
 
 export function reportReleasesOutcome(
   logger: Logger,
@@ -181,13 +173,6 @@ export function registerJobServices(ctx: RegistrationContext): void {
         // handler binds each call to the member's own resolved identity.
         contentApi: nextly,
         runAs: databaseRunAs(adapter),
-        // How long one pass may spend starting releases. Chosen here because
-        // this is the only place that knows what runs the tick: the domain
-        // cannot invent a tick length, and leaving it optional would have kept
-        // the unbounded behaviour for exactly the callers who do not know they
-        // need it. Ten seconds sits under the shortest serverless limit this
-        // runs behind while leaving room for the pass to discharge what it did.
-        budgetMs: RELEASES_DRAIN_BUDGET_MS,
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
     );
