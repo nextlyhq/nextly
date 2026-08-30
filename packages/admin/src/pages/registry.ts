@@ -32,6 +32,7 @@ import PluginsOverviewPage from "./dashboard/plugins/index";
 import CollectionsLandingRedirect from "./dashboard/redirects/CollectionsLandingRedirect";
 import FieldGroupsLandingRedirect from "./dashboard/redirects/FieldGroupsLandingRedirect";
 import SinglesLandingRedirect from "./dashboard/redirects/SinglesLandingRedirect";
+import ReleasesPage from "./dashboard/releases/index";
 import RolesPage from "./dashboard/roles";
 import RolesCreatePage from "./dashboard/roles/create";
 import RolesEditPage from "./dashboard/roles/edit";
@@ -186,6 +187,17 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     requiredPermission: "read-media",
     section: overridableBy("media"),
+  },
+  [ROUTES.RELEASES]: {
+    component: ReleasesPage,
+    type: "private",
+    // Gated on the SEEDED slug. The resource is `content-releases`, not
+    // `releases`: registering the shorter name would reserve a word real sites
+    // use for content. Naming a permission that is not seeded would hide this
+    // page from everyone including an administrator, which is the failure
+    // #1375 fixed for background jobs.
+    requiredPermission: "read-content-releases",
+    section: overridableBy("releases"),
   },
   [ROUTES.TRANSLATIONS]: {
     component: TranslationsPage,

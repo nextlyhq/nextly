@@ -22,6 +22,13 @@ export const ROUTES = {
   // Translations
   TRANSLATIONS: "/admin/translations",
 
+  // Content releases: a batch of documents that goes live at one instant.
+  // Top-level rather than nested under a collection, because a release spans
+  // collections and Singles and is the only shape that answers "what is going
+  // live on Friday?" without starting from a document.
+  RELEASES: "/admin/releases",
+  RELEASES_DETAIL: "/admin/releases/[id]",
+
   // ============================================================
   // Builder routes (schema management)
   //

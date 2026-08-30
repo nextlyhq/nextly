@@ -1,4 +1,5 @@
 import {
+  CalendarClock,
   FileText,
   Image,
   LayoutDashboard,
@@ -36,6 +37,7 @@ export type NavigationCategory =
   | "collections"
   | "singles"
   | "media"
+  | "releases"
   | "translations"
   | "plugins"
   | "settings"
@@ -116,6 +118,23 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Image,
     category: "media",
     requiredPermission: "read-media",
+  },
+
+  // === RELEASES ===
+  // Beside Media rather than under Settings: a release is editorial work on a
+  // schedule, and Settings is where configuration lives — filing a daily tool
+  // there puts it in the place people visit least.
+  {
+    title: "Releases",
+    href: ROUTES.RELEASES,
+    icon: CalendarClock,
+    category: "releases",
+    // The resource is `content-releases`, NOT `releases`: registering the
+    // shorter name would reserve a word real sites use for content, and "press
+    // releases" is among the most common collections on a corporate site.
+    // Seeded and already listed among the system resources, so this filters
+    // rather than hiding the item from everyone.
+    requiredPermission: "read-content-releases",
   },
 
   // === TRANSLATIONS ===

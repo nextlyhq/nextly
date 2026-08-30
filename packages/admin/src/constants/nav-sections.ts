@@ -18,6 +18,7 @@ export const NAV_SECTIONS = [
   "collections",
   "singles",
   "media",
+  "releases",
   "translations",
   "plugins",
   "settings",
