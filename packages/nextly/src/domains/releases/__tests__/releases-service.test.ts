@@ -430,3 +430,31 @@ describe("ReleasesService refuses input the database would answer differently", 
     expect(repo.findReleases).not.toHaveBeenCalled();
   });
 });
+
+describe("ReleasesService honours a scoped API key over its owner", () => {
+  const KEY = (permissions: string[]) => ({
+    userId: "owner",
+    overrideAccess: false,
+    authenticatedScope: { actorType: "apiKey" as const, permissions },
+  });
+
+  it("allows a key holding the grant even when its owner does not", async () => {
+    // The stamped scope is authoritative in BOTH directions. Resolving from the
+    // owner instead would deny a key that was explicitly granted the authority.
+    const { svc, repo, deps } = service({ holds: [] });
+    await svc.find({}, KEY(["read-content-releases"]));
+    expect(repo.findReleases).toHaveBeenCalled();
+    // The owner's grants are never consulted for a scoped key.
+    expect(deps.canManageReleases).not.toHaveBeenCalled();
+  });
+
+  it("denies a key without the grant however privileged its owner", async () => {
+    // The direction that matters more: a key scoped to read content must not
+    // inherit the power to schedule a publish from the person who created it.
+    const { svc, repo } = service({ holds: ["read", "create", "publish"] });
+    await expect(
+      svc.schedule("r1", new Date(), "UTC", KEY(["read-content-releases"]))
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+});

@@ -139,42 +139,61 @@ function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
   );
 
   return {
-    // An explicit `userId` wins; otherwise the instance's configured `user` is
-    // the acting identity, which is how the rest of the Direct API reads it.
-    userId: args.userId ?? access.user?.id ?? null,
+    // `"userId" in args` rather than `??`, because an explicit `null` MEANS
+    // anonymous and must survive. A route that turns an absent session into
+    // `userId: null` would otherwise be handed the instance's configured user
+    // and receive that person's release permissions — the caller asked to be
+    // refused and would be authorized instead. Omitted and present-but-null are
+    // different questions.
+    userId:
+      "userId" in args ? (args.userId ?? null) : (access.user?.id ?? null),
     overrideAccess: access.overrideAccess ?? true,
+    // Carried, not dropped. Without it release authority resolves from the KEY
+    // OWNER's grants: a restricted key inherits authority it was never given,
+    // and a key granted release authority is denied when its owner lacks it.
+    authenticatedScope: access.authenticatedScope,
   };
 }
 
 export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
+  // Every operation hands `actorOf` the ORIGINAL argument bag, never a
+  // reconstructed one. Destructuring `{ userId }` out of a call that omitted it
+  // creates the key with value `undefined`, and `"userId" in args` is then true
+  // — so a rebuilt object turns "omitted" into "explicitly nobody" and loses the
+  // instance identity. The same present-but-undefined trap the merge below
+  // guards against, one layer up.
   return {
-    create: ({ title, description, ...caller }) =>
-      service().create({ title, description }, actorOf(ctx, caller)),
+    create: args =>
+      service().create(
+        { title: args.title, description: args.description },
+        actorOf(ctx, args)
+      ),
 
     find: (args = {}) => {
       const { userId, overrideAccess, ...query } = args;
-      return service().find(query, actorOf(ctx, { userId, overrideAccess }));
+      void userId;
+      void overrideAccess;
+      return service().find(query, actorOf(ctx, args));
     },
 
-    findByID: ({ id, ...caller }) =>
-      service().findByID(id, actorOf(ctx, caller)),
+    findByID: args => service().findByID(args.id, actorOf(ctx, args)),
 
-    addMember: ({ releaseId, userId, overrideAccess, ...member }) =>
-      service().addMember(
-        releaseId,
-        member,
-        actorOf(ctx, { userId, overrideAccess })
-      ),
+    addMember: args => {
+      const { releaseId, userId, overrideAccess, ...member } = args;
+      void userId;
+      void overrideAccess;
+      return service().addMember(releaseId, member, actorOf(ctx, args));
+    },
 
-    removeMember: ({ memberId, ...caller }) =>
-      service().removeMember(memberId, actorOf(ctx, caller)),
+    removeMember: args =>
+      service().removeMember(args.memberId, actorOf(ctx, args)),
 
-    listMembers: ({ releaseId, ...caller }) =>
-      service().listMembers(releaseId, actorOf(ctx, caller)),
+    listMembers: args =>
+      service().listMembers(args.releaseId, actorOf(ctx, args)),
 
-    schedule: ({ id, at, timezone, ...caller }) =>
-      service().schedule(id, at, timezone, actorOf(ctx, caller)),
+    schedule: args =>
+      service().schedule(args.id, args.at, args.timezone, actorOf(ctx, args)),
 
-    cancel: ({ id, ...caller }) => service().cancel(id, actorOf(ctx, caller)),
+    cancel: args => service().cancel(args.id, actorOf(ctx, args)),
   };
 }

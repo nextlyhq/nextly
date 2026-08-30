@@ -45,7 +45,7 @@ describe("releases namespace access defaults", () => {
     await releases.find();
     expect(service.find).toHaveBeenCalledWith(
       {},
-      { userId: "u1", overrideAccess: false }
+      expect.objectContaining({ userId: "u1", overrideAccess: false })
     );
   });
 
@@ -56,7 +56,7 @@ describe("releases namespace access defaults", () => {
     await releases.find();
     expect(service.find).toHaveBeenCalledWith(
       {},
-      { userId: null, overrideAccess: true }
+      expect.objectContaining({ userId: null, overrideAccess: true })
     );
   });
 
@@ -69,7 +69,7 @@ describe("releases namespace access defaults", () => {
     await releases.create({ title: "Launch", userId: "u2" });
     expect(service.create).toHaveBeenCalledWith(
       { title: "Launch", description: undefined },
-      { userId: "u2", overrideAccess: false }
+      expect.objectContaining({ userId: "u2", overrideAccess: false })
     );
   });
 
@@ -90,7 +90,56 @@ describe("releases namespace access defaults", () => {
     expect(service.addMember).toHaveBeenCalledWith(
       "r1",
       expect.objectContaining({ scopeSlug: "posts" }),
-      { userId: "u1", overrideAccess: false }
+      expect.objectContaining({ userId: "u1", overrideAccess: false })
+    );
+  });
+});
+
+describe("releases namespace identity", () => {
+  it("keeps an EXPLICIT null as anonymous, rather than falling back to the instance user", async () => {
+    // A route that turns an absent session into `userId: null` is saying "act as
+    // nobody". Treating that as "not supplied" hands it the instance's
+    // configured user and, with it, that person's release permissions — the
+    // caller asked to be refused and would be authorized instead.
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.find({ userId: null });
+    expect(service.find).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ userId: null, overrideAccess: false })
+    );
+  });
+
+  it("still falls back to the instance user when userId is OMITTED", async () => {
+    // The control: omitted and present-but-null are different questions, and a
+    // fix answering both as "anonymous" would break every configured instance
+    // while passing the case above.
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.find();
+    expect(service.find).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ userId: "u1" })
+    );
+  });
+
+  it("forwards a scoped API key's own grants", async () => {
+    // Release authority must resolve from the KEY, not its owner: otherwise a
+    // restricted key inherits authority it was never granted, and a key granted
+    // release authority is denied when its owner lacks it.
+    const scope = {
+      actorType: "apiKey",
+      permissions: ["read-content-releases"],
+    };
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" }, actor: scope })
+    );
+    await releases.find();
+    expect(service.find).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ authenticatedScope: scope })
     );
   });
 });
