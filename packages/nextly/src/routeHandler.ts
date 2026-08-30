@@ -57,6 +57,7 @@ import {
 import { runJobsRoute } from "./api/jobs-run-route";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
+import { handleReleaseRequest } from "./api/releases";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
@@ -342,6 +343,7 @@ async function handleApiKeyRequest(
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
+  "releases",
   "jobs",
   "generalSettings",
   "previewLinks",
@@ -1020,6 +1022,14 @@ async function handleServiceRequest(
   // before they can read it.
   if (service === "webhooks") {
     return handleWebhookRequest(req, method, routeParams);
+  }
+
+  // ==================== CONTENT RELEASES DIRECT DISPATCH ====================
+  // Beside the handlers above and for the same reason: it owns its auth and
+  // parses its own JSON, so it must stay above the shared body read below or
+  // the stream reaches it consumed.
+  if (service === "releases") {
+    return handleReleaseRequest(req, method, routeParams);
   }
 
   // ==================== JOBS DIRECT DISPATCH ====================

@@ -11,6 +11,7 @@ import type { NextlyError } from "../errors/nextly-error";
 
 export type ServiceType =
   | "users"
+  | "releases"
   | "rbac"
   | "auth"
   | "posts"

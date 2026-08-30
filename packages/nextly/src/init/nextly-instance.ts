@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { ServiceMap } from "../di/register";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
+import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -871,6 +872,33 @@ export interface Nextly {
    * ```
    */
   jobs: JobsNamespace;
+
+  /**
+   * Content releases — batch documents and put them live at one instant.
+   *
+   * Every operation authorizes: pass `overrideAccess: false` with the acting
+   * `userId` for a call made on a person's behalf. Left at its default the call
+   * is trusted, like the rest of the Direct API.
+   *
+   * @example
+   * ```typescript
+   * const release = await nextly.releases.create({ title: "Spring launch" });
+   * await nextly.releases.addMember({
+   *   releaseId: release.id,
+   *   scopeKind: "collection",
+   *   scopeSlug: "posts",
+   *   entryId: post.id,
+   *   locale: null,
+   *   action: "publish",
+   * });
+   * await nextly.releases.schedule({
+   *   id: release.id,
+   *   at: new Date("2026-09-01T09:00:00Z"),
+   *   timezone: "Europe/Berlin",
+   * });
+   * ```
+   */
+  releases: ReleasesNamespace;
 
   roles: {
     find: (args?: FindRolesArgs) => Promise<ListResult<Role>>;
