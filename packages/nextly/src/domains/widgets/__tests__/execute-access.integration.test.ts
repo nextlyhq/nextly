@@ -26,7 +26,8 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { executeWidgetQuery, type ReadCaller } from "../execute";
+import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
 
 let current: TestNextly | undefined;

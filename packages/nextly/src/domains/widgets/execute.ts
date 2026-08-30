@@ -7,27 +7,25 @@
  * for Strapi's homepage widgets (strapi#22921), where the widget's permission
  * gated the card while its query returned rows the viewer could not see.
  *
+ * The caller arrives as the CANONICAL `ReadCaller` (`readCaller()`'s declared
+ * return type), imported rather than re-declared. A local copy of that shape is
+ * structurally assignable from the real one whether or not the two still agree,
+ * because the property that carries an API key's own grant is OPTIONAL: rename
+ * it upstream and the copy still compiles, `caller.authenticatedScope` reads
+ * `undefined`, the `actor` spread below stops firing, and every widget read by a
+ * narrowly scoped key is judged by the roles of whoever minted it instead.
+ * Importing the declaration is what makes that rename a compile error here.
+ *
  * @module domains/widgets/execute
  */
 
-import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { getNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
+import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
-import type { UserContext } from "../collections/services/collection-types";
 
 import type { WidgetQuery } from "./query";
 import { failUnavailableSourceOrOp, getSource } from "./sources";
-
-/**
- * Who is asking, in the two shapes an access decision reads. Structurally the
- * return of `api/authenticated-read`'s `readCaller`; declared here so the
- * widget domain does not import from the API layer.
- */
-export interface ReadCaller {
-  user: UserContext;
-  authenticatedScope?: AuthenticatedScope;
-}
 
 export type WidgetResult =
   | { op: "count"; total: number }
