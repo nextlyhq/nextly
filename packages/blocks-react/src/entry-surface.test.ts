@@ -200,6 +200,11 @@ const SOURCE_MODULES: ReadonlyArray<{
       // would disagree exactly there. It crosses a module boundary inside this
       // package; a consumer states its own through `styleContext.blockBases`.
       "blockBasesFor",
+      // Internal for the same reason and by the same route: it is the same walk
+      // over the same tree, reading a different field of the definition, so a
+      // consumer stating its own answer states it through
+      // `styleContext.blockParts` exactly as it does for the bases.
+      "blockPartsFor",
       "drawlessTestFor",
       "effectiveCompile",
       "gatedEntriesCoverRemovedNodes",

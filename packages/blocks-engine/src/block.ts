@@ -9,7 +9,7 @@
  * return type is opaque here and narrowed by the React binding package. That is
  * what keeps this package dependency-free and usable from any runtime.
  */
-import type { BlockNode, NodeStyles } from "./document";
+import type { BlockNode, BlockPart, NodeStyles } from "./document";
 import type { MigrationMap } from "./migration";
 
 /**
@@ -220,10 +220,31 @@ export interface BlockRenderArgs<P, C = unknown> {
   props: P;
   node: BlockNode;
   /**
-   * The generated class the block MUST place on its own root element. Blocks
-   * render a single element and never wrap it, so styles target that element.
+   * The generated class the block MUST place on its own root element.
+   *
+   * Styles for the block's own element target this. A block that draws more
+   * than one element marks the others with {@link partClass} instead — this
+   * one names the root and only the root, so two elements never answer to one
+   * node's identity.
    */
   className: string;
+  /**
+   * The class marking one of the elements this block declares in `parts`.
+   *
+   * Placed on the element the part names: `<figcaption className={partClass("caption")}>`.
+   *
+   * Supplied by the renderer rather than composed by the block, because the
+   * renderer is the only party that already knows which block is rendering. A
+   * block building the class itself would have to repeat its own type, and a
+   * block that repeated a NEIGHBOUR'S type would silently wear another block's
+   * defaults — a mistake nothing could catch, since the result is a valid class
+   * that the compiler happily emits rules for.
+   *
+   * Returns an empty string for a name the block does not declare, so a typo
+   * leaves the element unstyled rather than marked with a class no rule
+   * targets. Both are inert; only one of them is greppable.
+   */
+  partClass: (name: string) => string;
   /**
    * Marks the element that carries a named prop's value, for an editor.
    *
@@ -346,6 +367,25 @@ export interface BlockDefinition<
   localized?: (keyof P & string)[];
   /** Shared default styles for every instance of this block type. */
   baseStyles?: NodeStyles;
+  /**
+   * Elements this block renders INSIDE its root, named so a style can reach
+   * one of them.
+   *
+   * {@link baseStyles} is keyed by block TYPE, so it compiles to one rule on
+   * one class. A block that draws more than one element — a figure wrapping an
+   * image and a caption, a list wrapping its items — can put that class on the
+   * root or on one child and has no third option, so every element but the one
+   * holding it is unstyleable. These are the others.
+   *
+   * NAMED rather than written as selectors at the point of use, so a block may
+   * change what it renders without invalidating styles addressed to it: the
+   * name is the contract and the selector is the current implementation of it.
+   * That is the same trade `::part()` makes, and the reason it is a closed set
+   * the block publishes rather than an open selector anyone may write — an open
+   * one couples every stored style to markup the block is otherwise free to
+   * change.
+   */
+  parts?: Readonly<Record<string, BlockPart>>;
   /** Named child regions; only container blocks declare these. */
   slots?: Record<string, SlotSpec>;
   /**

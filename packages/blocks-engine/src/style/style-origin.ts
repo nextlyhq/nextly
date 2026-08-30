@@ -188,8 +188,15 @@ function reachesNode(entry: StyleTraceEntry, subject: StyleSubject): boolean {
       return true;
     case "node":
       return origin.id === subject.nodeId;
+    // A rule for one of the block's PARTS lands on an element the block marks
+    // inside its root, never on the node's own box — so it does not compete for
+    // the node's value, and reporting it would offer a control over a value the
+    // browser applies somewhere else. Refused rather than matched against a part
+    // the subject names, because a subject has no way to say which part it is:
+    // the answer would have to be guessed, and the quiet answer is the one this
+    // module already gives a caller that cannot state its tag.
     case "blockType":
-      return origin.type === subject.blockType;
+      return origin.part === undefined && origin.type === subject.blockType;
     case "class":
       return (subject.classIds ?? []).includes(origin.id);
     // The baseline lands on the ELEMENT, so only a node rendering that element

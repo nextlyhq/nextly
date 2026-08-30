@@ -12,6 +12,7 @@ import type {
   BlockRenderResult,
   BlockSupports,
   ComponentPath,
+  BlockPart,
   NodeStyles,
   SlotLock,
   SlotSpec,
@@ -30,6 +31,11 @@ expectTypeOf<BlockSeoContribution>().toBeObject();
 // construction into a helper needs to spell it without reaching past the SDK.
 expectTypeOf<BlockSeoImage>().not.toBeAny();
 expectTypeOf<NodeStyles>().toBeObject();
+// A block naming an element it renders declares it through this, so an author
+// writing a reusable part declaration or a helper has to be able to NAME the
+// type. Reaching it through the transitive engine package instead crosses the
+// stable plugin boundary and does not resolve under a strict pnpm layout.
+expectTypeOf<BlockPart>().toBeObject();
 expectTypeOf<SlotLock>().toEqualTypeOf<
   "all" | "insert" | "contentOnly" | false
 >();

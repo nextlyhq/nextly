@@ -394,6 +394,12 @@ export type NodeStyles = Partial<
   Record<StyleState, Partial<Record<BreakpointId, StyleValues>>>
 >;
 
+/** One named element a block renders inside its own root. */
+export interface BlockPart {
+  /** Shared default styles for this part on every instance of the block type. */
+  baseStyles?: NodeStyles;
+}
+
 /** True if a style value is a design-token reference. */
 export function isTokenRef(value: unknown): value is TokenRef {
   // A reference must be a plain record, not merely an object carrying the key.
@@ -489,6 +495,48 @@ export function isBlockType(value: unknown): value is string {
     typeof value === "string" &&
     value.length <= MAX_BLOCK_TYPE_LENGTH &&
     BLOCK_TYPE_RE.test(value)
+  );
+}
+
+/**
+ * The grammar a part NAME is held to.
+ *
+ * A part name is compiled into a class, so it reaches a selector — and a block
+ * definition is code a plugin supplies. The same shape a block type's own
+ * segments use, for the same reason: no dot, no bracket, no space can appear,
+ * so nothing here can close a rule and open another.
+ *
+ * Consecutive dashes are excluded deliberately. The class joins the block type
+ * and the part with a DOUBLED dash, so a name containing one would make the
+ * boundary ambiguous and let two different blocks compile to a single class.
+ */
+const BLOCK_PART_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/**
+ * Longest part name accepted. A name longer than this is not a name, and the
+ * bound keeps a pathological value out of an issue message.
+ */
+const MAX_BLOCK_PART_LENGTH = 32;
+
+/**
+ * True if a value names a part a block may state styles for.
+ *
+ * The ONE answer, for the same reason {@link isBlockType} is: a caller that
+ * bounds this where another does not emits a class its neighbour refuses.
+ */
+export function isPartName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_BLOCK_PART_LENGTH &&
+    BLOCK_PART_NAME_RE.test(value) &&
+    // A name `Object.prototype` already owns cannot be stored in a record and
+    // read back: the lookup answers with the inherited member instead of
+    // `undefined`, and assigning it sets the prototype rather than creating an
+    // own property. `constructor` passes the grammar above, which is exactly
+    // why this is asked of the prototype rather than matched against a written
+    // list — the list everyone writes is `__proto__` and `constructor` while
+    // `valueof` behaves identically.
+    !Object.prototype.hasOwnProperty.call(Object.prototype, value)
   );
 }
 

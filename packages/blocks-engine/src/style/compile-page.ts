@@ -20,6 +20,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  BlockPart,
   BreakpointDef,
   BreakpointSet,
   NodeStyles,
@@ -32,6 +33,7 @@ import {
   MAX_NAMED_CLASSES,
   STYLE_STATES,
   isBlockType,
+  isPartName,
 } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
@@ -58,6 +60,7 @@ import {
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
+  blockPartClassName,
   blockTypeClassName,
   nodeClassNames,
   PAGE_ROOT_CLASS,
@@ -144,6 +147,22 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * Base styles for the elements a block renders inside its root, keyed by
+   * block name and then by part name.
+   *
+   * A sibling of {@link blockBases} rather than a richer value inside it,
+   * matching how {@link elementBases} and the named-class tier already sit
+   * beside it. The two answer different questions — one styles the element the
+   * block-type class is ON, the other styles elements it is not — and a block
+   * declaring neither, one, or both are all ordinary.
+   *
+   * The selector travels with the styles because this package holds no
+   * registry: it cannot look a part's element up from its name, so the caller
+   * that does hold the definitions resolves both together, the same way
+   * `drawsNothing` answers from a registry this compiler cannot see.
+   */
+  blockParts?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>;
 
   /**
    * Typographic defaults per HTML element, keyed by tag name.
@@ -1844,8 +1863,15 @@ export function compilePageCss(
     if (typeof node.type === "string") usedTypes.add(node.type);
   }
   const bases = ctx.blockBases ?? {};
+  const partsByType = ctx.blockParts ?? {};
   for (const type of [...usedTypes].sort()) {
-    if (!Object.hasOwn(bases, type)) continue;
+    // Own properties only, and for the same reason the caller narrowing these
+    // records checks the same thing: a record reached through a polluted
+    // prototype answers this lookup with an inherited value, which would emit a
+    // rule against a selector built from a node type nobody declared.
+    const hasBase = Object.hasOwn(bases, type);
+    const hasParts = Object.hasOwn(partsByType, type);
+    if (!hasBase && !hasParts) continue;
     // A node type reaches a SELECTOR, and this compiler reads persisted data
     // whether or not a caller validated it. Unchecked, `"evil/x, body"` emits
     // `.nx-pb-page .nx-bt-evil--x, body { … }` — a second selector of the
@@ -1866,29 +1892,95 @@ export function compilePageCss(
       });
       continue;
     }
-    rules.push(
-      ...envelopeRules(
-        bases[type],
-        // Escaped as well as refused above. The check is what makes this safe;
-        // escaping is what keeps it safe if the check is ever loosened, and it
-        // changes nothing for a type that passed, whose characters are all
-        // legal in a class already.
-        `.${escapeIdentifier(blockTypeClassName(type))}`,
-        pointer("/blockBases", type),
-        contexts,
-        tokenPrefix,
-        warnings,
-        budget,
-        warningAllowance,
-        {
-          origin: { kind: "blockType", type },
-          previewStates,
-          trace,
-          mayFetchUrl,
-          weightlessAnchor: defaultsAnchor,
-        }
-      )
-    );
+    // Escaped as well as refused above. The check is what makes this safe;
+    // escaping is what keeps it safe if the check is ever loosened, and it
+    // changes nothing for a type that passed, whose characters are all legal in
+    // a class already. Built once because both tiers below anchor to it.
+    const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
+    if (hasBase)
+      rules.push(
+        ...envelopeRules(
+          bases[type],
+          typeClass,
+          pointer("/blockBases", type),
+          contexts,
+          tokenPrefix,
+          warnings,
+          budget,
+          warningAllowance,
+          {
+            origin: { kind: "blockType", type },
+            previewStates,
+            trace,
+            mayFetchUrl,
+            weightlessAnchor: defaultsAnchor,
+          }
+        )
+      );
+    if (!hasParts) continue;
+    const parts = partsByType[type];
+    // Registration refuses a malformed record, and registration is NOT the only
+    // door: `createBlockResolver` stores definitions directly, so a JavaScript
+    // caller reaches this with whatever it was given. Enumerating a `null` here
+    // throws before a single block renders and takes the whole page with it —
+    // so this answers for the value it is HANDED rather than for the value the
+    // type promised, exactly as the node-type check above does.
+    if (!isPlainRecord(parts)) {
+      pushBoundedWarning(warningAllowance, warnings, {
+        path: pointer("/blockParts", type),
+        code: "invalid-block-part",
+        severity: "warning",
+        message: `"${describeValue(parts)}" is not a set of parts, so no part of "${type}" was styled.`,
+        suggestion: "Use a plain object keyed by part name.",
+      });
+      continue;
+    }
+    // Sorted so one document always serializes the same way, exactly as the
+    // type loop above and `groupByDescendant` below both do.
+    for (const name of Object.keys(parts).sort()) {
+      // A part name is compiled INTO a class, so it reaches a selector, and a
+      // block definition is code a plugin supplies. Refused rather than escaped
+      // for the reason the block type above is: escaping produces a class no
+      // renderer will ever write, which is a style silently missing rather than
+      // a value reported.
+      if (!isPartName(name)) {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: pointer(pointer("/blockParts", type), name),
+          code: "invalid-block-part",
+          severity: "warning",
+          message: `"${describeValue(name)}" is not a part name, so that part of "${type}" was not styled.`,
+          suggestion: 'Use a lowercase slug such as "caption".',
+        });
+        continue;
+      }
+      rules.push(
+        ...envelopeRules(
+          parts[name]?.baseStyles,
+          // The block type is encoded in the class rather than left as an
+          // ancestor. `.nx-bt-core--form label` would also match labels a CHILD
+          // block renders into one of the form's slots, so a container's
+          // defaults would reach markup it does not own; a single class matches
+          // only what the block itself marked.
+          `.${escapeIdentifier(blockPartClassName(type, name))}`,
+          pointer(pointer("/blockParts", type), name),
+          contexts,
+          tokenPrefix,
+          warnings,
+          budget,
+          warningAllowance,
+          {
+            // The part travels with the origin so a provenance reader can say
+            // WHICH element a declaration landed on. Without it two rules from
+            // one block report the same source and differ only by property.
+            origin: { kind: "blockType", type, part: name },
+            previewStates,
+            trace,
+            mayFetchUrl,
+            weightlessAnchor: defaultsAnchor,
+          }
+        )
+      );
+    }
   }
 
   // The named classes, in library order — the tier between a block's defaults and a node's own

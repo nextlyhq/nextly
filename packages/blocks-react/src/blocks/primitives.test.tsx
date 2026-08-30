@@ -66,6 +66,10 @@ function args<P>(
     props,
     node: NODE,
     className: "nx-n1",
+    // Required by the render contract. These fixtures declare no parts, so the
+    // answer is empty for every name — but a renderer that could omit it would
+    // leave every block's parts unmarked with nothing to report.
+    partClass: () => "",
     ctx,
     renderSlot: () => null,
     ...(hostPolicy === undefined ? {} : { hostPolicy }),
