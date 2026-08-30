@@ -21,6 +21,7 @@ import {
   RELEASES_RESOURCE,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
+import type { CacheRevalidator } from "../../revalidation/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
@@ -33,7 +34,18 @@ export function registerReleaseServices({
     "releasesService",
     () =>
       new ReleasesService({
-        repository: new ReleasesRepository(adapter),
+        // WITH the registered revalidator. Without it, scheduling clears only
+        // the in-process transition memo and never flushes the affected
+        // document tags — so a page rendered before the release was scheduled
+        // stays cached with no transition bound and keeps serving pre-release
+        // content past the instant. The repository takes it optionally, which is
+        // exactly why omitting it here would have been silent.
+        repository: new ReleasesRepository(
+          adapter,
+          container.has("cacheRevalidator")
+            ? container.get<CacheRevalidator>("cacheRevalidator")
+            : undefined
+        ),
 
         // The system resource, whose three authorities are seeded by
         // `permission-seed-service`. `hasPermission` fails CLOSED — it returns

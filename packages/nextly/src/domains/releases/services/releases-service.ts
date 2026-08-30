@@ -226,9 +226,13 @@ export class ReleasesService {
   ): Promise<ReleaseMemberRow> {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
+    requireRunnableMember(input, actor);
     return this.deps.repository.addMember({
       ...input,
       releaseId,
+      // Never a caller-supplied author. Materialisation performs each member as
+      // its recorded author, so an author a caller could name would be an
+      // identity they could borrow at a future instant.
       createdBy: actor.userId,
     });
   }
@@ -247,7 +251,16 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<void> {
     await this.authorize(actor, "publish");
-    await this.deps.repository.scheduleRelease(id, at, timezone);
+    // The fence answers `false` for a release whose current state forbids the
+    // move — a published one, most importantly, because re-scheduling it makes
+    // the drain re-apply members against documents that have changed since.
+    // Reported as a CONFLICT rather than swallowed: a caller told nothing would
+    // read a no-op as a schedule that took.
+    if (!(await this.deps.repository.scheduleRelease(id, at, timezone))) {
+      throw NextlyError.conflict({
+        logContext: { reason: "release-not-schedulable", releaseId: id },
+      });
+    }
   }
 
   async cancel(id: string, actor: ReleaseActor): Promise<void> {
@@ -255,7 +268,11 @@ export class ReleasesService {
     // outright: `publish-content-releases` is "schedule or cancel". Someone who
     // could cancel but not schedule could still silently stop a launch.
     await this.authorize(actor, "publish");
-    await this.deps.repository.cancelRelease(id);
+    if (!(await this.deps.repository.cancelRelease(id))) {
+      throw NextlyError.conflict({
+        logContext: { reason: "release-not-cancellable", releaseId: id },
+      });
+    }
   }
 
   private async authorizeDocumentAction(
@@ -283,6 +300,55 @@ export class ReleasesService {
         action,
         scopeSlug,
         userId: actor.userId,
+      },
+    });
+  }
+}
+
+/**
+ * Refuse a member the drain could never perform.
+ *
+ * Both refusals are `invalidInput` rather than `forbidden`: nothing is being
+ * denied to this caller, the member simply cannot be materialised, and the
+ * sentence naming why is the whole value of the error. They are stated HERE
+ * rather than left to the drain because a member that fails at the scheduled
+ * instant fails silently — the release stays `scheduled`, the failure is one
+ * recorded outcome, and the editor finds out by noticing content that never
+ * went live.
+ */
+function requireRunnableMember(
+  input: AddMemberInput,
+  actor: ReleaseActor
+): void {
+  // An authorless member is UNRUNNABLE, not merely unattributed.
+  // `resolveActionAuthor` returns `NO_RECORDED_AUTHOR` for `createdBy: null`
+  // and the pass refuses to fall back to a privileged principal — correctly, or
+  // scheduling would become a way to act as the system. So a member added by a
+  // trusted call that named nobody produces a release that can never publish,
+  // and the default Direct API path is exactly that call.
+  if (actor.userId === null) {
+    throw NextlyError.invalidInput({
+      message:
+        "A release member needs an author: pass `userId` for the person this publish acts as.",
+      logContext: {
+        reason: "member-without-author",
+        scopeSlug: input.scopeSlug,
+      },
+    });
+  }
+
+  // Per-locale release visibility is not built. `applyOne` refuses any member
+  // carrying a locale and its comment names schedule time as where that refusal
+  // belongs once a write surface exists — this is that surface, so this is that
+  // refusal. Accepting one here would persist a member guaranteed to fail.
+  if (input.locale !== null && input.locale !== undefined) {
+    throw NextlyError.invalidInput({
+      message:
+        "Per-locale releases are not supported: omit `locale` to schedule the whole document.",
+      logContext: {
+        reason: "locale-scoped-member",
+        scopeSlug: input.scopeSlug,
+        locale: input.locale,
       },
     });
   }

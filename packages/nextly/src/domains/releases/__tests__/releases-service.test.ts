@@ -24,12 +24,13 @@ const ANON = { userId: null };
 function repository() {
   return {
     createRelease: vi.fn(async () => ({ id: "r1" })),
+    scheduleReleaseOk: true,
     findReleases: vi.fn(async () => []),
     listMembers: vi.fn(async () => []),
     addMember: vi.fn(async () => ({ id: "m1" })),
     removeMember: vi.fn(async () => undefined),
-    scheduleRelease: vi.fn(async () => undefined),
-    cancelRelease: vi.fn(async () => undefined),
+    scheduleRelease: vi.fn(async () => true),
+    cancelRelease: vi.fn(async () => true),
   };
 }
 
@@ -180,5 +181,53 @@ describe("ReleasesService add-time document check", () => {
     expect(repo.createRelease).toHaveBeenCalledWith(
       expect.objectContaining({ createdBy: "u1" })
     );
+  });
+});
+
+describe("ReleasesService refuses members the drain could never perform", () => {
+  it("refuses a member with no author, rather than persisting an unrunnable one", async () => {
+    // `resolveActionAuthor` returns NO_RECORDED_AUTHOR for `createdBy: null` and
+    // the pass refuses to fall back to a privileged principal — correctly, or
+    // scheduling would become a way to act as the system. So an authorless
+    // member produces a release that can NEVER publish, and the trusted Direct
+    // API default is exactly the call that would create one.
+    const { svc, repo } = service({ holds: ["create"] });
+    await expect(
+      svc.addMember("r1", MEMBER, { userId: null, overrideAccess: true })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("refuses a locale-scoped member at add time, where applyOne says it belongs", async () => {
+    // `applyOne` refuses any member carrying a locale and its comment names
+    // schedule time as where that refusal belongs once a write surface exists.
+    // This is that surface. Accepting one would persist a member guaranteed to
+    // fail at the scheduled instant, silently.
+    const { svc, repo } = service({ holds: ["create"] });
+    await expect(
+      svc.addMember("r1", { ...MEMBER, locale: "de" }, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService lifecycle fences", () => {
+  it("reports a conflict when the schedule fence refuses the move", async () => {
+    // The fence excludes a `published` release: re-scheduling one makes the
+    // drain re-apply members against documents that have changed since. A
+    // caller told nothing would read the no-op as a schedule that took.
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.scheduleRelease.mockResolvedValueOnce(false);
+    await expect(
+      svc.schedule("r1", new Date(), "UTC", ADMIN)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("reports a conflict when the cancel fence refuses the move", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.cancelRelease.mockResolvedValueOnce(false);
+    await expect(svc.cancel("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
   });
 });

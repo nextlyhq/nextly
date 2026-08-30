@@ -227,8 +227,25 @@ export class ReleasesRepository {
   }
 
   /** Move a release to `scheduled`, which is what makes reads consult it. */
-  async scheduleRelease(id: string, at: Date, timezone: string): Promise<void> {
-    await this.db.update(
+  /**
+   * Commit a release to an instant, and say whether it moved.
+   *
+   * FENCED on the states a schedule may legally leave. A `published` release is
+   * excluded: moving one back to `scheduled` makes the drain re-apply members
+   * whose documents have changed since, republishing or re-withdrawing content
+   * nobody asked it to touch. `draft` and `cancelled` are both legitimate
+   * sources — the second is how a called-off launch is put back on.
+   *
+   * Answering `false` rather than throwing follows `markReleasePublished`: the
+   * repository reports what the fence did, and the caller decides whether a
+   * refusal is a conflict for its transport.
+   */
+  async scheduleRelease(
+    id: string,
+    at: Date,
+    timezone: string
+  ): Promise<boolean> {
+    const affected = await this.db.updateCount(
       RELEASES,
       {
         scheduledAt: at,
@@ -236,9 +253,20 @@ export class ReleasesRepository {
         state: "scheduled" satisfies ReleaseState,
         updatedAt: new Date(),
       },
-      { and: [{ column: "id", op: "=", value: id }] }
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          {
+            column: "state",
+            op: "IN",
+            value: ["draft", "scheduled", "cancelled"],
+          },
+        ],
+      }
     );
+    if (affected === 0) return false;
     await this.revalidateMembersOf(id);
+    return true;
   }
 
   /**
@@ -249,19 +277,33 @@ export class ReleasesRepository {
    * consulted. That is what makes cancelling a due-but-unmaterialised release
    * free, and it is why there is no restore path here.
    */
-  async cancelRelease(id: string): Promise<void> {
-    await this.db.update(
+  /**
+   * Call a release off, and say whether it moved.
+   *
+   * Fenced away from `published` for the same reason scheduling is: that
+   * release already happened, and marking it cancelled would describe history
+   * that did not occur while leaving the published content in place.
+   */
+  async cancelRelease(id: string): Promise<boolean> {
+    const affected = await this.db.updateCount(
       RELEASES,
       {
         state: "cancelled" satisfies ReleaseState,
         updatedAt: new Date(),
       },
-      { and: [{ column: "id", op: "=", value: id }] }
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "IN", value: ["draft", "scheduled"] },
+        ],
+      }
     );
+    if (affected === 0) return false;
     // Cancelling changes what a read returns just as scheduling does: a page
     // cached with a lifetime derived from this release is now bounded by an
     // instant that will never arrive.
     await this.revalidateMembersOf(id);
+    return true;
   }
 
   /**
@@ -332,7 +374,11 @@ export class ReleasesRepository {
     return this.db.select<ReleaseRow>(RELEASES, {
       where: conditions.length > 0 ? { and: conditions } : undefined,
       orderBy: [
-        { column: "scheduledAt", direction: "desc" },
+        // NULLS LAST, stated rather than defaulted. An unscheduled draft has a
+        // null instant, and the default differs per dialect — on PostgreSQL a
+        // descending order puts nulls first, so a limited "what ships next"
+        // query would return drafts and omit every scheduled release.
+        { column: "scheduledAt", direction: "desc", nulls: "last" },
         { column: "createdAt", direction: "desc" },
       ],
       limit: query.limit,

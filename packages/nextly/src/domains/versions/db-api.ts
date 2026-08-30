@@ -52,7 +52,19 @@ export interface VersionsWhere {
 export interface VersionsSelectOptions {
   columns?: string[];
   where?: VersionsWhere;
-  orderBy?: { column: string; direction?: "asc" | "desc" }[];
+  /**
+   * `nulls` is exposed because DEFAULT null ordering is dialect-dependent:
+   * PostgreSQL sorts nulls FIRST on a descending order while MySQL and SQLite
+   * sort them last. A "newest scheduled first" list containing unscheduled
+   * drafts therefore returns different rows per engine, and under a limit it can
+   * return only drafts and omit every scheduled release. The adapter has
+   * supported the control since it was written.
+   */
+  orderBy?: {
+    column: string;
+    direction?: "asc" | "desc";
+    nulls?: "first" | "last";
+  }[];
   limit?: number;
 }
 
