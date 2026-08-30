@@ -45,6 +45,7 @@ vi.mock("../auth/entity-read-access", () => ({ readableEntities }));
 
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { container } from "../di";
+import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import {
@@ -57,8 +58,23 @@ function makeReq(url: string): Request {
   return new Request(url);
 }
 
-/** Two collections and one single, standing in for the real registries. */
-const REGISTERED = ["posts", "pages", "site-settings"];
+/**
+ * Every name the handler offers for a read decision.
+ *
+ * Two collections and one single from the stubbed registries, PLUS the settings
+ * activity namespaces, which are not registry-derived: `activity_log.collection`
+ * is a free string and `recordSettingsActivity` files entries under names that
+ * are neither a collection nor a single. Spliced from the exported list rather
+ * than spelled out, so a new namespace reaches this expectation the moment its
+ * writer registers one -- a literal here would leave the test agreeing with a
+ * handler that had gone stale.
+ */
+const CANDIDATES = [
+  "posts",
+  "pages",
+  "site-settings",
+  ...SETTINGS_ACTIVITY_NAMESPACES,
+];
 
 /**
  * The dashboard service (or activity log service) this test wants back.
@@ -203,7 +219,7 @@ describe("getDashboardRecentEntries", () => {
     // role-guarded collection silently returned zero rows.
     expect(getRecentEntries).toHaveBeenCalledWith(
       5,
-      { kind: "some", resources: new Set(REGISTERED) },
+      { kind: "some", resources: new Set(CANDIDATES) },
       { user: { id: "user-1", roles: ["editor"], role: "editor" } }
     );
   });
@@ -242,7 +258,7 @@ describe("getDashboardActivity", () => {
  * the way to the service.
  */
 describe("dashboard read scope", () => {
-  it("offers every registered entity for a decision -- singles as well as collections", async () => {
+  it("offers every candidate for a decision -- singles and settings namespaces too", async () => {
     // A single is an entity with its own `access` rules, and
     // `getRegisteredAccess` reads both maps. Omitting the single registry here
     // would leave every single permanently invisible on the dashboard, with no
@@ -252,7 +268,7 @@ describe("dashboard read scope", () => {
 
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
-    expect(offeredSlugs()).toEqual([...REGISTERED].sort());
+    expect(offeredSlugs()).toEqual([...CANDIDATES].sort());
   });
 
   it("forwards exactly what the access layer admitted, and nothing beside it", async () => {
@@ -299,7 +315,7 @@ describe("dashboard read scope", () => {
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
     expect(getStats).toHaveBeenCalledWith({
-      scope: { kind: "some", resources: new Set(REGISTERED) },
+      scope: { kind: "some", resources: new Set(CANDIDATES) },
       caller: expect.anything(),
     });
   });

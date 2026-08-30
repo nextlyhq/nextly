@@ -22,6 +22,7 @@ import { readableEntities } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
@@ -51,16 +52,36 @@ async function getActivityLogService(): Promise<ActivityLogService> {
 }
 
 /**
- * Every entity the dashboard can describe: collections and singles alike.
+ * Every name the dashboard can describe, offered for a read decision.
  *
- * Read from the two registries the dashboard service itself reads, so the set
- * being authorized is the set that would be counted. A registry that cannot be
- * reached yields NOTHING rather than an unbounded list -- an empty scope admits
- * nothing, which is visible and reportable; the alternative is a dashboard that
- * widens when the container is degraded.
+ * Three sources, and the third is the one that is easy to miss. The two content
+ * registries give the collections and singles, so the set being authorized is
+ * the set that would be counted. But the scope also bounds `/activity` and
+ * `recentChanges24h`, which filter `activity_log.collection` -- and that column
+ * is a FREE STRING whose namespace is deliberately wider than the registries.
+ * `recordSettingsActivity` files settings mutations under names that are
+ * neither a collection nor a single, so enumerating from the registries alone
+ * removed every such row from the feed for every caller, super-admin included.
+ * Rotating SMTP credentials is one of those rows. See
+ * {@link SETTINGS_ACTIVITY_NAMESPACES}.
+ *
+ * Widening the CANDIDATES is not widening the answer: each name still goes to
+ * `canReadEntity`, and each settings namespace has a real verdict there because
+ * its `read-{name}` permission is seeded and already authorizes the
+ * corresponding settings route.
+ *
+ * The per-collection COUNTS are unaffected by the third source.
+ * `getRegisteredCollections` filters the registry list BY this scope, and
+ * `filterByResource` can only ever narrow it -- a name that is not in the
+ * registry cannot be added to it by appearing in the scope.
+ *
+ * A registry that cannot be reached contributes NOTHING rather than an
+ * unbounded list -- an empty scope admits nothing, which is visible and
+ * reportable; the alternative is a dashboard that widens when the container is
+ * degraded.
  */
 async function registeredEntitySlugs(): Promise<string[]> {
-  const slugs: string[] = [];
+  const slugs: string[] = [...SETTINGS_ACTIVITY_NAMESPACES];
   try {
     const collections = await container
       .get<{

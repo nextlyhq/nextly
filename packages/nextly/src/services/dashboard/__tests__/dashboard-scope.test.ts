@@ -296,3 +296,48 @@ describe("recentChanges24h honours the read scope", () => {
     expect(activityLogCalls(adapter)).toEqual([]);
   });
 });
+
+/**
+ * A scope may name something that is not a content collection.
+ *
+ * `activity_log.collection` is a free string, so the read scope carries settings
+ * namespaces (`email-providers`, `email-templates`) alongside collection and
+ * single slugs. Two properties have to hold at once, and they pull in opposite
+ * directions: the name must reach the `activity_log` filter, and it must NOT
+ * become a collection to count. `filterByResource` can only narrow the registry
+ * list, so the second follows from the shape rather than from a guard — this
+ * pins it, because a future `getCollectionCounts` that iterated the SCOPE
+ * instead of the filtered registry would try to count a table that does not
+ * exist and report the failure as a zero.
+ */
+describe("a scope naming a non-content activity namespace", () => {
+  it("reaches the activity_log filter", async () => {
+    const adapter = makeAdapter();
+    const service = new DashboardService(adapter, makeLogger());
+
+    await service.getStats({
+      scope: someResources(["posts", "email-providers"]),
+      caller: CALLER,
+    });
+
+    const calls = activityLogCalls(adapter);
+    expect(calls).toHaveLength(1);
+    const [, params] = calls[0];
+    expect(params.slice(1)).toEqual(["posts", "email-providers"]);
+  });
+
+  it("does not become a collection to count", async () => {
+    const service = new DashboardService(makeAdapter(), makeLogger());
+
+    const stats = await service.getStats({
+      scope: someResources(["posts", "email-providers"]),
+      caller: CALLER,
+    });
+
+    expect(stats.collectionCounts.map(c => c.slug)).toEqual(["posts"]);
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(count).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "posts" })
+    );
+  });
+});

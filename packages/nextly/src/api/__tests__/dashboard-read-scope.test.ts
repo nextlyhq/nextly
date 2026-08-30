@@ -70,6 +70,9 @@ vi.mock("../../services/lib/permissions", () => ({
 
 import { requireAuthentication } from "../../auth/middleware";
 import { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import { SETTINGS_ACTIVITY_NAMESPACES } from "../../domains/audit/settings-activity-namespaces";
+import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../../domains/email/provider-activity";
+import { EMAIL_TEMPLATE_ACTIVITY_COLLECTION } from "../../domains/email/template-activity";
 import {
   hasPermission,
   isSuperAdmin,
@@ -248,6 +251,8 @@ describe("the resolver no longer parses permission slugs", () => {
 
     await getDashboardStats(new Request("http://x/api/dashboard/stats"));
 
+    // The two settings namespaces are offered too and refused: the key holds
+    // no `read-email-providers` / `read-email-templates` grant.
     expect(scopeOf(getStats)).toEqual(new Set(["site-settings"]));
   });
 
@@ -280,13 +285,145 @@ describe("a super-admin session", () => {
     await getDashboardStats(new Request("http://x/api/dashboard/stats"));
 
     expect(scopeOf(getStats)).toEqual(
-      new Set(["posts", "pages", "site-settings"])
+      new Set([
+        "posts",
+        "pages",
+        "site-settings",
+        ...SETTINGS_ACTIVITY_NAMESPACES,
+      ])
     );
   });
 });
 
 describe("the resolver fails closed", () => {
-  it("admits nothing when the registries cannot be reached", async () => {
+  it("contributes no CONTENT entity when the registries cannot be reached", async () => {
+    // A degraded container must not widen the scope. The registries supply the
+    // collections and singles, so an unreachable registry costs exactly those;
+    // the settings namespaces are a compiled-in list rather than a registry
+    // read, so they still get a verdict and this caller holds their grants.
+    // An implementation that answered `all` on a registry error -- or that
+    // threw -- fails here.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "dashboardService") return { getStats };
+      if (name === "rbacAccessControlService") return rbac;
+      throw new Error("registry unavailable");
+    });
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    expect(scopeOf(getStats)).toEqual(new Set(SETTINGS_ACTIVITY_NAMESPACES));
+  });
+
+  it("admits nothing at all when the caller can be granted nothing", async () => {
+    asMock(hasPermission).mockResolvedValue(false);
+    containerGet.mockImplementation((name: string) => {
+      if (name === "dashboardService") return { getStats };
+      if (name === "rbacAccessControlService") return rbac;
+      throw new Error("registry unavailable");
+    });
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    expect(scopeOf(getStats)).toEqual(new Set());
+  });
+});
+
+/**
+ * `activity_log.collection` is WIDER than the content registries.
+ *
+ * The column is a free string by design (`record-settings-activity`'s own
+ * docblock says so), and `recordSettingsActivity` files settings mutations under
+ * names that are neither a collection nor a single. Enumerating candidates from
+ * the two content registries alone therefore filtered those rows out of
+ * `/activity` and out of `recentChanges24h` for EVERY caller, super-admin
+ * included -- because the scope became an `IN (...)` over a list that never
+ * contained them.
+ *
+ * The failure this closes is not hypothetical. Rotating SMTP credentials writes
+ * `collection = "email-providers"` with `changedFields: ["host", "username",
+ * "password"]`, on the rows the audit module describes as holding "the
+ * credentials that send password-reset mail". That entry vanishing from the feed
+ * is a credential-change audit trail nobody can see.
+ *
+ * The decision procedure was never the problem: `canReadEntity("email-providers")`
+ * has a real answer, because `read-email-providers` is a SEEDED permission
+ * (resource `email-providers`, action `read`) that `routeHandler` already
+ * authorizes the provider list with. Only the candidate list was too narrow.
+ */
+describe("settings activity namespaces are offered for a decision", () => {
+  it("admits `email-providers` for a super-admin", async () => {
+    asMock(isSuperAdmin).mockResolvedValue(true);
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    expect(scopeOf(getStats).has(EMAIL_PROVIDER_ACTIVITY_COLLECTION)).toBe(
+      true
+    );
+  });
+
+  it("admits `email-templates` for a super-admin", async () => {
+    asMock(isSuperAdmin).mockResolvedValue(true);
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    expect(scopeOf(getStats).has(EMAIL_TEMPLATE_ACTIVITY_COLLECTION)).toBe(
+      true
+    );
+  });
+
+  it("refuses them for an editor holding no read grant on either", async () => {
+    // The positive control for the two above. Widening the candidate list must
+    // not widen the ANSWER: an implementation that appended the namespaces
+    // unconditionally, rather than offering them to `canReadEntity`, would pass
+    // the super-admin cases and fail here.
+    asMock(hasPermission).mockImplementation(
+      async (_userId: string, _action: string, resource: string) =>
+        !SETTINGS_ACTIVITY_NAMESPACES.includes(
+          resource as (typeof SETTINGS_ACTIVITY_NAMESPACES)[number]
+        )
+    );
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    const scope = scopeOf(getStats);
+    expect(scope.has(EMAIL_PROVIDER_ACTIVITY_COLLECTION)).toBe(false);
+    expect(scope.has(EMAIL_TEMPLATE_ACTIVITY_COLLECTION)).toBe(false);
+    // ...while a content collection the same caller DOES hold a grant on stays.
+    expect(scope.has("posts")).toBe(true);
+  });
+
+  it("admits one and refuses the other -- they are separate resources", async () => {
+    // The feed groups by this column precisely so a template edit and a
+    // credential change do not read as the same kind of event; the two
+    // permissions are seeded separately, so the scope must be able to split
+    // them rather than admitting or refusing the pair.
+    asMock(hasPermission).mockImplementation(
+      async (_userId: string, _action: string, resource: string) =>
+        resource !== EMAIL_TEMPLATE_ACTIVITY_COLLECTION
+    );
+
+    await getDashboardStats(new Request("http://x/api/dashboard/stats"));
+
+    const scope = scopeOf(getStats);
+    expect(scope.has(EMAIL_PROVIDER_ACTIVITY_COLLECTION)).toBe(true);
+    expect(scope.has(EMAIL_TEMPLATE_ACTIVITY_COLLECTION)).toBe(false);
+  });
+
+  it("bounds /activity by them too -- that is the endpoint they exist for", async () => {
+    asMock(isSuperAdmin).mockResolvedValue(true);
+
+    await getDashboardActivity(new Request("http://x/api/dashboard/activity"));
+
+    expect(
+      scopeOf(getRecentActivity).has(EMAIL_PROVIDER_ACTIVITY_COLLECTION)
+    ).toBe(true);
+  });
+
+  it("still admits nothing when the registries are unreachable", async () => {
+    // Fail-closed is preserved: a settings namespace is a CANDIDATE, not a
+    // standing grant. It is offered for a decision like everything else, and a
+    // caller who can decide nothing gets nothing.
+    asMock(hasPermission).mockResolvedValue(false);
     containerGet.mockImplementation((name: string) => {
       if (name === "dashboardService") return { getStats };
       if (name === "rbacAccessControlService") return rbac;
