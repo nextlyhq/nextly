@@ -138,6 +138,7 @@ import {
   registerPluginService,
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
+import { assertAdminWidgets } from "../plugins/validate-admin-widgets";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
@@ -504,6 +505,22 @@ export async function registerServices(
   // Boot is where this should fail; without it a transformer-introduced
   // collision would surface on the first admin-meta request instead.
   validatePluginSlugs(setupConfig.plugins ?? []);
+  // And the widgets on that same transformed list, for the same reason one
+  // level in. `resolvePlugins` checks the list the CALLER passed; a transformer
+  // that adds or replaces a plugin contributes widgets that list never held, and
+  // THIS one is what `setBootedConfig` publishes and `buildPluginAdminMeta`
+  // serializes. A bigint under `query.where` there throws inside the single
+  // `JSON.stringify` that builds `/api/admin-meta/workspace`, so the whole
+  // authenticated workspace response answers 500 for every admin — the failure
+  // the resolver's check exists to prevent, reached through a second door.
+  //
+  // Checked in BOTH places rather than moved here, even though nothing between
+  // the two reads a widget. `resolvePlugins` is shared with the CLI config
+  // loader and with `collectPluginInfo`, and neither applies transformers on
+  // this path, so relocating the check would take it away from them; the
+  // duplication is the same one `validatePluginSlugs` above already carries,
+  // for the same reason.
+  assertAdminWidgets(setupConfig.plugins ?? []);
 
   // ----------------------------------------
   // Layer 0c: Fold declarative plugin schema contributions (D3/D12/D50)
