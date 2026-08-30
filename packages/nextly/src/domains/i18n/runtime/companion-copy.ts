@@ -17,11 +17,11 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, sql } from "drizzle-orm";
 
+import { isMissingNamedColumnError } from "../../../database/missing-column";
 import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
 import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
 import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
-import { isMissingColumnError } from "../companion-join";
 import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 
 import type { CompanionIntrospectAdapter } from "./companion-io";
@@ -322,7 +322,7 @@ async function clearLocaleStamp(
           : thisLocale
       );
   } catch (error) {
-    if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return;
+    if (isMissingNamedColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return;
     throw error;
   }
 }

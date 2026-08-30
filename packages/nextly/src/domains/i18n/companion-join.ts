@@ -15,6 +15,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
 
+import { isMissingNamedColumnError } from "../../database/missing-column";
+
 import { COMPANION_UPDATED_AT_COLUMN } from "./companion-columns";
 import type { CompanionReadiness } from "./runtime/companion-readiness";
 import { buildCompanionStampTable } from "./runtime/companion-stamp-table";
@@ -859,7 +861,8 @@ async function readStaleLocales(
   } catch (error) {
     // A companion provisioned before the column exists. Reported as "nothing is KNOWN to be
     // stale", never as "nothing is stale" — the caller renders an absent entry as unknown.
-    if (isMissingColumnError(error, COMPANION_UPDATED_AT_COLUMN)) return out;
+    if (isMissingNamedColumnError(error, COMPANION_UPDATED_AT_COLUMN))
+      return out;
     throw error;
   }
 
@@ -867,56 +870,6 @@ async function readStaleLocales(
     out.add(`${String(row._parent)}::${String(row._locale)}`);
   }
   return out;
-}
-
-/**
- * Does this error say the table has no such column?
- *
- * 🔴 WALKS THE CAUSE CHAIN, because the driver wording is not on the error a caller catches.
- * Measured against a real SQLite adapter, a Drizzle select on a missing column throws:
- *
- *   DrizzleQueryError  "Failed query: select \"_parent\", \"_locale\", \"_updated_at\" from ..."
- *     cause: SqliteError  "no such column: \"_updated_at\" - should this be a string literal..."
- *
- * so a predicate reading only the top-level message finds no driver wording and rethrows — and
- * the legacy companion this exists to tolerate fails its read after all.
- *
- * 🔴 Both conditions are tested PER LEVEL rather than across the chain, and that is not fussiness:
- * the top-level message quotes the SQL, so it CONTAINS the column name. Testing "some level
- * mentions the column" and "some level reads as a missing-column error" separately would match the
- * name from the statement text and the wording from an unrelated cause, and report any nested
- * failure on a query that happens to select this column as a missing column.
- *
- * Matched on wording because none of the three dialects exposes a portable code for this that
- * reaches here: SQLite says `no such column`, PostgreSQL `column ... does not exist`, MySQL
- * `Unknown column`. Requiring the column NAME alongside the shape keeps it from swallowing a
- * different column's absence and reporting the site as having no staleness data.
- */
-export function isMissingColumnError(error: unknown, column: string): boolean {
-  const seen = new Set<unknown>();
-  let current: unknown = error;
-  // Bounded by identity rather than by a depth constant: a cause chain that loops would otherwise
-  // spin here, and a legitimate chain is short.
-  while (current !== null && current !== undefined && !seen.has(current)) {
-    seen.add(current);
-    // A cause is `unknown`, and only two shapes carry a readable message. Anything else is
-    // skipped rather than stringified: `String(someObject)` yields "[object Object]", which
-    // matches nothing and would quietly make this level unexaminable.
-    const message =
-      current instanceof Error
-        ? current.message
-        : typeof current === "string"
-          ? current
-          : "";
-    if (
-      message.includes(column) &&
-      /no such column|does not exist|unknown column/i.test(message)
-    ) {
-      return true;
-    }
-    current = current instanceof Error ? current.cause : undefined;
-  }
-  return false;
 }
 
 export async function populateTranslationStatus(
