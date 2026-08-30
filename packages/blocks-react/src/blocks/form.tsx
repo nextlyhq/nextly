@@ -141,7 +141,33 @@ export const FORM_BASE_STYLES = {
   base: {
     base: {
       display: "grid",
-      gap: "1rem",
+      // The gap is now the distance from a label to the control it names, NOT
+      // the distance between fields. One even gap spaced a label as far from
+      // its own input as from the next question, so nothing grouped; the field
+      // separation is stated by the control instead, which is the only element
+      // that knows a field has ended.
+      gap: "0.25rem",
+    },
+  },
+} as const;
+
+/**
+ * The control a field's label names.
+ *
+ * Carried on the CONTROL rather than the label, and the difference is the whole
+ * reason there is no leading gap inside the form: a margin above each label
+ * separates fields equally well and also pushes the FIRST label down, which
+ * reads as stray padding nobody asked for. Below the control the same distance
+ * falls only between fields and before the submit, where it is wanted.
+ */
+const FORM_PARTS = {
+  control: {
+    baseStyles: {
+      base: {
+        base: {
+          margin: { blockEnd: "0.75rem" },
+        },
+      },
     },
   },
 } as const;
@@ -155,6 +181,7 @@ export function renderForm({
   props,
   node,
   className,
+  partClass,
 }: BlockRenderArgs<FormProps>): ReactElement {
   // A stored array can hold anything: a migration, a hand edit, or an older
   // version of this block can all leave a member that is not a field. Sliced
@@ -198,9 +225,23 @@ export function renderForm({
         {required ? <span aria-hidden="true"> *</span> : null}
       </label>,
       type === "textarea" ? (
-        <textarea key={id} id={id} name={name} required={required} rows={4} />
+        <textarea
+          key={id}
+          id={id}
+          name={name}
+          required={required}
+          rows={4}
+          className={partClass("control")}
+        />
       ) : (
-        <input key={id} id={id} name={name} type={type} required={required} />
+        <input
+          key={id}
+          id={id}
+          name={name}
+          type={type}
+          required={required}
+          className={partClass("control")}
+        />
       )
     );
   });
@@ -254,6 +295,7 @@ export const form = defineBlock<FormProps, PageContext>({
     },
   },
   baseStyles: FORM_BASE_STYLES,
+  parts: FORM_PARTS,
   supports: {
     typography: true,
     color: true,

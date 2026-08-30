@@ -16,12 +16,13 @@ import { describe, expect, it } from "vitest";
 import { blockPartClassName, compilePageCss } from "@nextlyhq/blocks-engine";
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 
+import { form } from "./form";
 import { image } from "./image";
 import { quote } from "./quote";
-import { blockPartsFor } from "../styles";
+import { blockBasesFor, blockPartsFor } from "../styles";
 import { createBlockResolver } from "../resolver";
 
-const blocks = createBlockResolver([image, quote] as never);
+const blocks = createBlockResolver([form, image, quote] as never);
 
 /** What a published page's stylesheet says, for a document using one block. */
 function sheetFor(type: string): string {
@@ -32,6 +33,10 @@ function sheetFor(type: string): string {
   } as unknown as BlockDocument;
   return compilePageCss(document, {
     breakpoints: { viewport: [{ id: "base", label: "Base" }], container: [] },
+    // BOTH tiers, because a real page compiles both and the question here is
+    // how they divide the work: the gap is the block's own, the field
+    // separation is the part's. A sheet carrying one of them cannot answer it.
+    blockBases: blockBasesFor(document, blocks),
     blockParts: blockPartsFor(document, blocks),
   } as never).css;
 }
@@ -117,5 +122,53 @@ describe("core/image, once it can style its caption", () => {
     const css = sheetFor("core/image");
     expect(css).not.toContain("figcaption");
     expect(css).not.toContain(" img");
+  });
+});
+
+describe("core/form, once it can space a control apart from its label", () => {
+  it("marks each control, whichever element the field type renders", () => {
+    // A field is an `<input>` or a `<textarea>` depending on its type, and both
+    // are the same part: the thing a label names. Marking only one would leave
+    // every textarea field ungrouped, which no assertion on the stylesheet
+    // could see.
+    const markup = renderToStaticMarkup(
+      form.render({
+        props: {
+          fields: [
+            { name: "a", label: "A", type: "text" },
+            { name: "b", label: "B", type: "textarea" },
+          ],
+        },
+        node: { id: "n1", type: "core/form", version: 1, props: {} },
+        className: "nx-n1",
+        partClass: (name: string) => blockPartClassName("core/form", name),
+        ctx: undefined,
+        renderSlot: () => null,
+      } as never) as never
+    );
+    const marker = blockPartClassName("core/form", "control");
+    expect(markup).toContain(`<input`);
+    expect(markup).toContain(`<textarea`);
+    expect(markup.split(marker).length - 1).toBe(2);
+  });
+
+  it("separates FIELDS with the control, not the grid gap", () => {
+    // The measured defect: one even gap spaced a label as far from its own
+    // input as from the next question, so nothing grouped. The gap is now the
+    // label-to-control distance and the control states the field separation —
+    // which is why the gap shrinks and a margin appears, rather than either
+    // alone.
+    const css = sheetFor("core/form");
+    expect(css).toContain("gap: 0.25rem");
+    expect(css).toContain(blockPartClassName("core/form", "control"));
+    expect(css).toContain("margin-block-end: 0.75rem");
+  });
+
+  it("puts that distance BELOW the control, so the form has no leading gap", () => {
+    // Above each label separates fields equally well and also pushes the FIRST
+    // label down, which reads as padding nobody asked for. Asserted because the
+    // two placements are indistinguishable from the field spacing alone.
+    const css = sheetFor("core/form");
+    expect(css).not.toContain("margin-block-start: 0.75rem");
   });
 });

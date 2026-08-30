@@ -34,3 +34,9 @@ the block's own indent and added to it — so the same quote drew at 24px bare a
 An image's caption drew at the body's own size directly beneath the picture, so
 it read as another paragraph that happened to follow an image rather than as a
 caption.
+
+A form's fields did not group. One even gap separated a label from the control
+it names and one question from the next, so nothing read as belonging together —
+a label sat as far from its own input as from the next field entirely. The gap
+is now the distance from a label to its control, and the control states the
+distance to the next field.
