@@ -46,7 +46,12 @@
  */
 
 import { NextlyError } from "../../../errors";
-import type { ReleaseMemberAction } from "../../../schemas/releases/types";
+import {
+  isReleaseMemberAction,
+  type ReleaseMemberAction,
+  type ReleaseState,
+} from "../../../schemas/releases/types";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type {
   DocumentRef,
   NewRelease,
@@ -103,8 +108,14 @@ export interface ReleasesServiceDeps {
 }
 
 export interface FindReleasesQuery {
-  /** Restrict to one lifecycle state. */
-  state?: string;
+  /**
+   * Restrict to one lifecycle state.
+   *
+   * Typed as the exhaustive union rather than `string`: a typo like
+   * `"schedule"` would otherwise be accepted and answered with an empty list and
+   * no diagnostic, which reads exactly like "nothing is scheduled".
+   */
+  state?: ReleaseState;
   /**
    * Window on the scheduled instant, both bounds optional and independent.
    *
@@ -127,8 +138,21 @@ export interface FindReleasesQuery {
   limit?: number;
 }
 
+/**
+ * The document scopes a release can actually materialise.
+ *
+ * `VersionScopeKind` also admits `"page"`, and this input deliberately does NOT.
+ * `release-mutations` routes every non-single scope through the collection API,
+ * so a page member either fails every drain and holds the release scheduled
+ * forever, or targets an unrelated collection that happens to share the slug.
+ * Narrowing the public input is how a scope that cannot be performed stops being
+ * expressible.
+ */
+export type ReleaseScopeKind = "collection" | "single";
+
 /** What a member add asks for, minus the release it joins. */
-export interface AddMemberInput extends DocumentRef {
+export interface AddMemberInput extends Omit<DocumentRef, "scopeKind"> {
+  scopeKind: ReleaseScopeKind;
   action: ReleaseMemberAction;
 }
 
@@ -227,14 +251,57 @@ export class ReleasesService {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
-    return this.deps.repository.addMember({
-      ...input,
-      releaseId,
-      // Never a caller-supplied author. Materialisation performs each member as
-      // its recorded author, so an author a caller could name would be an
-      // identity they could borrow at a future instant.
-      createdBy: actor.userId,
+
+    // The parent must EXIST. No dialect declares a foreign key from a member to
+    // its release, so a mistyped id inserts a row no drain will ever find:
+    // the API answers 201 with a member that belongs to nothing, and the
+    // release it names is not scheduled because it does not exist.
+    const [parent] = await this.deps.repository.findReleases({
+      ids: [releaseId],
     });
+    if (parent === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId },
+      });
+    }
+    // A published or cancelled release will never be materialised again, so a
+    // member added to one is work that cannot happen.
+    if (parent.state === "published" || parent.state === "cancelled") {
+      throw NextlyError.conflict({
+        logContext: {
+          reason: "release-not-mutable",
+          releaseId,
+          state: parent.state,
+        },
+      });
+    }
+
+    try {
+      return await this.deps.repository.addMember({
+        ...input,
+        releaseId,
+        // Never a caller-supplied author. Materialisation performs each member
+        // as its recorded author, so an author a caller could name would be an
+        // identity they could borrow at a future instant.
+        createdBy: actor.userId,
+      });
+    } catch (error) {
+      // The `memberKey` unique index is what stops one document being scheduled
+      // twice in one release. Translated here so callers meet this package's
+      // stable error contract rather than the adapter's DatabaseError — and
+      // narrowly, so an unexpected database failure still propagates.
+      if (isUniqueViolation(error)) {
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "member-already-in-release",
+            releaseId,
+            scopeSlug: input.scopeSlug,
+            entryId: input.entryId,
+          },
+        });
+      }
+      throw error;
+    }
   }
 
   async removeMember(memberId: string, actor: ReleaseActor): Promise<void> {
@@ -326,6 +393,17 @@ function requireRunnableMember(
   // scheduling would become a way to act as the system. So a member added by a
   // trusted call that named nobody produces a release that can never publish,
   // and the default Direct API path is exactly that call.
+  // An action outside the union is DANGEROUS, not merely invalid. The Drizzle
+  // `$type` annotation is compile-time only, and the applier treats every effect
+  // that is not exactly `"publish"` as an unpublish — so `"publsih"` from an
+  // untyped caller WITHDRAWS the document at the scheduled instant.
+  if (!isReleaseMemberAction(input.action)) {
+    throw NextlyError.invalidInput({
+      message: "`action` must be `publish` or `unpublish`.",
+      logContext: { reason: "unknown-member-action", action: input.action },
+    });
+  }
+
   if (actor.userId === null) {
     throw NextlyError.invalidInput({
       message:

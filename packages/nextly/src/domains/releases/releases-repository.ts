@@ -380,6 +380,12 @@ export class ReleasesRepository {
         // query would return drafts and omit every scheduled release.
         { column: "scheduledAt", direction: "desc", nulls: "last" },
         { column: "createdAt", direction: "desc" },
+        // `id` last, so the order is actually total. `createdAt` is not unique
+        // and is stored coarsely enough for concurrent releases to tie —
+        // especially on SQLite — and two drafts tie on a null `scheduledAt` as
+        // well, so without this a limited page can return different rows across
+        // query plans and dialects.
+        { column: "id", direction: "desc" },
       ],
       limit: query.limit,
     });

@@ -25,7 +25,7 @@ function repository() {
   return {
     createRelease: vi.fn(async () => ({ id: "r1" })),
     scheduleReleaseOk: true,
-    findReleases: vi.fn(async () => []),
+    findReleases: vi.fn(async () => [{ id: "r1", state: "draft" }]),
     listMembers: vi.fn(async () => []),
     addMember: vi.fn(async () => ({ id: "m1" })),
     removeMember: vi.fn(async () => undefined),
@@ -229,5 +229,64 @@ describe("ReleasesService lifecycle fences", () => {
     await expect(svc.cancel("r1", ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
     });
+  });
+});
+
+describe("ReleasesService refuses members that would act on nothing", () => {
+  it("refuses an action outside the union, which would WITHDRAW content", async () => {
+    // The Drizzle `$type` annotation is compile-time only, and the applier
+    // treats every effect that is not exactly "publish" as an unpublish. So a
+    // typo from an untyped caller does not fail — it takes the document down at
+    // the scheduled instant.
+    const { svc, repo } = service({ holds: ["create"] });
+    await expect(
+      svc.addMember("r1", { ...MEMBER, action: "publsih" as never }, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member whose release does not exist", async () => {
+    // No dialect declares a foreign key from a member to its release, so a
+    // mistyped id would insert a row no drain can ever find: a 201 for a member
+    // that belongs to nothing.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValueOnce([]);
+    await expect(svc.addMember("nope", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member on a release that will never run again", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "published" }]);
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("translates a duplicate member into the package's own error", async () => {
+    // The memberKey unique index is what stops one document being scheduled
+    // twice in a release. Callers should meet NextlyError, not the adapter's
+    // DatabaseError.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.addMember.mockRejectedValueOnce(
+      Object.assign(new Error("UNIQUE constraint failed"), { code: "23505" })
+    );
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "DUPLICATE",
+    });
+  });
+
+  it("lets an unexpected database failure through rather than calling it a duplicate", async () => {
+    // The control on the case above: narrow translation only. A connection
+    // fault reported as "already exists" would send an operator hunting for a
+    // row that is not there.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.addMember.mockRejectedValueOnce(new Error("connection reset"));
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toThrow(
+      "connection reset"
+    );
   });
 });
