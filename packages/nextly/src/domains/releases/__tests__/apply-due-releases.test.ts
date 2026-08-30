@@ -67,7 +67,7 @@ function deps(over: {
 }): ApplyDueReleasesDeps {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
-  const blocked = vi.fn(async (_id: string) => true);
+  const blocked = vi.fn(async (_id: string, _at: Date) => true);
   return {
     // Pinned, so every case below observes a STABLE component order and asserts
     // about the mechanism it names rather than about which rotation came up.
@@ -993,6 +993,18 @@ describe("a release nothing about retrying could fix is STOPPED", () => {
     expect(result.failed).toBeGreaterThan(0);
     expect(blockedBy(d)).toEqual([]);
     expect(result.blocked).toBe(0);
+  });
+
+  it("fences the block on the instant the pass PLANNED against", async () => {
+    // An editor who postpones a due release between the plan and this write
+    // leaves the row in `scheduled`, so a state-only predicate would match and
+    // replace the schedule they just chose with `blocked`. The release would
+    // then never run at the replacement instant, and nothing would say why.
+    const d = deps({ members: [member({ createdBy: null })] });
+    await applyDueReleases(d);
+    const call = vi.mocked(d.repository.blockRelease).mock.calls[0];
+    expect(call?.[1]).toBeInstanceOf(Date);
+    expect(call?.[1]?.getTime()).toBe(release().scheduledAt?.getTime());
   });
 
   it("blocks nothing when every member applies", async () => {

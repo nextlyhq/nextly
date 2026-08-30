@@ -27,11 +27,23 @@ import type { ReleaseBlocker } from "@admin/types/releases";
  */
 const REASON: Record<ReleaseBlocker["reason"], string> = {
   AUTHOR_GONE:
-    "the person who added it has been deleted or deactivated. A release publishes each document as its author, so there is nobody left to act as. Restore that user, or remove the document and add it again.",
+    "the person who added it has been deleted or deactivated. A release acts on each document as its author, so there is nobody left to act as. Restore that user, or remove the document and add it again.",
   NO_AUTHOR:
-    "no author was recorded for it, so there is nobody to publish it as. Remove the document and add it again.",
+    "no author was recorded for it, so there is nobody to act as. Remove the document and add it again.",
   LOCALE_SCOPED:
-    "it names a single language, which releases cannot publish on their own. Remove it and add the document without a language.",
+    "it names a single language, which releases cannot act on by themselves. Remove it and add the document without a language.",
+};
+
+/**
+ * What the member was going to do, said neutrally enough to be true either way.
+ *
+ * The wording used to assume a publish, which states the OPPOSITE of the truth
+ * for a blocked takedown: an operator reading "could not be published" about a
+ * document that was scheduled to come down learns exactly the wrong thing.
+ */
+const ACTION_PHRASE: Record<ReleaseBlocker["action"], string> = {
+  publish: "could not be published",
+  unpublish: "could not be taken down",
 };
 
 export function BlockedReleaseNotice({
@@ -61,7 +73,15 @@ export function BlockedReleaseNotice({
       <ul className="mt-2 flex list-disc flex-col gap-1 pl-5">
         {blockers.map(blocker => (
           <li key={blocker.memberId} className="text-sm text-muted-foreground">
-            One document could not be published: {REASON[blocker.reason]}
+            {/* NAMED, because the fix is per document. An anonymous sentence
+                repeated once per blocker tells an operator that something is
+                wrong and leaves them opening every row to find which. */}
+            <span className="font-medium text-foreground">
+              {blocker.scopeKind === "single"
+                ? blocker.scopeSlug
+                : `${blocker.scopeSlug} / ${blocker.entryId}`}
+            </span>{" "}
+            {ACTION_PHRASE[blocker.action]}: {REASON[blocker.reason]}
           </li>
         ))}
       </ul>

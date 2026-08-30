@@ -49,6 +49,29 @@ const ACTION_SENTENCE: Record<string, string> = {
 };
 
 function ReleaseLine({ release }: { release: Release }) {
+  // A release that STOPPED still holds this document, and reads completely
+  // differently: nothing is coming, and somebody has to act. Reported here
+  // rather than by dropping the row, because a row disappearing is exactly what
+  // an editor reads as "resolved".
+  if (release.state === "blocked") {
+    return (
+      <li className="text-sm text-foreground">
+        <Link
+          href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
+          className="underline"
+        >
+          {release.title}
+        </Link>{" "}
+        was going to change this document and has{" "}
+        <strong className="font-medium">stopped</strong>. It will not run until
+        somebody fixes it.
+      </li>
+    );
+  }
+  return <ScheduledLine release={release} />;
+}
+
+function ScheduledLine({ release }: { release: Release }) {
   const at = formatScheduledAt(release);
   // An action the admin does not recognise is NAMED as unknown rather than
   // guessed at. Defaulting to "goes live" would state the opposite of the truth
@@ -97,8 +120,16 @@ function savedEditsSentence(
   releases: Release[],
   onDefaultLocale: boolean
 ): string {
-  const publishes = releases.some(r => r.memberAction === "publish");
-  const withdraws = releases.some(r => r.memberAction === "unpublish");
+  // Only the releases still going to happen decide this sentence. A stopped one
+  // makes no promise about saved edits either way, and letting it vote would
+  // have a blocked publish claim that changes are included when nothing is
+  // going to ship them.
+  const pending = releases.filter(r => r.state === "scheduled");
+  if (pending.length === 0) {
+    return "Nothing is scheduled to happen to this document until somebody fixes the release above.";
+  }
+  const publishes = pending.some(r => r.memberAction === "publish");
+  const withdraws = pending.some(r => r.memberAction === "unpublish");
 
   if (!onDefaultLocale) {
     return publishes
@@ -181,11 +212,18 @@ export function ScheduledReleaseBanner({
       />
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex items-center gap-2">
-          <Badge variant="warning">
-            {releases.length === 1
-              ? "Scheduled"
-              : `${releases.length} scheduled`}
-          </Badge>
+          {/* The badge names the WORST state present: a stopped release is the
+              one that needs somebody, and burying it behind a count of
+              scheduled ones is how it gets missed. */}
+          {releases.some(release => release.state === "blocked") ? (
+            <Badge variant="destructive">Stopped</Badge>
+          ) : (
+            <Badge variant="warning">
+              {releases.length === 1
+                ? "Scheduled"
+                : `${releases.length} scheduled`}
+            </Badge>
+          )}
         </div>
         <ul className="flex flex-col gap-0.5">
           {releases.map(release => (

@@ -80,6 +80,11 @@ export function reportReleasesOutcome(
     // ACTION, so `deferred` is zero while releases stay scheduled. Without this
     // the one case the finalization bound handles is the one it cannot report.
     undischarged: result.undischarged,
+    // The transitions this pass made that nothing else reports. One failed
+    // member can stop an entire overlapping component, so the error logged
+    // below names ONE release while several were moved to `blocked` — and
+    // without this the operator reading the log has no way to learn that.
+    blocked: result.blocked,
   });
 
   for (const outcome of result.outcomes) {

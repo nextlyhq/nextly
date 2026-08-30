@@ -23,7 +23,7 @@ interface M {
   locale?: string | null;
 }
 
-function service(members: M[], liveAuthorIds: string[]) {
+function service(members: M[], liveAuthorIds: string[], state = "blocked") {
   const listMembers = vi.fn(async () =>
     members.map(m => ({
       id: m.id,
@@ -38,21 +38,24 @@ function service(members: M[], liveAuthorIds: string[]) {
     }))
   );
   const liveAuthors = vi.fn(async () => new Set(liveAuthorIds));
+  const scheduleRelease = vi.fn(async () => true);
   const deps = {
     repository: {
       listMembers,
       liveAuthors,
+      findReleases: vi.fn(async () => [{ id: "r1", state }]),
+      scheduleRelease,
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
   };
-  return { svc: new ReleasesService(deps), liveAuthors };
+  return { svc: new ReleasesService(deps), liveAuthors, scheduleRelease };
 }
 
 describe("what stands between a release and its instant", () => {
   it("names a member whose author was never recorded", async () => {
     const { svc } = service([{ id: "m1", createdBy: null }], []);
-    expect(await svc.blockingReasons("r1", ACTOR)).toEqual([
+    expect(await svc.blockingReasons("r1", ACTOR)).toMatchObject([
       { memberId: "m1", reason: "NO_AUTHOR" },
     ]);
   });
@@ -61,14 +64,14 @@ describe("what stands between a release and its instant", () => {
     // Deleted or deactivated. The drain performs each member AS its recorded
     // author, so there is no principal left to act as.
     const { svc } = service([{ id: "m1", createdBy: "ghost" }], []);
-    expect(await svc.blockingReasons("r1", ACTOR)).toEqual([
+    expect(await svc.blockingReasons("r1", ACTOR)).toMatchObject([
       { memberId: "m1", reason: "AUTHOR_GONE" },
     ]);
   });
 
   it("names a locale-scoped member", async () => {
     const { svc } = service([{ id: "m1", locale: "de" }], ["author"]);
-    expect(await svc.blockingReasons("r1", ACTOR)).toEqual([
+    expect(await svc.blockingReasons("r1", ACTOR)).toMatchObject([
       { memberId: "m1", reason: "LOCALE_SCOPED" },
     ]);
   });
@@ -92,7 +95,7 @@ describe("what stands between a release and its instant", () => {
       ["author"]
     );
     const found = await svc.blockingReasons("r1", ACTOR);
-    expect(found).toEqual([
+    expect(found).toMatchObject([
       { memberId: "bad", reason: "AUTHOR_GONE" },
       { memberId: "loc", reason: "LOCALE_SCOPED" },
     ]);
@@ -149,5 +152,49 @@ describe("as an instrument", () => {
     await expect(
       new ReleasesService(deps).blockingReasons("r1", ACTOR)
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("scheduling a blocked release", () => {
+  const AT = new Date("2026-09-01T00:00:00.000Z");
+
+  it("is REFUSED while what stopped it is still true", async () => {
+    // Scheduling again would reach the instant, hit the same member and stop
+    // again — and the operator would learn that only by waiting for a launch
+    // that does not happen.
+    const { svc, scheduleRelease } = service(
+      [{ id: "m1", createdBy: "ghost" }],
+      []
+    );
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    // And nothing was written: a refusal that arrives after the update is not
+    // a refusal.
+    expect(scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("is allowed once the cause is fixed", async () => {
+    // The control, and the whole point of deriving the blockers: restoring the
+    // author makes the release schedulable with nothing else changing.
+    const { svc, scheduleRelease } = service(
+      [{ id: "m1", createdBy: "u9" }],
+      ["u9"]
+    );
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).resolves.toBeUndefined();
+    expect(scheduleRelease).toHaveBeenCalled();
+  });
+
+  it("does not pay the extra read for a release that is not blocked", async () => {
+    // A draft has nothing to check, and putting the lookup on every schedule
+    // would charge every caller for a question only one state answers yes to.
+    const { svc, liveAuthors, scheduleRelease } = service(
+      [{ id: "m1", createdBy: "ghost" }],
+      [],
+      "draft"
+    );
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).resolves.toBeUndefined();
+    expect(liveAuthors).not.toHaveBeenCalled();
+    expect(scheduleRelease).toHaveBeenCalled();
   });
 });

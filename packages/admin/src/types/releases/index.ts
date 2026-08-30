@@ -9,7 +9,11 @@
  * @module types/releases
  */
 
-import type { ReleaseMemberAction, ReleaseState } from "nextly/schemas";
+import type {
+  ReleaseBlockerReason,
+  ReleaseMemberAction,
+  ReleaseState,
+} from "nextly/schemas";
 
 /**
  * The release lifecycle and the member actions, taken from the engine.
@@ -25,7 +29,7 @@ import type { ReleaseMemberAction, ReleaseState } from "nextly/schemas";
  * answer to is a UI that eventually lies. Deriving from the engine is what makes
  * inventing one impossible rather than merely discouraged.
  */
-export type { ReleaseMemberAction, ReleaseState };
+export type { ReleaseBlockerReason, ReleaseMemberAction, ReleaseState };
 
 /**
  * What the server says THIS reader may do to a release.
@@ -106,10 +110,21 @@ export interface Release {
   blockedBy?: ReleaseBlocker[];
 }
 
-/** One member standing between a release and its instant. */
+/**
+ * One member standing between a release and its instant.
+ *
+ * The reason union is taken from the engine, not restated: a cause added there
+ * would otherwise compile everywhere and render as `undefined` in the one
+ * screen that maps it to a sentence.
+ */
 export interface ReleaseBlocker {
   memberId: string;
-  reason: "NO_AUTHOR" | "AUTHOR_GONE" | "LOCALE_SCOPED";
+  reason: ReleaseBlockerReason;
+  /** What this member was going to do — a blocked takedown is not a failed publish. */
+  action: ReleaseMemberAction;
+  scopeKind: "collection" | "single" | "page";
+  scopeSlug: string;
+  entryId: string;
 }
 
 export interface ReleaseMember {

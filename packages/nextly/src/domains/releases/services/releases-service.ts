@@ -56,9 +56,11 @@ import {
   RELEASE_CANCELLABLE_FROM,
   RELEASE_SCHEDULABLE_FROM,
   isReleaseMemberAction,
+  type ReleaseBlockerReason,
   type ReleaseMemberAction,
   type ReleaseState,
 } from "../../../schemas/releases/types";
+import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { documentRefKey } from "../releases-repository";
 import type {
@@ -181,6 +183,17 @@ export interface ReleasesServiceDeps {
 }
 
 /**
+ * The release states a document's editor needs to be told about.
+ *
+ * `scheduled` because it is about to happen, and `blocked` because it was going
+ * to and now will not — both are facts about this document that nothing else on
+ * the editor's screen carries. Every other state is finished: a published
+ * release already did its work and a cancelled one was called off on purpose,
+ * and reporting either would be telling an editor about history.
+ */
+const VISIBLE_ON_A_DOCUMENT: readonly ReleaseState[] = ["scheduled", "blocked"];
+
+/**
  * The engine's total order over two members, ascending.
  *
  * The same three keys `resolveReleaseEffect` decides a winner with — instant,
@@ -199,6 +212,23 @@ function byEngineOrder(
   const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
   if (byCreated !== 0) return byCreated;
   return a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0;
+}
+
+/**
+ * Why this member cannot be applied, or `null` if it can.
+ *
+ * The order matters and is the drain's: a member that is BOTH locale-scoped and
+ * authorless is reported as the one the drain would actually stop on, rather
+ * than whichever a loop noticed first.
+ */
+function blockerReasonFor(
+  member: ReleaseMemberRow,
+  liveAuthors: ReadonlySet<string>
+): ReleaseBlockerReason | null {
+  if (member.locale !== null) return "LOCALE_SCOPED";
+  if (member.createdBy === null) return "NO_AUTHOR";
+  if (!liveAuthors.has(member.createdBy)) return "AUTHOR_GONE";
+  return null;
 }
 
 /** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
@@ -223,13 +253,24 @@ function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
  */
 export interface ReleaseBlocker {
   memberId: string;
-  reason:
-    /** The member carries no author, so the drain has nobody to act as. */
-    | "NO_AUTHOR"
-    /** The recorded author has been deleted or deactivated. */
-    | "AUTHOR_GONE"
-    /** The member names one locale, which the engine cannot materialise. */
-    | "LOCALE_SCOPED";
+  reason: ReleaseBlockerReason;
+  /**
+   * What this member was going to DO, carried so a reader is not left to guess.
+   *
+   * A blocked takedown is not a failed publish, and a notice that says "could
+   * not be published" about one states the opposite of the truth.
+   */
+  action: ReleaseMemberAction;
+  /**
+   * Which document, so the fix names a row rather than an opaque id.
+   *
+   * `VersionScopeKind` rather than the two values releases accept today: it is
+   * the type the member row actually carries, and narrowing it here would be a
+   * second, quietly smaller vocabulary for the same field.
+   */
+  scopeKind: VersionScopeKind;
+  scopeSlug: string;
+  entryId: string;
 }
 
 export interface FindReleasesQuery {
@@ -509,7 +550,15 @@ export class ReleasesService {
         // been published, and emitting it would report an action that has
         // ALREADY HAPPENED as still coming. A reader polling until nothing is
         // pending would then stop on that row and keep the claim forever.
-        if (release.state !== "scheduled") return [];
+        //
+        // `blocked` is kept for the OPPOSITE reason. A release that stopped
+        // still holds this document and is still going nowhere, so dropping it
+        // makes the document's banner vanish — and a banner disappearing reads
+        // as resolved. The editor concludes the release already ran or was
+        // called off, when in truth the launch has failed and needs somebody to
+        // fix a member. Silence would be worse here than never having shown
+        // anything.
+        if (!VISIBLE_ON_A_DOCUMENT.includes(release.state)) return [];
         return [{ ...release, memberAction: member.action, member }];
       })
       // THE ENGINE'S OWN ORDER, not a simpler one that agrees with it most of
@@ -519,7 +568,19 @@ export class ReleasesService {
       // Sorting on the instant alone leaves those ties in whatever order the
       // database returned, so a reader taking the last row as the final state —
       // which is exactly what this ordering invites — could read the loser.
-      .sort((a, b) => byEngineOrder(a.member, b.member));
+      //
+      // The instant comes from the RE-READ row, not from the member. These are
+      // two reads: a release moved between them carries its new time on the row
+      // that is displayed, and sorting by the old one renders dates out of
+      // order — and, under a limit, keeps rows that are no longer the earliest.
+      // The tie-breakers stay the member's, because that is what the engine
+      // breaks ties on.
+      .sort((a, b) =>
+        byEngineOrder(
+          { ...a.member, scheduledAt: a.scheduledAt ?? a.member.scheduledAt },
+          { ...b.member, scheduledAt: b.scheduledAt ?? b.member.scheduledAt }
+        )
+      );
 
     // The document filter NARROWS the list; it does not replace it. A caller
     // combining it with a window or a limit asked for both, and answering with
@@ -597,16 +658,20 @@ export class ReleasesService {
     return members.flatMap<ReleaseBlocker>(member => {
       // Ordered as the drain checks them, so the reason reported is the one it
       // would actually stop on rather than whichever this loop noticed first.
-      if (member.locale !== null) {
-        return [{ memberId: member.id, reason: "LOCALE_SCOPED" as const }];
-      }
-      if (member.createdBy === null) {
-        return [{ memberId: member.id, reason: "NO_AUTHOR" as const }];
-      }
-      if (!live.has(member.createdBy)) {
-        return [{ memberId: member.id, reason: "AUTHOR_GONE" as const }];
-      }
-      return [];
+      const reason = blockerReasonFor(member, live);
+      if (reason === null) return [];
+      return [
+        {
+          memberId: member.id,
+          reason,
+          // Carried so a reader is not left with an opaque id and a sentence
+          // that assumes a publish: a blocked takedown is not a failed publish.
+          action: member.action,
+          scopeKind: member.scopeKind,
+          scopeSlug: member.scopeSlug,
+          entryId: member.entryId,
+        },
+      ];
     });
   }
 
@@ -873,6 +938,30 @@ export class ReleasesService {
         logContext: { reason: "invalid-timezone", length: timezone.length },
       });
     }
+    // A BLOCKED release is refused while what stopped it is still true.
+    // Scheduling it again would reach the instant, hit the same member, and
+    // stop again — and the operator would learn that only by waiting for a
+    // launch that does not happen. Checked here rather than left to the drain
+    // because this is the moment somebody is asking, and the answer is already
+    // derivable from the members.
+    //
+    // Only for a blocked release: every other state pays no extra read.
+    const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    if (current?.state === "blocked") {
+      const blockers = await this.blockingReasons(id, actor);
+      if (blockers.length > 0) {
+        throw NextlyError.conflict({
+          message:
+            "This release cannot be scheduled until the documents blocking it are fixed or removed.",
+          logContext: {
+            reason: "release-still-blocked",
+            releaseId: id,
+            blockers: blockers.length,
+          },
+        });
+      }
+    }
+
     // The fence answers `false` for a release whose current state forbids the
     // move — a published one, most importantly, because re-scheduling it makes
     // the drain re-apply members against documents that have changed since.

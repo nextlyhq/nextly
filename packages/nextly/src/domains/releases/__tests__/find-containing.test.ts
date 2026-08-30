@@ -31,6 +31,8 @@ interface Row {
   created?: string;
   memberId?: string;
   state?: string;
+  /** A new instant the SECOND read sees, as if somebody rescheduled it. */
+  movedTo?: string;
 }
 
 function service(rows: Row[]) {
@@ -38,6 +40,8 @@ function service(rows: Row[]) {
     memberId: r.memberId ?? `m-${r.id}`,
     releaseId: r.id,
     action: r.action ?? ("publish" as const),
+    // What the FIRST read saw. `movedTo` makes the second read disagree, which
+    // is what happens when somebody reschedules between the two.
     scheduledAt: new Date(r.at),
     createdAt: new Date(r.created ?? r.at),
   }));
@@ -50,7 +54,8 @@ function service(rows: Row[]) {
         id: r.id,
         title: r.id,
         description: null,
-        scheduledAt: new Date(r.at),
+        // What the SECOND read sees.
+        scheduledAt: new Date(r.movedTo ?? r.at),
         timezone: "UTC",
         state: r.state ?? "scheduled",
         publishedAt: null,
@@ -126,6 +131,38 @@ describe("the order the releases are returned in", () => {
   });
 });
 
+describe("a release RESCHEDULED between the two reads", () => {
+  it("is ordered by the instant it now carries, not the one first seen", async () => {
+    // Two reads again. The row that is displayed carries the NEW instant, so
+    // sorting by the old one renders the dates out of chronological order —
+    // and under a limit keeps rows that are no longer the earliest.
+    const svc = service([
+      {
+        id: "was-first",
+        at: "2026-09-01T00:00:00.000Z",
+        movedTo: "2026-10-01T00:00:00.000Z",
+      },
+      { id: "now-first", at: "2026-09-05T00:00:00.000Z" },
+    ]);
+    expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual([
+      "now-first",
+      "was-first",
+    ]);
+  });
+
+  it("orders by the first-read instant when nothing moved", async () => {
+    // The control: without it a comparator reading neither field would pass.
+    const svc = service([
+      { id: "later", at: "2026-10-01T00:00:00.000Z" },
+      { id: "sooner", at: "2026-09-05T00:00:00.000Z" },
+    ]);
+    expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual([
+      "sooner",
+      "later",
+    ]);
+  });
+});
+
 describe("a release the drain settled between the two reads", () => {
   it("is dropped rather than reported as still coming", async () => {
     // Two reads, and the drain runs between them: `findDueMembersFor` selects
@@ -144,6 +181,31 @@ describe("a release the drain settled between the two reads", () => {
     expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual([
       "still-coming",
     ]);
+  });
+
+  it("KEEPS a release that stopped, because the document is still in it", async () => {
+    // The opposite of the published case, and the reason the filter is a LIST
+    // rather than an equality. A blocked release still holds this document and
+    // is still going nowhere; dropping it makes the document's banner vanish,
+    // and a banner disappearing reads as resolved.
+    const svc = service([
+      { id: "coming", at: "2026-09-01T00:00:00.000Z" },
+      { id: "stopped", at: "2026-09-02T00:00:00.000Z", state: "blocked" },
+    ]);
+    expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual([
+      "coming",
+      "stopped",
+    ]);
+  });
+
+  it("still drops a CANCELLED one, which somebody called off on purpose", async () => {
+    // The discrimination: "not published" is not the rule. A cancelled release
+    // is a decision, and reporting it would be telling an editor about history.
+    const svc = service([
+      { id: "coming", at: "2026-09-01T00:00:00.000Z" },
+      { id: "called-off", at: "2026-09-02T00:00:00.000Z", state: "cancelled" },
+    ]);
+    expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual(["coming"]);
   });
 
   it("keeps the scheduled ones, so the filter is not simply emptying the list", async () => {

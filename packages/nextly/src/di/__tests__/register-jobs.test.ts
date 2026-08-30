@@ -278,4 +278,24 @@ describe("reportReleasesOutcome", () => {
     expect(log.info).not.toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
   });
+  it("reports the releases this pass STOPPED", () => {
+    // One failed member can stop a whole overlapping component, so the per-
+    // member error below names one release while several were moved. Without
+    // this line the operator reading the log never learns the others stopped.
+    const log = logger();
+    reportReleasesOutcome(log, {
+      due: 2,
+      published: 0,
+      blocked: 2,
+      applied: 0,
+      failed: 1,
+      deferred: 0,
+      undischarged: 0,
+      outcomes: [],
+    });
+    expect(log.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ blocked: 2 })
+    );
+  });
 });

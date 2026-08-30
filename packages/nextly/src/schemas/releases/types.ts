@@ -70,6 +70,26 @@ export function isReleaseMemberAction(v: unknown): v is ReleaseMemberAction {
 }
 
 /**
+ * Why a release cannot be applied, in the vocabulary a CLIENT renders.
+ *
+ * Declared beside the states rather than in the service, so the admin can
+ * `import type` it from the same leaf module it takes `ReleaseState` from. Two
+ * spellings of this union is how a core addition compiles everywhere and then
+ * renders `undefined` in the one screen that maps it to a sentence.
+ *
+ * Deliberately NOT the drain's `MaterialisationFailure`. That names what went
+ * wrong during one pass, transient causes included; this names what is still
+ * true of a stored member and therefore what somebody has to fix.
+ */
+export type ReleaseBlockerReason =
+  /** The member carries no author, so the drain has nobody to act as. */
+  | "NO_AUTHOR"
+  /** The recorded author has been deleted or deactivated. */
+  | "AUTHOR_GONE"
+  /** The member names one locale, which the engine cannot materialise. */
+  | "LOCALE_SCOPED";
+
+/**
  * Which states each lifecycle move may START from.
  *
  * Declared once, here, because three separate places need the same answer and

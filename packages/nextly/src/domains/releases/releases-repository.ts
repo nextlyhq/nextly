@@ -293,17 +293,21 @@ export class ReleasesRepository {
   /**
    * Stop a release the drain can never apply, and say whether it moved.
    *
-   * Fenced on `scheduled` alone. Every other state is either a decision
-   * somebody made — cancelled, or rescheduled out from under this pass — or an
-   * outcome already reached, and overwriting any of them with `blocked` would
-   * replace a person's intent with a machine's verdict.
+   * Fenced on the state AND on the instant the pass planned against, the same
+   * pair `isStillDueAt` judges by. State alone is not enough: an editor who
+   * postpones a due release between the plan and this write leaves the row in
+   * `scheduled`, so a state-only predicate matches and overwrites the schedule
+   * they just chose. The release would then never run at the replacement
+   * instant, and nothing would say why.
    *
-   * Deliberately does NOT revalidate. A blocked release is not consulted by the
-   * read rule, exactly as a scheduled one whose instant has not arrived is not
-   * — so nothing a reader can see changes, and a cache bust would be work with
-   * no observable effect.
+   * REVALIDATES, and the reason is worth stating because the opposite looks
+   * right: only a DUE release is ever blocked, and a due release is already in
+   * effect for readers — `resolveReleaseEffect` counts every member whose
+   * instant has passed. So its projection is live, and stopping it removes
+   * something a reader can currently see. A scheduled release whose instant has
+   * NOT arrived would indeed need no flush; that is a different release.
    */
-  async blockRelease(id: string): Promise<boolean> {
+  async blockRelease(id: string, scheduledAt: Date): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,
       {
@@ -314,10 +318,15 @@ export class ReleasesRepository {
         and: [
           { column: "id", op: "=", value: id },
           { column: "state", op: "=", value: "scheduled" },
+          { column: "scheduledAt", op: "=", value: scheduledAt },
         ],
       }
     );
-    return affected > 0;
+    if (affected === 0) return false;
+    // Also drops the shared transition memo, which would otherwise keep
+    // answering `mayHaveDue` for a release that has stopped.
+    await this.revalidateMembersOf(id);
+    return true;
   }
 
   async cancelRelease(id: string): Promise<boolean> {

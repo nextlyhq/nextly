@@ -121,10 +121,12 @@ export interface ApplyDueReleasesDeps {
     /**
      * Stop a release nothing about retrying could fix.
      *
-     * Fenced on `scheduled` in the repository, so a release cancelled or
-     * rescheduled while this pass ran keeps the state a person chose.
+     * Takes the instant the pass planned against, and the repository fences on
+     * it as well as on the state — the same pair `isStillDueAt` judges by. A
+     * release someone postponed between the plan and this call is left alone,
+     * rather than having the schedule they just chose replaced with `blocked`.
      */
-    blockRelease(id: string): Promise<boolean>;
+    blockRelease(id: string, scheduledAt: Date): Promise<boolean>;
   };
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
@@ -229,6 +231,57 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
   // state they did not ask for.
   RELEASE_NO_LONGER_SCHEDULED: true,
 };
+
+/**
+ * Stop every release this pass proved can never run, and say how many moved.
+ *
+ * Expanded over the overlapping components for the same reason holding open is:
+ * a release sharing a document with a permanently broken one can never settle
+ * either, because the pair is only ever discharged together. Blocking one and
+ * not the other would leave the second retrying forever, which is the condition
+ * this exists to end.
+ */
+async function stopHopelessReleases(
+  deps: ApplyDueReleasesDeps,
+  plan: ReturnType<typeof planReleaseMaterialisation>,
+  outcomes: readonly MaterialisationOutcome[],
+  plannedInstants: ReadonlyMap<string, Date>
+): Promise<number> {
+  const permanent = permanentlyBrokenReleases(outcomes);
+  if (permanent.size === 0) return 0;
+
+  const toBlock = new Set<string>();
+  for (const group of plan.overlappingReleases) {
+    if (group.some(id => permanent.has(id))) {
+      for (const id of group) toBlock.add(id);
+    }
+  }
+
+  // EARLIEST FIRST, and this ordering is load-bearing rather than tidy. The
+  // component is blocked with one write per release and the port has no
+  // transaction, so a crash or an error partway through leaves it split — and
+  // which half survives decides what the document looks like. Blocking the
+  // earliest first means any prefix that succeeds leaves the LATER releases
+  // still scheduled, and the later one is the winner under the engine's total
+  // order: the document ends in the state the whole component would have left
+  // it in. Blocking the latest first inverts that — the earlier release becomes
+  // the winner and applies the opposite lifecycle action.
+  const ordered = [...toBlock].sort((a, b) => {
+    const at = plannedInstants.get(a)?.getTime() ?? 0;
+    const bt = plannedInstants.get(b)?.getTime() ?? 0;
+    return at - bt;
+  });
+
+  let blocked = 0;
+  for (const id of ordered) {
+    const at = plannedInstants.get(id);
+    // A release with no planned instant was not part of this pass's plan, so
+    // there is nothing to fence against and nothing to stop.
+    if (at === undefined) continue;
+    if (await deps.repository.blockRelease(id, at)) blocked += 1;
+  }
+  return blocked;
+}
 
 /** The releases this pass proved can never be applied as they stand. */
 function permanentlyBrokenReleases(
@@ -352,19 +405,16 @@ export async function applyDueReleases(
   // settle either, because the pair is only ever discharged together. Blocking
   // one and not the other would leave the second retrying forever, which is the
   // condition this exists to end.
-  const permanent = permanentlyBrokenReleases(outcomes);
-  const toBlock = new Set<string>();
-  if (permanent.size > 0) {
-    for (const group of plan.overlappingReleases) {
-      if (group.some(id => permanent.has(id))) {
-        for (const id of group) toBlock.add(id);
-      }
-    }
-  }
-  let blocked = 0;
-  for (const id of toBlock) {
-    if (await deps.repository.blockRelease(id)) blocked += 1;
-  }
+  const blocked = await stopHopelessReleases(
+    deps,
+    plan,
+    outcomes,
+    // The instants THIS pass planned against, so blocking fences on the same
+    // schedule the plan was built from.
+    new Map(
+      releases.flatMap(r => (r.scheduledAt ? [[r.id, r.scheduledAt]] : []))
+    )
+  );
 
   const { published, undischarged } = await dischargeSettledComponents(
     deps,
