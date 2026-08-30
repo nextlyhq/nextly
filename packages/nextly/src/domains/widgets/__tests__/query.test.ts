@@ -372,4 +372,132 @@ describe("validateWidgetQuery", () => {
       );
     });
   });
+
+  // ---------------------------------------------------------------------
+  // The read-once invariant covers the WHOLE query, not just `where`.
+  // `validateWidgetQuery` is public API, so the caller's object may be a
+  // Proxy or carry accessors. An earlier commit closed this for `where` and
+  // left its four family members open: a `sort` getter answering "title" to
+  // the guard and "-secretScore" to the return spread yields a certified
+  // query whose sort was never checked.
+  // ---------------------------------------------------------------------
+  describe("every field is read exactly once, not just `where`", () => {
+    /** Counts reads per property and hands back a different value after the first. */
+    function hostile(benign: Record<string, unknown>, hostileValue: unknown) {
+      const reads: Record<string, number> = {};
+      const target: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(benign)) {
+        reads[key] = 0;
+        Object.defineProperty(target, key, {
+          enumerable: true,
+          get() {
+            reads[key] += 1;
+            return reads[key] === 1 ? value : hostileValue;
+          },
+        });
+      }
+      return { target, reads };
+    }
+
+    it("reads every property of the caller's object exactly once", () => {
+      const { target, reads } = hostile(
+        {
+          source: "collection:posts",
+          op: "count",
+          where: { status: { equals: "draft" } },
+          status: "draft",
+          select: ["title"],
+          sort: "-updatedAt",
+          limit: 5,
+        },
+        "-secretScore"
+      );
+
+      validateWidgetQuery(target);
+
+      expect(reads).toEqual({
+        source: 1,
+        op: 1,
+        where: 1,
+        status: 1,
+        select: 1,
+        sort: 1,
+        limit: 1,
+      });
+    });
+
+    it("returns the `sort` it validated, never a later answer from the same getter", () => {
+      let reads = 0;
+      const query = {
+        source: "collection:posts",
+        op: "count",
+        get sort() {
+          reads += 1;
+          return reads === 1 ? "title" : "-secretScore";
+        },
+      };
+
+      // Either outcome is acceptable SECURITY: refusing is fine. What is not
+      // acceptable is certifying `title` and returning `-secretScore`.
+      const q = validateWidgetQuery(query);
+      expect(q.sort).toBe("title");
+    });
+
+    it("returns the `select` it validated, never a later answer from the same getter", () => {
+      let reads = 0;
+      const query = {
+        source: "collection:posts",
+        op: "list",
+        get select() {
+          reads += 1;
+          return reads === 1 ? ["title"] : ["secretScore"];
+        },
+      };
+
+      const q = validateWidgetQuery(query);
+      expect(q.select).toEqual(["title"]);
+    });
+
+    it("returns the `status` it validated, never a later answer from the same getter", () => {
+      let reads = 0;
+      const query = {
+        source: "collection:posts",
+        op: "count",
+        get status() {
+          reads += 1;
+          return reads === 1 ? "draft" : "everything";
+        },
+      };
+
+      const q = validateWidgetQuery(query);
+      expect(q.status).toBe("draft");
+    });
+
+    it("returns the `op` it validated, never a later answer from the same getter", () => {
+      let reads = 0;
+      const query = {
+        source: "collection:posts",
+        get op() {
+          reads += 1;
+          return reads === 1 ? "count" : "timeseries";
+        },
+      };
+
+      const q = validateWidgetQuery(query);
+      expect(q.op).toBe("count");
+    });
+
+    it("copies `select` so a later mutation of the caller's array cannot reach it", () => {
+      // The array ELEMENTS are read once too: validating the caller's array
+      // and returning a spread of it is two reads of each index.
+      const select = ["title"];
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        select,
+      });
+      select[0] = "secretScore";
+      expect(q.select).toEqual(["title"]);
+    });
+  });
 });

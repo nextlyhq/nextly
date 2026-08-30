@@ -50,29 +50,61 @@ function fail(message: string): never {
   });
 }
 
-/** Narrows `unknown` to a plain, non-null object shape we can inspect. */
-function asRecord(query: unknown): Partial<WidgetQuery> {
+/**
+ * The caller's query with every property read EXACTLY ONCE, into locals
+ * nothing outside this module can reach.
+ *
+ * `validateWidgetQuery` is public API, so its argument may be a Proxy or carry
+ * accessors, and an accessor is free to answer differently on each call. Every
+ * property that is read twice -- once to check it, once to build the returned
+ * object -- is therefore a TOCTOU: the value that was validated and the value
+ * that ships can differ. An earlier commit closed this for `where` by cloning
+ * before the walk and left the other five open, which is one gap per family
+ * member rather than one gap.
+ *
+ * Reading them all here, up front, is what makes the invariant structural: no
+ * later step can read the caller's object again, because no later step is
+ * handed it.
+ */
+interface RawWidgetQuery {
+  source: unknown;
+  op: unknown;
+  where: unknown;
+  status: unknown;
+  select: unknown;
+  sort: unknown;
+  limit: unknown;
+}
+
+/** Narrows `unknown` to an object, then takes its one read of each property. */
+function readEachFieldOnce(query: unknown): RawWidgetQuery {
   if (typeof query !== "object" || query === null) fail("expected an object");
-  return query;
+  const q = query as Record<string, unknown>;
+  return {
+    source: q.source,
+    op: q.op,
+    where: q.where,
+    status: q.status,
+    select: q.select,
+    sort: q.sort,
+    limit: q.limit,
+  };
 }
 
 /** Resolves `source` against the registry. A caller-invented id cannot exist here. */
-function resolveSource(q: Partial<WidgetQuery>): WidgetSource {
-  if (typeof q.source !== "string") fail("source is required");
-  const source = getSource(q.source);
-  if (!source) fail(`unknown source "${q.source}"`);
-  return source;
+function resolveSource(source: unknown): WidgetSource {
+  if (typeof source !== "string") fail("source is required");
+  const found = getSource(source);
+  if (!found) fail(`unknown source "${source}"`);
+  return found;
 }
 
 /** Confirms the source declares support for the requested op. */
-function assertSupportedOp(
-  source: WidgetSource,
-  q: Partial<WidgetQuery>
-): WidgetOp {
-  if (typeof q.op !== "string" || !source.supports.includes(q.op)) {
-    fail(`source "${source.id}" does not support op "${String(q.op)}"`);
+function assertSupportedOp(source: WidgetSource, op: unknown): WidgetOp {
+  if (typeof op !== "string" || !source.supports.includes(op as WidgetOp)) {
+    fail(`source "${source.id}" does not support op "${String(op)}"`);
   }
-  return q.op;
+  return op as WidgetOp;
 }
 
 /**
@@ -297,15 +329,28 @@ function assertWhereFieldsDeclared(
   walkWhereClause(where, 0, source, declared);
 }
 
+/**
+ * Copies `select` up front -- reading each element exactly once -- and returns
+ * that copy, which is both what gets validated and what gets returned.
+ *
+ * The same reasoning as `cloneWhereOrUndefined`, one level down: validating
+ * the caller's array and then spreading it into the result is two reads of
+ * every index, and an index can be an accessor too.
+ */
+function copySelectOrUndefined(select: unknown): string[] | undefined {
+  if (select === undefined) return undefined;
+  if (!Array.isArray(select)) fail("select must be an array of field names");
+  return [...(select as unknown[])] as string[];
+}
+
 /** Confirms every field named in `select` was declared by the source. */
 function assertSelectFieldsDeclared(
   source: WidgetSource,
-  q: Partial<WidgetQuery>,
+  select: string[] | undefined,
   declared: ReadonlySet<string>
 ): void {
-  if (q.select === undefined) return;
-  if (!Array.isArray(q.select)) fail("select must be an array of field names");
-  for (const field of q.select) {
+  if (select === undefined) return;
+  for (const field of select) {
     if (typeof field !== "string" || !declared.has(field)) {
       fail(
         `select references undeclared field "${String(field)}" on "${source.id}"`
@@ -315,28 +360,32 @@ function assertSelectFieldsDeclared(
 }
 
 /**
- * Confirms the field named in `sort` was declared by the source. `sort` may
- * carry a leading `-` for descending order; it is stripped before checking,
- * or `-secretScore` would slip an undeclared field past this guard.
+ * Confirms the field named in `sort` was declared by the source, and returns
+ * the string it checked. `sort` may carry a leading `-` for descending order;
+ * it is stripped before checking, or `-secretScore` would slip an undeclared
+ * field past this guard.
  */
 function assertSortFieldDeclared(
   source: WidgetSource,
-  q: Partial<WidgetQuery>,
+  sort: unknown,
   declared: ReadonlySet<string>
-): void {
-  if (q.sort === undefined) return;
-  if (typeof q.sort !== "string") fail("sort must be a string");
-  const field = q.sort.startsWith("-") ? q.sort.slice(1) : q.sort;
+): string | undefined {
+  if (sort === undefined) return undefined;
+  if (typeof sort !== "string") fail("sort must be a string");
+  const field = sort.startsWith("-") ? sort.slice(1) : sort;
   if (!declared.has(field)) {
     fail(`sort references undeclared field "${field}" on "${source.id}"`);
   }
+  return sort;
 }
 
-/** Confirms `status`, when present, is one of the known values. */
-function assertValidStatus(q: Partial<WidgetQuery>): void {
-  if (q.status !== undefined && !VALID_STATUSES.includes(q.status)) {
+/** Confirms `status`, when present, is one of the known values, and returns it. */
+function assertValidStatus(status: unknown): WidgetQuery["status"] | undefined {
+  if (status === undefined) return undefined;
+  if (!VALID_STATUSES.includes(status as WidgetQuery["status"] & string)) {
     fail(`status must be one of ${VALID_STATUSES.join(", ")}`);
   }
+  return status as WidgetQuery["status"];
 }
 
 /**
@@ -352,20 +401,30 @@ function assertValidStatus(q: Partial<WidgetQuery>): void {
  * `Math.trunc` on the finite branch closes the neighbouring gap where a
  * fractional limit (`5.7`) passed the old numeric check unchanged.
  */
-function clampLimit(q: Partial<WidgetQuery>): number {
-  const requested = Number.isFinite(q.limit)
-    ? Math.trunc(q.limit as number)
+function clampLimit(limit: unknown): number {
+  const requested = Number.isFinite(limit)
+    ? Math.trunc(limit as number)
     : DEFAULT_WIDGET_LIMIT;
   return Math.min(Math.max(requested, 1), MAX_WIDGET_LIMIT);
 }
 
 /**
- * Validate and normalize. Returns a query fully independent of the input:
- * a fresh envelope AND a `where` that was cloned BEFORE validation ever ran
- * (see `cloneWhereOrUndefined`), not a fresh object wrapped around a shared
- * `where` reference, and not one cloned only after the walk already trusted
- * it. Both the walk and the value returned to the caller read the identical
- * clone, so there is exactly one read of the caller's original object.
+ * Validate and normalize. Returns a query fully independent of the input.
+ *
+ * EVERY property of the caller's object is read exactly once, by
+ * `readEachFieldOnce`, before any of them is inspected -- and every later step
+ * works on those locals, so nothing downstream is even handed the caller's
+ * object to read again. The composite values are copied at that same moment:
+ * `where` by `structuredClone` and `select` element by element, so their
+ * insides get the same single read.
+ *
+ * That is the whole point, and it is why the invariant is stated over the
+ * whole query rather than over `where` alone. A getter or Proxy is free to
+ * answer differently on each call, so any property read twice -- once to check
+ * it, once to build the result -- is a value that can be certified and then
+ * swapped: a `sort` answering "title" to the guard and "-secretScore" to the
+ * return spread yields a query whose sort was never checked. There is no seam
+ * for that here, because there is no second read.
  *
  * The returned query is safe to compile: its source exists, its op is
  * supported, every field it names was declared by that source (at every
@@ -374,25 +433,27 @@ function clampLimit(q: Partial<WidgetQuery>): number {
  * limit is a bounded, finite integer.
  */
 export function validateWidgetQuery(query: unknown): WidgetQuery {
-  const q = asRecord(query);
-  const source = resolveSource(q);
-  const op = assertSupportedOp(source, q);
+  const raw = readEachFieldOnce(query);
+
+  const source = resolveSource(raw.source);
+  const op = assertSupportedOp(source, raw.op);
   const declared = new Set(source.fields.map(f => f.name));
 
-  const where = cloneWhereOrUndefined(q.where);
+  const where = cloneWhereOrUndefined(raw.where);
+  const select = copySelectOrUndefined(raw.select);
 
   assertWhereFieldsDeclared(source, where, declared);
-  assertSelectFieldsDeclared(source, q, declared);
-  assertSortFieldDeclared(source, q, declared);
-  assertValidStatus(q);
+  assertSelectFieldsDeclared(source, select, declared);
+  const sort = assertSortFieldDeclared(source, raw.sort, declared);
+  const status = assertValidStatus(raw.status);
 
   return {
     source: source.id,
     op,
     ...(where ? { where } : {}),
-    ...(q.status ? { status: q.status } : {}),
-    ...(q.select ? { select: [...q.select] } : {}),
-    ...(q.sort ? { sort: q.sort } : {}),
-    limit: clampLimit(q),
+    ...(status ? { status } : {}),
+    ...(select ? { select } : {}),
+    ...(sort ? { sort } : {}),
+    limit: clampLimit(raw.limit),
   };
 }
