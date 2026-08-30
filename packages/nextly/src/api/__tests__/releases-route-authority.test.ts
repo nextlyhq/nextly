@@ -166,3 +166,32 @@ describe("release route authority", () => {
     expect(requireAnyPermission).not.toHaveBeenCalled();
   });
 });
+
+describe("release route input at the untyped boundary", () => {
+  it("refuses an unrecognised state rather than widening the query", async () => {
+    // A query string is whatever was sent. Dropping an unrecognised filter
+    // WIDENS the request — the caller asked for one state and would receive
+    // every release — and a client paging through what it believes is a
+    // filtered list has no way to notice.
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases?state=schedule"),
+      "listReleases",
+      {}
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.find).not.toHaveBeenCalled();
+  });
+
+  it("passes a recognised state through", async () => {
+    // The control: the guard must not refuse every state, which would make the
+    // filter unusable and still pass the case above.
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases?state=scheduled"),
+      "listReleases",
+      {}
+    );
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "scheduled" })
+    );
+  });
+});

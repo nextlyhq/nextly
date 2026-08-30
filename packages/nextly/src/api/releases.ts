@@ -25,6 +25,11 @@ import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { RELEASES_RESOURCE } from "../domains/releases/services/releases-service";
 import { getCachedNextly } from "../init";
+import {
+  isReleaseState,
+  RELEASE_STATES,
+  type ReleaseState,
+} from "../schemas/releases/types";
 
 import { withErrorHandler } from "./with-error-handler";
 
@@ -106,6 +111,23 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
 }
 
 /** Optional positive integer from a query string. */
+/**
+ * A lifecycle state from a query string, or a refusal.
+ *
+ * Refused rather than ignored. Dropping an unrecognised filter widens the query
+ * — the caller asked for one state and receives every release — and a client
+ * paging through what it believes is a filtered list has no way to notice.
+ */
+function releaseStateParam(value: string | null): ReleaseState | undefined {
+  if (value === null) return undefined;
+  if (!isReleaseState(value)) {
+    throw new ReleaseRequestError(
+      `\`state\` must be one of: ${RELEASE_STATES.join(", ")}.`
+    );
+  }
+  return value;
+}
+
 function optionalCount(value: string | null): number | undefined {
   if (value === null) return undefined;
   const n = Number(value);
@@ -166,7 +188,11 @@ const RELEASE_OPERATIONS: Record<
     return json({
       releases: await releases.find({
         ...caller,
-        state: params.get("state") ?? undefined,
+        // The runtime guard belongs HERE, at the untyped boundary. The service
+        // takes `ReleaseState` so a typed caller cannot pass a typo, but a query
+        // string is whatever was sent — and an unrecognised state answered with
+        // an empty list reads exactly like "nothing is scheduled".
+        state: releaseStateParam(params.get("state")),
         scheduledAfter: optionalInstant(
           params.get("scheduledAfter"),
           "scheduledAfter"
