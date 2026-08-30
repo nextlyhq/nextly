@@ -60,6 +60,7 @@ import {
   type ReleaseState,
 } from "../../../schemas/releases/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { documentRefKey } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
@@ -197,6 +198,20 @@ export interface FindReleasesQuery {
    */
   scheduledAfter?: Date;
   scheduledBefore?: Date;
+  /**
+   * Only releases that CONTAIN this document.
+   *
+   * The inverse of `listMembers`, and the question a document editor asks: what
+   * is going to happen to the thing I am looking at. Expressed as a filter on
+   * the release list rather than a route of its own, because that is what it is
+   * — the same resource, narrowed — and because a literal path segment under
+   * `/api/releases` would be read as a release id.
+   *
+   * Answers about SCHEDULED releases only. A draft membership changes nothing on
+   * its own, and the question this serves is whether the document will change
+   * without anyone touching it again.
+   */
+  containing?: DocumentRef;
   /**
    * How many rows at most. Must be a non-negative integer when given.
    *
@@ -398,6 +413,52 @@ export class ReleasesService {
     );
   }
 
+  /**
+   * The scheduled releases holding this document, soonest first.
+   *
+   * Reuses `findDueMembersFor`, which returns every member of a scheduled
+   * release and leaves the dueness judgement to the pure rule — so the same
+   * query serves the read path's "what is live now" and this surface's "what is
+   * still coming", without a second implementation of either.
+   *
+   * The member's ACTION travels with each release, because it is the thing an
+   * editor needs and it belongs to the membership rather than to the release: a
+   * release can publish one document while unpublishing another.
+   *
+   * Ordered by instant ascending — the order the changes will actually happen —
+   * so a document in several releases reads as a sequence. The final state is
+   * then the last row, which is what `resolveReleaseEffect` will conclude, and
+   * saying it that way avoids a second implementation of that ordering.
+   */
+  private async findContaining(
+    ref: DocumentRef,
+    now: Date
+  ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
+    const grouped = await this.deps.repository.findDueMembersFor([ref], now);
+    const members = grouped.get(documentRefKey(ref)) ?? [];
+    if (members.length === 0) return [];
+
+    const releases = await this.deps.repository.findReleases({
+      ids: [...new Set(members.map(member => member.releaseId))],
+    });
+    const byId = new Map(releases.map(release => [release.id, release]));
+
+    return members
+      .flatMap(member => {
+        const release = byId.get(member.releaseId);
+        // A member whose release vanished between the two reads is dropped
+        // rather than rendered without its instant: a row saying a document is
+        // scheduled, without saying when, is worse than not mentioning it.
+        return release === undefined
+          ? []
+          : [{ ...release, memberAction: member.action }];
+      })
+      .sort(
+        (a, b) =>
+          (a.scheduledAt?.getTime() ?? 0) - (b.scheduledAt?.getTime() ?? 0)
+      );
+  }
+
   async find(
     query: FindReleasesQuery,
     actor: ReleaseActor
@@ -414,6 +475,9 @@ export class ReleasesService {
         message: "`limit` must be a non-negative integer.",
         logContext: { reason: "invalid-limit", limit: query.limit },
       });
+    }
+    if (query.containing !== undefined) {
+      return this.findContaining(query.containing, new Date());
     }
     return this.deps.repository.findReleases(query);
   }
