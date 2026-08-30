@@ -100,6 +100,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
@@ -1758,6 +1759,11 @@ export function createDynamicHandlers(options?: {
     // instead of at startup. This module runs when the route file is imported,
     // which is the earliest deterministic point the config exists.
     assertClientConfigs(options.config.plugins ?? []);
+    // And the widgets beside it. `/api/admin-meta/workspace` serializes both
+    // halves through one `JSON.stringify`, so a widget carrying a bigint takes
+    // the whole authenticated workspace payload down for every admin -- a
+    // wider failure than a bad `clientConfig`, reached the same way.
+    assertAdminWidgets(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

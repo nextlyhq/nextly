@@ -1,5 +1,6 @@
 import type { PluginDefinition } from "./plugin-context";
 import { topoSortPlugins } from "./topo-sort";
+import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
 import { validatePluginSlugs } from "./validate-slugs";
 import { validatePluginVersions } from "./validate-versions";
@@ -29,6 +30,13 @@ export function resolvePlugins(
   // other fail-fast checks rather than surfacing when the admin first asks for
   // its metadata and losing the whole branding response with it.
   assertClientConfigs(plugins);
+  // Beside it, and for the same reason one level up: a contributed widget rides
+  // in the SAME `/api/admin-meta/workspace` payload, through the same single
+  // `JSON.stringify`. A bigint under `query.where` is type-legal there, so the
+  // throw lands on the workspace response for every admin rather than on the
+  // one card -- which is a worse failure than a bad `clientConfig`, not a
+  // lesser one.
+  assertAdminWidgets(plugins);
   // Two plugins sharing an admin slug share an address, and nothing downstream
   // can detect it: every lookup along that address returns a plugin, which is
   // what a correct lookup returns. Registration is where the ambiguity is still
