@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
+import { WEBHOOK_DRAIN_JOB } from "../../domains/webhooks/webhook-drain-job";
 import type { Logger } from "../../shared/types";
 
 import { reportReleasesOutcome } from "../registrations/register-jobs";
@@ -76,6 +77,13 @@ describe("the registered job types", () => {
         registerSingleton: (name: string, factory: () => unknown) => {
           singletons.set(name, factory());
         },
+        // The registry constructs the webhook drain job, which resolves its
+        // deps from the container. Answered with inert stand-ins: these cases
+        // are about WHICH job types get registered, not what they do.
+        get: () => ({
+          getEnabledEndpointsFresh: async () => [],
+          select: async () => [],
+        }),
       },
     }));
 
@@ -97,6 +105,13 @@ describe("the registered job types", () => {
     // defined-but-not-registered, one layer along.
     expect(registry.sweeps().map(d => d.slug)).toContain(RELEASES_DRAIN_JOB);
 
+    // Webhook delivery, consumer #1. An event reaches the outbox on a content
+    // write, but the DRAIN that delivers it has no request of its own — so like
+    // the releases pass it must be kept queued, or an installation that goes
+    // quiet stops delivering what it still owes.
+    expect(registry.get(WEBHOOK_DRAIN_JOB)).toBeDefined();
+    expect(registry.sweeps().map(d => d.slug)).toContain(WEBHOOK_DRAIN_JOB);
+
     vi.doUnmock("../container");
     vi.resetModules();
   });
@@ -110,6 +125,13 @@ describe("the registered job types", () => {
         registerSingleton: (name: string, factory: () => unknown) => {
           singletons.set(name, factory());
         },
+        // The registry constructs the webhook drain job, which resolves its
+        // deps from the container. Answered with inert stand-ins: these cases
+        // are about WHICH job types get registered, not what they do.
+        get: () => ({
+          getEnabledEndpointsFresh: async () => [],
+          select: async () => [],
+        }),
       },
     }));
 
