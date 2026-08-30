@@ -11,7 +11,7 @@
  *
  * @module blocks/quote
  */
-import { defineBlock } from "@nextlyhq/blocks-engine";
+import { blockTypeClassName, defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -50,8 +50,16 @@ export function renderQuote({
   const markText = markProp?.("text");
   const markSource = markProp?.("source");
 
+  // The attributed branch wraps this in a `<figure>` that takes the block's
+  // class, so the quotation itself would otherwise carry none — and a
+  // `<blockquote>` a user agent has indented by its own margin needs the class
+  // in order for that margin to be zeroed. Without it the same quote steps
+  // further right for no reason an author gave.
   const blockquote = (
-    <blockquote {...(citeUrl === undefined ? {} : { cite: citeUrl })}>
+    <blockquote
+      className={blockTypeClassName(QUOTE_BLOCK)}
+      {...(citeUrl === undefined ? {} : { cite: citeUrl })}
+    >
       <p {...markText}>{quoted}</p>
     </blockquote>
   );
@@ -111,17 +119,32 @@ export function renderQuote({
  * the indent stays proportional to the quotation's own type size, so an author
  * who enlarges the quote does not leave its indent behind.
  */
+/**
+ * Named once: the renderer derives a class from it and the definition registers
+ * under it, and two literals would be one contract with two spellings.
+ */
+const QUOTE_BLOCK = "core/quote";
+
 const QUOTE_BASE_STYLES = {
   base: {
     base: {
-      margin: { blockStart: "1.5em", blockEnd: "1.5em" },
+      // The inline sides are zeroed, not left alone. A user agent indents a
+      // `<blockquote>` and a `<figure>` by about 40px of its own, so in a host
+      // with no reset that margin ADDS to the padding below and the indent is
+      // whatever the browser happened to choose plus whatever this states.
+      margin: {
+        blockStart: "1.5em",
+        blockEnd: "1.5em",
+        inlineStart: "0",
+        inlineEnd: "0",
+      },
       padding: { inlineStart: "1.5em" },
     },
   },
 } as const;
 
 export const quote = defineBlock<QuoteProps, PageContext>({
-  name: "core/quote",
+  name: QUOTE_BLOCK,
   version: 1,
   description:
     "Quoted text with an optional attribution, kept outside the quotation so the speaker is not quoted saying their own name.",

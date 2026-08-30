@@ -140,6 +140,37 @@ describe("the content-width rule", () => {
     );
   });
 
+  it("follows the token's IDENTITY when a site has renamed it", () => {
+    // A rename keeps the identity and changes only the display name, and the
+    // custom property is built from the identity — so the property is still
+    // declared and containment must still apply. A check keyed on the name
+    // withdraws it from every opted-in section while `--site-content-width` is
+    // sitting in the sheet above.
+    const renamed = {
+      id: "content.width",
+      name: "page.measure",
+      kind: "dimension",
+      values: { light: "72rem" },
+    } as never;
+    const css = sheet({ tokens: { tokens: [renamed] } }).css;
+    expect(css).toContain("nx-pb-contained");
+    expect(css).toContain("var(--site-content-width)");
+  });
+
+  it("writes nothing when the emitter REFUSED the width token", () => {
+    // Derived from what the emitter wrote rather than from what the caller
+    // passed. A token the emitter rejects declares no property, so the rule
+    // would otherwise reference nothing — dropping `max-width` and leaving
+    // `margin-inline: auto` to centre a node with no bound.
+    const refused = {
+      name: "content.width",
+      kind: "dimension",
+      values: {},
+    } as never;
+    const css = sheet({ tokens: { tokens: [refused] } }).css;
+    expect(css).not.toContain("nx-pb-contained");
+  });
+
   it("writes nothing at all when the token set omits the width", () => {
     // Half of this rule is worse than none: an undeclared custom property
     // invalidates only its own declaration, so `max-width` would drop while

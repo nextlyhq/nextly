@@ -21,11 +21,12 @@ import type { MayFetchUrl } from "./css-value";
 import { tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
 import { CONTENT_WIDTH_CLASS, hashId } from "./node-class";
-import type { FontFaceDef, SiteTokenSet } from "./site-tokens";
+import type { FontFaceDef, SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   emitFontFaces,
   emitTokenBlocks,
   resolveTokenPrefix,
+  tokenIdentity,
 } from "./site-tokens";
 
 /** Everything the shared sheet is built from. All of it is site configuration, not document content. */
@@ -167,15 +168,22 @@ function documentUsingEveryType(
  * zero specificity is what makes that true without depending on source order.
  */
 function emitContentWidth(
-  tokens: SiteTokenSet | undefined,
+  declaredTokens: readonly SiteToken[],
   prefix: string | undefined
 ): string {
   // The decision lives here rather than at the call site so the caller pushes
-  // unconditionally: whether this rule applies is a fact about the token set,
-  // which this function already has, and every branch spent asking about it up
-  // there is one the sheet compiler carries for a question it does not own.
-  const declared =
-    tokens?.tokens?.some(token => token.name === CONTENT_WIDTH_TOKEN) === true;
+  // unconditionally: whether this rule applies is a fact about what the token
+  // emitter wrote, and every branch spent asking about it up there is one the
+  // sheet compiler carries for a question it does not own.
+  //
+  // Matched on IDENTITY rather than on the display name, because those are
+  // different fields and the custom property is built from the first. A site
+  // that renames this token keeps the identity and therefore keeps
+  // `--site-content-width`, so a name check would withdraw containment from
+  // every opted-in section while the property it reads was still declared.
+  const declared = declaredTokens.some(
+    token => tokenIdentity(token) === CONTENT_WIDTH_TOKEN
+  );
   if (!declared) return "";
 
   // Resolved through the same function the token emitter uses, not read raw. A
@@ -214,6 +222,12 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   // once here is what makes that impossible rather than merely unlikely.
   const tokenPrefix = input.tokenPrefix ?? input.tokens?.prefix;
 
+  // What the token emitter actually WROTE, carried forward rather than
+  // re-derived. `emitTokenBlocks` refuses a token on five separate conditions
+  // and reports the survivors for exactly this reason: a second statement of
+  // those conditions agrees today and drifts the first time one changes.
+  let declaredTokens: readonly SiteToken[] = [];
+
   if (input.tokens !== undefined) {
     const tokens = emitTokenBlocks(
       {
@@ -224,6 +238,7 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     );
     warnings.push(...tokens.issues);
     if (tokens.css !== "") blocks.push(tokens.css);
+    declaredTokens = tokens.emitted;
   }
 
   // After the tokens that declare the property it reads, and before the block
@@ -235,7 +250,7 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   // those defaults are layered a tier above this function, so a caller
   // compiling a set that omits it arrives here with the property undeclared —
   // and half of this rule is worse than none of it.
-  blocks.push(emitContentWidth(input.tokens, tokenPrefix));
+  blocks.push(emitContentWidth(declaredTokens, tokenPrefix));
 
   const blockBases = input.blockBases ?? {};
   const tiers = compilePageCss(documentUsingEveryType(blockBases), {

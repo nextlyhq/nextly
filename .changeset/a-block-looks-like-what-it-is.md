@@ -33,7 +33,7 @@ no gutter, and a call to action drew as bare underlined link text.
 The mechanism was already here. A block definition's `baseStyles` compiles to
 one rule per block type PRESENT in the document, every default is wrapped in
 `:where()` so it weighs nothing against a site's own CSS, and the token set
-merges in three tiers. Six blocks used it; two more do now.
+merges in three tiers. Six blocks used it; four more do now.
 
 `core/image` takes `max-width: 100%` with `height: auto`. The element carries
 width and height attributes from the media record, which reserve its box and
@@ -45,6 +45,14 @@ standing and draw the image squashed, so the pair moves together or not at all.
 HTML attribute rather than a visual kind. Its colours are tokens and its
 geometry is literal: a literal colour is wrong in whichever mode it was not
 chosen for, while no radius token is guaranteed to exist.
+
+`core/list` gets its markers back and `core/quote` its indent. Both are removed
+by an ordinary CSS reset — Tailwind's Preflight sets `list-style: none` on every
+list and zeroes margins everywhere, and the scaffold this project ships imports
+it — so a bulleted list rendered with no bullets and a quotation was
+indistinguishable from a paragraph. The list states `list-style-type: revert`
+rather than a marker, because one rule serves both `<ul>` and `<ol>` and naming
+a marker would put bullets on ordered lists.
 
 A contained container is finally constrained. The rule behind that class could
 not be a block default at all — containment is a PROP, so every container of a
