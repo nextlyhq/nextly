@@ -237,8 +237,11 @@ function assertOperatorValueShape(
  * start accepting values the executor then discards, which is precisely the
  * failure being closed.
  */
+// The type argument is on `new Map`, not only on the binding: an unannotated
+// `new Map([...])` infers its value type from the entry array, which fixes on
+// the first parser's return type and then rejects the second.
 const GEO_VALUE_PARSERS: ReadonlyMap<string, (value: string) => unknown> =
-  new Map([
+  new Map<string, (value: string) => unknown>([
     ["near", parseNearQuery],
     ["within", parseWithinQuery],
   ]);
