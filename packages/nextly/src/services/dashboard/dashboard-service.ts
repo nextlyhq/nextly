@@ -15,6 +15,7 @@ import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
 import { getNextly } from "../../direct-api/nextly";
+import type { FindArgs } from "../../direct-api/types";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
@@ -163,21 +164,19 @@ export class DashboardService extends BaseService {
    * @param limit - Maximum number of entries to return (default: 5, max: 20)
    * @param scope - What the caller may read. Defaults to nothing rather than
    *   everything -- see {@link getStats}.
-   * @param caller - Who is asking. Required to make an access decision at all:
-   *   see the no-caller guard below, which refuses rather than reading with
-   *   `user: undefined`.
+   * @param caller - Who is asking. REQUIRED, not defaulted: there is exactly
+   *   one production caller (the REST handler, via `readCaller`), and a
+   *   future handler that forgets to build one must fail to compile rather
+   *   than silently return HTTP 200 with an empty, unauthenticated-looking
+   *   feed. Reading with `user: undefined` and `overrideAccess: false` is the
+   *   shape most likely to be mishandled downstream, so the type system
+   *   forecloses it instead of a runtime guard trying to catch it.
    */
   async getRecentEntries(
     limit: number = 5,
     scope: ReadableResources = someResources([]),
-    caller?: ReadCaller
+    caller: ReadCaller
   ): Promise<RecentEntriesResponse> {
-    // No caller, no access decision. Reading anyway with `user: undefined`
-    // and `overrideAccess: false` is the shape most likely to be mishandled
-    // downstream (some paths treat a missing `user` as "trusted"), so refuse
-    // outright rather than hand an ambiguous read on.
-    if (!caller) return { entries: [] };
-
     const clampedLimit = Math.min(Math.max(limit, 1), 20);
     const collections = await this.getRegisteredCollections(scope);
 
@@ -567,12 +566,28 @@ export class DashboardService extends BaseService {
         // Reducing either to an id is how a read silently answers as
         // somebody with different rights.
         user: caller.user,
+        // `satisfies` makes the field name a COMPILE-TIME boundary rather
+        // than a convention: `find()`'s excess-property check is exempt from
+        // a conditional spread (`...(cond ? {x} : {})`), which is exactly
+        // why a wrong key here -- `authenticatedScope`, the name this value
+        // has on `caller` -- would compile clean and be silently dropped by
+        // `find()` instead of failing loudly. Typing the spread's operand
+        // against the real option name closes that gap: rename `actor`
+        // anywhere in `FindArgs` and this line stops compiling.
         ...(caller.authenticatedScope
-          ? { actor: caller.authenticatedScope }
+          ? ({ actor: caller.authenticatedScope } satisfies Pick<
+              FindArgs<string>,
+              "actor"
+            >)
           : {}),
         // The dashboard shows what the editor can act on, drafts included.
-        // The lifecycle filter -- not a `where` on a status column -- is
-        // what makes this correct for localized collections too.
+        // `status: "all"` is the one WIDENING option in this call -- it also
+        // propagates into relationship expansion (see
+        // `status-filter.ts`'s `expansionStatusScope`) -- and under it
+        // `resolveStatusFilter` returns null: no status condition is built
+        // at all, for the main row or its per-locale `_status` companion.
+        // That is not "the lifecycle filter handles locales correctly"; it
+        // is that NO filter is applied, so none can be wrong for either.
         status: "all",
         select: {
           id: true,

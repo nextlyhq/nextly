@@ -122,6 +122,43 @@ describe("getDashboardRecentEntries", () => {
     expect(json).not.toHaveProperty("data");
     expect(json).toEqual(entries);
   });
+
+  it("builds the caller from readCaller's RESOLVED slugs and forwards it as the third argument", async () => {
+    // Session auth carries role IDS on the auth context; `resolveRoleSlugs`
+    // is what turns those into the SLUGS a role-based access rule matches.
+    // The two are made deliberately different strings ("role-7" vs
+    // "editor") so this assertion can actually tell "the handler forwarded
+    // the resolved caller" apart from "the handler forwarded the raw auth
+    // context" -- if both were "editor" the test could not distinguish them.
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "user-1",
+      roles: ["role-7"],
+    });
+    (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "editor",
+    ]);
+
+    const getRecentEntries = vi.fn().mockResolvedValue({ entries: [] });
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      getRecentEntries,
+    });
+
+    await getDashboardRecentEntries(
+      makeReq("http://x/api/dashboard/recent-entries?limit=5")
+    );
+
+    // The seam this task's whole security property runs through: had the
+    // handler built `{ user: { id: auth.userId, roles: auth.roles } }` by
+    // hand instead of calling `readCaller(auth)`, this would observe
+    // `roles: ["role-7"]` (the unresolved id) instead of `["editor"]`, and
+    // every test in the file would otherwise stay green while a
+    // role-guarded collection silently returned zero rows.
+    expect(getRecentEntries).toHaveBeenCalledWith(
+      5,
+      { kind: "all" },
+      { user: { id: "user-1", roles: ["editor"], role: "editor" } }
+    );
+  });
 });
 
 describe("getDashboardActivity", () => {

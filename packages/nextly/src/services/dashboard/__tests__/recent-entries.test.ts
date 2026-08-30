@@ -6,6 +6,15 @@ vi.mock("../../../direct-api/nextly", () => ({
   getNextly: () => ({ find }),
 }));
 
+// Backs `getRegisteredCollections`'s real (unstubbed) path -- see "does not
+// query a collection outside the caller's scope" below, which needs the real
+// `filterByResource` call to run rather than a stub that already decided the
+// answer.
+const getAllCollections = vi.fn();
+vi.mock("../../../di/container", () => ({
+  container: { get: () => ({ getAllCollections }) },
+}));
+
 import { DashboardService } from "../dashboard-service";
 import { someResources } from "../readable-resources";
 
@@ -27,6 +36,7 @@ function makeService() {
 beforeEach(() => {
   vi.clearAllMocks();
   find.mockResolvedValue({ items: [] });
+  getAllCollections.mockResolvedValue([]);
 });
 
 describe("recent entries", () => {
@@ -103,34 +113,7 @@ describe("recent entries", () => {
     );
   });
 
-  it("refuses to read at all when it has no caller", async () => {
-    const service = makeService();
-    vi.spyOn(
-      service as unknown as {
-        getRegisteredCollections: (s: unknown) => Promise<unknown[]>;
-      },
-      "getRegisteredCollections"
-    ).mockResolvedValue([
-      {
-        slug: "posts",
-        tableName: "posts",
-        label: "Posts",
-        group: null,
-        useAsTitle: "title",
-        hasStatus: true,
-      },
-    ]);
-
-    // No caller means no access decision can be made. Reading anyway with
-    // `user: undefined` and `overrideAccess: false` is the shape most likely to
-    // be mishandled downstream, so refuse here instead.
-    const result = await service.getRecentEntries(5, someResources(["posts"]));
-
-    expect(find).not.toHaveBeenCalled();
-    expect(result).toEqual({ entries: [] });
-  });
-
-  it("does not query a collection outside the caller's scope", async () => {
+  it("requires a caller at compile time -- there is no optional-parameter fallback", async () => {
     const service = makeService();
     vi.spyOn(
       service as unknown as {
@@ -139,10 +122,56 @@ describe("recent entries", () => {
       "getRegisteredCollections"
     ).mockResolvedValue([]);
 
-    await service.getRecentEntries(5, someResources([]), {
+    // `caller` is a required parameter now (not `caller?`): a handler that
+    // forgets to build one must fail to compile rather than silently return
+    // an empty, unauthenticated-looking feed. This file is NOT in
+    // `tsconfig.tests.json`'s exclude list, so `pnpm check-types` actually
+    // evaluates this directive -- widening `caller` back to optional makes
+    // it unused and the build fails, which is the point.
+    // @ts-expect-error -- omitting `caller` must fail to typecheck.
+    const result = await service.getRecentEntries(5, someResources(["posts"]));
+
+    // Even reached through a type-system bypass, the call must not throw:
+    // with no registered collections there is nothing to read through.
+    expect(result).toEqual({ entries: [] });
+  });
+
+  it("does not query a collection outside the caller's scope", async () => {
+    const service = makeService();
+    // Deliberately NOT stubbing `getRegisteredCollections` here: it is the
+    // function that applies `filterByResource(scope, ...)`
+    // (dashboard-service.ts), so stubbing it is exactly what would let the
+    // scope filter be deleted without this test noticing. The registry
+    // returns three collections; only "posts" is in scope, so only "posts"
+    // may reach `find`.
+    getAllCollections.mockResolvedValue([
+      {
+        slug: "posts",
+        tableName: "posts",
+        labels: { plural: "Posts" },
+        fields: [],
+      },
+      {
+        slug: "pages",
+        tableName: "pages",
+        labels: { plural: "Pages" },
+        fields: [],
+      },
+      {
+        slug: "orders",
+        tableName: "orders",
+        labels: { plural: "Orders" },
+        fields: [],
+      },
+    ]);
+
+    await service.getRecentEntries(5, someResources(["posts"]), {
       user: { id: "user-1" },
     });
 
-    expect(find).not.toHaveBeenCalled();
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "posts" })
+    );
   });
 });
