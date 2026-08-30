@@ -515,10 +515,12 @@ describe("emitTokenBlocks", () => {
     expect(css).toContain("--site-color-text:#eee");
   });
 
-  it("reaches tokens declared on the document root, which has no ancestor", () => {
-    // The defect the attached form exists for: `:root` is `<html>`, so
-    // `[data-nx-theme="dark"] :root` cannot match however a host sets the
-    // switch, and every dark value under a site sheet was silently inert.
+  it("declares root-scoped dark values on whichever element carries the switch", () => {
+    // `:root` IS `<html>`, so no rule describing an ancestor can reach it — and
+    // a rule ATTACHED to it reaches only the case where the host put the
+    // attribute on `<html>`. Custom properties inherit, so declaring them on
+    // the attribute-bearing element covers `<html>`, `<body>` and a wrapper
+    // alike. Measured in a browser across all three placements.
     const { css } = emitTokenBlocks(
       {
         tokens: [
@@ -531,7 +533,13 @@ describe("emitTokenBlocks", () => {
       },
       ":root"
     );
-    expect(css).toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    expect(css).toContain(
+      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+    );
+    // Not anchored to the root, which is the form that only works on `<html>`.
+    expect(css).not.toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    // And the light block still declares on the root itself.
+    expect(css).toContain(":root{--site-color-text:#111}");
   });
 
   it("follows the operating system when the site asks for that instead", () => {
