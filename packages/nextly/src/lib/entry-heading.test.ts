@@ -1,0 +1,44 @@
+/**
+ * The shared heading walk, at the two boundaries its callers differ on.
+ *
+ * `services/dashboard/__tests__/recent-entries.test.ts` drives it through the
+ * dashboard, where the fallback is always the entry id. The activity feed's
+ * fallback may be `undefined` — a delete row can legitimately have nothing to
+ * call the entry it names — and that case has no other test.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import { entryHeading } from "./entry-heading";
+
+describe("entryHeading", () => {
+  it("prefers the configured title field over `title` and `name`", () => {
+    expect(
+      entryHeading({ heading: "H", title: "T", name: "N" }, "heading", "id-1")
+    ).toBe("H");
+  });
+
+  it("starts at `title` when no title field is configured", () => {
+    expect(entryHeading({ title: "T", name: "N" }, null, "id-1")).toBe("T");
+  });
+
+  it("returns `undefined` rather than a placeholder when nothing is usable", () => {
+    // The activity feed's case. A heading it invents is worse than none: the
+    // row would claim a name the entry never had.
+    expect(entryHeading({ title: {} }, null, undefined)).toBeUndefined();
+  });
+
+  it("accepts a bigint, which `typeof` reports separately from `number`", () => {
+    expect(entryHeading({ title: 9007199254740993n }, null, "id-1")).toBe(
+      "9007199254740993"
+    );
+  });
+
+  it("refuses `null`, a boolean and a Date without stringifying any of them", () => {
+    // `String(null)` is "null", `String(false)` is "false", and a Date renders
+    // its whole locale string — three headings that read as data and are not.
+    expect(entryHeading({ title: null }, null, "id-1")).toBe("id-1");
+    expect(entryHeading({ title: false }, null, "id-1")).toBe("id-1");
+    expect(entryHeading({ title: new Date(0) }, null, "id-1")).toBe("id-1");
+  });
+});

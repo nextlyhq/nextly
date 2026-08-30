@@ -175,3 +175,99 @@ describe("recent entries", () => {
     );
   });
 });
+
+/**
+ * `admin.useAsTitle` may name a field of any type.
+ *
+ * Schema validation checks only that the named field EXISTS, never that it
+ * holds a primitive, so `json`, `group`, `repeater`, `component` and `chips`
+ * all reach this code as objects or arrays. `String()` on one of those renders
+ * `[object Object]` -- a heading that says nothing, in a feed whose whole job
+ * is to name the entry.
+ *
+ * The rule is already written in the comment above this mapping ("narrow by
+ * typeof/instanceof first so every branch that reaches String() is already
+ * known to be a real primitive") and `updatedAt` and `status` beside it obey
+ * it. The title did not.
+ */
+describe("recent entry headings", () => {
+  function collectionWithTitleField(useAsTitle: string) {
+    return {
+      slug: "posts",
+      tableName: "posts",
+      label: "Posts",
+      group: null,
+      useAsTitle,
+      hasStatus: false,
+    };
+  }
+
+  async function headingFor(
+    row: Record<string, unknown>,
+    useAsTitle = "title"
+  ): Promise<string> {
+    const service = makeService();
+    vi.spyOn(
+      service as unknown as {
+        getRegisteredCollections: (s: unknown) => Promise<unknown[]>;
+      },
+      "getRegisteredCollections"
+    ).mockResolvedValue([collectionWithTitleField(useAsTitle)]);
+    find.mockResolvedValue({ items: [row] });
+
+    const result = await service.getRecentEntries(5, someResources(["posts"]), {
+      user: { id: "user-1" },
+    });
+    return result.entries[0].title;
+  }
+
+  it("falls back to the id when the title field holds an object", async () => {
+    expect(
+      await headingFor({ id: "p1", title: { en: "Hello" }, updatedAt: "" })
+    ).toBe("p1");
+  });
+
+  it("falls back to the id when the title field holds an array", async () => {
+    // A `repeater` or `chips` field named by `useAsTitle`.
+    expect(
+      await headingFor({ id: "p2", title: ["a", "b"], updatedAt: "" })
+    ).toBe("p2");
+  });
+
+  it("keeps a numeric title, which is a real primitive", async () => {
+    // The positive control for the two above: an implementation that rejected
+    // everything but a string would satisfy them and would blank out a
+    // numeric title field.
+    expect(await headingFor({ id: "p3", title: 2026, updatedAt: "" })).toBe(
+      "2026"
+    );
+  });
+
+  it("skips past an EMPTY string to the next candidate", async () => {
+    // An untitled draft. `??` only skips null and undefined, so an empty
+    // string reached the heading and rendered as nothing at all.
+    expect(
+      await headingFor({ id: "p4", title: "", name: "Draft", updatedAt: "" })
+    ).toBe("Draft");
+  });
+
+  it("skips past an object title to the next candidate rather than to the id", async () => {
+    expect(
+      await headingFor(
+        {
+          id: "p5",
+          heading: { en: "Hi" },
+          title: "Fallback title",
+          updatedAt: "",
+        },
+        "heading"
+      )
+    ).toBe("Fallback title");
+  });
+
+  it("keeps an ordinary string title", async () => {
+    expect(
+      await headingFor({ id: "p6", title: "Real title", updatedAt: "" })
+    ).toBe("Real title");
+  });
+});

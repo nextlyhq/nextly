@@ -16,6 +16,7 @@ import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 import { container } from "../../di/container";
 import { getNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
+import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
@@ -708,13 +709,15 @@ export class DashboardService extends BaseService {
       const rows = result.items ?? [];
 
       return rows.map(row => {
-        const rawTitle = row[titleField] ?? row.title ?? row.name ?? row.id;
         // `??` against an `unknown` value narrows the checked side to `{}`,
         // which still has nothing but `Object.prototype.toString` -- calling
         // `String()` on that renders `[object Object]` instead of failing
         // loudly. Narrow by `typeof`/`instanceof` first so every branch that
         // reaches `String()` (or a bare `.toLowerCase()`) is already known to
-        // be a real primitive.
+        // be a real primitive. `entryHeading` is that narrowing for the title,
+        // and it is the SAME walk the activity feed records its headings with,
+        // so one entry does not get two different names depending on which
+        // surface names it.
         const updatedAt =
           row.updatedAt instanceof Date
             ? row.updatedAt.toISOString()
@@ -727,9 +730,10 @@ export class DashboardService extends BaseService {
           status = row.status.toLowerCase() === "draft" ? "draft" : "published";
         }
 
+        const id = String(row.id);
         return {
-          id: String(row.id),
-          title: String(rawTitle),
+          id,
+          title: entryHeading(row, titleField, id),
           collectionSlug: coll.slug,
           collectionLabel: coll.label,
           status,
