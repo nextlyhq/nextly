@@ -56,6 +56,7 @@ function result(
   return {
     due: 1,
     published: 1,
+    blocked: 0,
     applied: 1,
     failed: 0,
     outcomes: [],
@@ -193,6 +194,7 @@ describe("reportReleasesOutcome", () => {
     reportReleasesOutcome(log, {
       due: 5,
       published: 1,
+      blocked: 0,
       applied: 1,
       failed: 0,
       deferred: 4,
@@ -215,6 +217,7 @@ describe("reportReleasesOutcome", () => {
     reportReleasesOutcome(log, {
       due: 9,
       published: 2,
+      blocked: 0,
       applied: 2,
       failed: 0,
       deferred: 0,
@@ -267,7 +270,10 @@ describe("reportReleasesOutcome", () => {
     // would bury the pass that mattered.
     const log = logger();
 
-    reportReleasesOutcome(log, result({ due: 0, published: 0, applied: 0 }));
+    reportReleasesOutcome(
+      log,
+      result({ due: 0, published: 0, blocked: 0, applied: 0 })
+    );
 
     expect(log.info).not.toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();

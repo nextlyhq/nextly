@@ -67,6 +67,7 @@ function deps(over: {
 }): ApplyDueReleasesDeps {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
+  const blocked = vi.fn(async (_id: string) => true);
   return {
     // Pinned, so every case below observes a STABLE component order and asserts
     // about the mechanism it names rather than about which rotation came up.
@@ -74,6 +75,11 @@ function deps(over: {
     random: () => 0,
     repository: {
       findDueReleases: async () => releases,
+      // A spy, reached through the port with `vi.mocked` so a case can assert
+      // WHICH releases the pass stopped. A stub returning true would let a pass
+      // that blocked the wrong ones — or every one — look identical to a pass
+      // that blocked exactly the hopeless.
+      blockRelease: blocked,
       listMembersOf: async ids =>
         members.filter(m => ids.includes(m.releaseId)),
       isStillDueAt: async (id: string, scheduledAt: Date) =>

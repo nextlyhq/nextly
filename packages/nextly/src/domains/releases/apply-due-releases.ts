@@ -118,6 +118,13 @@ export interface ApplyDueReleasesDeps {
     listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]>;
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
     markReleasePublished(id: string, at: Date): Promise<boolean>;
+    /**
+     * Stop a release nothing about retrying could fix.
+     *
+     * Fenced on `scheduled` in the repository, so a release cancelled or
+     * rescheduled while this pass ran keeps the state a person chose.
+     */
+    blockRelease(id: string): Promise<boolean>;
   };
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
@@ -187,6 +194,53 @@ export type MaterialisationFailure =
    */
   | "RELEASE_NO_LONGER_SCHEDULED";
 
+/**
+ * Whether retrying could ever change this outcome.
+ *
+ * An exhaustive `Record` rather than a set of the permanent ones, so a failure
+ * kind added later cannot default into either answer: the compiler demands it
+ * be classified, and both defaults are bad. Defaulting to permanent lets a new
+ * transient error permanently stop launches; defaulting to transient puts a
+ * hopeless release back into the retry loop this exists to end.
+ */
+const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
+  // Nothing about waiting supplies an author, restores a deleted one, or
+  // teaches the engine per-locale releases. These are the ones that leave a
+  // release retrying every tick forever while looking healthy.
+  NO_RECORDED_AUTHOR: false,
+  AUTHOR_UNAVAILABLE: false,
+  LOCALE_SCOPE_UNSUPPORTED: false,
+
+  // Documented at their declarations as evidence of nothing: a lookup that
+  // errored does not mean the user is gone, and a re-read that errored does not
+  // mean the release was cancelled. Blocking on either would let a momentary
+  // database blip permanently halt a launch the next pass would have completed.
+  IDENTITY_LOOKUP_FAILED: true,
+  SCHEDULE_CHECK_FAILED: true,
+
+  // Ambiguous, and resolved toward retrying deliberately. "Refused or errored"
+  // covers both a permission the caller will never gain and a connection that
+  // dropped, and the two are indistinguishable here. Retrying a hopeless write
+  // wastes a tick; blocking a recoverable one loses a launch.
+  WRITE_FAILED: true,
+
+  // Not a failure of this release at all — somebody cancelled or rescheduled it
+  // while the pass was running. Blocking would overwrite their decision with a
+  // state they did not ask for.
+  RELEASE_NO_LONGER_SCHEDULED: true,
+};
+
+/** The releases this pass proved can never be applied as they stand. */
+function permanentlyBrokenReleases(
+  outcomes: readonly MaterialisationOutcome[]
+): Set<string> {
+  return new Set(
+    outcomes
+      .filter(o => o.failure !== null && !RETRY_COULD_HELP[o.failure])
+      .map(o => o.releaseId)
+  );
+}
+
 export interface MaterialisationOutcome {
   ref: DocumentRef;
   memberId: string;
@@ -202,6 +256,11 @@ export interface ApplyDueReleasesResult {
   due: number;
   /** Releases moved to `published` by THIS pass. */
   published: number;
+  /**
+   * Releases moved to `blocked` by THIS pass, because nothing about retrying
+   * them could succeed.
+   */
+  blocked: number;
   applied: number;
   failed: number;
   /**
@@ -235,6 +294,7 @@ export async function applyDueReleases(
     return {
       due: 0,
       published: 0,
+      blocked: 0,
       applied: 0,
       failed: 0,
       deferred: 0,
@@ -283,6 +343,29 @@ export async function applyDueReleases(
     }
   }
 
+  // A release that can NEVER be applied is stopped rather than left scheduled.
+  // Left alone it is replanned every tick forever, and it reads as healthy the
+  // whole time — the operator learns nothing until the launch does not happen.
+  //
+  // Expanded over the overlapping components for the same reason holding open
+  // is: a release sharing a document with a permanently broken one can never
+  // settle either, because the pair is only ever discharged together. Blocking
+  // one and not the other would leave the second retrying forever, which is the
+  // condition this exists to end.
+  const permanent = permanentlyBrokenReleases(outcomes);
+  const toBlock = new Set<string>();
+  if (permanent.size > 0) {
+    for (const group of plan.overlappingReleases) {
+      if (group.some(id => permanent.has(id))) {
+        for (const id of group) toBlock.add(id);
+      }
+    }
+  }
+  let blocked = 0;
+  for (const id of toBlock) {
+    if (await deps.repository.blockRelease(id)) blocked += 1;
+  }
+
   const { published, undischarged } = await dischargeSettledComponents(
     deps,
     plan,
@@ -300,6 +383,7 @@ export async function applyDueReleases(
     failed,
     deferred,
     undischarged,
+    blocked,
     outcomes,
   };
 }

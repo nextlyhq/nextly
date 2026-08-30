@@ -19,6 +19,7 @@ export const RELEASE_STATE_LABEL: Record<ReleaseState, string> = {
   scheduled: "Scheduled",
   published: "Published",
   cancelled: "Cancelled",
+  blocked: "Blocked",
 };
 
 /**
@@ -85,6 +86,12 @@ export function describeRelease(release: Release): string {
         : "Published";
     case "cancelled":
       return "Cancelled — nothing will go live";
+    case "blocked":
+      // The one state whose name does not carry its consequence. "Blocked"
+      // alone reads as a warning; what an operator needs is that this will not
+      // happen on its own and that waiting will not help, because the drain has
+      // already stopped retrying it.
+      return "Blocked — it cannot go live until something is fixed";
     case "draft":
       return "Not scheduled yet";
   }

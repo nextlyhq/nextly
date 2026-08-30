@@ -165,7 +165,20 @@ describe("capabilities, as an instrument", () => {
       "scheduled",
       "published",
       "cancelled",
+      "blocked",
     ]);
+  });
+
+  it("treats a BLOCKED release as fixable rather than finished", async () => {
+    // The whole point of the state: an operator removes the member whose author
+    // is gone and reschedules. A blocked release nobody could edit or
+    // reschedule would be a dead end whose only exit is abandoning it.
+    const { svc } = service(ALL);
+    const can = await svc.capabilities([release("blocked")], ACTOR);
+    expect(can.get("r1")?.addMember).toBe(true);
+    expect(can.get("r1")?.removeMember).toBe(true);
+    expect(can.get("r1")?.schedule).toBe(true);
+    expect(can.get("r1")?.cancel).toBe(true);
   });
 });
 

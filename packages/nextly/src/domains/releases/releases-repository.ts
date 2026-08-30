@@ -290,6 +290,36 @@ export class ReleasesRepository {
    * release already happened, and marking it cancelled would describe history
    * that did not occur while leaving the published content in place.
    */
+  /**
+   * Stop a release the drain can never apply, and say whether it moved.
+   *
+   * Fenced on `scheduled` alone. Every other state is either a decision
+   * somebody made — cancelled, or rescheduled out from under this pass — or an
+   * outcome already reached, and overwriting any of them with `blocked` would
+   * replace a person's intent with a machine's verdict.
+   *
+   * Deliberately does NOT revalidate. A blocked release is not consulted by the
+   * read rule, exactly as a scheduled one whose instant has not arrived is not
+   * — so nothing a reader can see changes, and a cache bust would be work with
+   * no observable effect.
+   */
+  async blockRelease(id: string): Promise<boolean> {
+    const affected = await this.db.updateCount(
+      RELEASES,
+      {
+        state: "blocked" satisfies ReleaseState,
+        updatedAt: new Date(),
+      },
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "=", value: "scheduled" },
+        ],
+      }
+    );
+    return affected > 0;
+  }
+
   async cancelRelease(id: string): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,

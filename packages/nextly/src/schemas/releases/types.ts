@@ -13,10 +13,28 @@
  * Lifecycle of a release.
  *
  * Only `scheduled` affects reads. `draft` is still being assembled, `published`
- * has already been materialised into the live rows, and `cancelled` was called
- * off — so a read consults exactly one state and the other three cost nothing.
+ * has already been materialised into the live rows, `cancelled` was called off,
+ * and `blocked` cannot proceed — so a read consults exactly one state and the
+ * other four cost nothing.
+ *
+ * `blocked` is a release the drain will never be able to apply, for a reason
+ * retrying cannot fix: a member with no author, an author who has been deleted
+ * or deactivated, or a locale-scoped member the engine does not support. It
+ * exists because leaving such a release `scheduled` makes it retry every tick
+ * forever while looking exactly like a healthy one — and the operator learns
+ * nothing until the launch does not happen.
+ *
+ * A TRANSIENT failure — a lookup that errored, a re-read that errored — does
+ * NOT block. Those are documented as retry-worthy where they are raised, and
+ * blocking on one would let a momentary database blip permanently stop a launch
+ * that the next pass would have completed.
  */
-export type ReleaseState = "draft" | "scheduled" | "published" | "cancelled";
+export type ReleaseState =
+  | "draft"
+  | "scheduled"
+  | "published"
+  | "cancelled"
+  | "blocked";
 
 /** What a member does to its document when the release takes effect. */
 export type ReleaseMemberAction = "publish" | "unpublish";
@@ -27,6 +45,7 @@ export const RELEASE_STATES: readonly ReleaseState[] = [
   "scheduled",
   "published",
   "cancelled",
+  "blocked",
 ];
 
 /** The member actions, in the order the admin offers them. */
@@ -76,6 +95,9 @@ export const RELEASE_SCHEDULABLE_FROM: readonly ReleaseState[] = [
   "draft",
   "scheduled",
   "cancelled",
+  // A blocked release is fixed and then rescheduled. Excluding it would leave
+  // the operator who has just removed the offending member with nothing to do.
+  "blocked",
 ];
 
 /**
@@ -87,6 +109,8 @@ export const RELEASE_SCHEDULABLE_FROM: readonly ReleaseState[] = [
 export const RELEASE_CANCELLABLE_FROM: readonly ReleaseState[] = [
   "draft",
   "scheduled",
+  // Abandoning a blocked release is the other way out of it.
+  "blocked",
 ];
 
 /**
@@ -98,6 +122,9 @@ export const RELEASE_CANCELLABLE_FROM: readonly ReleaseState[] = [
 export const RELEASE_ASSEMBLABLE_FROM: readonly ReleaseState[] = [
   "draft",
   "cancelled",
+  // Editable BECAUSE it is blocked: the fix is usually to remove the member
+  // whose author is gone, and a release nobody can edit cannot be unblocked.
+  "blocked",
 ];
 
 /**
