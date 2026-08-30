@@ -25,6 +25,11 @@ import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
 import {
+  allResources,
+  someResources,
+  type ReadableResources,
+} from "../services/dashboard/readable-resources";
+import {
   isSuperAdmin,
   listEffectivePermissions,
 } from "../services/lib/permissions";
@@ -48,17 +53,19 @@ async function getActivityLogService(): Promise<ActivityLogService> {
 }
 
 /**
- * Resolve the read-allowed resource set for a non-superadmin caller, or
- * `undefined` for a superadmin (which the dashboard service treats as
- * "no resource filter"). Centralized so each handler stays focused on its
- * own service call.
+ * Resolve what this caller may read.
+ *
+ * A super-admin gets `all`. Everyone else gets exactly the resources they hold
+ * a `:read` permission for -- INCLUDING the empty case, which admits nothing.
+ * `listEffectivePermissions` fails closed by returning `[]`, and this function
+ * preserves that rather than inverting it.
  */
 async function resolveReadableResources(
   userId: string
-): Promise<Set<string> | undefined> {
-  if (await isSuperAdmin(userId)) return undefined;
+): Promise<ReadableResources> {
+  if (await isSuperAdmin(userId)) return allResources();
   const permissionPairs = await listEffectivePermissions(userId);
-  return new Set(
+  return someResources(
     permissionPairs
       .filter(pair => pair.endsWith(":read"))
       .map(pair => pair.split(":")[0])
@@ -80,8 +87,8 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const service = await getDashboardService();
-  const readableResources = await resolveReadableResources(auth.userId);
-  const stats = await service.getStats({ readableResources });
+  const scope = await resolveReadableResources(auth.userId);
+  const stats = await service.getStats({ scope });
 
   // Bare-object read: stats is the dashboard summary itself; no envelope.
   // Spread into a fresh literal so respondData's `Record<string, unknown>`
@@ -110,8 +117,8 @@ export const getDashboardRecentEntries = withErrorHandler(
       : 5;
 
     const service = await getDashboardService();
-    const readableResources = await resolveReadableResources(auth.userId);
-    const entries = await service.getRecentEntries(limit, readableResources);
+    const scope = await resolveReadableResources(auth.userId);
+    const entries = await service.getRecentEntries(limit, scope);
 
     // Service returns `{ entries: [...] }` (a named-field object). This is a
     // capped non-paginated read (no total / page / limit semantics), so the

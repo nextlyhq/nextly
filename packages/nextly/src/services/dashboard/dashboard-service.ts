@@ -17,6 +17,13 @@ import { container } from "../../di/container";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
+import {
+  filterByResource,
+  someResources,
+  type ReadableResources,
+  type ReadCaller,
+} from "./readable-resources";
+
 /** Content statistics for the hero stats row. */
 export interface ContentStats {
   totalEntries: number;
@@ -94,12 +101,14 @@ export class DashboardService extends BaseService {
    * adapter directly for simple COUNT(*) queries.
    */
   async getStats(options?: {
-    readableResources?: Set<string>;
+    scope?: ReadableResources;
   }): Promise<DashboardStatsResponse> {
-    const collections = await this.getRegisteredCollections(
-      options?.readableResources
-    );
-    const singles = await this.getRegisteredSingles(options?.readableResources);
+    // An omitted scope denies rather than allows. A caller that forgets to
+    // pass one gets an empty dashboard, which is visible and reportable; the
+    // old default returned everything, which was not.
+    const scope = options?.scope ?? someResources([]);
+    const collections = await this.getRegisteredCollections(scope);
+    const singles = await this.getRegisteredSingles(scope);
 
     const [
       collectionCounts,
@@ -151,13 +160,21 @@ export class DashboardService extends BaseService {
    * to prevent excessive DB queries on large installations.
    *
    * @param limit - Maximum number of entries to return (default: 5, max: 20)
+   * @param scope - What the caller may read. Defaults to nothing rather than
+   *   everything -- see {@link getStats}.
+   * @param caller - Unused in this task. Filled in by a follow-up that needs
+   *   to know who is asking rather than only what they may read; declared now
+   *   so the signature settles once instead of widening twice.
    */
   async getRecentEntries(
     limit: number = 5,
-    readableResources?: Set<string>
+    scope: ReadableResources = someResources([]),
+    // `_caller` is intentionally unused today; preserved for a follow-up that
+    // needs to know who is asking (not only what they may read).
+    _caller?: ReadCaller
   ): Promise<RecentEntriesResponse> {
     const clampedLimit = Math.min(Math.max(limit, 1), 20);
-    const collections = await this.getRegisteredCollections(readableResources);
+    const collections = await this.getRegisteredCollections(scope);
 
     let collectionsToQuery = collections;
     if (collections.length > MAX_COLLECTIONS_FOR_RECENT) {
@@ -191,7 +208,7 @@ export class DashboardService extends BaseService {
    * Reuses the same data sources as `getStats()`.
    */
   async getProjectStats(options?: {
-    readableResources?: Set<string>;
+    scope?: ReadableResources;
   }): Promise<ProjectStatsResponse> {
     const dashStats = await this.getStats(options);
 
@@ -226,7 +243,7 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredCollections(
-    readableResources?: Set<string>
+    scope: ReadableResources
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
@@ -252,8 +269,9 @@ export class DashboardService extends BaseService {
           c.fields?.some(f => f.name === "_status" || f.name === "status") ??
           false,
       }));
-      if (!readableResources || readableResources.size === 0) return mapped;
-      return mapped.filter(c => readableResources.has(String(c.slug)));
+      // Derive the readable subset from the shared scope check rather than
+      // re-testing membership here -- see `filterByResource`.
+      return filterByResource(scope, mapped, c => String(c.slug));
     } catch (error) {
       this.logger.error("Failed to get registered collections", {
         error: error instanceof Error ? error.message : String(error),
@@ -263,7 +281,7 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredSingles(
-    readableResources?: Set<string>
+    scope: ReadableResources
   ): Promise<Array<{ slug: string }>> {
     try {
       const singleRegistryService = container.get<{
@@ -271,9 +289,7 @@ export class DashboardService extends BaseService {
       }>("singleRegistryService");
 
       const singles = await singleRegistryService.getAllSingles();
-      if (!readableResources || readableResources.size === 0) return singles;
-
-      return singles.filter(s => readableResources.has(String(s.slug)));
+      return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
       this.logger.error("Failed to get registered singles", {
         error: error instanceof Error ? error.message : String(error),

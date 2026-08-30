@@ -33,7 +33,10 @@ vi.mock("../services/lib/permissions", () => ({
 
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { container } from "../di";
-import { isSuperAdmin } from "../services/lib/permissions";
+import {
+  isSuperAdmin,
+  listEffectivePermissions,
+} from "../services/lib/permissions";
 
 import {
   getDashboardActivity,
@@ -134,5 +137,56 @@ describe("getDashboardActivity", () => {
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
     expect(json).toEqual(result);
+  });
+});
+
+describe("dashboard read scope", () => {
+  it("asks the service for nothing when the caller holds no read permissions", async () => {
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(
+      []
+    );
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    // The defect was that an empty permission set reached the service as
+    // "no filter" and returned every collection. The scope must arrive as an
+    // EMPTY `some`, which admits nothing.
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set() },
+    });
+  });
+
+  it("asks the service for everything when the caller is a super-admin", async () => {
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith({ scope: { kind: "all" } });
+  });
+
+  it("passes only the readable resources through", async () => {
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "posts:read",
+      "posts:update",
+      "pages:update",
+    ]);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    // `pages` is writable but not readable, so it must not appear.
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(["posts"]) },
+    });
   });
 });
