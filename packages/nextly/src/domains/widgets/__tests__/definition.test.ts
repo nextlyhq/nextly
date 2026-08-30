@@ -141,3 +141,65 @@ describe("validateWidgetDefinition", () => {
     ).not.toThrow();
   });
 });
+
+describe("defaultHeight is checked against the height vocabulary", () => {
+  // `WIDGET_HEIGHTS` has two values and nothing compared `defaultHeight`
+  // against them, so the field was enforced by the TYPE alone -- which reaches
+  // a TypeScript caller and nothing else. A plugin authored in JavaScript, or
+  // one whose definition arrives as parsed JSON, registered `"medium"` at boot
+  // and the grid resolved a height that does not exist.
+  it("accepts each declared height", () => {
+    for (const defaultHeight of ["short", "tall"]) {
+      expect(() =>
+        validateWidgetDefinition({ ...valid, defaultHeight })
+      ).not.toThrow();
+    }
+  });
+
+  it("accepts a definition that declares no height", () => {
+    expect(() => validateWidgetDefinition(valid)).not.toThrow();
+  });
+
+  it("refuses a height outside the vocabulary", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultHeight: "medium" })
+    ).toThrow(/defaultHeight must be one of short, tall/);
+  });
+
+  it("refuses a non-string height", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultHeight: 2 })
+    ).toThrow(/defaultHeight must be one of/);
+  });
+});
+
+describe("a custom widget's component must be able to resolve", () => {
+  const custom = {
+    id: "acme/chart",
+    title: "Chart",
+    archetype: "custom" as const,
+    defaultSize: "lg" as const,
+  };
+
+  it("accepts a real component path", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...custom, component: "pkg#Chart" })
+    ).not.toThrow();
+  });
+
+  it("refuses an empty component", () => {
+    // `typeof d.component !== "string"` passes for `""`, so the archetype that
+    // REQUIRES a component registered without a usable one -- the same broken
+    // card requiring the field exists to prevent, reached through the check
+    // meant to prevent it.
+    expect(() =>
+      validateWidgetDefinition({ ...custom, component: "" })
+    ).toThrow(/requires a component path/);
+  });
+
+  it("refuses a whitespace-only component", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...custom, component: "   " })
+    ).toThrow(/requires a component path/);
+  });
+});

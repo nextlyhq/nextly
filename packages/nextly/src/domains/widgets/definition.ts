@@ -153,10 +153,40 @@ function validateSizeRange(d: Partial<WidgetDefinition>): void {
   }
 }
 
-/** Confirms `component` is present exactly when the archetype requires it. */
+/**
+ * Confirms `defaultHeight`, when present, names a real height.
+ *
+ * `WIDGET_HEIGHTS` was enforced by the TYPE alone, which reaches a TypeScript
+ * caller and nothing else -- a plugin authored in JavaScript, or one whose
+ * definition arrives as parsed JSON, registered `"medium"` at boot and left the
+ * grid resolving a height that does not exist. The two size fields are checked
+ * against their vocabulary here; this is the third field of the same kind.
+ */
+function validateHeight(d: Partial<WidgetDefinition>): void {
+  if (
+    d.defaultHeight !== undefined &&
+    !WIDGET_HEIGHTS.includes(d.defaultHeight)
+  ) {
+    fail(`${d.id}: defaultHeight must be one of ${WIDGET_HEIGHTS.join(", ")}`);
+  }
+}
+
+/**
+ * Confirms `component` is present exactly when the archetype requires it, and
+ * that what is present can actually resolve.
+ *
+ * A `typeof` check alone accepts `""` and `"   "`, so the archetype that
+ * REQUIRES a component registered without a usable one -- the broken card
+ * requiring the field exists to prevent, arriving through the check meant to
+ * prevent it. Trimmed rather than merely length-checked, because a path made of
+ * spaces resolves no better than an empty one.
+ */
 function validateComponent(d: Partial<WidgetDefinition>): void {
   const isCustom = d.archetype === "custom";
-  if (isCustom && typeof d.component !== "string") {
+  if (
+    isCustom &&
+    (typeof d.component !== "string" || d.component.trim() === "")
+  ) {
     fail(`${d.id}: archetype "custom" requires a component path`);
   }
   if (!isCustom && d.component !== undefined) {
@@ -207,6 +237,7 @@ export function validateWidgetDefinition(
   validateArchetype(d);
   validateSizeValues(d);
   validateSizeRange(d);
+  validateHeight(d);
   validateComponent(d);
   validateQuery(d);
 }
