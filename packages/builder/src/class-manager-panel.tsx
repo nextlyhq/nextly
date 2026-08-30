@@ -193,9 +193,13 @@ export interface ClassManagerPanelProps {
    * How many rows to mount at once, and how many each "show more" adds.
    *
    * A host embedding the manager in a narrower column has a legitimate reason
-   * to want fewer, so the page size is stated rather than fixed. Omitted, it is
-   * {@link DEFAULT_PAGE_SIZE} — a bound that exists so a library near its
-   * ceiling does not mount two thousand text inputs at once.
+   * to want fewer, so the page size is stated rather than fixed. Omitted — or
+   * given a value that cannot bound a list, which the `number` type still
+   * admits — it is {@link DEFAULT_PAGE_SIZE}, a bound that exists so a library
+   * near its ceiling does not mount two thousand text inputs at once.
+   *
+   * A later value replaces the earlier one, so a column that narrows after
+   * mount is bounded by what the host asks for NOW.
    */
   pageSize?: number;
   /**
@@ -405,6 +409,21 @@ function FilterChips({
  */
 const DEFAULT_PAGE_SIZE = 200;
 
+/*
+ * The page size a host actually gets. `pageSize` is typed `number`, which
+ * admits zero, negatives, fractions and NaN — and each of those breaks the
+ * list in a way an author cannot escape: zero and NaN mount nothing and offer
+ * a control that adds nothing, a negative slice drops rows off the END, and a
+ * fraction mounts a row count that never reaches the total. Falling back to
+ * the default keeps every class reachable, which refusing to render would not.
+ */
+function usablePageSize(pageSize: number | undefined): number {
+  if (pageSize === undefined) return DEFAULT_PAGE_SIZE;
+  return Number.isInteger(pageSize) && pageSize > 0
+    ? pageSize
+    : DEFAULT_PAGE_SIZE;
+}
+
 function ClassList({
   rows,
   searching,
@@ -434,8 +453,17 @@ function ClassList({
    * likely to type, and the last sixty would stay unreachable however the
    * message was worded.
    */
-  const page = pageSize ?? DEFAULT_PAGE_SIZE;
-  const [limit, setLimit] = React.useState(page);
+  const page = usablePageSize(pageSize);
+  /*
+   * How many PAGES are open, not how many rows. Holding the row count would
+   * freeze the first page size this component ever saw: a host that recomputes
+   * `pageSize` for a narrowed column re-renders without unmounting, and state
+   * seeded from a prop ignores every value after the first. Counting pages
+   * makes the mounted total derive from the CURRENT prop, so the initial slice
+   * and the "show more" step cannot disagree about what a page is.
+   */
+  const [pagesOpen, setPagesOpen] = React.useState(1);
+  const limit = pagesOpen * page;
   if (rows.length === 0) {
     return (
       <p className="nx-inspector__note">
@@ -477,7 +505,7 @@ function ClassList({
       {hidden > 0 ? (
         <Button
           className="nx-classman__more"
-          onClick={() => setLimit(current => current + page)}
+          onClick={() => setPagesOpen(current => current + 1)}
           size="sm"
           type="button"
           variant="ghost"

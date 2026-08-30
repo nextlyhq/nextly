@@ -654,9 +654,15 @@ describe("a library far larger than a screen", () => {
           onDelete={vi.fn()}
         />
       );
+      /*
+       * The EXACT default, not merely "fewer than 260": a default of one row
+       * also mounts fewer than the library, and so does one of 259. Naming the
+       * number is what separates the bound this ships from any other bound.
+       */
       const fields = screen.getAllByRole("textbox");
-      expect(fields.length).toBeLessThan(many.length);
-      expect(screen.getByText(/Showing \d+ of 260/)).toBeTruthy();
+      expect(fields.length).toBe(200);
+      expect(screen.getByText("Showing 200 of 260.")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Show 60 more" })).toBeTruthy();
     }
   );
 });
@@ -724,6 +730,83 @@ describe("reaching a class past the row cap", () => {
     expect(screen.queryByRole("button", { name: /Show \d+ more/ })).toBeNull();
   });
 
+  it("pages by the size the host asked for, not one it was built around", () => {
+    /*
+     * A SECOND size, because every other case here supplies two. An
+     * implementation reading `pageSize === undefined ? 200 : 2` satisfies all
+     * of them while ignoring the host entirely, so one supplied value can only
+     * evidence that a custom branch exists — not that it carries the number.
+     */
+    draw({
+      library: many,
+      usage: undefined,
+      documentClassIds: [],
+      pageSize: 3,
+    });
+    expect(screen.getByText("Showing 3 of 6.")).toBeTruthy();
+
+    // The step matches the size too, so a page is one thing and not two.
+    fireEvent.click(screen.getByRole("button", { name: "Show 3 more" }));
+    expect(screen.getByLabelText("Name of class-5")).toBeTruthy();
+  });
+
+  it.each([
+    ["zero", 0],
+    ["negative", -2],
+    ["fractional", 2.5],
+    ["not a number", Number.NaN],
+  ])("falls back to the default when the size is %s", (_label, pageSize) => {
+    /*
+     * `number` admits all of these, and each strands the author rather than
+     * merely paging oddly: zero and NaN mount nothing while offering a control
+     * that adds nothing, and a negative slice drops rows off the far end. The
+     * library is smaller than the default, so falling back mounts all of it —
+     * which is the observable difference from honouring the value.
+     */
+    draw({
+      library: many,
+      usage: undefined,
+      documentClassIds: [],
+      pageSize,
+    });
+    expect(screen.getAllByRole("textbox").length).toBe(many.length);
+    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).toBeNull();
+  });
+
+  it("re-pages when the host narrows the column without unmounting", () => {
+    /*
+     * A page size held in state seeded from the prop reads only the first
+     * value it ever sees, so a host recomputing it for a resized column keeps
+     * mounting the original count. Re-rendering the SAME element is what
+     * separates that from a size derived on every pass; unmounting would reset
+     * the state either way and prove nothing.
+     */
+    const view = render(
+      <ClassManagerPanel
+        library={many}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        pageSize={4}
+      />
+    );
+    expect(screen.getByText("Showing 4 of 6.")).toBeTruthy();
+
+    view.rerender(
+      <ClassManagerPanel
+        library={many}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+        pageSize={2}
+      />
+    );
+    expect(screen.getByText("Showing 2 of 6.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show 2 more" })).toBeTruthy();
+  });
+
   it("blames the FILTER, not a search that is not set", () => {
     // With the box blank, "no classes match this search" sends an author to
     // clear something they never typed and hides the chip that emptied the list.
@@ -735,15 +818,6 @@ describe("reaching a class past the row cap", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "On this page" }));
     expect(screen.getByText("No classes match this filter.")).toBeTruthy();
-  });
-
-  it("defaults to a page size that bounds a library near its ceiling", () => {
-    // The default must still CAP, or the bound this exists for is gone. Seven
-    // rows with no `pageSize` are all mounted, which is the correct behaviour
-    // below the default and the control that the default is not tiny.
-    draw({ library: many, usage: undefined, documentClassIds: [] });
-    expect(screen.getByLabelText("Name of class-5")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Show \d+ more/ })).toBeNull();
   });
 });
 

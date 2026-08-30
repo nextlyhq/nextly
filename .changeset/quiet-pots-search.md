@@ -26,4 +26,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Let a host state how many class rows the manager mounts at once, so the bound is a stated page size rather than a fixed one.
+Let a host state how many class rows the manager mounts at once, so the bound is a stated page size rather than a fixed one. The size takes effect when it changes, and a value that cannot bound a list falls back to the default rather than stranding classes out of reach.
