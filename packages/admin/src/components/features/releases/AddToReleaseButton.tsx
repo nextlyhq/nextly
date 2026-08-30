@@ -41,7 +41,7 @@ import {
   useReleases,
 } from "@admin/hooks/queries/useReleases";
 import { useCan } from "@admin/hooks/useCan";
-import type { Release, ReleaseMemberAction } from "@admin/types/releases";
+import type { ReleaseMemberAction } from "@admin/types/releases";
 
 import { describeRelease } from "./release-schedule";
 
@@ -54,34 +54,35 @@ export interface AddToReleaseButtonProps {
 /**
  * Which releases are worth OFFERING as a target.
  *
- * Drafts always, and scheduled ones to a caller who could have scheduled them —
- * the drain reads membership at the instant, so adding to a committed launch
- * changes what a publisher agreed to, and the engine requires `publish` for it.
- *
- * Cancelled releases are assemblable and deliberately not offered: nothing added
- * to one would ever go live, so listing it invites an editor to believe they
- * have scheduled something. Rescheduling it first makes it a normal target, so
+ * The server says which ones this caller may add to — state and authority
+ * together — so this filters on `can.addMember` rather than reasoning about
+ * either. What remains here is a presentation decision the server has no view
+ * on: a CANCELLED release is addable and is not offered, because nothing put in
+ * one would ever go live and listing it invites an editor to believe they have
+ * scheduled something. Rescheduling it first makes it an ordinary target, so
  * nothing is unreachable — only the pointless order of operations is.
+ *
+ * Asked as two narrow queries rather than one wide one. The list is ordered by
+ * instant descending with nulls LAST, so drafts — the usual target — sort behind
+ * every scheduled and published release and would fall outside an unfiltered
+ * first window on any site with a history.
  */
-function useAssemblableReleases(canPublish: boolean) {
-  // Asked as two narrow queries rather than one wide one. The list is ordered
-  // by instant descending with nulls LAST, so drafts — the usual target — sort
-  // behind every scheduled and published release and would fall outside an
-  // unfiltered first window on any site with a history.
+function useAssemblableReleases() {
   const drafts = useReleases({ state: "draft" });
   const scheduled = useReleases({ state: "scheduled" });
 
-  const items: Release[] = [
+  const items = [
     ...(drafts.data?.items ?? []),
-    ...(canPublish ? (scheduled.data?.items ?? []) : []),
-  ];
+    ...(scheduled.data?.items ?? []),
+  ].filter(release => release.can?.addMember === true);
+
   return {
     items,
-    isPending: drafts.isPending || (canPublish && scheduled.isPending),
-    isError: drafts.isError || (canPublish && scheduled.isError),
+    isPending: drafts.isPending || scheduled.isPending,
+    isError: drafts.isError || scheduled.isError,
     truncated:
       (drafts.data?.meta.hasNext ?? false) ||
-      (canPublish && (scheduled.data?.meta.hasNext ?? false)),
+      (scheduled.data?.meta.hasNext ?? false),
   };
 }
 
@@ -91,11 +92,10 @@ export function AddToReleaseButton({
   entryId,
 }: AddToReleaseButtonProps) {
   const canAssemble = useCan("create-content-releases");
-  const canPublish = useCan("publish-content-releases");
   const [open, setOpen] = useState(false);
   const [releaseId, setReleaseId] = useState("");
   const [action, setAction] = useState<ReleaseMemberAction>("publish");
-  const releases = useAssemblableReleases(canPublish);
+  const releases = useAssemblableReleases();
   const add = useAddReleaseMember(releaseId);
 
   if (!canAssemble) return null;

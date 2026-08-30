@@ -33,6 +33,7 @@ import type {
 import type {
   AddMemberInput,
   FindReleasesQuery,
+  ReleaseCapabilities,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
@@ -87,6 +88,16 @@ export interface ReleasesNamespace {
   findByID(
     args: { id: string } & ReleaseCallerArgs
   ): Promise<ReleaseRow | null>;
+  /**
+   * What this caller may do to each of these releases.
+   *
+   * A separate call rather than a field on the rows above, because answering it
+   * costs permission reads that most readers of a release do not need. Keyed by
+   * release id.
+   */
+  capabilities(
+    args: { releases: readonly ReleaseRow[] } & ReleaseCallerArgs
+  ): Promise<Map<string, ReleaseCapabilities>>;
   /** Put a document into a release under a lifecycle action. */
   /**
    * Put a document into a release under a lifecycle action.
@@ -247,6 +258,14 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     },
 
     findByID: args => service().findByID(args.id, actorOf(ctx, args)),
+
+    // Kept OFF `find` and `findByID` deliberately. Answering it costs permission
+    // reads, and most readers of a release — a scheduled-content query, a
+    // revalidation pass — never render a control and would pay for an answer
+    // they discard. Payload draws the same line: it computes document
+    // permissions for the edit view, not for every read.
+    capabilities: args =>
+      service().capabilities(args.releases, actorOf(ctx, args)),
 
     addMember: args => {
       const {

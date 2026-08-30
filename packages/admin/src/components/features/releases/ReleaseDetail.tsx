@@ -34,16 +34,13 @@ import {
   useReleaseMembers,
   useRemoveReleaseMember,
 } from "@admin/hooks/queries/useReleases";
-import { useCan } from "@admin/hooks/useCan";
-import type { Release, ReleaseMember } from "@admin/types/releases";
+import type {
+  Release,
+  ReleaseMember,
+  ReleaseState,
+} from "@admin/types/releases";
 
 import { CancelReleaseButton } from "./CancelReleaseButton";
-import {
-  canCancel,
-  canSchedule,
-  membershipEditability,
-  scheduleIntent,
-} from "./release-lifecycle";
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
 import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
 
@@ -162,28 +159,36 @@ function contentsSummary(members: ReleaseMember[]): string {
   return `${parts.join(", ")}.`;
 }
 
-const SCHEDULE_LABEL: Record<ReturnType<typeof scheduleIntent>, string> = {
-  set: "Schedule…",
-  move: "Reschedule…",
-  reinstate: "Reschedule…",
-};
+/**
+ * What the one scheduling control MEANS, given where the release stands.
+ *
+ * Setting a first instant, moving one already committed to, and reinstating a
+ * launch that was called off are three different acts, and the verb is what an
+ * editor reads before clicking. "Schedule" on a release that already has an
+ * instant reads as though it has none.
+ *
+ * Derived from the state, which is a presentational question. WHETHER the
+ * control appears is a different one, and the server answers that.
+ */
+function scheduleLabel(state: ReleaseState): string {
+  return state === "draft" ? "Schedule…" : "Reschedule…";
+}
 
 function Header({
   release,
-  canPublish,
   contentsKnown,
 }: {
   release: Release;
-  canPublish: boolean;
   contentsKnown: boolean;
 }) {
   const [scheduling, setScheduling] = useState(false);
 
-  // Taken from the engine's own transition rules rather than restated. A
-  // scheduled release can be RE-scheduled and a cancelled one reinstated, and a
-  // draft is abandoned by cancelling it, because no delete route exists.
-  const schedulable = canSchedule(release.state);
-  const cancellable = canCancel(release.state);
+  // The server's verdict, not a rule of our own. It knows both halves — the
+  // release's state and this caller's grants — and a scoped API key is judged
+  // by its own, so anything computed here would be guessing at the half the
+  // admin cannot see.
+  const schedulable = release.can?.schedule ?? false;
+  const cancellable = release.can?.cancel ?? false;
 
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -212,7 +217,7 @@ function Header({
       {/* Gated on the same authority the server checks. Its refusal is one
           fixed sentence that cannot say WHY, so the only place a reason can be
           given is here — and not offering the action is the clearest one. */}
-      {canPublish && schedulable ? (
+      {schedulable ? (
         <div className="flex flex-col items-end gap-1">
           <Button
             onClick={() => setScheduling(true)}
@@ -222,7 +227,7 @@ function Header({
             // pending one — the editor cannot see what they are committing.
             disabled={!contentsKnown}
           >
-            {SCHEDULE_LABEL[scheduleIntent(release.state)]}
+            {scheduleLabel(release.state)}
           </Button>
           {!contentsKnown ? (
             <p className="text-xs text-muted-foreground">
@@ -236,9 +241,7 @@ function Header({
           />
         </div>
       ) : null}
-      {canPublish && cancellable ? (
-        <CancelReleaseButton release={release} />
-      ) : null}
+      {cancellable ? <CancelReleaseButton release={release} /> : null}
     </div>
   );
 }
@@ -246,8 +249,6 @@ function Header({
 export function ReleaseDetail({ id }: { id: string }) {
   const release = useRelease(id);
   const members = useReleaseMembers(id);
-  const canAssemble = useCan("create-content-releases");
-  const canPublish = useCan("publish-content-releases");
 
   if (release.isPending) {
     return (
@@ -274,14 +275,11 @@ export function ReleaseDetail({ id }: { id: string }) {
 
   const rows = members.data?.items ?? [];
 
-  // What the service enforces, asked here so the control is not offered where
-  // it can only be refused — and taken from the engine's rules rather than
-  // restated, because a UI matrix that drifts NARROWER removes product without
-  // anything failing to say so.
-  const editability = membershipEditability(release.data.state);
-  const removable =
-    canAssemble &&
-    (editability === "free" || (editability === "needs-publish" && canPublish));
+  // The server's verdict again. Membership is editable freely in some states and
+  // only by a publisher in others — the drain reads membership AT the instant,
+  // so changing a scheduled release changes what a publisher committed to — and
+  // that rule lives with the fence that enforces it, not here.
+  const removable = release.data.can?.removeMember ?? false;
 
   // A members request that has not returned and one that FAILED are the same
   // fact for scheduling: the editor cannot see what they would be committing.
@@ -289,11 +287,7 @@ export function ReleaseDetail({ id }: { id: string }) {
 
   return (
     <>
-      <Header
-        release={release.data}
-        canPublish={canPublish}
-        contentsKnown={contentsKnown}
-      />
+      <Header release={release.data} contentsKnown={contentsKnown} />
 
       <section aria-labelledby="release-contents">
         <div className="mb-3 flex items-baseline justify-between gap-3">

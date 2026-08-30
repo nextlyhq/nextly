@@ -27,6 +27,32 @@ import type { ReleaseMemberAction, ReleaseState } from "nextly/schemas";
  */
 export type { ReleaseMemberAction, ReleaseState };
 
+/**
+ * What the server says THIS reader may do to a release.
+ *
+ * Sent with the release rather than worked out here. Two halves decide it — the
+ * release's state and the caller's authority — and the admin holds only the
+ * first: a scoped API key is judged by its own grants, so any rule written here
+ * would be guessing at the half it cannot see. Restating the transition rules
+ * would also make them a second implementation of the fence the repository
+ * enforces with, which is how a screen comes to offer a move the database
+ * refuses, or to hide one it allows.
+ *
+ * Payload computes the same thing per document for its edit view; Sanity gates
+ * each release action by its own permission id, so scheduling can be granted
+ * without publishing.
+ *
+ * `addMember` and `removeMember` are NECESSARY rather than sufficient — putting
+ * a particular document in also needs that document's own publish authority,
+ * which the server checks at the write. They say what to OFFER.
+ */
+export interface ReleaseCapabilities {
+  schedule: boolean;
+  cancel: boolean;
+  addMember: boolean;
+  removeMember: boolean;
+}
+
 export interface Release {
   id: string;
   title: string;
@@ -52,6 +78,14 @@ export interface Release {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Absent on a release that came from somewhere other than `/api/releases`.
+   *
+   * Optional rather than defaulted, so a screen has to decide what to do with
+   * "unknown" instead of silently reading it as "not permitted" — which would
+   * hide every control — or as permitted, which would offer refusals.
+   */
+  can?: ReleaseCapabilities;
 }
 
 export interface ReleaseMember {

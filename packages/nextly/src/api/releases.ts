@@ -25,7 +25,11 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { RELEASES_RESOURCE } from "../domains/releases/services/releases-service";
+import type { ReleaseRow } from "../domains/releases/releases-repository";
+import {
+  RELEASES_RESOURCE,
+  type ReleaseCapabilities,
+} from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
@@ -405,6 +409,40 @@ interface ReleaseContext {
 }
 
 /**
+ * Each release, with what THIS caller may do to it.
+ *
+ * Attached at the HTTP surface rather than inside the read, because a control
+ * is a property of the reader and not of the release: two callers asking for the
+ * same release get the same row and different verdicts. Sending it spares every
+ * client from holding the transition rules and the grant model, which is the
+ * only way a client could otherwise decide what to offer — and it would be
+ * guessing at the half it cannot see, since a scoped API key is judged by its
+ * own grants rather than its owner's.
+ *
+ * One batched call for the whole page, so a window of fifty releases does not
+ * become fifty permission reads.
+ */
+async function withCapabilities(
+  rows: ReleaseRow[],
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<Array<ReleaseRow & { can: ReleaseCapabilities }>> {
+  const can = await releases.capabilities({ ...caller, releases: rows });
+  return rows.map(row => ({
+    ...row,
+    // A release missing from the map would be a bug in the batch rather than a
+    // caller with no rights, and defaulting to `true` would offer controls the
+    // write then refuses. Absent means "not permitted", which fails closed.
+    can: can.get(row.id) ?? {
+      schedule: false,
+      cancel: false,
+      addMember: false,
+      removeMember: false,
+    },
+  }));
+}
+
+/**
  * One function per operation, keyed by the method the route table named.
  *
  * A map rather than a switch: eight cases in one function is twenty-three paths
@@ -443,11 +481,12 @@ const RELEASE_OPERATIONS: Record<
     });
     const page = found.slice(0, limit);
     const hasNext = found.length > limit;
+    const items = await withCapabilities(page, caller, releases);
     // The canonical list envelope, so shared client tooling reads this like
     // every other list. The meta is synthetic because the query is windowed
     // rather than paged — `total` is what this page holds, and a second query
     // to count the whole table would be a read nobody asked for.
-    return respondList(page, {
+    return respondList(items, {
       // `total` is what this window holds, not a count of the table: the query
       // is windowed rather than paged, and a second COUNT would be a read
       // nobody asked for. `hasNext` is the honest part — it says whether more
@@ -470,7 +509,10 @@ const RELEASE_OPERATIONS: Record<
         logContext: { reason: "release-not-found", releaseId },
       });
     }
-    return respondDoc(release);
+    // The detail read is exactly where the controls are rendered, so this is
+    // the one place the extra permission reads are certainly wanted.
+    const [item] = await withCapabilities([release], caller, releases);
+    return respondDoc(item);
   },
 
   createRelease: async ({ request, caller, releases }) => {
