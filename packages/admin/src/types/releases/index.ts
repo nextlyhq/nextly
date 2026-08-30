@@ -86,6 +86,16 @@ export interface Release {
    * hide every control — or as permitted, which would offer refusals.
    */
   can?: ReleaseCapabilities;
+  /**
+   * What this release will do to the document the list was filtered BY.
+   *
+   * Present only on a read narrowed with `containing`, because it belongs to
+   * the membership rather than to the release: one release can publish a post
+   * while taking a landing page down. Optional rather than defaulted, so a
+   * screen has to decide what an unknown action means instead of quietly
+   * calling it a publish.
+   */
+  memberAction?: ReleaseMemberAction;
 }
 
 export interface ReleaseMember {
@@ -120,10 +130,26 @@ export interface AddReleaseMemberPayload {
   action: ReleaseMemberAction;
 }
 
+/** A document, as the release list's `containing` filter names it. */
+export interface ReleaseDocumentRef {
+  scopeKind: "collection" | "single";
+  scopeSlug: string;
+  entryId: string;
+}
+
 /** The window a release list may be narrowed to. */
 export interface ReleaseListParams {
   state?: ReleaseState;
   scheduledAfter?: string;
   scheduledBefore?: string;
   limit?: number;
+  /**
+   * Only the SCHEDULED releases holding this document.
+   *
+   * The question a document editor asks. All three parts travel or none: the
+   * route refuses a partial reference rather than widening to every release,
+   * because a banner rendering that would tell an author their post is in
+   * eleven launches.
+   */
+  containing?: ReleaseDocumentRef;
 }

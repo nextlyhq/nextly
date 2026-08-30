@@ -54,6 +54,15 @@ function query(params: ReleaseListParams): string {
     search.set("scheduledBefore", params.scheduledBefore);
   }
   if (params.limit !== undefined) search.set("limit", String(params.limit));
+  // All three or none. The route refuses a partial reference, so sending one
+  // part would turn a document question into a 400 rather than into an answer
+  // about every release — which is the behaviour we want, and not one to
+  // trigger by accident.
+  if (params.containing) {
+    search.set("containingScopeKind", params.containing.scopeKind);
+    search.set("containingScopeSlug", params.containing.scopeSlug);
+    search.set("containingEntryId", params.containing.entryId);
+  }
   const q = search.toString();
   return q ? `?${q}` : "";
 }

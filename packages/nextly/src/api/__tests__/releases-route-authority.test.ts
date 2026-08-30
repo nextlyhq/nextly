@@ -67,7 +67,13 @@ function namespace() {
       })
     ),
     releases: {
-      find: vi.fn(async (): Promise<{ id: string }[]> => []),
+      // Takes its query, so a case can assert on what the route ASKED for. A
+      // zero-argument stub records an empty call tuple, and a test reading
+      // `calls[0][0]` from it does not compile — which is the compiler saying
+      // the fake and the thing it stands in for have different shapes.
+      find: vi.fn(
+        async (_query: Record<string, unknown>): Promise<{ id: string }[]> => []
+      ),
       findByID: vi.fn(async () => ({ id: "r1" })),
       create: vi.fn(async () => ({ id: "r1" })),
       addMember: vi.fn(async () => ({ id: "m1" })),

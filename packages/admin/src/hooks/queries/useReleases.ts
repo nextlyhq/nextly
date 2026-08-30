@@ -36,6 +36,7 @@ import {
 import type {
   AddReleaseMemberPayload,
   CreateReleasePayload,
+  ReleaseDocumentRef,
   ReleaseListParams,
   ScheduleReleasePayload,
 } from "@admin/types/releases";
@@ -56,6 +57,28 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
     // because the surface is closed — would otherwise issue a request whose
     // only outcome is a 403 in everyone's network log.
     enabled,
+  });
+}
+
+/**
+ * The scheduled releases holding one document, soonest first.
+ *
+ * A narrowing of the same list, so it shares the list's cache key and is
+ * invalidated by every release write — adding this document to a release
+ * refreshes the banner without the banner knowing that happened.
+ */
+export function useReleasesContaining(
+  document: ReleaseDocumentRef | undefined,
+  enabled = true
+) {
+  const params: ReleaseListParams = document ? { containing: document } : {};
+  return useQuery({
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+    // Never asked without a complete reference: the route refuses a partial
+    // one, and a 404-shaped error in the console under every document editor
+    // is a poor way to say "this document has no id yet".
+    enabled: enabled && Boolean(document),
   });
 }
 
