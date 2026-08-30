@@ -4,6 +4,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import type {
+  WidgetArchetype,
+  WidgetHeight,
+  WidgetOp,
+  WidgetSize,
+  WidgetSourceField,
+} from "../index";
+
 // The rename is only complete when the old vocabulary is absent from every
 // published entry point. A re-exported legacy name is indistinguishable from a
 // supported one to anyone reading the package, so the list is spelled out here
@@ -97,6 +105,33 @@ describe("published export surface", () => {
     const cfg = (await import("../config")) as Record<string, unknown>;
     expect(typeof cfg.defineFieldGroup).toBe("function");
     expect(typeof cfg.fieldGroup).toBe("function");
+  });
+
+  it("publishes every contract a widget definition names", async () => {
+    // `WidgetDefinition` is exported from the root and its `defaultHeight` is
+    // typed `WidgetHeight`. There is no `nextly/widgets` subpath, so the root
+    // entry point is the only place a plugin author can reach these -- and a
+    // publicly visible property whose type has no public name cannot be
+    // annotated, only inferred. Same argument for the source contract:
+    // `registerSource` and `WidgetSource` are published, so the field and op
+    // vocabularies they are built out of have to be nameable too.
+    const root = (await import("../index")) as Record<string, unknown>;
+    expect(root.WIDGET_SIZES).toEqual(["sm", "md", "lg", "xl", "full"]);
+    expect(root.WIDGET_HEIGHTS).toEqual(["short", "tall"]);
+    expect(root.WIDGET_ARCHETYPES).toContain("metric");
+    expect(root.WIDGET_SOURCE_KINDS).toContain("collection");
+    expect(root.WIDGET_OPS).toContain("count");
+
+    // The types themselves: this file is compiled by `tsconfig.tests.json`, so
+    // an unexported name here is a `check-types` failure rather than a silent
+    // pass. Each is annotated (never merely inferred), which is the property a
+    // plugin author actually needs.
+    const height: WidgetHeight = "tall";
+    const size: WidgetSize = "lg";
+    const archetype: WidgetArchetype = "metric";
+    const op: WidgetOp = "count";
+    const field: WidgetSourceField = { name: "title", type: "string" };
+    expect([height, size, archetype, op, field.name]).toHaveLength(5);
   });
 
   it("publishes the field-group type accessor", async () => {

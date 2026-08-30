@@ -462,9 +462,19 @@ export {
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and
 // the validated query shape itself.
+// Every contract a published shape NAMES is published beside it. There is no
+// `nextly/widgets` subpath, so this is the only place a plugin author can
+// reach them, and a public property whose type has no public name can be
+// inferred but never annotated: `WidgetDefinition.defaultHeight` is a
+// `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
+// `WidgetSourceKind` and `WidgetOp`.
 export {
   WIDGET_SIZES,
+  WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
+  WIDGET_SOURCE_KINDS,
+  WIDGET_SOURCE_FIELD_TYPES,
+  WIDGET_OPS,
   registerWidget,
   overrideWidget,
   extendWidget,
@@ -478,8 +488,13 @@ export {
   type WidgetDefinition,
   type WidgetQuery,
   type WidgetSize,
+  type WidgetHeight,
   type WidgetArchetype,
   type WidgetSource,
+  type WidgetSourceField,
+  type WidgetSourceFieldType,
+  type WidgetSourceKind,
+  type WidgetOp,
   type WidgetPatch,
 } from "./domains/widgets";
 

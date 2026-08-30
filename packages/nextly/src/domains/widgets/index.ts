@@ -20,12 +20,17 @@ export {
   type WidgetQuery,
 } from "./query";
 export {
+  WIDGET_OPS,
+  WIDGET_SOURCE_KINDS,
+  WIDGET_SOURCE_FIELD_TYPES,
   registerSource,
   getSource,
   listSources,
   clearSources,
   type WidgetSource,
   type WidgetSourceField,
+  type WidgetSourceFieldType,
+  type WidgetSourceKind,
   type WidgetOp,
 } from "./sources";
 export {
