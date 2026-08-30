@@ -95,43 +95,51 @@ function wallTimeIn(instant: Date, timeZone: string): string {
 /**
  * The instant at which `wall` occurs in `timeZone`, as an ISO string with `Z`.
  *
- * Solved rather than computed in one step: the offset depends on the instant,
- * and the instant is what is being solved for. A first guess treating the wall
- * time as UTC gives an offset that is right except across a daylight-saving
- * boundary, and one correction lands on the far side of it.
+ * Both DST edges are answered here, and they need opposite treatment.
  *
- * **The answer is then CHECKED by rendering it back**, because on a spring
- * forward the requested wall time does not exist and the correction cannot land
- * on it — no instant reads as 02:30 in Berlin on the day the clocks go from
- * 02:00 to 03:00. Without the check the solver returns its nearest approach and
- * the release is scheduled for a different moment than the one that was typed:
- * measured, `2026-03-29T02:30` in `Europe/Berlin` came back as 03:30 (an hour
- * late) and `2026-03-08T02:30` in `America/New_York` as 01:30 (an hour early).
- * Silently moving a launch in either direction is worse than refusing, so this
- * returns `null` and the caller says so.
+ * A SPRING FORWARD deletes an hour, so the requested wall time may not exist at
+ * all. Returning the solver's nearest approach schedules a different moment
+ * while every screen reads as though it took: measured, `2026-03-29T02:30` in
+ * `Europe/Berlin` came back as 03:30 and `2026-03-08T02:30` in
+ * `America/New_York` as 01:30 — an hour late and an hour early from ONE
+ * implementation. So a candidate is accepted only if it renders back as exactly
+ * what was typed, and `null` otherwise.
  *
- * A wall time that occurs TWICE — the autumn fall-back — round-trips correctly
- * and is accepted at its first occurrence, which is the earlier instant and the
- * one an editor naming a time on that day means.
+ * A FALL BACK repeats an hour, so TWO real instants render as the requested
+ * time — in Berlin on 2026-10-25, `00:30Z` and `01:30Z` both read as 02:30. A
+ * single-candidate solver silently returns whichever its arithmetic lands on,
+ * which is the later one; "02:30 that day" means the first, and an editor who
+ * meant the second would have to be able to say so, which this input cannot
+ * express. So both offsets in play around the instant are tried and the EARLIER
+ * surviving candidate wins.
+ *
+ * Offsets are read at a full day either side rather than derived from one
+ * guess, because that is what makes both members of the ambiguous pair
+ * reachable — a transition is at most a couple of hours wide and always falls
+ * inside that window.
  */
 export function instantFor(wall: string, timeZone: string): string | null {
   // `datetime-local` yields `YYYY-MM-DDTHH:mm`, which `Date.parse` reads as
-  // LOCAL time. Appending `Z` reads the same digits as UTC, which is the guess
-  // the correction below starts from.
-  const guess = new Date(`${wall}:00.000Z`);
-  if (Number.isNaN(guess.getTime())) return null;
+  // LOCAL time. Appending `Z` reads the same digits as UTC, which is the anchor
+  // every candidate below is measured from.
+  const asUtc = new Date(`${wall}:00.000Z`);
+  if (Number.isNaN(asUtc.getTime())) return null;
 
-  let instant = guess;
-  for (let pass = 0; pass < 2; pass++) {
-    const offset = offsetMinutesAt(instant, timeZone);
-    const corrected = new Date(guess.getTime() - offset * 60_000);
-    if (corrected.getTime() === instant.getTime()) break;
-    instant = corrected;
-  }
+  const DAY = 86_400_000;
+  const offsets = new Set([
+    offsetMinutesAt(new Date(asUtc.getTime() - DAY), timeZone),
+    offsetMinutesAt(asUtc, timeZone),
+    offsetMinutesAt(new Date(asUtc.getTime() + DAY), timeZone),
+  ]);
 
-  // The round trip is the whole guarantee. Compared to the minute, because that
-  // is the precision the input offers and the seconds are always zero.
-  return wallTimeIn(instant, timeZone) === wall ? instant.toISOString() : null;
+  const candidates = [...offsets]
+    .map(offset => new Date(asUtc.getTime() - offset * 60_000))
+    // The round trip is the whole guarantee: an offset that does not reproduce
+    // the typed wall time is not this zone's offset at that moment.
+    .filter(candidate => wallTimeIn(candidate, timeZone) === wall)
+    .sort((a, b) => a.getTime() - b.getTime());
+
+  return candidates[0]?.toISOString() ?? null;
 }
 
 /** The reader's own zone, or UTC where the platform will not name one. */

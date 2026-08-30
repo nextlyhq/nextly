@@ -567,10 +567,15 @@ export class ReleasesService {
         logContext: { reason: "release-not-found", releaseId },
       });
     }
-    if (parent.state === "scheduled") {
+    if (RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(parent.state)) {
       // Changing what is in a scheduled release changes what goes live at an
       // instant a publisher committed to. The drain reads membership at the
       // instant, not at scheduling time.
+      //
+      // Read from the declaration rather than compared to a literal, so this
+      // and the `can.addMember` the client renders from cannot come apart: a
+      // state added to that list must authorize the same way here, or the UI
+      // offers an edit the write refuses.
       await this.authorize(actor, "publish");
       return;
     }

@@ -29,14 +29,7 @@ import {
 import { useCreateRelease } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
-/**
- * The server's own cap, restated where a person can see it before they hit it.
- *
- * The column is 255 characters in the narrowest dialect, so a longer title is
- * refused at the write. Counting here turns that refusal into something an
- * editor can avoid rather than something they discover after typing.
- */
-const MAX_TITLE = 255;
+import { releaseErrorMessage } from "./release-error";
 
 export interface CreateReleaseDialogProps {
   open: boolean;
@@ -55,8 +48,12 @@ export function CreateReleaseDialog({
   const create = useCreateRelease();
 
   const trimmed = title.trim();
-  const tooLong = trimmed.length > MAX_TITLE;
-  const canSubmit = trimmed.length > 0 && !tooLong && !create.isPending;
+  // No length rule here. The cap is a property of the narrowest dialect's
+  // column and the server states it in its refusal, naming the field and the
+  // number; a copy in this file would be a second implementation of that
+  // boundary and would start rejecting titles the server accepts the moment the
+  // storage contract moves.
+  const canSubmit = trimmed.length > 0 && !create.isPending;
 
   const reset = () => {
     setTitle("");
@@ -115,18 +112,7 @@ export function CreateReleaseDialog({
                 autoFocus
                 onChange={event => setTitle(event.target.value)}
                 placeholder="Spring launch"
-                aria-invalid={tooLong || undefined}
-                aria-describedby={tooLong ? "release-title-error" : undefined}
               />
-              {tooLong ? (
-                <p
-                  id="release-title-error"
-                  role="alert"
-                  className="text-sm text-destructive"
-                >
-                  Names are limited to {MAX_TITLE} characters.
-                </p>
-              ) : null}
             </div>
 
             <div className="flex flex-col gap-2">
@@ -150,7 +136,10 @@ export function CreateReleaseDialog({
               // truthfully — that the release was not created — rather than
               // inventing a reason from an error that carries none.
               <p role="alert" className="text-sm text-destructive">
-                The release could not be created.
+                {releaseErrorMessage(
+                  create.error,
+                  "The release could not be created."
+                )}
               </p>
             ) : null}
           </div>

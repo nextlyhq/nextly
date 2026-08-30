@@ -28,7 +28,15 @@ export const SYSTEM_RESOURCES: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
  * Permission slugs follow the format "{action}-{resource}"
  * (e.g., "read-users", "create-posts", "manage-settings").
  */
-function buildCapabilities(
+/**
+ * The capability shape the admin actually runs on, from a permission list.
+ *
+ * Exported so a test can derive it the way the product does. A hand-built
+ * `AdminCapabilities` literal in a test asserts against a shape nothing
+ * produces, and would go on passing after this function stopped setting a flag
+ * the test still sets for itself.
+ */
+export function buildCapabilities(
   permissions: string[],
   isSuperAdmin: boolean
 ): AdminCapabilities {
@@ -42,6 +50,7 @@ function buildCapabilities(
       canViewMedia: true,
       canViewSettings: true,
       canViewWebhooks: true,
+      canViewReleases: true,
       collections: new Proxy(
         {},
         {
@@ -114,6 +123,10 @@ function buildCapabilities(
       permSet.has("read-webhooks") ||
       permSet.has("update-webhooks") ||
       permSet.has("create-webhooks"),
+    // Read alone. Unlike webhooks, assembling and publishing releases do not
+    // reveal the section on their own — the list is a read, and a caller who
+    // may create one but not read them would land on a page that shows nothing.
+    canViewReleases: permSet.has("read-content-releases"),
     collections,
     canManageUsers: permSet.has("create-users") || permSet.has("update-users"),
     canManageRoles: permSet.has("create-roles") || permSet.has("update-roles"),
@@ -133,6 +146,7 @@ const EMPTY_CAPABILITIES: AdminCapabilities = {
   canViewMedia: false,
   canViewSettings: false,
   canViewWebhooks: false,
+  canViewReleases: false,
   collections: {},
   canManageUsers: false,
   canManageRoles: false,

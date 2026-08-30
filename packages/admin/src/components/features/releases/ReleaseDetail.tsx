@@ -174,7 +174,15 @@ function scheduleLabel(state: ReleaseState): string {
   return state === "draft" ? "Schedule…" : "Reschedule…";
 }
 
-function Header({
+/**
+ * The two lifecycle controls, and the state each is offered from.
+ *
+ * Separated from the header's identity block because they own the dialog state:
+ * keeping them together re-renders the title, the schedule line and the
+ * description every time a dialog opens, and mixes a question about authority
+ * with one about presentation.
+ */
+function HeaderActions({
   release,
   contentsKnown,
 }: {
@@ -187,9 +195,48 @@ function Header({
   // release's state and this caller's grants — and a scoped API key is judged
   // by its own, so anything computed here would be guessing at the half the
   // admin cannot see.
-  const schedulable = release.can?.schedule ?? false;
-  const cancellable = release.can?.cancel ?? false;
+  if (release.can?.cancel === true && release.can.schedule !== true) {
+    return <CancelReleaseButton release={release} />;
+  }
 
+  if (release.can?.schedule !== true) return null;
+
+  return (
+    <div className="flex flex-wrap items-start justify-end gap-2">
+      <div className="flex flex-col items-end gap-1">
+        <Button
+          onClick={() => setScheduling(true)}
+          // Committing a release whose contents have not arrived defeats the
+          // reason this page exists: the instant is chosen with what ships on
+          // screen. A FAILED members request is the same situation as a pending
+          // one — the editor cannot see what they are committing.
+          disabled={!contentsKnown}
+        >
+          {scheduleLabel(release.state)}
+        </Button>
+        {!contentsKnown ? (
+          <p className="text-xs text-muted-foreground">
+            Available once the contents have loaded.
+          </p>
+        ) : null}
+        <ScheduleReleaseDialog
+          release={release}
+          open={scheduling}
+          onOpenChange={setScheduling}
+        />
+      </div>
+      {release.can.cancel ? <CancelReleaseButton release={release} /> : null}
+    </div>
+  );
+}
+
+function Header({
+  release,
+  contentsKnown,
+}: {
+  release: Release;
+  contentsKnown: boolean;
+}) {
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div className="min-w-0">
@@ -214,34 +261,7 @@ function Header({
         ) : null}
       </div>
 
-      {/* Gated on the same authority the server checks. Its refusal is one
-          fixed sentence that cannot say WHY, so the only place a reason can be
-          given is here — and not offering the action is the clearest one. */}
-      {schedulable ? (
-        <div className="flex flex-col items-end gap-1">
-          <Button
-            onClick={() => setScheduling(true)}
-            // Committing a release whose contents have not arrived defeats the
-            // reason this page exists: the instant is chosen with what ships on
-            // screen. A failed members request is the same situation as a
-            // pending one — the editor cannot see what they are committing.
-            disabled={!contentsKnown}
-          >
-            {scheduleLabel(release.state)}
-          </Button>
-          {!contentsKnown ? (
-            <p className="text-xs text-muted-foreground">
-              Available once the contents have loaded.
-            </p>
-          ) : null}
-          <ScheduleReleaseDialog
-            release={release}
-            open={scheduling}
-            onOpenChange={setScheduling}
-          />
-        </div>
-      ) : null}
-      {cancellable ? <CancelReleaseButton release={release} /> : null}
+      <HeaderActions release={release} contentsKnown={contentsKnown} />
     </div>
   );
 }

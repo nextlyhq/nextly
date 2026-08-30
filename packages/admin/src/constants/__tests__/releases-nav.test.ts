@@ -21,6 +21,10 @@ import {
   MAIN_MENU_ITEMS,
 } from "@admin/components/layout/sidebar/sidebar-types";
 
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
+import { filterNavigationItems } from "@admin/lib/permissions/authorization";
+import type { AdminCapabilities } from "@admin/types/permissions";
+
 import { isNavSection, NAV_SECTIONS } from "../nav-sections";
 import { SIDEBAR_NAVIGATION } from "../navigation";
 import { SYSTEM_RESOURCES_IN_DISPLAY_ORDER } from "../permissions";
@@ -109,5 +113,50 @@ describe("the routes the Releases section needs", () => {
     expect(ROUTES.RELEASES).toBe("/admin/releases");
     // The detail route is a template, so the list route must not swallow it.
     expect(ROUTES.RELEASES_DETAIL).toBe("/admin/releases/[id]");
+  });
+});
+
+describe("the OTHER navigation render, which the rail test cannot see", () => {
+  // `DualSidebar` is the desktop rail and renders `MAIN_MENU_ITEMS`. The mobile
+  // drawer renders `SIDEBAR_NAVIGATION` through `filterNavigationItems`, which
+  // authorizes each item by its `requiredPermission`. Two renders, two ways to
+  // be invisible, and the tests above only reach the first.
+  // Derived the way the product derives it, never hand-built: a literal here
+  // would keep passing after `buildCapabilities` stopped setting a flag the
+  // test still sets for itself.
+  const holding = (permissions: string[]): AdminCapabilities =>
+    buildCapabilities(permissions, false);
+
+  it("shows Releases to a caller holding the seeded read permission", () => {
+    // The defect this guards: `content-releases` is a SYSTEM resource, so it is
+    // skipped when the per-collection capability map is built. Without a case
+    // of its own, the generic `action-resource` lookup finds no collection
+    // entry and answers false — hiding the section from everyone except a
+    // super-admin, while the permission is held and the route works.
+    const visible = filterNavigationItems(
+      [...SIDEBAR_NAVIGATION],
+      holding(["read-content-releases"])
+    );
+    expect(visible.map(item => item.href)).toContain(ROUTES.RELEASES);
+  });
+
+  it("hides it from a caller without that permission", () => {
+    // The control. Without it the case above passes against a filter that
+    // returns everything it is given.
+    const visible = filterNavigationItems(
+      [...SIDEBAR_NAVIGATION],
+      holding(["read-media"])
+    );
+    expect(visible.map(item => item.href)).not.toContain(ROUTES.RELEASES);
+  });
+
+  it("still shows Media to that caller, so the filter is doing something", () => {
+    // The second control: proves the caller above is not simply being refused
+    // everything, which would satisfy the negative case for the wrong reason.
+    const visible = filterNavigationItems(
+      [...SIDEBAR_NAVIGATION],
+      holding(["read-media"])
+    );
+    expect(visible.map(item => item.href)).toContain(ROUTES.MEDIA);
   });
 });

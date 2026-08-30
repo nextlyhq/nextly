@@ -43,6 +43,7 @@ import {
 import { useCan } from "@admin/hooks/useCan";
 import type { ReleaseMemberAction } from "@admin/types/releases";
 
+import { releaseErrorMessage } from "./release-error";
 import { describeRelease } from "./release-schedule";
 
 export interface AddToReleaseButtonProps {
@@ -68,21 +69,18 @@ export interface AddToReleaseButtonProps {
  * first window on any site with a history.
  */
 function useAssemblableReleases() {
-  const drafts = useReleases({ state: "draft" });
-  const scheduled = useReleases({ state: "scheduled" });
-
-  const items = [
-    ...(drafts.data?.items ?? []),
-    ...(scheduled.data?.items ?? []),
-  ].filter(release => release.can?.addMember === true);
+  const queries = [
+    useReleases({ state: "draft" }),
+    useReleases({ state: "scheduled" }),
+  ];
 
   return {
-    items,
-    isPending: drafts.isPending || scheduled.isPending,
-    isError: drafts.isError || scheduled.isError,
-    truncated:
-      (drafts.data?.meta.hasNext ?? false) ||
-      (scheduled.data?.meta.hasNext ?? false),
+    items: queries
+      .flatMap(query => query.data?.items ?? [])
+      .filter(release => release.can?.addMember === true),
+    isPending: queries.some(query => query.isPending),
+    isError: queries.some(query => query.isError),
+    truncated: queries.some(query => query.data?.meta.hasNext === true),
   };
 }
 
@@ -92,16 +90,34 @@ export function AddToReleaseButton({
   entryId,
 }: AddToReleaseButtonProps) {
   const canAssemble = useCan("create-content-releases");
+  // The DOCUMENT's own lifecycle grants, which `addMember` requires in addition
+  // to the release authority — scheduling a publish must not become a way to
+  // perform a write the caller could not perform now. Without these the dialog
+  // offers both actions to an assembler who holds neither, and the only thing
+  // they learn is that it failed.
+  const canPublishDocument = useCan(`publish-${scopeSlug}`);
+  const canUnpublishDocument = useCan(`unpublish-${scopeSlug}`);
   const [open, setOpen] = useState(false);
   const [releaseId, setReleaseId] = useState("");
-  const [action, setAction] = useState<ReleaseMemberAction>("publish");
+  // Defaulted to whichever the caller can actually perform, so the dialog does
+  // not open on a disabled choice.
+  const [action, setAction] = useState<ReleaseMemberAction>(
+    canPublishDocument ? "publish" : "unpublish"
+  );
   const releases = useAssemblableReleases();
   const add = useAddReleaseMember(releaseId);
 
-  if (!canAssemble) return null;
+  // Assembling authority alone is not enough to do anything here: every member
+  // performs a lifecycle write on THIS document, so a caller who can neither
+  // publish nor unpublish it has no action to schedule.
+  if (!canAssemble || (!canPublishDocument && !canUnpublishDocument)) {
+    return null;
+  }
 
   const chosen = releases.items.find(release => release.id === releaseId);
-  const canSubmit = Boolean(releaseId) && !add.isPending;
+  const permitted =
+    action === "publish" ? canPublishDocument : canUnpublishDocument;
+  const canSubmit = Boolean(releaseId) && permitted && !add.isPending;
 
   return (
     <>
@@ -205,13 +221,21 @@ export function AddToReleaseButton({
                   onValueChange={next => setAction(next as ReleaseMemberAction)}
                 >
                   <div className="flex items-center gap-2">
-                    <RadioGroupItem value="publish" id="release-publish" />
+                    <RadioGroupItem
+                      value="publish"
+                      id="release-publish"
+                      disabled={!canPublishDocument}
+                    />
                     <Label htmlFor="release-publish" className="font-normal">
                       Publish it — make this document live
                     </Label>
                   </div>
                   <div className="flex items-center gap-2">
-                    <RadioGroupItem value="unpublish" id="release-unpublish" />
+                    <RadioGroupItem
+                      value="unpublish"
+                      id="release-unpublish"
+                      disabled={!canUnpublishDocument}
+                    />
                     <Label htmlFor="release-unpublish" className="font-normal">
                       Unpublish it — take this document down
                     </Label>
@@ -221,7 +245,10 @@ export function AddToReleaseButton({
 
               {add.isError ? (
                 <p role="alert" className="text-sm text-destructive">
-                  This document could not be added to that release.
+                  {releaseErrorMessage(
+                    add.error,
+                    "This document could not be added to that release."
+                  )}
                 </p>
               ) : null}
             </div>

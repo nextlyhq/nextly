@@ -56,13 +56,38 @@ describe("instantFor", () => {
     expect(wallClockIn(iso as string, "Europe/Berlin")).toContain("03:30");
   });
 
-  it("accepts an AMBIGUOUS wall time at its first occurrence", () => {
-    // On a fall back, 02:30 happens twice. Both are real instants, so refusing
-    // would reject a time the editor can legitimately name; the earlier one is
-    // what "02:30 that day" means.
-    const iso = instantFor("2026-10-25T02:30", "Europe/Berlin");
-    expect(iso).toBe("2026-10-25T01:30:00.000Z");
-    expect(wallClockIn(iso as string, "Europe/Berlin")).toContain("02:30");
+  it("accepts an AMBIGUOUS wall time at its FIRST occurrence", () => {
+    // On a fall back, 02:30 happens twice — in Berlin on this date, 00:30Z
+    // (CEST) and 01:30Z (CET) both read as 02:30. Both are real instants, so
+    // refusing would reject a time an editor can legitimately name; the earlier
+    // is what "02:30 that day" means, and the input cannot express the other.
+    //
+    // The exact instant is asserted rather than the rendered time, because BOTH
+    // candidates render as 02:30 — a round-trip assertion cannot tell them
+    // apart, and an earlier version of this test passed while returning the
+    // later one.
+    expect(instantFor("2026-10-25T02:30", "Europe/Berlin")).toBe(
+      "2026-10-25T00:30:00.000Z"
+    );
+  });
+
+  it("picks the first occurrence in a second zone, on its own date", () => {
+    // A control on the case above. One ambiguous case is satisfied by an
+    // implementation that happens to subtract the standard-time offset; a zone
+    // whose transition falls on a different date and at a different UTC hour is
+    // not.
+    expect(instantFor("2026-11-01T01:30", "America/New_York")).toBe(
+      "2026-11-01T05:30:00.000Z"
+    );
+  });
+
+  it("resolves a zone whose offset is not a whole hour", () => {
+    // Kolkata is UTC+5:30 year-round. A solver working in whole hours produces
+    // a plausible-looking instant thirty minutes out, and the round trip is
+    // what catches it.
+    const iso = instantFor("2026-01-15T12:00", "Asia/Kolkata");
+    expect(iso).toBe("2026-01-15T06:30:00.000Z");
+    expect(wallClockIn(iso as string, "Asia/Kolkata")).toContain("12:00");
   });
 
   it("says nothing for an unparseable wall time", () => {

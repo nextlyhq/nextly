@@ -57,6 +57,27 @@ const STATE_VARIANT: Record<
  */
 const FILTERABLE_STATES = Object.keys(RELEASE_STATE_LABEL) as ReleaseState[];
 
+/**
+ * The bounds a date input MEANS, as instants.
+ *
+ * `new Date("2026-09-01")` is midnight UTC, and the server compares
+ * `scheduledAt <=` it — so a release at 09:00 on the chosen day falls outside a
+ * range the editor believes includes it. A date picker names a DAY; the window
+ * it implies runs from that day's first instant to its last.
+ *
+ * Resolved in UTC rather than the reader's zone, matching the instants being
+ * compared. A local-zone boundary would make the same filter select different
+ * releases for two editors looking at one list, which is harder to explain than
+ * an edge that is off by a few hours for someone far from UTC.
+ */
+function startOfDay(day: string): string {
+  return new Date(`${day}T00:00:00.000Z`).toISOString();
+}
+
+function endOfDay(day: string): string {
+  return new Date(`${day}T23:59:59.999Z`).toISOString();
+}
+
 /** The sentinel for "every state", which is not itself a state. */
 const ANY_STATE = "all";
 
@@ -139,12 +160,22 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
 
   const { data, isPending, isError } = useReleases({
     ...(state === ANY_STATE ? {} : { state }),
-    ...(before ? { scheduledBefore: new Date(before).toISOString() } : {}),
-    ...(after ? { scheduledAfter: new Date(after).toISOString() } : {}),
+    ...(before ? { scheduledBefore: endOfDay(before) } : {}),
+    ...(after ? { scheduledAfter: startOfDay(after) } : {}),
     limit,
   });
 
   const filtering = state !== ANY_STATE || Boolean(after) || Boolean(before);
+
+  // ALL of them. Clearing only the state leaves a date window narrowing the
+  // list, so "Show all releases" can render the same empty result it was
+  // offered to escape.
+  const clearFilters = () => {
+    setState(ANY_STATE);
+    setAfter("");
+    setBefore("");
+    setLimit(PAGE);
+  };
 
   const filter = (
     <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -236,7 +267,7 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
       <>
         {filter}
         {filtering ? (
-          <NoneInThisState onClear={() => setState(ANY_STATE)} />
+          <NoneInThisState onClear={clearFilters} />
         ) : (
           <NoReleasesYet onCreate={onCreate} />
         )}

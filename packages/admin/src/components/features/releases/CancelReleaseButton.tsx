@@ -27,6 +27,7 @@ import {
 import { useCancelRelease } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
+import { releaseErrorMessage } from "./release-error";
 import { formatScheduledAt } from "./release-schedule";
 
 export function CancelReleaseButton({ release }: { release: Release }) {
@@ -38,8 +39,24 @@ export function CancelReleaseButton({ release }: { release: Release }) {
   // committed to a moment in the first place.
   const abandoning = release.state === "draft";
 
+  // The dialog is held open while a cancellation is FAILING. `AlertDialogAction`
+  // closes on click, so a message that appears after it has gone is missed by
+  // exactly the editor who most needs it: someone who believes the launch is
+  // stopped and leaves the page. Nothing else on this screen would contradict
+  // them — the release still reads as scheduled, which is what they expected to
+  // change.
+  const open = confirming || cancel.isError;
+
   return (
-    <AlertDialog open={confirming} onOpenChange={setConfirming}>
+    <AlertDialog
+      open={open}
+      onOpenChange={next => {
+        // Dismissing clears the failure too, so the dialog does not reopen
+        // itself the next time this release is looked at.
+        if (!next) cancel.reset();
+        setConfirming(next);
+      }}
+    >
       <Button
         variant="outline"
         onClick={() => setConfirming(true)}
@@ -60,6 +77,14 @@ export function CancelReleaseButton({ release }: { release: Release }) {
             later if you change your mind.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {cancel.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {releaseErrorMessage(
+              cancel.error,
+              "This release was not cancelled — it is still scheduled."
+            )}
+          </p>
+        ) : null}
         <AlertDialogFooter>
           <AlertDialogCancel>
             {abandoning ? "Keep it" : "Keep it scheduled"}

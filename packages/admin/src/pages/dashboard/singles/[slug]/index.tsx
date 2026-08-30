@@ -19,11 +19,15 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
+import { AddToReleaseButton } from "@admin/components/features/releases/AddToReleaseButton";
 import {
   SingleForm,
   type SingleSchema,
 } from "@admin/components/features/singles";
-import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
+import {
+  CONTENT_MEASURE_LENGTH,
+  CONTENT_PAGE_MEASURE,
+} from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -331,6 +335,21 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
       <MeasuredPageFrame>
+        {/* A Single is a release member exactly as a collection entry is — the
+            engine models both and the release detail page links to both — so
+            omitting this control here would leave the Single half of that
+            reachable only through the API. Above the form, in the editor's own
+            measure, matching the collection editor. */}
+        <div
+          className="mx-auto flex w-full justify-end"
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
+          <AddToReleaseButton
+            scopeKind="single"
+            scopeSlug={slug ?? ""}
+            entryId={document.id}
+          />
+        </div>
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
           // expects FieldConfig[] (discriminated). The runtime payload is the
