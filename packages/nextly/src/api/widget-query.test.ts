@@ -30,8 +30,14 @@ vi.mock("../domains/widgets/execute", () => ({ executeWidgetQuery }));
 const { readCaller } = vi.hoisted(() => ({ readCaller: vi.fn() }));
 vi.mock("./authenticated-read", () => ({ readCaller }));
 
+// The collection registry is reached through the DI container, so the
+// container module is the seam -- the same one `dashboard-scope.test.ts` uses
+// for `DashboardService`.
+const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
+vi.mock("../di/container", () => ({ container: { get: containerGet } }));
+
 import { requireAuthentication } from "../auth/middleware";
-import { clearSources, registerSource } from "../domains/widgets/sources";
+import { clearSources } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { setNextlyLogger } from "../observability/logger";
 
@@ -79,16 +85,32 @@ beforeEach(() => {
   readCaller.mockResolvedValue({ user: { id: "user-1", roles: ["editor"] } });
   executeWidgetQuery.mockResolvedValue({ op: "count", total: 3 });
   clearSources();
-  registerSource({
-    id: "collection:posts",
-    label: "Posts",
-    kind: "collection",
-    supports: ["count", "list"],
-    fields: [{ name: "status", type: "string" }],
-  });
   logged.length = 0;
   setNextlyLogger(testLogger);
+  containerGet.mockImplementation((name: string) => {
+    if (name === "collectionRegistryService") {
+      return { getAllCollections: async () => registeredCollections };
+    }
+    throw new Error(`unexpected container.get("${name}") in this test`);
+  });
+  // The endpoint derives its collection sources from the live collection
+  // registry, so the fixture describes what that registry holds rather than
+  // pre-registering a source the handler would replace anyway.
+  registeredCollections = [
+    {
+      slug: "posts",
+      fields: [{ name: "status", type: "text" }],
+      timestamps: true,
+    },
+  ];
 });
+
+/** What the live collection registry answers with for the case under test. */
+let registeredCollections: Array<{
+  slug: string;
+  fields: Array<{ name: string; type: string }>;
+  timestamps: boolean;
+}> = [];
 
 afterEach(() => {
   setNextlyLogger(undefined);
@@ -169,6 +191,30 @@ describe("POST /api/dashboard/query", () => {
     }));
     const res = await postWidgetQuery(makeReq({ queries }));
     expect(res.status).toBe(400);
+  });
+
+  it("serves a collection that exists only in the Schema Builder", async () => {
+    // A Builder-authored collection lives in `dynamic_collections` and is
+    // ABSENT from `transformedConfig.collections`, so a source registry built
+    // from the static config has no entry for it -- and the widget surface
+    // silently refuses one of the framework's two schema modes while the
+    // Direct API and the dashboard both read it fine. The registry is the
+    // source of truth both of those already use.
+    registeredCollections = [
+      {
+        slug: "reports",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ];
+
+    const res = await postWidgetQuery(
+      makeReq({ queries: [{ source: "collection:reports", op: "count" }] })
+    );
+
+    const slots = await slotsOf(res);
+    expect(slots[0].error).toBeUndefined();
+    expect(slots[0].ok).toBe(true);
   });
 
   describe("a malformed body answers in the canonical error envelope", () => {

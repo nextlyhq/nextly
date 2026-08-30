@@ -194,7 +194,6 @@ import {
 } from "./load-dynamic-tables";
 import {
   registerAuthServices,
-  registerBuiltInWidgetSources,
   registerCollectionServices,
   registerComponentServices,
   registerDashboardServices,
@@ -208,6 +207,7 @@ import {
   registerUserServices,
   registerVersionServices,
   registerWebhookServices,
+  resetWidgetRegistries,
   type RegistrationContext,
 } from "./registrations";
 
@@ -687,29 +687,21 @@ export async function registerServices(
   // PII-bearing events despite the opt-out.
   publishWebhookRecordingPolicies(transformedConfig);
 
-  // Rebuild the widget-source registry from the config the same way: derived,
-  // unconditional, and independent of the schema registry below. Clear-then-
-  // register so a dev-server hot reload re-registering the same collection
-  // slugs never collides with itself, while a genuine duplicate slug WITHIN
-  // this one config still fails loudly (see register-widgets.ts). This is the
-  // one place both of Nextly's boot paths funnel through `registerServices`,
-  // so it is the one place this needs wiring.
+  // Empty the `globalThis`-pinned widget registries before anything registers
+  // into them, so a dev-server hot reload re-registering the same ids never
+  // collides with itself while a genuine duplicate within one boot still
+  // fails loudly. This is the one place both of Nextly's boot paths funnel
+  // through, so it is the one place the reset needs wiring.
   //
-  // A `group` field has no `name` of its own (it is a layout container over
-  // named children), so it is filtered out here rather than widening
-  // `WidgetBootConfig` to accept `name: string | undefined` -- a source field
-  // with no name could never be referenced by a query anyway.
-  registerBuiltInWidgetSources({
-    collections: (transformedConfig.collections ?? []).map(collection => ({
-      slug: collection.slug,
-      fields: (collection.fields ?? [])
-        .filter(
-          (field): field is typeof field & { name: string } =>
-            typeof field.name === "string"
-        )
-        .map(field => ({ name: field.name, type: field.type })),
-    })),
-  });
+  // Deliberately a reset and nothing more. Collection sources are DERIVED from
+  // the collection registry, which is registered in Layer 3 and populated by
+  // Layer 4's sync -- both after this point -- and which keeps changing
+  // afterwards as the Schema Builder creates collections in a running process.
+  // `domains/widgets/collection-sources.ts` reads it where the answer is
+  // needed. Building them from `transformedConfig.collections` here was the
+  // defect: a Builder-authored collection has no config entry at all, so one
+  // of the framework's two schema modes had no queryable source.
+  resetWidgetRegistries();
 
   // Then layer in the registry-stored opt-outs. Builder-authored collections and
   // singles have no code-first config to publish from, so without this read their

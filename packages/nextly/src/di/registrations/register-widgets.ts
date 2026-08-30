@@ -1,21 +1,27 @@
 /**
- * Populate the widget registries from the boot config.
+ * Reset the widget registries at boot.
  *
  * `clearWidgets()` and `clearSources()` reset a `globalThis`-pinned store
  * rather than a DI container entry, so this does not live beside the other
  * `register*Services` functions in this directory -- there is no service to
- * register, only a clear-then-rebuild to run.
+ * register, only a reset to run.
  *
  * Called from `registerServices()`, which both of Nextly's boot paths funnel
  * through (`init.ts`'s instrumentation boot and `createDynamicHandlers`'s lazy
  * request-path boot -- see `route-handler/auth-handler.ts`). That makes it the
- * one choke point where "clear, then re-register" needs to be wired exactly
- * once: CLEARING first means a dev-server hot reload re-registering the same
- * collection slugs never collides with itself (the previous boot's rows are
- * gone before the new ones land), while a genuine duplicate slug WITHIN one
- * boot still fails loudly -- `registerSource` throws on a second call for the
- * same id inside a single `registerBuiltInSources` pass, because nothing
- * clears the store between two collections in that same pass.
+ * one choke point where the reset needs wiring exactly once: a dev-server hot
+ * reload re-registering the same widget ids or plugin source ids never
+ * collides with itself, because the previous boot's rows are gone before the
+ * new ones land -- while a genuine duplicate WITHIN one boot still fails
+ * loudly, since nothing clears the store between two registrations in the same
+ * pass.
+ *
+ * It deliberately publishes NO collection sources. Those are derived from the
+ * collection registry, which is not populated at this point in boot and which
+ * keeps changing afterwards as the Schema Builder is used;
+ * `domains/widgets/collection-sources.ts` reads it where the answer is needed
+ * and explains why. What is left here is the one thing boot genuinely owns:
+ * the store starts empty.
  *
  * `clearWidgets()` runs here too even though no core widget definition is
  * registered yet. The widget registry is `globalThis`-pinned exactly as the
@@ -27,25 +33,10 @@
  * @module di/registrations/register-widgets
  */
 
-import { registerBuiltInSources } from "../../domains/widgets/built-in-sources";
 import { clearWidgets } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
 
-/** The slice of the boot config this needs -- never the whole `NextlyServiceConfig`. */
-export interface WidgetBootConfig {
-  collections?: Array<{
-    slug: string;
-    fields?: Array<{ name: string; type: string }>;
-  }>;
-}
-
-export function registerBuiltInWidgetSources(config: WidgetBootConfig): void {
+export function resetWidgetRegistries(): void {
   clearWidgets();
   clearSources();
-  registerBuiltInSources(
-    (config.collections ?? []).map(collection => ({
-      slug: collection.slug,
-      fields: collection.fields ?? [],
-    }))
-  );
 }

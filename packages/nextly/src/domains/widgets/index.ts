@@ -24,6 +24,7 @@ export {
   WIDGET_SOURCE_KINDS,
   WIDGET_SOURCE_FIELD_TYPES,
   registerSource,
+  replaceSourcesOfKind,
   getSource,
   listSources,
   clearSources,
@@ -45,4 +46,8 @@ export {
   type WidgetPatch,
 } from "./registry";
 export { executeWidgetQuery, type WidgetResult } from "./execute";
-export { registerBuiltInSources } from "./built-in-sources";
+export {
+  registerBuiltInSources,
+  type WidgetSourceCollection,
+} from "./built-in-sources";
+export { refreshCollectionSources } from "./collection-sources";

@@ -188,6 +188,34 @@ export function getSource(id: string): WidgetSource | undefined {
 }
 
 /**
+ * Swap every source of one KIND for `next`, leaving the other kinds standing.
+ *
+ * The collection sources are DERIVED from the collection registry rather than
+ * declared, so they are rebuilt whenever that registry is consulted -- and a
+ * rebuild has to be able to run against a store that already holds the
+ * previous answer, which `registerSource` refuses (correctly: a duplicate id
+ * inside one pass is a real mistake). Replacing by kind is what makes the
+ * rebuild idempotent without weakening that refusal.
+ *
+ * Kind-scoped, not a full clear: a plugin's own `plugin:` sources are declared
+ * once at boot and have nothing to do with which collections exist, so a
+ * collection rebuild must not take them with it.
+ *
+ * A collection that has LEFT the registry loses its source here, which is the
+ * direction that matters: the set shrinks as well as grows.
+ */
+export function replaceSourcesOfKind(
+  kind: WidgetSourceKind,
+  next: readonly WidgetSource[]
+): void {
+  const map = store();
+  for (const [id, source] of map) {
+    if (source.kind === kind) map.delete(id);
+  }
+  for (const source of next) registerSource(source);
+}
+
+/**
  * The ONE refusal every "you cannot query that" answer gives.
  *
  * A widget query names a source and an op, and both are caller input on a

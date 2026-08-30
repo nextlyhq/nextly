@@ -16,6 +16,7 @@
 
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { refreshCollectionSources } from "../domains/widgets/collection-sources";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import { validateWidgetQuery } from "../domains/widgets/query";
 import { NextlyError } from "../errors/nextly-error";
@@ -149,6 +150,13 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   await getCachedNextly();
+
+  // ONCE for the whole batch, before any query is resolved. The collection
+  // sources are derived from the live collection registry rather than from the
+  // boot config, which is what makes a Schema-Builder collection queryable at
+  // all -- it has no config entry, and it can be created while this process is
+  // running. See `domains/widgets/collection-sources.ts`.
+  await refreshCollectionSources();
 
   const body = (await req.json()) as unknown;
   const queries = parseQueriesBody(body);

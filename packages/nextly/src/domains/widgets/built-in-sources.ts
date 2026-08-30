@@ -8,7 +8,11 @@
  * @module domains/widgets/built-in-sources
  */
 
-import { registerSource, type WidgetSourceField } from "./sources";
+import {
+  replaceSourcesOfKind,
+  type WidgetSource,
+  type WidgetSourceField,
+} from "./sources";
 
 /** Columns every collection has, and the ones a recency widget sorts by. */
 const ALWAYS_PRESENT: readonly WidgetSourceField[] = [
@@ -56,30 +60,44 @@ function exposedFields(
     .map(field => ({ name: field.name, type: toSourceType(field.type) }));
 }
 
-export function registerBuiltInSources(
-  collections: Array<{
-    slug: string;
-    fields: Array<{ name: string; type: string }>;
-  }>
-): void {
-  for (const collection of collections) {
-    const declared = exposedFields(collection.fields);
-    const seen = new Set(declared.map(f => f.name));
+/** One collection, in the shape a widget source is built from. */
+export interface WidgetSourceCollection {
+  slug: string;
+  fields: Array<{ name: string; type: string }>;
+}
 
-    registerSource({
-      id: `collection:${collection.slug}`,
-      label: collection.slug,
-      kind: "collection",
-      // `read-<slug>`: the spelling the permission table and `canReadEntity`
-      // use, so a picker filtering on this asks the same question the read
-      // path answers. Advisory only -- see `WidgetSource.requiredPermission`
-      // for why nothing enforces it.
-      requiredPermission: `read-${collection.slug}`,
-      supports: ["count", "list"],
-      fields: [
-        ...declared,
-        ...ALWAYS_PRESENT.filter(field => !seen.has(field.name)),
-      ],
-    });
-  }
+/** The widget source a single collection exposes. */
+function collectionSource(collection: WidgetSourceCollection): WidgetSource {
+  const declared = exposedFields(collection.fields);
+  const seen = new Set(declared.map(f => f.name));
+
+  return {
+    id: `collection:${collection.slug}`,
+    label: collection.slug,
+    kind: "collection",
+    // `read-<slug>`: the spelling the permission table and `canReadEntity`
+    // use, so a picker filtering on this asks the same question the read
+    // path answers. Advisory only -- see `WidgetSource.requiredPermission`
+    // for why nothing enforces it.
+    requiredPermission: `read-${collection.slug}`,
+    supports: ["count", "list"],
+    fields: [
+      ...declared,
+      ...ALWAYS_PRESENT.filter(field => !seen.has(field.name)),
+    ],
+  };
+}
+
+/**
+ * Publish exactly these collections as the install's collection sources.
+ *
+ * A REPLACEMENT rather than an addition, because the collection set is derived
+ * from a registry that changes while the process runs: a collection dropped
+ * from it has to lose its source, and republishing the same slug has to be
+ * something that can happen twice without colliding with itself.
+ */
+export function registerBuiltInSources(
+  collections: WidgetSourceCollection[]
+): void {
+  replaceSourcesOfKind("collection", collections.map(collectionSource));
 }
