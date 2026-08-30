@@ -59,4 +59,48 @@ describe("validateWidgetDefinition", () => {
       })
     ).not.toThrow();
   });
+
+  it("FORBIDS a query on text and actions, both directions like component", () => {
+    // The interface says "Required for every data archetype; forbidden for
+    // `text` and `actions`", and only the first half was enforced. A `text`
+    // widget carrying a query is a declaration whose author expected data and
+    // whose renderer will never ask for any -- accepted at registration,
+    // silently inert afterwards. `validateComponent` beside it already checks
+    // both directions; this now matches.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/notes",
+        title: "Notes",
+        archetype: "text",
+        defaultSize: "md",
+        query: { source: "collection:posts", op: "list", limit: 5 },
+      })
+    ).toThrow(/query is only valid for/);
+
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        query: { source: "collection:posts", op: "count", limit: 5 },
+      })
+    ).toThrow(/query is only valid for/);
+  });
+
+  it("still allows a query on the custom archetype", () => {
+    // The negative control, and the reason the forbidden set is named rather
+    // than inferred as "everything that is not a data archetype": `custom`
+    // draws itself and may legitimately want core to run its query.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/chart",
+        title: "Chart",
+        archetype: "custom",
+        defaultSize: "md",
+        component: "pkg#Chart",
+        query: { source: "collection:posts", op: "count", limit: 5 },
+      })
+    ).not.toThrow();
+  });
 });

@@ -140,10 +140,34 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
   }
 }
 
-/** Confirms `query` is present for every archetype whose content comes from data. */
+/**
+ * Confirms `query` is present exactly where the archetype calls for one.
+ *
+ * BOTH directions, the way `validateComponent` above checks both. The
+ * interface says "Required for every data archetype; forbidden for `text` and
+ * `actions`", and enforcing only the first half let a `text` widget carry a
+ * query its renderer never asks for -- accepted at registration and silently
+ * inert afterwards, which is the class of mistake this validator exists to
+ * catch at boot.
+ *
+ * `custom` is in neither set on purpose: it draws itself and may legitimately
+ * want core to run its query, so the forbidden set is NAMED rather than
+ * derived as "everything that is not a data archetype".
+ */
+const QUERYLESS_ARCHETYPES: ReadonlySet<WidgetArchetype> = new Set([
+  "text",
+  "actions",
+]);
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
-  if (DATA_ARCHETYPES.has(d.archetype as WidgetArchetype) && !d.query) {
+  const archetype = d.archetype as WidgetArchetype;
+  if (DATA_ARCHETYPES.has(archetype) && !d.query) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
+  }
+  if (QUERYLESS_ARCHETYPES.has(archetype) && d.query !== undefined) {
+    fail(
+      `${d.id}: query is only valid for a data archetype or "custom", not "${d.archetype}"`
+    );
   }
 }
 
