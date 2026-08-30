@@ -161,6 +161,13 @@ function buildNextlyInstance(
     userFields: directAPI.userFields,
     email: directAPI.email,
 
+    // Background jobs. Forwarded like every other namespace: adding one to the
+    // `Nextly` CLASS does not put it on the object this builds, so a namespace
+    // that stops here exists only on the module-level `nextly` facade and is
+    // absent — at compile time and at runtime — from the documented
+    // `await getNextly()` path.
+    jobs: directAPI.jobs,
+
     // RBAC namespaces
     roles: directAPI.roles,
     permissions: directAPI.permissions,

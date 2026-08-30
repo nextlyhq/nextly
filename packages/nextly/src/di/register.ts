@@ -59,6 +59,7 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
+import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { MetaService } from "../domains/meta";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
@@ -287,6 +288,11 @@ export interface NextlyServiceConfig {
 
   /** @experimental App-declared role bundles, seeded like plugin roles (D67). */
   roles?: PluginRole[];
+  /**
+   * Background job types this application declares itself, alongside any a
+   * plugin contributes. Registered at boot; see `plugins/jobs/collect-jobs`.
+   */
+  jobs?: JobDefinition[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];

@@ -81,6 +81,7 @@ import type { NextlyContext } from "./namespaces/context";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
+  createJobsNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
@@ -93,6 +94,7 @@ import {
   createUsersNamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
+  type JobsNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
@@ -201,6 +203,7 @@ import type {
   UpdateUserFieldArgs,
   UploadMediaArgs,
 } from "./types/index";
+import type { JobSlug, QueueJobArgs } from "./types/jobs";
 
 /**
  * Nextly Direct API class.
@@ -250,6 +253,7 @@ export class Nextly implements NextlyContext {
   public readonly permissions: PermissionsNamespace;
   public readonly access: AccessNamespace;
   public readonly apiKeys: ApiKeysNamespace;
+  public readonly jobs: JobsNamespace;
 
   /**
    * Create a new Nextly instance.
@@ -274,6 +278,7 @@ export class Nextly implements NextlyContext {
     this.permissions = createPermissionsNamespace(this);
     this.access = createAccessNamespace(this);
     this.apiKeys = createApiKeysNamespace(this);
+    this.jobs = createJobsNamespace();
   }
 
   /**
@@ -779,6 +784,11 @@ export const nextly = {
     getNextly().forgotPassword(args),
   resetPassword: (args: ResetPasswordArgs) => getNextly().resetPassword(args),
   verifyEmail: (args: VerifyEmailArgs) => getNextly().verifyEmail(args),
+
+  jobs: {
+    queue: <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
+      getNextly().jobs.queue(args),
+  },
 
   users: {
     find: (args?: FindUsersArgs) => getNextly().users.find(args),

@@ -44,3 +44,4 @@ export {
   type PermissionsNamespace,
   type RolesNamespace,
 } from "./rbac";
+export { createJobsNamespace, type JobsNamespace } from "./jobs";

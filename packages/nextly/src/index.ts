@@ -647,6 +647,15 @@ export type {
 export { runJobsPass } from "./domains/jobs/jobs-runner";
 export type { RunJobsPassOptions } from "./domains/jobs/jobs-runner";
 export type { RunJobsResult } from "./domains/jobs/run-jobs";
+// The QUEUE side. `nextly.jobs.queue` is the call almost every application
+// makes; everything above it is the machinery that then runs the work, and only
+// an application assembling its own runner needs those.
+export type {
+  JobInputFor,
+  JobSlug,
+  QueueJobArgs,
+  QueueJobResult,
+} from "./direct-api/types/jobs";
 
 // The release materialiser, as a job definition. Exported so an application can
 // register it with the runner today: the periodic trigger that would register it

@@ -26,6 +26,7 @@ import type {
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
+import type { JobDefinition } from "../../domains/jobs/job-registry";
 import type { PreviewConfig } from "../../domains/preview/route-config";
 import { resolveWebhookRetentionConfig } from "../../domains/webhooks/retention-config";
 import type {
@@ -645,6 +646,17 @@ export interface NextlyConfig {
   /** Plugins to extend Nextly functionality. */
   plugins?: PluginDefinition[];
 
+  /**
+   * @experimental Background job types this application declares itself.
+   *
+   * Each entry is a `defineJob(...)` result, registered with the job runner at
+   * boot alongside anything a plugin contributes. Declared here rather than only
+   * on the internal service config so an application using `defineConfig` can
+   * actually reach it — a definition the public type does not admit is an option
+   * nobody can set.
+   */
+  jobs?: JobDefinition[];
+
   /** @experimental Custom permissions declared by the app (seeded like plugin permissions, D36). */
   permissions?: PluginPermission[];
 
@@ -775,6 +787,12 @@ export interface SanitizedNextlyConfig {
 
   /** Plugins to extend Nextly functionality (empty array if none configured). */
   plugins: PluginDefinition[];
+
+  /**
+   * @experimental Background job types the application declared, carried through
+   * sanitisation so the collector that registers them can see them.
+   */
+  jobs?: JobDefinition[];
 
   /** @experimental App-declared custom permissions (undefined if none). Seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
@@ -980,6 +998,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     },
     storage: config.storage ?? [],
     plugins: config.plugins ?? [],
+    // Carried explicitly. This function names every field it returns, so a field
+    // added to the type and not to this literal is accepted by the compiler and
+    // dropped at runtime — the option would validate and do nothing.
+    jobs: config.jobs ?? [],
     permissions: config.permissions,
     security: config.security,
     admin: config.admin,
