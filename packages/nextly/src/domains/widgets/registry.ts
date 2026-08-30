@@ -50,6 +50,53 @@ function store(): Map<string, RegistryEntry> {
   return globalForWidgets.__nextly_widgets;
 }
 
+/** Freezes an object and everything reachable from it. */
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  for (const nested of Object.values(value)) deepFreeze(nested);
+  return Object.freeze(value);
+}
+
+/**
+ * The value the store actually holds: a detached, frozen copy.
+ *
+ * Keeping the caller's object by reference makes every gate in this module
+ * optional. `validateWidgetDefinition` ran at registration and a plugin that
+ * still holds the object can edit it afterwards; `extendWidget`'s patch
+ * allowlist and the deliberate `overrideWidget` path are then both routes
+ * nobody has to take. The archetype, the `component` path, or the `query` the
+ * host is about to execute all change with nothing revalidating them.
+ *
+ * DETACHED and FROZEN, because either alone leaves a way in: a copy handed
+ * back unfrozen is mutated through the getter, and a frozen original is still
+ * the caller's object to keep a reference into. Frozen also means the getters
+ * can return the stored value directly rather than copying per read.
+ *
+ * `structuredClone` is available because a widget definition is DATA by
+ * construction -- the module contract is that a host reads it without
+ * executing the plugin that declared it -- so there is nothing here it cannot
+ * carry. It throws on a function, symbol or class instance, which is a
+ * definition that already violated that contract; the refusal is wrapped so it
+ * reads like every other one in this module rather than as an unhandled
+ * `DOMException`.
+ *
+ * `blocks-engine`'s registry stores by reference in the same way and is
+ * deliberately left alone: a `BlockDefinition` may carry a `markProp` FUNCTION,
+ * so it is not structured-cloneable and the same fix does not transfer.
+ */
+function snapshot(def: WidgetDefinition): WidgetDefinition {
+  try {
+    return deepFreeze(structuredClone(def));
+  } catch {
+    throw NextlyError.invalidInput({
+      message:
+        `Widget "${def.id}" carries a value that cannot be stored. A widget ` +
+        `definition is data: functions, symbols and class instances are not ` +
+        `part of it.`,
+    });
+  }
+}
+
 /** Register a widget. Throws if the id is taken or the definition is malformed. */
 export function registerWidget(
   def: WidgetDefinition,
@@ -65,7 +112,7 @@ export function registerWidget(
         `"${source}" cannot claim it. Use overrideWidget() to replace it deliberately.`,
     });
   }
-  store().set(def.id, { definition: def, source });
+  store().set(def.id, { definition: snapshot(def), source });
 }
 
 /**
@@ -100,7 +147,10 @@ export function overrideWidget(
       message: `Cannot override widget "${id}": it is not registered.`,
     });
   }
-  store().set(id, { definition: def, source: opts.source ?? "unknown" });
+  store().set(id, {
+    definition: snapshot(def),
+    source: opts.source ?? "unknown",
+  });
 }
 
 /**
@@ -129,7 +179,7 @@ export function extendWidget(
   const merged = { ...existing.definition, ...patch };
   validateWidgetDefinition(merged);
   store().set(id, {
-    definition: merged,
+    definition: snapshot(merged),
     source: opts.source ?? existing.source,
   });
 }

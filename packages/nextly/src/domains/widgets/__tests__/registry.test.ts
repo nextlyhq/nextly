@@ -115,6 +115,53 @@ describe("widget registry", () => {
     expect(survivor?.maxSize).toBeUndefined();
   });
 
+  it("stores a snapshot, so mutating the registered object changes nothing", () => {
+    // Registration is the gate: `validateWidgetDefinition` runs, `extendWidget`
+    // restricts a patch to named fields, and `overrideWidget` is the only way
+    // to replace one wholesale. Keeping the caller's object by reference makes
+    // all three optional -- a plugin holds the object it handed over and edits
+    // it afterwards, changing the archetype or the query the host will execute
+    // with nothing revalidating anything.
+    const original = def("core/totals", { title: "Totals" });
+    registerWidget(original, { source: "core" });
+
+    original.title = "Hijacked";
+    original.archetype = "custom";
+    if (original.query) original.query.op = "list";
+
+    const stored = getWidget("core/totals");
+    expect(stored?.title).toBe("Totals");
+    expect(stored?.archetype).toBe("metric");
+    expect(stored?.query?.op).toBe("count");
+  });
+
+  it("hands out a definition the caller cannot mutate, at every depth", () => {
+    // The other half: a snapshot taken at registration is undone if the
+    // getter then hands the store's own object to anyone who asks.
+    registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
+
+    const stored = getWidget("core/totals") as WidgetDefinition;
+    expect(() => {
+      stored.title = "Hijacked";
+    }).toThrow(TypeError);
+    expect(() => {
+      (stored.query as { op: string }).op = "list";
+    }).toThrow(TypeError);
+
+    expect(getWidget("core/totals")?.title).toBe("Totals");
+    expect(listWidgets()[0].query?.op).toBe("count");
+  });
+
+  it("snapshots a patched widget too", () => {
+    registerWidget(def("core/totals", { title: "Totals" }), { source: "core" });
+    extendWidget("core/totals", { title: "Revenue totals" });
+
+    const patched = getWidget("core/totals") as WidgetDefinition;
+    expect(() => {
+      patched.title = "Hijacked";
+    }).toThrow(TypeError);
+  });
+
   it("reports whether a deregistration removed anything", () => {
     registerWidget(def("core/totals"), { source: "core" });
     expect(deregisterWidget("core/totals")).toBe(true);
