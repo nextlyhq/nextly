@@ -2,9 +2,15 @@
  * Dashboard Service
  *
  * Aggregates content-centric statistics, recent entries across collections,
- * and project-wide metrics for the admin dashboard. Uses the database adapter
- * directly for simple read-only aggregate queries — no hooks, access control,
- * or relationship expansion needed for dashboard stats.
+ * and project-wide metrics for the admin dashboard.
+ *
+ * Anything describing CONTENT goes through the ordinary access-controlled path
+ * — `nextly.find` for the recent-entries feed, `nextly.count` for the
+ * per-collection totals — because a number computed beside the access layer
+ * discloses exactly what the row read withholds. The adapter is used directly
+ * only for the installation-wide admin metrics (`media`, `users`, `roles`,
+ * `permissions`, active API keys), which are uniformly unscoped, and for the
+ * two `activity_log` aggregates, whose scoping is applied to the query itself.
  *
  * @module services/dashboard/dashboard-service
  * @since 1.0.0
@@ -100,8 +106,9 @@ export class DashboardService extends BaseService {
   /**
    * Get aggregated dashboard statistics.
    *
-   * Runs all count queries in parallel for fast response. Uses the database
-   * adapter directly for simple COUNT(*) queries.
+   * Runs all count queries in parallel for fast response. The per-collection
+   * totals go through the access-controlled count; see
+   * {@link countReadableEntries} for why they cannot be a bare `COUNT(*)`.
    */
   async getStats(options: {
     scope?: ReadableResources;
