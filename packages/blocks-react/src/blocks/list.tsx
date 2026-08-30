@@ -95,16 +95,28 @@ export function renderList({
  * grows a third kind.
  *
  * The inline padding is the other half. A marker is drawn OUTSIDE the content
- * box by default, so restoring it to a list whose padding a reset has zeroed
- * paints it beyond the element's own edge — clipped, or overlapping whatever
- * sits alongside. Browsers pair their markers with roughly `40px`; `2.5ch`
- * tracks the text instead, so a long numeral in a wide font still has room.
+ * box, so restoring one to a list whose padding a reset has zeroed paints it
+ * beyond the element's own edge — clipped by any ancestor that hides overflow,
+ * which `core/card` does in order to make its own rounding mean something.
+ *
+ * **`2.5em`, which is what a browser itself reserves.** Measured at 16px system
+ * UI rather than reasoned about: `99.` is 23.6px, `999.` is 33.4px, `9999.` is
+ * 43.3px, and a bullet is 7.2px. An earlier `2.5ch` gutter came to 25.2px and
+ * so began clipping at THREE digits — an ordinary list of a hundred items, not
+ * an exotic one. `2.5em` is 40px and carries three comfortably.
+ *
+ * It does not carry four, and no fixed gutter carries the `start` this block
+ * accepts, which runs to 1,000,000. That is a property of the range rather than
+ * of this default, and a browser's own list has exactly the same limit at
+ * exactly the same width; a list numbered into the thousands wants a gutter its
+ * author chose. What this value must not do is clip a case a browser would have
+ * shown, and at 40px it does not.
  */
 const LIST_BASE_STYLES = {
   base: {
     base: {
       listStyleType: "revert",
-      padding: { inlineStart: "2.5ch" },
+      padding: { inlineStart: "2.5em" },
     },
   },
 } as const;
