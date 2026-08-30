@@ -724,10 +724,23 @@ export class DashboardService extends BaseService {
         // That is not "the lifecycle filter handles locales correctly"; it
         // is that NO filter is applied, so none can be wrong for either.
         status: "all",
+        // `entryHeading`'s fallback chain is
+        // `data[titleField] ?? data.title ?? data.name`, but the Direct
+        // API's `select` is a real projection (`applyFieldSelection` in
+        // `collection-query-service.ts` keeps only `id`, the system
+        // timestamps, and whatever key is named here) -- so `title` and
+        // `name` reach the resolver only when they are asked for by name.
+        // Without them the fallback candidates are simply absent from every
+        // real read, and the chain can never do anything but return the id:
+        // dead code that only "worked" in a test handing the resolver an
+        // unprojected row. Selecting a field twice when `titleField` already
+        // IS `title` or `name` is harmless -- every value here is `true`.
         select: {
           id: true,
           updatedAt: true,
           [titleField]: true,
+          title: true,
+          name: true,
           ...(coll.hasStatus ? { status: true } : {}),
         },
       });

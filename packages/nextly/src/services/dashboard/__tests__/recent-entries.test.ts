@@ -202,6 +202,32 @@ describe("recent entry headings", () => {
     };
   }
 
+  /**
+   * The Direct API's `select` is a REAL projection: `applyFieldSelection`
+   * (collection-query-service.ts) keeps only `id`, the system timestamps, and
+   * whatever key was explicitly asked for -- it does not hand back the whole
+   * row regardless of what was requested. A row fixture passed straight
+   * through to `entryHeading` -- unprojected -- would let its fallback chain
+   * (`data.title`, `data.name`) "work" in a test while being dead code in
+   * production, because a real read only ever carries what `select` named.
+   *
+   * So the mock projects too: a field survives only if `select` asked for it
+   * by name. This is what makes "the fallback candidates are in `select`" an
+   * assertion that can actually fail.
+   */
+  function project(
+    row: Record<string, unknown>,
+    select: Record<string, boolean> | undefined
+  ): Record<string, unknown> {
+    const projected: Record<string, unknown> = {};
+    if (row.id !== undefined) projected.id = row.id;
+    if (!select) return { ...projected };
+    for (const [key, included] of Object.entries(select)) {
+      if (included && row[key] !== undefined) projected[key] = row[key];
+    }
+    return projected;
+  }
+
   async function headingFor(
     row: Record<string, unknown>,
     useAsTitle = "title"
@@ -213,7 +239,11 @@ describe("recent entry headings", () => {
       },
       "getRegisteredCollections"
     ).mockResolvedValue([collectionWithTitleField(useAsTitle)]);
-    find.mockResolvedValue({ items: [row] });
+    find.mockImplementation(
+      async (args: { select?: Record<string, boolean> }) => ({
+        items: [project(row, args.select)],
+      })
+    );
 
     const result = await service.getRecentEntries(5, someResources(["posts"]), {
       user: { id: "user-1" },
@@ -269,5 +299,48 @@ describe("recent entry headings", () => {
     expect(
       await headingFor({ id: "p6", title: "Real title", updatedAt: "" })
     ).toBe("Real title");
+  });
+
+  it("projects entryHeading's fallback candidates, so its chain can actually fire", async () => {
+    // `entryHeading`'s chain is `data[titleField] ?? data.title ?? data.name`.
+    // `applyFieldSelection` keeps only what `select` names, so `title` and
+    // `name` reach a real read ONLY if they are asked for here -- proven by
+    // the two preceding tests failing without this.
+    const service = makeService();
+    vi.spyOn(
+      service as unknown as {
+        getRegisteredCollections: (s: unknown) => Promise<unknown[]>;
+      },
+      "getRegisteredCollections"
+    ).mockResolvedValue([collectionWithTitleField("heading")]);
+
+    await service.getRecentEntries(5, someResources(["posts"]), {
+      user: { id: "user-1" },
+    });
+
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ title: true, name: true }),
+      })
+    );
+  });
+
+  it("resolves a REAL heading through the fallback chain, from a genuinely projected row", async () => {
+    // `useAsTitle` names a field ("heading") this row does not carry -- the
+    // realistic case of a field that is empty, absent, or of a type
+    // `entryHeading` will not render. `title` reaches the resolver only
+    // because the projection above selected it; a select missing the
+    // fallback candidates would drop it here exactly as it does in
+    // production, and this would resolve to the id instead.
+    expect(
+      await headingFor(
+        {
+          id: "p7",
+          title: "Selected through a real projection",
+          updatedAt: "",
+        },
+        "heading"
+      )
+    ).toBe("Selected through a real projection");
   });
 });

@@ -65,7 +65,11 @@ Two behaviour changes are worth planning for:
   `admin.useAsTitle`) is now labelled with its id instead of rendering as
   `[object Object]`. An empty, boolean or date-valued title field falls through
   to the next candidate field and then to the id, where before it rendered as an
-  empty or nonsensical heading.
+  empty or nonsensical heading. That fallback chain now actually runs: the
+  recent-entries read selects the fallback fields (`title`, `name`) alongside
+  the collection's configured title field, where before they were silently
+  dropped by the projection and the chain could never do anything but return
+  the id.
 - The draft/published breakdown on `/stats` is now read through the same
   access-enforced count as the per-collection totals beside it, instead of a
   raw query over the whole table. A collection with an owner-only or custom
