@@ -6,11 +6,11 @@
  * and this package has to answer without importing every block in the library
  * or inspecting how one was compiled.
  *
- * The last case in this file is the one Plan 03 wanted and could not write: the
- * core library adds no JavaScript of its own. It is asserted here at the unit
- * level and measured nightly in a real browser, and the two answer different
- * halves — this one cannot see bytes, and the browser cannot say WHICH block
- * was responsible.
+ * The last case is the one that could not be written before a block could say
+ * this about itself: the core library adds no JavaScript of its own. It is
+ * asserted here at the unit level and measured nightly in a real browser, and
+ * the two answer different halves — this one cannot see bytes, and the browser
+ * cannot say WHICH block was responsible.
  *
  * @module islands.test
  */
@@ -66,9 +66,9 @@ describe("the islands a stored page contains", () => {
   });
 
   it("is EMPTY for a page whose blocks all draw and stop", () => {
-    // The claim Plan 03 wanted to make. Empty means the page needs no
-    // JavaScript OF ITS OWN — not that it ships no script, which is a fact
-    // about the host framework and not about blocks.
+    // Empty means the page needs no JavaScript OF ITS OWN — not that it ships
+    // no script, which is a fact about the host framework and not about
+    // blocks.
     expect(islandsFor(page("test/still"), blocks)).toEqual({});
   });
 
@@ -88,12 +88,90 @@ describe("the islands a stored page contains", () => {
   });
 });
 
+describe("a block stored under a slot its parent may not draw", () => {
+  // A block declares such a slot when it renders the contents only sometimes —
+  // a loop over a query draws its template once per row, and none at all when
+  // the query is empty. A reader of the STORED document cannot tell which
+  // happened, because that is settled by rendering.
+  const loop = {
+    name: "test/loop",
+    version: 1,
+    description: "Draws its template once per row.",
+    example: { props: {} },
+    slots: { children: {} },
+    conditionalSlots: ["children"],
+    render: () => null,
+  } as unknown as AnyBlockDefinition;
+
+  const nested = createBlockResolver([loop, ticker, still]);
+
+  const pageWithLoop = (childType: string): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n0",
+          type: "test/loop",
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "n1", type: childType, version: 1, props: {} }],
+          },
+        },
+      ],
+    }) as unknown as BlockDocument;
+
+  it("does not report an island the page may never draw", () => {
+    // Reporting it claims a page needs JavaScript that never reaches it, which
+    // is the opposite of the claim this function exists to make. Skipped rather
+    // than guessed, and this is the cautious direction: a conditional slot that
+    // WAS drawn under-reports one island, while the reverse tells a caller a
+    // static page is interactive.
+    expect(islandsFor(pageWithLoop("test/ticker"), nested)).toEqual({});
+  });
+
+  it("still reports an island in an UNCONDITIONAL slot", () => {
+    // The control the assertion above needs: a walk that skipped every slot
+    // would satisfy it while seeing nothing at all.
+    const plainParent = {
+      name: "test/box",
+      version: 1,
+      description: "Draws its children always.",
+      example: { props: {} },
+      slots: { children: {} },
+      render: () => null,
+    } as unknown as AnyBlockDefinition;
+    const blocksWithBox = createBlockResolver([plainParent, ticker]);
+    const doc = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "n0",
+          type: "test/box",
+          version: 1,
+          props: {},
+          slots: {
+            children: [
+              { id: "n1", type: "test/ticker", version: 1, props: {} },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    expect(Object.keys(islandsFor(doc, blocksWithBox))).toEqual([
+      "test/ticker",
+    ]);
+  });
+});
+
 describe("the core block library", () => {
   it("declares no islands, so a page of core blocks adds no JavaScript", () => {
-    // Plan 03 criterion 8, in the form that is actually true and testable. The
-    // nightly Lighthouse budget measures the BYTES on a real page in a real
-    // browser; this says which blocks would be responsible if that number ever
-    // moved, which the browser cannot.
+    // The nightly Lighthouse budget measures the BYTES on a real page in a
+    // real browser; this says which blocks would be responsible if that number
+    // ever moved, which the browser cannot.
     const declared = (coreBlocks as AnyBlockDefinition[])
       .filter(block => block.island !== undefined)
       .map(block => block.name);

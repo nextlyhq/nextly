@@ -235,22 +235,61 @@ export function blockPartsFor(
  * and this package must answer from the document without importing every block
  * in the library or inspecting how one was compiled.
  *
- * EMPTY means the page needs no JavaScript of its own — which is the claim
- * Plan 03 wanted to make and could not test. It does not mean the page ships no
- * script at all: a host framework has a floor of its own that no block library
- * can remove, and conflating the two is what made the original criterion
- * unmeasurable.
+ * EMPTY means the page needs no JavaScript OF ITS OWN. It does not mean the
+ * page ships no script at all: a host framework has a floor of its own that no
+ * block library can remove, and conflating the two makes the statement
+ * unmeasurable rather than merely optimistic.
  *
- * Goes through the same walk as the style tiers because it is the same
- * question asked of a different field — two walkers agreeing today drift, and
- * the drift would be silent.
+ * Walks the tree ITSELF rather than through the style tiers' shared reading,
+ * and the divergence is deliberate. Those ask which types COULD appear, because
+ * a rule missing for a row a loop did draw leaves it unstyled. This asks which
+ * will CERTAINLY appear, because naming one that never renders claims a static
+ * page is interactive. The same tree answers the two questions differently, so
+ * collapsing them would have to break one of them.
  */
 export function islandsFor(
   document: BlockDocument,
-  blocks: BlockResolver,
-  stated?: Readonly<Record<string, BlockIsland>>
+  blocks: BlockResolver
 ): Record<string, BlockIsland> {
-  return perUsedType(document, blocks, definition => definition.island, stated);
+  const found: Record<string, BlockIsland> = {};
+  const visit = (nodes: readonly BlockNode[]): void => {
+    for (const node of nodes) {
+      const definition = blocks.get(node.type);
+      const island = definition?.island;
+      if (island !== undefined && found[node.type] === undefined) {
+        found[node.type] = island;
+      }
+      for (const children of drawnSlots(node, definition)) visit(children);
+    }
+  };
+  visit(document.nodes);
+  return found;
+}
+
+/**
+ * The children this node will CERTAINLY draw.
+ *
+ * A slot the block may decline to render cannot say the page needs JavaScript.
+ * Reading a stored document cannot tell whether the block drew it — that is
+ * settled by rendering — so a slot the definition declares conditional is
+ * skipped, which is what `conditionalSlots` requires of anything deriving a
+ * page-level fact without rendering.
+ *
+ * Skipped rather than guessed, and this is the CAUTIOUS direction: a
+ * conditional slot that WAS drawn under-reports one island, while the reverse
+ * tells a caller a page is interactive when nothing on it ever runs.
+ */
+function drawnSlots(
+  node: BlockNode,
+  definition: AnyBlockDefinition | undefined
+): BlockNode[][] {
+  const slots = node.slots;
+  if (slots === undefined) return [];
+  const conditional = new Set(definition?.conditionalSlots ?? []);
+  return Object.keys(definition?.slots ?? {})
+    .filter(name => !conditional.has(name))
+    .map(name => slots[name])
+    .filter((children): children is BlockNode[] => children !== undefined);
 }
 
 /**

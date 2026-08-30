@@ -43,7 +43,7 @@ export const PAGE_BUILDER_PLUGIN = "@nextlyhq/plugin-page-builder";
  * Separate from any block's `version`, which describes one block's props. A
  * reader checks this to know whether it understands the file at all.
  */
-export const BLOCK_MANIFEST_VERSION = 2;
+export const BLOCK_MANIFEST_VERSION = 3;
 
 /**
  * The namespaced form a block name takes, as the engine's registration gate requires it.
@@ -225,6 +225,16 @@ export const blockManifestEntrySchema = z
     props: z.record(z.string(), z.unknown()).optional(),
     /** Style capabilities the block opts into. */
     supports: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * Why this block needs JavaScript in the browser.
+     *
+     * The reason is REQUIRED and non-blank, matching what registration accepts,
+     * because the two gates answering differently is how a manifest generates
+     * cleanly for a block the engine then refuses at boot. `\S` rather than a
+     * length check for the same reason the description above uses it: a reason
+     * of spaces is a reason nobody can read.
+     */
+    island: z.object({ reason: z.string().regex(/\S/) }).optional(),
     /**
      * Named child regions, for container blocks.
      *
@@ -660,6 +670,17 @@ function toEntry(block: DeclaredBlock, source: string): BlockManifestDraft {
   // one: the manifest then validates cleanly while `registerBlocks` refuses the same definition at
   // boot, which is generation succeeding for a configuration that cannot run.
   if (block.slots !== undefined) entry.slots = block.slots;
+  // Carried because the manifest is what an editor build, the docs and an agent
+  // read to tell an interactive block from an inert one WITHOUT importing it.
+  // Omitted, every reader of this file believes no block on the page needs
+  // JavaScript, which is the one thing this field exists to say.
+  //
+  // Passed through whatever its shape, so the SCHEMA judges it — the same
+  // reason `slots` above is. Guarding here would DROP a malformed value, and a
+  // dropped field is an absent one: the manifest would validate cleanly while
+  // `registerBlocks` refuses the same definition at boot, which is generation
+  // succeeding for a configuration that cannot run.
+  if (block.island !== undefined) entry.island = block.island;
   // Carried because the manifest is read to decide where a block may LEGALLY sit — by editor
   // builds and by agents generating documents. Omitting it does not make the restriction lenient;
   // it makes every reader of this file believe there is none, so they generate placements the

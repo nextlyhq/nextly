@@ -12,6 +12,7 @@ import type {
   BlockRenderResult,
   BlockSupports,
   ComponentPath,
+  BlockIsland,
   BlockPart,
   NodeStyles,
   SlotLock,
@@ -36,6 +37,11 @@ expectTypeOf<NodeStyles>().toBeObject();
 // type. Reaching it through the transitive engine package instead crosses the
 // stable plugin boundary and does not resolve under a strict pnpm layout.
 expectTypeOf<BlockPart>().toBeObject();
+// A block declaring `island` states WHY it needs JavaScript, and an author
+// factoring that declaration into a shared constant or helper has to be able to
+// NAME the type. Reaching it through the transitive engine package crosses the
+// stable plugin boundary and does not resolve under a strict pnpm layout.
+expectTypeOf<BlockIsland>().toBeObject();
 expectTypeOf<SlotLock>().toEqualTypeOf<
   "all" | "insert" | "contentOnly" | false
 >();
