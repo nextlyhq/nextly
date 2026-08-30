@@ -19,7 +19,11 @@ import {
   registerSource,
 } from "../sources";
 
-type Row = { slug: string; fields: Array<{ name: string; type: string }> };
+type Row = {
+  slug: string;
+  fields: Array<{ name: string; type: string }>;
+  timestamps?: boolean;
+};
 
 const containerGet = container.get as ReturnType<typeof vi.fn>;
 
@@ -137,6 +141,28 @@ describe("refreshCollectionSources", () => {
     await refreshCollectionSources();
 
     expect(getSource("collection:posts")).toBeUndefined();
+  });
+
+  it("carries the collection's timestamps setting into its source", async () => {
+    // `timestamps: false` means the table has no `created_at`/`updated_at`
+    // columns, so a source declaring them selectable and sortable produces a
+    // query that validates and then fails in the read path on a missing
+    // column. The registry knows the answer; it has to reach the source.
+    registryHolds([
+      { slug: "audit", fields: [], timestamps: false },
+      { slug: "posts", fields: [], timestamps: true },
+    ]);
+
+    await refreshCollectionSources();
+
+    const audit = getSource("collection:audit")?.fields.map(f => f.name) ?? [];
+    const posts = getSource("collection:posts")?.fields.map(f => f.name) ?? [];
+    expect(audit).not.toContain("createdAt");
+    expect(audit).toContain("id");
+    // The control: the same refresh DOES publish them for a collection that
+    // has them, so the assertion above is not satisfied by never adding any.
+    expect(posts).toContain("createdAt");
+    expect(posts).toContain("updatedAt");
   });
 
   it("skips a field that carries no name of its own", async () => {

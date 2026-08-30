@@ -43,6 +43,13 @@ import { registerBuiltInSources } from "./built-in-sources";
 interface RegisteredCollection {
   slug?: unknown;
   fields?: unknown;
+  /**
+   * The `timestamps` column pair. A required boolean on the stored record and
+   * read defensively here, because the two values decide whether
+   * `createdAt`/`updatedAt` exist as COLUMNS -- declaring them on a collection
+   * that has none makes a query pass validation and fail in the read path.
+   */
+  timestamps?: unknown;
 }
 
 interface CollectionRegistrySurface {
@@ -114,6 +121,9 @@ export async function refreshCollectionSources(): Promise<void> {
       .map(collection => ({
         slug: collection.slug,
         fields: readableFields(collection.fields),
+        // Only an explicit `false` turns them off; absent means on, the way
+        // `defineCollection` normalizes it and the registry stores it.
+        timestamps: collection.timestamps !== false,
       }))
   );
 }

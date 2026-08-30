@@ -8,7 +8,11 @@ beforeEach(() => clearSources());
 describe("built-in sources", () => {
   it("registers one source per collection, addressed by slug", () => {
     registerBuiltInSources([
-      { slug: "posts", fields: [{ name: "title", type: "text" }] },
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
     ]);
 
     const source = getSource("collection:posts");
@@ -18,6 +22,8 @@ describe("built-in sources", () => {
   });
 
   it("exposes only the collection's own declared fields", () => {
+    // No `timestamps` key: an absent flag defaults to ON, the way
+    // `defineCollection` normalizes it and the way the registry stores it.
     registerBuiltInSources([
       { slug: "posts", fields: [{ name: "title", type: "text" }] },
     ]);
@@ -46,6 +52,7 @@ describe("built-in sources", () => {
           { name: "email", type: "text" },
           { name: "password", type: "password" },
         ],
+        timestamps: true,
       },
     ]);
 
@@ -61,14 +68,52 @@ describe("built-in sources", () => {
     // spelling, so a source emitting `posts:read` meant one field name held
     // two vocabularies -- and a consumer that eventually compares them would
     // match nothing while looking entirely correct.
-    registerBuiltInSources([{ slug: "posts", fields: [] }]);
+    registerBuiltInSources([{ slug: "posts", fields: [], timestamps: true }]);
     expect(getSource("collection:posts")?.requiredPermission).toBe(
       "read-posts"
     );
   });
 
+  it("omits the timestamp columns a collection does not have", () => {
+    // `timestamps: false` means the table has no `created_at`/`updated_at`
+    // columns at all. Declaring them selectable and sortable anyway makes a
+    // query pass validation and then fail in the read path on a missing
+    // column -- a refusal the caller cannot act on, from a field the source
+    // told them was available.
+    registerBuiltInSources([
+      {
+        slug: "audit",
+        fields: [{ name: "action", type: "text" }],
+        timestamps: false,
+      },
+    ]);
+
+    const names = getSource("collection:audit")?.fields.map(f => f.name) ?? [];
+    expect(names).toContain("action");
+    // `id` is present whatever the timestamps setting says.
+    expect(names).toContain("id");
+    expect(names).not.toContain("createdAt");
+    expect(names).not.toContain("updatedAt");
+  });
+
+  it("keeps them for a collection that HAS them", () => {
+    // The control: the assertion above would also pass on a build that never
+    // appended the timestamp columns to anything.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    const names = getSource("collection:posts")?.fields.map(f => f.name) ?? [];
+    expect(names).toContain("createdAt");
+    expect(names).toContain("updatedAt");
+  });
+
   it("is idempotent across a boot", () => {
-    const collections = [{ slug: "posts", fields: [] }];
+    const collections = [{ slug: "posts", fields: [], timestamps: true }];
     registerBuiltInSources(collections);
     clearSources();
     registerBuiltInSources(collections);

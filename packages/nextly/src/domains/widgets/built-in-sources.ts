@@ -14,9 +14,19 @@ import {
   type WidgetSourceField,
 } from "./sources";
 
-/** Columns every collection has, and the ones a recency widget sorts by. */
-const ALWAYS_PRESENT: readonly WidgetSourceField[] = [
-  { name: "id", type: "string" },
+/** The primary key. Present whatever else the collection is configured with. */
+const IDENTITY_FIELD: WidgetSourceField = { name: "id", type: "string" };
+
+/**
+ * The columns `timestamps` creates, and the ones a recency widget sorts by.
+ *
+ * Appended only when the collection actually has them. `timestamps: false`
+ * means the table carries no `created_at`/`updated_at` at all, so declaring
+ * them selectable and sortable is a promise the read path cannot keep: the
+ * query passes validation, reaches the compiler, and fails on a missing
+ * column -- a refusal about a field the source itself said was available.
+ */
+const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
   { name: "createdAt", type: "date" },
   { name: "updatedAt", type: "date" },
 ];
@@ -64,12 +74,22 @@ function exposedFields(
 export interface WidgetSourceCollection {
   slug: string;
   fields: Array<{ name: string; type: string }>;
+  /**
+   * Whether the collection has `createdAt`/`updatedAt` columns. Absent means
+   * ON, which is how `defineCollection` normalizes it and how the registry
+   * stores it.
+   */
+  timestamps?: boolean;
 }
 
 /** The widget source a single collection exposes. */
 function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const declared = exposedFields(collection.fields);
   const seen = new Set(declared.map(f => f.name));
+  const systemFields =
+    collection.timestamps === false
+      ? [IDENTITY_FIELD]
+      : [IDENTITY_FIELD, ...TIMESTAMP_FIELDS];
 
   return {
     id: `collection:${collection.slug}`,
@@ -83,7 +103,7 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     supports: ["count", "list"],
     fields: [
       ...declared,
-      ...ALWAYS_PRESENT.filter(field => !seen.has(field.name)),
+      ...systemFields.filter(field => !seen.has(field.name)),
     ],
   };
 }
