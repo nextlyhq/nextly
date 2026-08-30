@@ -40,10 +40,7 @@ import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
-import {
-  computeMainFields,
-  computeFieldsBeside,
-} from "@admin/lib/builder/takeoverLayout";
+import { computeMainFields } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
@@ -63,6 +60,7 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
+import { fieldsBesidePanel } from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -404,14 +402,18 @@ export function EntryForm({
    * form submits are one thing. A second `EntryForm` would fork the state and
    * lose the edit made in whichever copy did not save.
    */
+  /*
+   * Delegated whole, including the decision to answer NULL when there is
+   * nothing to draw — which is what withholds the panel rather than opening an
+   * empty one. Kept out of this callback so the rule is reachable by a test
+   * without standing up the entire form.
+   */
   const renderEntryFields = useCallback(
-    (excludePath: string) => (
-      <EntryFormContent
-        fields={computeFieldsBeside(allFields, excludePath)}
-        disabled={isSubmitting}
-        mode={mode}
-      />
-    ),
+    (excludePath: string) =>
+      fieldsBesidePanel(allFields, excludePath, {
+        disabled: isSubmitting,
+        mode,
+      }),
     [allFields, isSubmitting, mode]
   );
 

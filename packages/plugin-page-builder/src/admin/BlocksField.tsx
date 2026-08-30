@@ -1378,10 +1378,15 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
-   * The entry's other fields, or null when there is no surrounding form. Null
-   * is what withholds the panel rather than opening an empty one.
+   * The entry's other fields, ALREADY DRAWN, or null when there are none.
+   *
+   * One value feeds both the rail's availability and the panel's body below,
+   * so the two cannot disagree about whether there is anything to show. Asking
+   * separately is what put an empty Settings panel on the rail: every entry
+   * form has a renderer, so a gate on the renderer's existence is true even for
+   * a collection whose only fields are its title, its slug and this one.
    */
-  const renderEntryFields = useEntryFieldsPanel();
+  const entryFields = useEntryFieldsPanel(name);
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -1974,7 +1979,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         onExit={done}
         availablePanels={
-          renderEntryFields === null
+          entryFields === null
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
@@ -2223,13 +2228,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             ),
             /*
-              The entry's own fields — SEO, relations, whatever this collection
-              declares — which the takeover removed from the page behind this
-              editor. Rendered by the ADMIN's closure, not reconstructed here:
-              how a field is drawn is the entry form's contract, and a second
-              renderer would drift from it.
+              The document's title and slug, and the entry's own fields — SEO,
+              relations, whatever this collection declares — which this editor
+              covered when it took the window. Drawn by the ADMIN, not
+              reconstructed here: how a field is drawn is the entry form's
+              contract, and a second renderer would drift from it.
+
+              The same value the rail was derived from, so a panel is never
+              offered that this returns nothing for.
             */
-            settings: () => renderEntryFields?.(name) ?? null,
+            settings: () => entryFields,
           };
           return panels[panel]?.() ?? null;
         }}

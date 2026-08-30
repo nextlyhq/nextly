@@ -151,7 +151,23 @@ export function computeMainFields<T extends LayoutField>(
 }
 
 /**
- * The body fields a surface may offer BESIDE the one it was opened for.
+ * What a takeover surface offers back, split the way its panel presents it.
+ *
+ * Two groups rather than one list, because they are answerable to different
+ * things: `page` is what every document has and what a surface covering the
+ * form takes away, while `content` is whatever this collection happens to
+ * declare. A single list would put a page's slug between two of its own
+ * relations, ordered by nothing an author can predict.
+ */
+export interface FieldsBeside<T> {
+  /** The document's identity — title and slug — in the order declared. */
+  page: T[];
+  /** Everything else the form body would show. */
+  content: T[];
+}
+
+/**
+ * The fields a surface may offer BESIDE the one it was opened for.
  *
  * Everything the form body would show, minus the field at `excludePath` — the
  * field whose own surface is asking. A page builder rendering this inside its
@@ -166,13 +182,22 @@ export function computeMainFields<T extends LayoutField>(
  * and while a full-screen surface covers the body, showing them is the only
  * way an author reaches them without leaving it.
  *
- * System fields are already stripped, so the title and slug drawn by the system
- * header are not offered a second, competing editor here.
+ * TITLE AND SLUG ARE OFFERED HERE, which they were not, and the reason they
+ * were withheld is the reason they now belong: they are drawn by the system
+ * header, so offering them again would have been a second, competing editor.
+ * A surface that COVERS the form suppresses that header — the page builder
+ * names it in `useSuppressAdminChrome` — so there is no second editor to
+ * compete with and no first one to fall back on. Withholding them left the
+ * commonest shape a collection takes, a title, a slug and a builder field,
+ * with nothing to put in the panel at all: it was offered and opened blank,
+ * and a document's own name could not be read from inside the editor.
+ *
+ * They stay grouped rather than merged so the panel can say which is which.
  */
 export function computeFieldsBeside<T extends LayoutField>(
   fields: T[],
   excludePath: string
-): T[] {
+): FieldsBeside<T> {
   /*
    * The field whose value decides whether the asking field is visible at all is
    * withheld too.
@@ -185,13 +210,18 @@ export function computeFieldsBeside<T extends LayoutField>(
    */
   const asking = fields.find(f => (f.name ?? "") === excludePath);
   const controller = asking === undefined ? undefined : controllerName(asking);
-  return fields.filter(
+  const offered = fields.filter(
     f =>
-      !SYSTEM_FIELDS.has(f.name ?? "") &&
       !isHidden(f) &&
       (f.name ?? "") !== excludePath &&
       (f.name ?? "") !== controller
   );
+  // Partitioned from ONE filtered list rather than filtered twice, so a field
+  // cannot land in both groups or in neither if the two predicates ever drift.
+  return {
+    page: offered.filter(f => SYSTEM_FIELDS.has(f.name ?? "")),
+    content: offered.filter(f => !SYSTEM_FIELDS.has(f.name ?? "")),
+  };
 }
 
 /** Resolve the value a field's condition source currently holds. */
