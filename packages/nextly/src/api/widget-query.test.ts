@@ -47,7 +47,16 @@ vi.mock("../di/container", () => ({ container: { get: containerGet } }));
 // The entity-level read decision. Mocked so this handler test can put a caller
 // on either side of it without standing up the RBAC stack.
 const { canReadEntity } = vi.hoisted(() => ({ canReadEntity: vi.fn() }));
-vi.mock("../auth/entity-read-access", () => ({ canReadEntity }));
+// `importOriginal` rather than a bare factory: the handler now also imports
+// `authorizationGroups` from this module, and that one must stay REAL. It is a
+// pure function of a slug list and the concurrency constant, so a stand-in
+// would make the batching test assert against the test's own arithmetic
+// instead of the bound the product enforces.
+vi.mock("../auth/entity-read-access", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../auth/entity-read-access")>();
+  return { ...actual, canReadEntity };
+});
 
 import { requireAuthentication } from "../auth/middleware";
 import { clearSources } from "../domains/widgets/sources";
@@ -309,6 +318,68 @@ describe("POST /api/dashboard/query", () => {
         "salaries",
         expect.objectContaining({ userId: "user-1" })
       );
+    });
+
+    it("resolves 30 DISTINCT sources in bounded rounds, not all at once", async () => {
+      // The promise cache deduplicates repeated slugs and does nothing for
+      // distinct ones, so a legal 30-query batch naming 30 collections opened
+      // 30 cold permission decisions simultaneously -- exactly the fan-out
+      // `AUTHORIZATION_CONCURRENCY` exists to bound, reached by going around
+      // it. `canReadEntity` resolves a session caller through a per-user TTL
+      // cache, so firing them together makes every one of them a miss.
+      //
+      // Asserted on the GROUPING rather than on elapsed time: each decision is
+      // held open, and what is checked is how many are in flight before any of
+      // them answers. `authorizationGroups` prescribes one warm-up decision and
+      // then rounds of eight, so the in-flight count must climb 1, 9, 17, 25,
+      // 30 -- and the unbounded version dispatches all 30 from a single
+      // synchronous `.map`, so its very first observable count is 30.
+      registeredCollections = Array.from({ length: 30 }, (_, i) => ({
+        slug: `c${i}`,
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      }));
+
+      const release: Array<(allowed: boolean) => void> = [];
+      canReadEntity.mockImplementation(
+        () => new Promise<boolean>(resolve => release.push(resolve))
+      );
+
+      const pending = postWidgetQuery(
+        makeReq({
+          queries: registeredCollections.map(c => ({
+            source: `collection:${c.slug}`,
+            op: "count",
+          })),
+        })
+      );
+
+      /** Lets every decision taken so far answer. */
+      function answerEveryDecisionSoFar(): void {
+        for (const resolve of release.splice(0, release.length)) resolve(true);
+      }
+
+      // The warm-up: ONE decision populates the shared per-user caches before
+      // anything fans out. `waitFor` stops at the FIRST count that matches, so
+      // this cannot be satisfied by a build that dispatched all 30 -- their
+      // first observable count is already 30 and 1 never occurs.
+      await vi.waitFor(() => expect(canReadEntity).toHaveBeenCalledTimes(1));
+
+      for (const expected of [9, 17, 25, 30]) {
+        answerEveryDecisionSoFar();
+        await vi.waitFor(() =>
+          expect(canReadEntity).toHaveBeenCalledTimes(expected)
+        );
+      }
+
+      // Every distinct slug still gets its own decision -- bounding concurrency
+      // must not become a cap on how many entities are authorized.
+      expect(new Set(canReadEntity.mock.calls.map(c => c[0])).size).toBe(30);
+
+      answerEveryDecisionSoFar();
+      const slots = await slotsOf(await pending);
+      expect(slots).toHaveLength(30);
+      expect(slots.every(slot => slot.ok)).toBe(true);
     });
 
     it("keeps the reason in the log", async () => {

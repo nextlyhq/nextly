@@ -14,7 +14,7 @@
  * @module api/widget-query
  */
 
-import { canReadEntity } from "../auth/entity-read-access";
+import { authorizationGroups, canReadEntity } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { refreshCollectionSources } from "../domains/widgets/collection-sources";
@@ -108,26 +108,6 @@ function parseQueriesBody(body: unknown): unknown[] {
 const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
 
 /**
- * Runs one query, converting any failure -- validation or execution -- into
- * its own slot.
- *
- * Two things this catch must do that the original did neither of.
- *
- * It must not put `error.message` on the wire. Every other boundary in this
- * package maps a non-`NextlyError` to `NextlyError.internal`, whose
- * `publicMessage` is generic, and only `toResponseJSON` reaches a caller. Here
- * a `DbError` or a raw driver error was serialized verbatim under HTTP 200 --
- * reproducible with
- * `{"source":"collection:posts","op":"list","where":{"createdAt":{"greater_than":"not-a-date"}}}`.
- * A `NextlyError`'s `publicMessage` IS public by construction, so it passes
- * through; anything else is replaced.
- *
- * And it must not swallow the failure. Isolating a widget's error into its own
- * slot is the point of the batch shape, but the batch still answers 200, so
- * `withErrorHandler` never sees it and neither did the logger. A dashboard
- * whose widgets all fail left no trace anywhere.
- */
-/**
  * Refuses, indistinguishably, unless this caller may read what the source
  * addresses.
  *
@@ -199,42 +179,142 @@ function readDecisionsFor(
   };
 }
 
-async function runOne(
-  raw: unknown,
+/** One query, read once and resolved to its source, or the slot it failed into. */
+type PreparedQuery =
+  | {
+      ok: true;
+      parsed: ReturnType<typeof readWidgetQuery>;
+      source: WidgetSource;
+    }
+  | { ok: false; slot: QuerySlot };
+
+/**
+ * What a failure becomes: logged where an operator can read it, redacted where
+ * the caller can.
+ *
+ * Two things this must do that the original catch did neither of.
+ *
+ * It must not put `error.message` on the wire. Every other boundary in this
+ * package maps a non-`NextlyError` to `NextlyError.internal`, whose
+ * `publicMessage` is generic, and only `toResponseJSON` reaches a caller. Here
+ * a `DbError` or a raw driver error was serialized verbatim under HTTP 200 --
+ * reproducible with
+ * `{"source":"collection:posts","op":"list","where":{"createdAt":{"greater_than":"not-a-date"}}}`.
+ * A `NextlyError`'s `publicMessage` IS public by construction, so it passes
+ * through; anything else is replaced.
+ *
+ * And it must not swallow the failure. Isolating a widget's error into its own
+ * slot is the point of the batch shape, but the batch still answers 200, so
+ * `withErrorHandler` never sees it and neither did the logger. A dashboard
+ * whose widgets all fail left no trace anywhere.
+ */
+function failedSlot(error: unknown): QuerySlot {
+  // Guarded the way `withErrorHandler` guards its own logging call: a
+  // thrower's `logContext` is arbitrary, and a cycle or a BigInt in it would
+  // throw from inside this catch and fail the whole batch over one slot.
+  try {
+    getNextlyLogger().error({
+      kind: "widget-query-failed",
+      ...(NextlyError.is(error)
+        ? error.toLogJSON("widget-query")
+        : { err: error instanceof Error ? error.stack : String(error) }),
+    });
+  } catch {
+    // Deliberately swallowed; see above.
+  }
+
+  return {
+    ok: false,
+    error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
+  };
+}
+
+/**
+ * Reads one caller-supplied query and resolves the source it names, WITHOUT
+ * authorizing anything.
+ *
+ * Split out from running the slot so the batch knows which entities it is
+ * about to ask read decisions for BEFORE it starts asking -- which is what
+ * lets those decisions be taken in bounded rounds rather than all at once.
+ *
+ * Every property of the caller's object is read ONCE, here, and the
+ * already-read value is what the authorization gate and the validator both
+ * work from. Re-reading `source` after authorizing it would let an accessor
+ * answer one id to the gate and another to the validator.
+ *
+ * A failure here is this slot's, not the batch's -- an unparseable entry or an
+ * unknown source must not take the other 29 cards down with it.
+ */
+function prepareOne(raw: unknown): PreparedQuery {
+  try {
+    const parsed = readWidgetQuery(raw);
+    return { ok: true, parsed, source: resolveWidgetSource(parsed.source) };
+  } catch (error) {
+    return { ok: false, slot: failedSlot(error) };
+  }
+}
+
+/**
+ * The DISTINCT entities this batch will need a read decision about.
+ *
+ * Only collection sources: `assertSourceReadable` refuses any other kind
+ * before it consults `mayRead`, so warming one would take a decision nothing
+ * asks for.
+ */
+function batchSlugs(prepared: readonly PreparedQuery[]): string[] {
+  const slugs = new Set<string>();
+  for (const entry of prepared) {
+    if (entry.ok && entry.source.kind === "collection") {
+      slugs.add(sourceTarget(entry.source.id));
+    }
+  }
+  return [...slugs];
+}
+
+/**
+ * Takes every read decision the batch needs, in the rounds
+ * `authorizationGroups` prescribes, before any slot runs.
+ *
+ * The promise cache below deduplicates REPEATED slugs and does nothing at all
+ * for distinct ones, so a legal 30-query batch naming 30 collections opened 30
+ * cold permission decisions simultaneously -- reaching the exact fan-out
+ * `AUTHORIZATION_CONCURRENCY` exists to bound by going around it.
+ * `canReadEntity` resolves a session caller through a shared per-user TTL
+ * cache, so firing them together makes every one of them a miss.
+ *
+ * The grouping is `authorizationGroups`', not a second one written here: it
+ * owns both the bound and the lone warm-up round that converts N cold misses
+ * into one miss and N-1 hits, and a copy of that reasoning would drift from it.
+ *
+ * `allSettled`, so a decision that REJECTS still fails only the slots that
+ * named it. `Promise.all` would throw out of the warm-up and answer the whole
+ * batch with a 500, which is the blast radius the per-slot isolation exists to
+ * prevent; the rejected promise stays in the cache and rethrows into each of
+ * its own slots.
+ */
+async function warmReadDecisions(
+  slugs: readonly string[],
+  mayRead: (slug: string) => Promise<boolean>
+): Promise<void> {
+  for (const group of authorizationGroups(slugs)) {
+    await Promise.allSettled(group.map(mayRead));
+  }
+}
+
+/** Authorizes, validates and runs one already-prepared query. */
+async function runPrepared(
+  entry: Extract<PreparedQuery, { ok: true }>,
   caller: ReadCaller,
   mayRead: (slug: string) => Promise<boolean>
 ): Promise<QuerySlot> {
   try {
-    // Every property of the caller's object is read ONCE, here, and the
-    // already-read value is what the authorization gate and the validator both
-    // work from. Re-reading `source` after authorizing it would let an
-    // accessor answer one id to the gate and another to the validator.
-    const parsed = readWidgetQuery(raw);
-    const source = resolveWidgetSource(parsed.source);
-    await assertSourceReadable(source, mayRead);
+    await assertSourceReadable(entry.source, mayRead);
 
-    const query = validateReadWidgetQuery(parsed, source);
+    const query = validateReadWidgetQuery(entry.parsed, entry.source);
     const result = await executeWidgetQuery(query, caller);
     return { ok: true, result };
   } catch (error) {
-    // Guarded the way `withErrorHandler` guards its own logging call: a
-    // thrower's `logContext` is arbitrary, and a cycle or a BigInt in it would
-    // throw from inside this catch and fail the whole batch over one slot.
-    try {
-      getNextlyLogger().error({
-        kind: "widget-query-failed",
-        ...(NextlyError.is(error)
-          ? error.toLogJSON("widget-query")
-          : { err: error instanceof Error ? error.stack : String(error) }),
-      });
-    } catch {
-      // Deliberately swallowed; see above.
-    }
-
-    return {
-      ok: false,
-      error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
-    };
+    return failedSlot(error);
   }
 }
 
@@ -278,8 +358,23 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   const caller = await readCaller(auth);
 
   const mayRead = readDecisionsFor(caller);
+
+  // Read and resolve every entry FIRST, so the batch's distinct entities are
+  // known before a single read decision is taken -- then take them through the
+  // bounded path, and only then run the slots, which now find every decision
+  // already made.
+  const prepared = queries.map(prepareOne);
+  await warmReadDecisions(batchSlugs(prepared), mayRead);
+
+  // An already-failed entry is wrapped rather than handed over bare: a mixed
+  // array of values and promises is legal for `Promise.all` and reads as a
+  // mistake, so the aggregator is given one kind.
   const results: QuerySlot[] = await Promise.all(
-    queries.map(raw => runOne(raw, caller, mayRead))
+    prepared.map(entry =>
+      entry.ok
+        ? runPrepared(entry, caller, mayRead)
+        : Promise.resolve(entry.slot)
+    )
   );
 
   return respondData({ results }, { headers: PRIVATE_NO_STORE_HEADERS });
