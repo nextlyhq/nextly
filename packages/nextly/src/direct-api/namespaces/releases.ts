@@ -36,14 +36,28 @@ import type {
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
 
-/** Who the call acts as, and whether its permissions are checked. */
+import type { NextlyContext } from "./context";
+import { accessOptions, mergeConfig } from "./helpers";
+
+/**
+ * Who the call acts as, and whether its permissions are checked.
+ *
+ * Both fields fall back to the INSTANCE configuration, not to a constant. An
+ * instance built with `getNextly({ overrideAccess: false, user })` is asking for
+ * every operation on it to be checked, and a namespace that defaulted to `true`
+ * on its own would bypass that silently — the one failure where a caller has
+ * asked for enforcement and been given none.
+ *
+ * `user` is read from the same `DirectAPIConfig.user` every other namespace
+ * uses, so an instance configured once acts consistently across all of them.
+ */
 export interface ReleaseCallerArgs {
   /**
    * The acting identity. Required whenever `overrideAccess` is `false`, because
    * a checked call with nobody to check is a call that can only be refused.
    */
   userId?: string | null;
-  /** Defaults to `true`: the Direct API is trusted. */
+  /** Defaults to the instance's setting, which itself defaults to `true`. */
   overrideAccess?: boolean;
 }
 
@@ -97,44 +111,70 @@ function service(): ReleasesService {
   return container.get<ReleasesService>("releasesService");
 }
 
-/** Split the caller identity out of an argument bag. */
-function actorOf(args: ReleaseCallerArgs) {
+/**
+ * Split the caller identity out of an argument bag, over the instance defaults.
+ *
+ * Per-call config wins over the instance default, matching `mergeConfig` and
+ * every other namespace, so one call can act as someone without reconfiguring
+ * the instance — and an instance that asked for enforcement keeps it when the
+ * call says nothing.
+ */
+function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
+  // Absent keys are DROPPED before merging, not passed as `undefined`.
+  // `mergeConfig` is a spread and a present-but-undefined key wins it, so
+  // forwarding `{ overrideAccess: undefined }` from a call that said nothing
+  // would erase an instance's configured `false` and silently restore trust.
+  // The same trap the jobs content API documents, arriving from the other side.
+  const supplied: Record<string, unknown> = {};
+  if (args.overrideAccess !== undefined) {
+    supplied.overrideAccess = args.overrideAccess;
+  }
+
+  // Read through `accessOptions` rather than off the merged config directly.
+  // The access fields travel together, and `access-options-seam.test.ts` fails
+  // the build for a namespace that picks at them inline — because an operation
+  // forwarding one and not another compiles, runs, and authorizes wrongly.
+  const access = accessOptions(
+    mergeConfig(ctx.defaultConfig, supplied as never)
+  );
+
   return {
-    userId: args.userId ?? null,
-    // Trusted by default, like every other Direct API operation. A caller
-    // asking for checks says so explicitly.
-    overrideAccess: args.overrideAccess ?? true,
+    // An explicit `userId` wins; otherwise the instance's configured `user` is
+    // the acting identity, which is how the rest of the Direct API reads it.
+    userId: args.userId ?? access.user?.id ?? null,
+    overrideAccess: access.overrideAccess ?? true,
   };
 }
 
-export function createReleasesNamespace(): ReleasesNamespace {
+export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
   return {
     create: ({ title, description, ...caller }) =>
-      service().create({ title, description }, actorOf(caller)),
+      service().create({ title, description }, actorOf(ctx, caller)),
 
     find: (args = {}) => {
       const { userId, overrideAccess, ...query } = args;
-      return service().find(query, actorOf({ userId, overrideAccess }));
+      return service().find(query, actorOf(ctx, { userId, overrideAccess }));
     },
 
-    findByID: ({ id, ...caller }) => service().findByID(id, actorOf(caller)),
+    findByID: ({ id, ...caller }) =>
+      service().findByID(id, actorOf(ctx, caller)),
 
     addMember: ({ releaseId, userId, overrideAccess, ...member }) =>
       service().addMember(
         releaseId,
         member,
-        actorOf({ userId, overrideAccess })
+        actorOf(ctx, { userId, overrideAccess })
       ),
 
     removeMember: ({ memberId, ...caller }) =>
-      service().removeMember(memberId, actorOf(caller)),
+      service().removeMember(memberId, actorOf(ctx, caller)),
 
     listMembers: ({ releaseId, ...caller }) =>
-      service().listMembers(releaseId, actorOf(caller)),
+      service().listMembers(releaseId, actorOf(ctx, caller)),
 
     schedule: ({ id, at, timezone, ...caller }) =>
-      service().schedule(id, at, timezone, actorOf(caller)),
+      service().schedule(id, at, timezone, actorOf(ctx, caller)),
 
-    cancel: ({ id, ...caller }) => service().cancel(id, actorOf(caller)),
+    cancel: ({ id, ...caller }) => service().cancel(id, actorOf(ctx, caller)),
   };
 }

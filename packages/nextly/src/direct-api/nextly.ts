@@ -282,7 +282,7 @@ export class Nextly implements NextlyContext {
     this.access = createAccessNamespace(this);
     this.apiKeys = createApiKeysNamespace(this);
     this.jobs = createJobsNamespace();
-    this.releases = createReleasesNamespace();
+    this.releases = createReleasesNamespace(this);
   }
 
   /**
