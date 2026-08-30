@@ -510,9 +510,32 @@ describe("emitTokenBlocks", () => {
     // which is the flexible one — a host may carry the switch anywhere above
     // it. A site sheet declares on `:root`, which IS the document element and
     // has no ancestor, so only the attached form can reach it.
-    expect(css).toContain(`[${DARK_MODE_ATTRIBUTE}="dark"] ${SCOPE}`);
-    expect(css).toContain(`${SCOPE}[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    // Wrapped in `:is()`, because this selector may be a LIST and appending
+    // the attribute to one would qualify only its last member.
+    expect(css).toContain(`[${DARK_MODE_ATTRIBUTE}="dark"] :is(${SCOPE})`);
+    expect(css).toContain(`:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="dark"]`);
     expect(css).toContain("--site-color-text:#eee");
+  });
+
+  it("qualifies every member of a scoped selector LIST", () => {
+    // Appending the attribute to `.a,.b` qualifies only the last member, so
+    // `.a` would take the dark values with no attribute anywhere and a scoped
+    // preview would render dark permanently.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ".preview-a,.preview-b"
+    );
+    const dark = css.slice(css.indexOf("#111") + 4);
+    expect(dark).not.toMatch(/(^|[,{])\s*\.preview-a\s*[,{]/);
+    expect(dark).toContain(":is(.preview-a,.preview-b)");
   });
 
   it("declares root-scoped dark values on whichever element carries the switch", () => {

@@ -120,6 +120,21 @@ const CONTENT_WIDTH_TOKEN = "content.width";
 const CONTENT_WIDTH_KIND = "dimension";
 
 /**
+ * Values that are legal for `max-width` and bound nothing.
+ *
+ * `none` says so outright; the CSS-wide keywords resolve to it or to whatever a
+ * cascade decides, which a site stylesheet cannot promise on behalf of a page.
+ */
+const UNBOUNDED_WIDTHS = new Set([
+  "none",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+  "auto",
+]);
+
+/**
  * A document that uses every block type and styles nothing itself.
  *
  * `compilePageCss` emits a type's default only for a type present in the document, which is right
@@ -169,6 +184,38 @@ function documentUsingEveryType(
  * anything an author states, including a `max-width` on the node itself, and
  * zero specificity is what makes that true without depending on source order.
  */
+/**
+ * Whether one emitted token can actually bound the content width.
+ *
+ * ONE predicate rather than a list of conditions, and that is the point. The
+ * rule it guards has been reached from five directions — the token absent, the
+ * token refused by the emitter, the right identity with the wrong kind, the
+ * right kind with a value that is not one, and now a value that is a legal
+ * `max-width` yet bounds nothing. Each was patched as its own condition, and a
+ * fifth said the shape was wrong rather than the list incomplete: every one of
+ * them is the same question, which is whether `max-width` will end up with a
+ * usable maximum.
+ *
+ * Asked once, it also covers cases nobody has hit yet. `none` is valid CSS and
+ * removes the bound; `initial`, `unset` and `revert` resolve to `none` or to
+ * whatever a cascade decides, which is not something a site stylesheet can
+ * promise. All of them leave `margin-inline: auto` centring an element that has
+ * an authored width and no maximum — the failure this whole gate exists to
+ * refuse.
+ */
+function boundsTheContent(token: SiteToken): boolean {
+  if (tokenIdentity(token) !== CONTENT_WIDTH_TOKEN) return false;
+  if (token.kind !== CONTENT_WIDTH_KIND) return false;
+  const values = Object.values(token.values ?? {});
+  if (values.length === 0) return false;
+  return values.every(
+    value =>
+      typeof value === "string" &&
+      checkTokenKind(token.kind, value) === undefined &&
+      !UNBOUNDED_WIDTHS.has(value.trim().toLowerCase())
+  );
+}
+
 function emitContentWidth(
   declaredTokens: readonly SiteToken[],
   prefix: string | undefined
@@ -189,22 +236,7 @@ function emitContentWidth(
   // declare what it was given — and `max-width: #ff0000` is invalid at
   // computed-value time, so it drops while `margin-inline: auto` beside it does
   // not. Same half-rule, arrived at from a third direction.
-  const declared = declaredTokens.some(
-    token =>
-      tokenIdentity(token) === CONTENT_WIDTH_TOKEN &&
-      token.kind === CONTENT_WIDTH_KIND &&
-      // And every mode's VALUE has to suit that kind. A token may declare
-      // itself a dimension and carry `#fff` or `12ms`; the emitter writes it as
-      // given and says so in a warning, so the property is declared and useless
-      // — `max-width` drops in the affected mode while `margin-inline: auto`
-      // beside it does not. The same verdict the emitter reaches is asked for
-      // here rather than restated.
-      Object.values(token.values ?? {}).every(
-        value =>
-          typeof value === "string" &&
-          checkTokenKind(token.kind, value) === undefined
-      )
-  );
+  const declared = declaredTokens.some(boundsTheContent);
   if (!declared) return "";
 
   // Resolved through the same function the token emitter uses, not read raw. A

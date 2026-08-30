@@ -266,9 +266,17 @@ const ROOT_TOKEN_SELECTOR = ":root";
  */
 function darkSelectorFor(selector: string, dark: readonly string[]): string {
   const body = `{${dark.join(";")}}`;
-  return selector === ROOT_TOKEN_SELECTOR
-    ? `[${DARK_MODE_ATTRIBUTE}="dark"]${body}`
-    : `[${DARK_MODE_ATTRIBUTE}="dark"] ${selector},${selector}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+  if (selector === ROOT_TOKEN_SELECTOR) {
+    return `[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+  }
+  // `:is()` around the whole selector, because this one may be a LIST. Appending
+  // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
+  // `.preview-b[...]` qualified, so the first member would take the dark values
+  // unconditionally and a scoped preview would render dark for good. `:is()`
+  // takes the specificity of its most specific argument, so a list of single
+  // classes weighs exactly what one of them did.
+  const scoped = `:is(${selector})`;
+  return `[${DARK_MODE_ATTRIBUTE}="dark"] ${scoped},${scoped}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
 }
 
 /** The `format()` hints a face may declare: plain keywords, nothing else. */
