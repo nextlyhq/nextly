@@ -127,6 +127,21 @@ const BUTTON_BASE_STYLES = {
       backgroundColor: { $token: "color.primary" },
       color: { $token: "color.background" },
       borderRadius: "8px",
+      // A user agent draws a border on `<button>` and none on `<a>`, and this
+      // block renders whichever the presence of a destination selects. Left
+      // alone, adding or removing a link changes the control's outline and its
+      // outer size while every other declaration here says the two are one
+      // presentation. Zeroed rather than set: the block states no border, so
+      // the branch that would have inherited one states none either.
+      border: {
+        width: {
+          blockStart: "0",
+          blockEnd: "0",
+          inlineStart: "0",
+          inlineEnd: "0",
+        },
+        style: "none",
+      },
       textDecoration: "none",
       fontFamily: "inherit",
       fontSize: "inherit",

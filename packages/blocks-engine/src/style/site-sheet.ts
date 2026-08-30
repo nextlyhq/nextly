@@ -113,6 +113,9 @@ export interface SiteSheetArtifact {
  */
 const TOKEN_SELECTOR = ":root";
 
+/** The token the content-width rule reads. */
+const CONTENT_WIDTH_TOKEN = "content.width";
+
 /**
  * A document that uses every block type and styles nothing itself.
  *
@@ -145,24 +148,43 @@ function documentUsingEveryType(
  * direction and leaves any block-direction margin an author set alone.
  *
  * **No fallback width, deliberately.** A site whose token set omits
- * `content.width` leaves the custom property undeclared, the declaration
- * invalid, and the element full width — which is the same thing it does today
- * and the same posture the rest of this compiler takes: what the merged style
- * does not define is omitted rather than invented. A literal here would hand a
- * site that deliberately removed the token a width from a place it cannot see.
+ * `content.width` gets no rule at all, which is the same posture the rest of
+ * this compiler takes: what the merged style does not define is omitted rather
+ * than invented. A literal here would hand a site that deliberately removed the
+ * token a width from a place it cannot see.
+ *
+ * **The two declarations stand or fall together, which is why the CALLER gates
+ * on the token rather than this function emitting an unusable half.** An
+ * undeclared custom property invalidates its own declaration and nothing else,
+ * so a rule written without the token would drop `max-width` and keep
+ * `margin-inline: auto` — centring a contained node that has an authored width
+ * of its own, in exactly the configuration documented as producing no
+ * containment. Centring is not the smaller half of this rule; it is a separate
+ * effect that only makes sense once a width bounds it.
  *
  * Wrapped in `:where()` so it weighs nothing. It is a default that must lose to
  * anything an author states, including a `max-width` on the node itself, and
  * zero specificity is what makes that true without depending on source order.
  */
-function emitContentWidth(prefix: string | undefined): string {
+function emitContentWidth(
+  tokens: SiteTokenSet | undefined,
+  prefix: string | undefined
+): string {
+  // The decision lives here rather than at the call site so the caller pushes
+  // unconditionally: whether this rule applies is a fact about the token set,
+  // which this function already has, and every branch spent asking about it up
+  // there is one the sheet compiler carries for a question it does not own.
+  const declared =
+    tokens?.tokens?.some(token => token.name === CONTENT_WIDTH_TOKEN) === true;
+  if (!declared) return "";
+
   // Resolved through the same function the token emitter uses, not read raw. A
   // prefix that fails validation is REPLACED with the default there rather than
   // rejected, so a reference built from the raw value would name a property
   // nothing declared — silently, because an unresolved custom property
   // invalidates its declaration instead of reporting.
   const property = tokenCustomProperty(
-    "content.width",
+    CONTENT_WIDTH_TOKEN,
     resolveTokenPrefix(prefix).prefix
   );
   return `:where(.${CONTENT_WIDTH_CLASS}){max-width:var(${property});margin-inline:auto}`;
@@ -208,11 +230,12 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   // defaults, which is where a structural rule belongs in this cascade: it must
   // lose to a block's own default and to everything after it.
   //
-  // Emitted only alongside a token set, because the rule exists to READ one. A
-  // sheet with no tokens can never resolve the property, so the rule would be
-  // inert bytes on every page of the site — and a configuration that declares
-  // nothing should still compile to nothing.
-  if (input.tokens !== undefined) blocks.push(emitContentWidth(tokenPrefix));
+  // Pushed unconditionally; the rule withholds ITSELF when the width token it
+  // reads is undeclared. The engine's default set carries `content.width`, but
+  // those defaults are layered a tier above this function, so a caller
+  // compiling a set that omits it arrives here with the property undeclared —
+  // and half of this rule is worse than none of it.
+  blocks.push(emitContentWidth(input.tokens, tokenPrefix));
 
   const blockBases = input.blockBases ?? {};
   const tiers = compilePageCss(documentUsingEveryType(blockBases), {
@@ -237,6 +260,8 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   warnings.push(...tiers.warnings);
   if (tiers.css !== "") blocks.push(tiers.css);
 
-  const css = blocks.join("\n");
+  // Empty entries are dropped here rather than guarded at each push, so a
+  // section that decides it has nothing to say can simply say nothing.
+  const css = blocks.filter(block => block !== "").join("\n");
   return { css, contentHash: hashId(css), warnings };
 }
