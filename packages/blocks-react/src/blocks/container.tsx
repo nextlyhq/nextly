@@ -18,6 +18,7 @@
  * @module blocks/library/container
  */
 
+import { CONTENT_WIDTH_CLASS } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs } from "../context";
@@ -60,13 +61,13 @@ export type ContainerTag = (typeof CONTAINER_TAGS)[number];
  * what it lacks is per-breakpoint control, which the style catalog supplies
  * separately.
  *
- * **The rule behind this class does not exist yet.** It belongs to the site
- * stylesheet, which is where the `content.width` token it reads will live, so
- * until that ships a contained container carries the class and renders full
- * width. The class is the seam; naming it now is what lets the rule arrive
- * later without touching a single stored document.
+ * Re-exported from the engine rather than spelled again here. The rule behind
+ * it is emitted by the site stylesheet, which the engine compiles, and a
+ * selector written there against a literal written here is one contract with
+ * two definitions — free to drift, and drifting silently, because a rule whose
+ * selector matches nothing simply does not apply.
  */
-export const CONTENT_WIDTH_CLASS = "nx-pb-contained";
+export { CONTENT_WIDTH_CLASS };
 
 /**
  * The style capabilities every container preset opts into.

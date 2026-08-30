@@ -180,11 +180,13 @@ describe("every default the core library declares", () => {
     // pass having inspected nothing at all.
     expect(DECLARING.map(block => block.name).sort()).toEqual([
       "core/accordion",
+      "core/button",
       "core/card",
       "core/column",
       "core/columns",
       "core/form",
       "core/gallery",
+      "core/image",
     ]);
   });
 

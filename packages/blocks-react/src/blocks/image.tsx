@@ -130,6 +130,34 @@ export async function renderImage({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
+/**
+ * The one pair of declarations that keeps an image inside its container.
+ *
+ * The element carries `width` and `height` attributes taken from the media
+ * record, which is what reserves the right box before the bytes arrive and
+ * keeps the page from shifting. Those attributes are also a SIZE: without a
+ * rule overriding them, an asset wider than its column renders at its intrinsic
+ * width and overflows, and the layout shift the attributes prevented is
+ * replaced by a horizontal scrollbar.
+ *
+ * `height: auto` is not optional beside `maxWidth`. Constraining the width
+ * alone leaves the attribute height standing, so a narrowed image is drawn
+ * squashed rather than scaled — the aspect ratio is preserved by the pair or by
+ * neither.
+ *
+ * This is the one place every precedent surveyed agrees, which is the standard
+ * the typographic defaults set for what belongs in a baseline: it is not a look
+ * anyone chose, it is what stops a correct document rendering broken.
+ */
+const IMAGE_BASE_STYLES = {
+  base: {
+    base: {
+      maxWidth: "100%",
+      height: "auto",
+    },
+  },
+} as const;
+
 export const image = defineBlock<ImageProps, PageContext>({
   name: "core/image",
   version: 1,
@@ -144,6 +172,7 @@ export const image = defineBlock<ImageProps, PageContext>({
     category: MEDIA,
     keywords: ["picture", "photo", "img", "media"],
   },
+  baseStyles: IMAGE_BASE_STYLES,
   props: {
     mediaId: { type: "media" },
     src: { type: "url" },

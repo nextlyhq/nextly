@@ -43,6 +43,22 @@ export const PAGE_ROOT_SELECTOR = `.${PAGE_ROOT_CLASS}.${PAGE_ROOT_CLASS}`;
 export const BLOCK_TYPE_CLASS_PREFIX = "nx-bt-";
 
 /**
+ * The class an element wears to opt into the site's content width.
+ *
+ * Here rather than beside the container block that applies it, because the rule
+ * behind it is emitted by the site stylesheet — and a selector written in one
+ * package against a name owned by another is a contract with two definitions,
+ * which is the arrangement this file exists to refuse.
+ *
+ * A CLASS rather than a block-type default, and the distinction is what makes
+ * it necessary: containment is a PROP, so every container of a given type wears
+ * the same block-type class whether it opted in or not. A default keyed by type
+ * would constrain the ones that declined. The same argument the typographic
+ * defaults make about a heading's level, one tier along.
+ */
+export const CONTENT_WIDTH_CLASS = `${NODE_CLASS_PREFIX}contained`;
+
+/**
  * A 53-bit hash of an id, in base 36.
  *
  * Two FNV-1a lanes with different multipliers, combined into one integer that a

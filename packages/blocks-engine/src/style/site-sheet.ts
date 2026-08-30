@@ -18,10 +18,15 @@ import type { ValidationIssue } from "../validation";
 
 import { compilePageCss } from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
+import { tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
-import { hashId } from "./node-class";
+import { CONTENT_WIDTH_CLASS, hashId } from "./node-class";
 import type { FontFaceDef, SiteTokenSet } from "./site-tokens";
-import { emitFontFaces, emitTokenBlocks } from "./site-tokens";
+import {
+  emitFontFaces,
+  emitTokenBlocks,
+  resolveTokenPrefix,
+} from "./site-tokens";
 
 /** Everything the shared sheet is built from. All of it is site configuration, not document content. */
 export interface SiteSheetInput {
@@ -134,6 +139,36 @@ function documentUsingEveryType(
 }
 
 /**
+ * The rule behind the content-width class.
+ *
+ * `margin-inline` rather than `margin: 0 auto`, so the centring follows writing
+ * direction and leaves any block-direction margin an author set alone.
+ *
+ * **No fallback width, deliberately.** A site whose token set omits
+ * `content.width` leaves the custom property undeclared, the declaration
+ * invalid, and the element full width — which is the same thing it does today
+ * and the same posture the rest of this compiler takes: what the merged style
+ * does not define is omitted rather than invented. A literal here would hand a
+ * site that deliberately removed the token a width from a place it cannot see.
+ *
+ * Wrapped in `:where()` so it weighs nothing. It is a default that must lose to
+ * anything an author states, including a `max-width` on the node itself, and
+ * zero specificity is what makes that true without depending on source order.
+ */
+function emitContentWidth(prefix: string | undefined): string {
+  // Resolved through the same function the token emitter uses, not read raw. A
+  // prefix that fails validation is REPLACED with the default there rather than
+  // rejected, so a reference built from the raw value would name a property
+  // nothing declared — silently, because an unresolved custom property
+  // invalidates its declaration instead of reporting.
+  const property = tokenCustomProperty(
+    "content.width",
+    resolveTokenPrefix(prefix).prefix
+  );
+  return `:where(.${CONTENT_WIDTH_CLASS}){max-width:var(${property});margin-inline:auto}`;
+}
+
+/**
  * Compile the stylesheet every page of a site shares.
  *
  * Order is the cascade, so it is fixed: font faces, then tokens, then the block-type defaults,
@@ -168,6 +203,16 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     warnings.push(...tokens.issues);
     if (tokens.css !== "") blocks.push(tokens.css);
   }
+
+  // After the tokens that declare the property it reads, and before the block
+  // defaults, which is where a structural rule belongs in this cascade: it must
+  // lose to a block's own default and to everything after it.
+  //
+  // Emitted only alongside a token set, because the rule exists to READ one. A
+  // sheet with no tokens can never resolve the property, so the rule would be
+  // inert bytes on every page of the site — and a configuration that declares
+  // nothing should still compile to nothing.
+  if (input.tokens !== undefined) blocks.push(emitContentWidth(tokenPrefix));
 
   const blockBases = input.blockBases ?? {};
   const tiers = compilePageCss(documentUsingEveryType(blockBases), {

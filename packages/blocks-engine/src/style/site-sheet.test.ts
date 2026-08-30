@@ -88,6 +88,61 @@ describe("what the shared sheet carries", () => {
   });
 });
 
+describe("the content-width rule", () => {
+  it("constrains the class the container block applies, and centres it", () => {
+    const css = sheet({ tokens: { tokens: [] } }).css;
+    expect(css).toContain(
+      ":where(.nx-pb-contained){max-width:var(--site-content-width);margin-inline:auto}"
+    );
+  });
+
+  it("reads the property under the prefix the tokens were declared with", () => {
+    // The failure this guards is silent rather than loud: a reference under one
+    // prefix and a declaration under another leaves the custom property
+    // unresolved, which invalidates the declaration instead of reporting.
+    const css = sheet({
+      tokenPrefix: "--brand-",
+      tokens: { tokens: [] },
+    }).css;
+    expect(css).toContain("var(--brand-content-width)");
+    expect(css).not.toContain("var(--site-content-width)");
+  });
+
+  it("falls back to the default prefix exactly as the token emitter does", () => {
+    // A refused prefix is REPLACED there rather than rejected, so a reference
+    // built from the raw value would name a property nothing declared.
+    const css = sheet({
+      tokenPrefix: "not a prefix",
+      tokens: { tokens: [] },
+    }).css;
+    expect(css).toContain("var(--site-content-width)");
+  });
+
+  it("is not written at all when there is no token set to read", () => {
+    // The rule exists to reference a custom property. With no tokens the
+    // property is never declared, so the rule could only ever be inert bytes on
+    // every page of the site.
+    expect(sheet().css).not.toContain("nx-pb-contained");
+  });
+
+  it("weighs nothing, so anything an author states beats it", () => {
+    // `:where()` is the whole mechanism. Without it a site default would beat a
+    // node's own max-width whenever the node's rule did not out-specify it.
+    expect(sheet({ tokens: { tokens: [] } }).css).toContain(
+      ":where(.nx-pb-contained)"
+    );
+  });
+
+  it("states no width of its own when the token set omits one", () => {
+    // What the merged style does not define is omitted rather than invented: a
+    // literal here would hand a site that removed the token a width from a
+    // place it cannot see.
+    const css = sheet({ tokens: { tokens: [] } }).css;
+    const rule = css.slice(css.indexOf(":where(.nx-pb-contained)"));
+    expect(rule.slice(0, rule.indexOf("}"))).not.toMatch(/rem|px|%/);
+  });
+});
+
 describe("the bytes agree with what a page would have inlined", () => {
   it("emits the class tier exactly as the page compiler does", () => {
     // The guarantee that lets a site share these tiers instead of every page repeating them. It
