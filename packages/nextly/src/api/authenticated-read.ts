@@ -15,12 +15,11 @@
  * @module api/authenticated-read
  */
 
-import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { buildUserContext } from "../auth/user-context";
-import type { UserContext } from "../domains/collections/services/collection-types";
+import type { ReadCaller } from "../services/dashboard/readable-resources";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
 /**
@@ -79,13 +78,23 @@ export async function authenticatedRead(
  * rather than on the roles of whoever minted it. Without it a narrowly scoped
  * key issued by a super-admin inherits the owner's reach.
  *
+ * The return type is the NAMED `ReadCaller` rather than an inline literal, and
+ * that annotation is what couples this function to its consumer. An inline
+ * shape only had to be assignable at each call site, and the property that
+ * matters is OPTIONAL: every caller passes the result as a variable rather than
+ * an object literal, so excess-property checking never applies, and renaming
+ * `authenticatedScope` here would compile everywhere. The dashboard service's
+ * conditional spread would then simply stop firing, and every API-key
+ * recent-entries read would be judged by the minter's roles -- the exact silent
+ * drop the `satisfies Pick<FindArgs<string>, "actor">` beside it exists to
+ * prevent. `ReadCaller` is declared in `readable-resources` because that is
+ * where the dashboard service reads it from; one declaration, two importers.
+ *
  * `versions-access` and `preview-links` each grew their own copy of this before
  * there was a shared one; they are left as they are, and new read endpoints
  * should call this.
  */
-export async function readCaller(
-  auth: AuthContext
-): Promise<{ user: UserContext; authenticatedScope?: AuthenticatedScope }> {
+export async function readCaller(auth: AuthContext): Promise<ReadCaller> {
   const roles = await resolveRoleSlugs(auth);
   const user = buildUserContext({
     claims: auth.claims,
@@ -96,13 +105,23 @@ export async function readCaller(
   });
   return {
     user,
+    // `satisfies` makes the field name a COMPILE-TIME boundary, and the
+    // return annotation alone does NOT: TypeScript exempts properties
+    // introduced by a SPREAD from excess-property checking, so
+    // `...(cond ? { authenticatedScopeTypo: ... } : {})` is assignable to
+    // `ReadCaller` and compiles clean. Every consumer then reads
+    // `caller.authenticatedScope` as `undefined` -- an API key silently judged
+    // by its minter's roles, with no error anywhere. `Required<Pick<...>>`
+    // rather than a bare `Pick` so a rename fails twice: once as an excess
+    // property, once as a missing one. `dashboard-service` applies the same
+    // pattern to `find()`'s `actor` for the same reason.
     ...(auth.authMethod === "api-key"
-      ? {
+      ? ({
           authenticatedScope: {
             actorType: "apiKey" as const,
             permissions: auth.permissions,
           },
-        }
+        } satisfies Required<Pick<ReadCaller, "authenticatedScope">>)
       : {}),
   };
 }
