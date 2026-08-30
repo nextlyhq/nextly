@@ -29,6 +29,14 @@ function repository() {
     listMembers: vi.fn(async () => []),
     addMember: vi.fn(async () => ({ id: "m1" })),
     removeMember: vi.fn(async () => undefined),
+    touchIfAssemblable: vi.fn(async () => true),
+    findMember: vi.fn(
+      async (): Promise<{ id: string; releaseId: string } | undefined> => ({
+        id: "m1",
+        releaseId: "r1",
+      })
+    ),
+    liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async () => true),
     cancelRelease: vi.fn(async () => true),
   };
@@ -250,6 +258,7 @@ describe("ReleasesService refuses members that would act on nothing", () => {
     // mistyped id would insert a row no drain can ever find: a 201 for a member
     // that belongs to nothing.
     const { svc, repo } = service({ holds: ["create"] });
+    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValueOnce([]);
     await expect(svc.addMember("nope", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "NOT_FOUND",
@@ -259,6 +268,7 @@ describe("ReleasesService refuses members that would act on nothing", () => {
 
   it("refuses a member on a release that will never run again", async () => {
     const { svc, repo } = service({ holds: ["create"] });
+    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "published" }]);
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
@@ -298,6 +308,7 @@ describe("ReleasesService protects a committed release", () => {
     // publisher already committed to — the escalation the publish authority
     // exists to prevent, arriving after the decision instead of before it.
     const { svc, repo } = service({ holds: ["create"] });
+    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
@@ -310,6 +321,7 @@ describe("ReleasesService protects a committed release", () => {
     // not about the state. Without this, freezing membership outright would
     // pass the test above and be wrong.
     const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
     await svc.addMember("r1", MEMBER, ADMIN);
     expect(repo.addMember).toHaveBeenCalled();
@@ -338,5 +350,83 @@ describe("ReleasesService protects a committed release", () => {
 
     await svc.create({ title: "x".repeat(255) }, ADMIN);
     expect(repo.createRelease).toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService closes the window around a committed release", () => {
+  it("undoes the member when the release is scheduled during the insert", async () => {
+    // The claim cannot cover the insert itself: a publisher can schedule
+    // between the two, and the drain reads membership at the instant. Detected
+    // after the write and COMPENSATED — a member that should not be there is
+    // removable, while a publish that already happened is not.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.touchIfAssemblable
+      .mockResolvedValueOnce(true) // the claim succeeds: still a draft
+      .mockResolvedValueOnce(false); // scheduled while we were inserting
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.removeMember).toHaveBeenCalledWith("m1");
+  });
+
+  it("does not re-check for a caller who may publish", async () => {
+    // For them adding to a scheduled release is allowed, so there is nothing to
+    // undo — and a second fence call would refuse a legitimate write.
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(repo.touchIfAssemblable).toHaveBeenCalledTimes(1);
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
+  it("requires publish authority to remove a member from a scheduled release", async () => {
+    // Removing an `unpublish` member CANCELS a committed takedown and leaves
+    // content live. The earlier reasoning — that removal can only make less go
+    // live — was wrong in exactly that direction.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.touchIfAssemblable.mockResolvedValueOnce(false);
+    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
+  it("treats removing an already-gone member as done, not as an error", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findMember.mockResolvedValueOnce(undefined);
+    await expect(svc.removeMember("gone", ADMIN)).resolves.toBeUndefined();
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService refuses input the database would answer differently", () => {
+  it("refuses an author who cannot act, rather than scheduling a pass that always fails", async () => {
+    // Non-null is not enough: a deleted or deactivated author yields
+    // AUTHOR_UNAVAILABLE on every drain, and the only symptom is content that
+    // never appeared.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.liveAuthors.mockResolvedValueOnce(new Set<string>());
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("refuses a timezone longer than the narrowest dialect stores", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    await expect(
+      svc.schedule("r1", new Date(), "x".repeat(65), ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses a negative limit, which SQLite reads as NO limit", async () => {
+    // `LIMIT -1` on SQLite means unbounded, so a query documented as "at most N"
+    // would return every release.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(svc.find({ limit: -1 }, ADMIN)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(repo.findReleases).not.toHaveBeenCalled();
   });
 });

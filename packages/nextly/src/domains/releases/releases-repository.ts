@@ -335,6 +335,55 @@ export class ReleasesRepository {
    * case for a coordinated launch, and an unstable order there makes a paged
    * list skip and repeat rows.
    */
+  /**
+   * Touch a release ONLY if it is still assemblable, and say whether it was.
+   *
+   * One conditional UPDATE rather than a read followed by a decision. A caller
+   * that reads `draft`, decides, and then writes can be overtaken by a publisher
+   * scheduling in between — and the write then lands on a committed launch
+   * without ever passing the publish gate. Folding the check into the statement
+   * removes that window from the check itself; see `addMember` in the service
+   * for how the remaining window around the member write is closed.
+   *
+   * `updateCount` rather than `update({ returning })` for the reason
+   * `markReleasePublished` gives: MySQL has no RETURNING and the adapter
+   * emulates it by re-selecting on a predicate the write invalidates.
+   */
+  async touchIfAssemblable(id: string): Promise<boolean> {
+    const affected = await this.db.updateCount(
+      RELEASES,
+      { updatedAt: new Date() },
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "IN", value: ["draft", "cancelled"] },
+        ],
+      }
+    );
+    return affected > 0;
+  }
+
+  /** One member by id, so a caller can learn which release it belongs to. */
+  async findMember(memberId: string): Promise<ReleaseMemberRow | undefined> {
+    const rows = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: { and: [{ column: "id", op: "=", value: memberId }] },
+    });
+    return rows[0];
+  }
+
+  /**
+   * Whether these author ids resolve to users who can still act.
+   *
+   * Public because the WRITE path needs the same question the read path asks. A
+   * member whose author is deleted or deactivated is recorded, scheduled, and
+   * then fails on every drain with `AUTHOR_UNAVAILABLE`, leaving the release
+   * scheduled forever — a failure that only ever shows up as content that did
+   * not appear.
+   */
+  async liveAuthors(ids: string[]): Promise<ReadonlySet<string>> {
+    return this.liveAuthorIds(ids);
+  }
+
   async findReleases(query: {
     ids?: string[];
     state?: string;

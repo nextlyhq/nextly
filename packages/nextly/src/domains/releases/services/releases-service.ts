@@ -76,6 +76,16 @@ export const RELEASES_RESOURCE = "content-releases";
 export const MAX_RELEASE_TITLE_LENGTH = 255;
 
 /**
+ * The longest timezone every supported dialect can store.
+ *
+ * `nextly_releases.timezone` is `varchar(64)` on MySQL and unbounded `text` on
+ * PostgreSQL and SQLite. Comfortably above every IANA zone name — the longest in
+ * the database is around 32 characters — so the limit refuses nonsense rather
+ * than constraining a real caller.
+ */
+export const MAX_RELEASE_TIMEZONE_LENGTH = 64;
+
+/**
  * Who is asking, and whether to ask at all.
  *
  * `overrideAccess` matches every other service in this package: the Direct API
@@ -135,7 +145,7 @@ export interface FindReleasesQuery {
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   /**
-   * How many rows at most.
+   * How many rows at most. Must be a non-negative integer when given.
    *
    * There is no `offset`: the select port this reads through exposes `where`,
    * `orderBy` and `limit` and nothing else, so offset paging would mean widening
@@ -245,6 +255,18 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseRow[]> {
     await this.authorize(actor, "read");
+    // A negative limit is not a smaller page — on SQLite `LIMIT -1` means NO
+    // limit, so a query documented as returning "at most" N would return every
+    // release and turn a bounded dashboard read into a full table scan.
+    if (
+      query.limit !== undefined &&
+      (!Number.isInteger(query.limit) || query.limit < 0)
+    ) {
+      throw NextlyError.invalidInput({
+        message: "`limit` must be a non-negative integer.",
+        logContext: { reason: "invalid-limit", limit: query.limit },
+      });
+    }
     return this.deps.repository.findReleases(query);
   }
 
@@ -272,41 +294,12 @@ export class ReleasesService {
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
 
-    // The parent must EXIST. No dialect declares a foreign key from a member to
-    // its release, so a mistyped id inserts a row no drain will ever find:
-    // the API answers 201 with a member that belongs to nothing, and the
-    // release it names is not scheduled because it does not exist.
-    const [parent] = await this.deps.repository.findReleases({
-      ids: [releaseId],
-    });
-    if (parent === undefined) {
-      throw NextlyError.notFound({
-        logContext: { reason: "release-not-found", releaseId },
-      });
-    }
-    // A published or cancelled release will never be materialised again, so a
-    // member added to one is work that cannot happen.
-    if (parent.state === "published" || parent.state === "cancelled") {
-      throw NextlyError.conflict({
-        logContext: {
-          reason: "release-not-mutable",
-          releaseId,
-          state: parent.state,
-        },
-      });
-    }
-    // Once a release is SCHEDULED, changing what is in it changes what goes
-    // live at an instant a publisher already committed to. The drain reads
-    // membership at the instant, not at scheduling time, so `create` alone
-    // would let a caller append content to a committed launch without ever
-    // passing the publish gate — the escalation this authority exists to
-    // prevent, arriving after the decision rather than before it.
-    if (parent.state === "scheduled") {
-      await this.authorize(actor, "publish");
-    }
+    // Claimed ATOMICALLY, and the author checked, before anything is written.
+    await this.claimAssemblable(releaseId, actor);
+    await this.requireLiveAuthor(actor.userId);
 
     try {
-      return await this.deps.repository.addMember({
+      const member = await this.deps.repository.addMember({
         ...input,
         releaseId,
         // Never a caller-supplied author. Materialisation performs each member
@@ -314,6 +307,29 @@ export class ReleasesService {
         // identity they could borrow at a future instant.
         createdBy: actor.userId,
       });
+
+      // The window the claim above cannot cover on its own: a publisher may
+      // schedule the release between the claim and this insert, and the drain
+      // reads membership at the instant, so the member would join a committed
+      // launch. Re-checked after the write and COMPENSATED, because a member
+      // that should not be there is removable while a publish that already
+      // happened is not.
+      //
+      // Skipped for a caller who holds `publish`: for them, adding to a
+      // scheduled release is allowed, so there is nothing to undo.
+      if (!(await this.holds(actor, "publish"))) {
+        if (!(await this.deps.repository.touchIfAssemblable(releaseId))) {
+          await this.deps.repository.removeMember(member.id);
+          throw NextlyError.conflict({
+            logContext: {
+              reason: "release-scheduled-during-add",
+              releaseId,
+              memberId: member.id,
+            },
+          });
+        }
+      }
+      return member;
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
       // twice in one release. Translated here so callers meet this package's
@@ -334,10 +350,94 @@ export class ReleasesService {
   }
 
   async removeMember(memberId: string, actor: ReleaseActor): Promise<void> {
-    // `create`, not `publish`: taking a document out of a release un-does part
-    // of assembling it, and it can only ever make less content go live.
     await this.authorize(actor, "create");
+
+    // An earlier version of this method reasoned that removing a member "can
+    // only ever make less content go live" and needed no publish authority.
+    // That is FALSE for an `unpublish` member: removing one cancels a committed
+    // takedown and leaves content live. So a create-only caller could undo a
+    // publisher's decision in the direction that keeps content up, which is the
+    // direction that matters.
+    const member = await this.deps.repository.findMember(memberId);
+    // Already gone. Idempotent rather than a 404: the caller's intent is
+    // satisfied, and answering not-found for a member somebody else removed
+    // makes a retry look like a failure.
+    if (member === undefined) return;
+
+    await this.claimAssemblable(member.releaseId, actor);
     await this.deps.repository.removeMember(memberId);
+  }
+
+  /**
+   * Take the release as assemblable, or require the authority to change a
+   * committed one.
+   *
+   * The claim is a single conditional statement, so it cannot be overtaken
+   * between deciding and acting the way a read-then-write can. Only when it
+   * fails is the row read, and only to say WHY: a release that does not exist,
+   * one that will never run again, or one a publisher has already committed.
+   */
+  private async claimAssemblable(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<void> {
+    if (await this.deps.repository.touchIfAssemblable(releaseId)) return;
+
+    const [parent] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    // No dialect declares a foreign key from a member to its release, so a
+    // mistyped id would otherwise insert a row no drain will ever find.
+    if (parent === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId },
+      });
+    }
+    if (parent.state === "scheduled") {
+      // Changing what is in a scheduled release changes what goes live at an
+      // instant a publisher committed to. The drain reads membership at the
+      // instant, not at scheduling time.
+      await this.authorize(actor, "publish");
+      return;
+    }
+    // Published or cancelled: never materialised again, so this is work that
+    // cannot happen rather than work someone is not allowed to do.
+    throw NextlyError.conflict({
+      logContext: {
+        reason: "release-not-mutable",
+        releaseId,
+        state: parent.state,
+      },
+    });
+  }
+
+  /** Whether the actor holds an authority, without throwing. */
+  private async holds(
+    actor: ReleaseActor,
+    authority: ReleaseAuthority
+  ): Promise<boolean> {
+    if (actor.overrideAccess === true) return true;
+    if (actor.userId === null) return false;
+    return this.deps.canManageReleases(actor.userId, authority);
+  }
+
+  /**
+   * Refuse an author the drain will not be able to act as.
+   *
+   * Non-null is not enough. A trusted call naming a deleted or deactivated user
+   * persists that id, and `resolveActionAuthor` then returns
+   * `AUTHOR_UNAVAILABLE` on every pass — the release stays scheduled forever and
+   * the only symptom is content that never appeared.
+   */
+  private async requireLiveAuthor(userId: string | null): Promise<void> {
+    if (userId === null) return;
+    const live = await this.deps.repository.liveAuthors([userId]);
+    if (live.has(userId)) return;
+    throw NextlyError.invalidInput({
+      message:
+        "The author for this release member cannot act: the user is missing or deactivated.",
+      logContext: { reason: "author-not-runnable", userId },
+    });
   }
 
   async schedule(
@@ -355,6 +455,17 @@ export class ReleasesService {
       throw NextlyError.invalidInput({
         message: "`at` is not a valid instant.",
         logContext: { reason: "invalid-schedule-instant", releaseId: id },
+      });
+    }
+    // Same reason the title has a limit: the narrowest dialect defines the
+    // contract, or the call succeeds on two engines and truncates on the third.
+    if (
+      timezone.length === 0 ||
+      timezone.length > MAX_RELEASE_TIMEZONE_LENGTH
+    ) {
+      throw NextlyError.invalidInput({
+        message: `\`timezone\` must be between 1 and ${MAX_RELEASE_TIMEZONE_LENGTH} characters.`,
+        logContext: { reason: "invalid-timezone", length: timezone.length },
       });
     }
     // The fence answers `false` for a release whose current state forbids the
