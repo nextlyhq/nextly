@@ -195,6 +195,63 @@ describe("when the lookup FAILED", () => {
   });
 });
 
+describe("a release that STOPPED", () => {
+  it("is still reported, rather than vanishing from the banner", () => {
+    // The gap the banner and the blocked state create together. The document is
+    // still in that release and still going nowhere — and a banner that simply
+    // disappears reads as RESOLVED: the editor concludes the release already
+    // ran or was called off, when the launch has actually failed.
+    showing([release({ state: "blocked" })]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).toMatch(/has stopped/i);
+    expect(text).toMatch(/will not run until somebody fixes it/i);
+  });
+
+  it("does not describe it as something that is going to happen", () => {
+    // The control on the case above: rendering a blocked release through the
+    // scheduled wording would say "This document goes live …", which is the
+    // opposite of true and worse than the silence it replaced.
+    showing([release({ state: "blocked" })]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    expect(screen.getByRole("status").textContent).not.toMatch(/goes live/i);
+  });
+
+  it("does not promise that saved edits are included", () => {
+    // Nothing is going to ship them. A stopped release voting on that sentence
+    // is how a banner ends up reassuring an editor about a launch that failed.
+    showing([release({ state: "blocked" })]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).not.toMatch(/changes you save now are included/i);
+    expect(text).toMatch(/nothing is scheduled to happen/i);
+  });
+
+  it("badges the STOPPED one even when a scheduled release is also listed", () => {
+    // The worst state present is the one that needs somebody. Burying it behind
+    // a count of scheduled releases is how it gets missed.
+    showing([
+      release({ id: "a", state: "scheduled" }),
+      release({ id: "b", state: "blocked" }),
+    ]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    expect(screen.getByRole("status").textContent).toMatch(/stopped/i);
+  });
+
+  it("still promises inclusion for the scheduled one beside it", () => {
+    // The control: a blocked row must not silence a genuine promise about a
+    // release that IS still going to publish this document.
+    showing([
+      release({ id: "a", state: "scheduled", memberAction: "publish" }),
+      release({ id: "b", state: "blocked" }),
+    ]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    expect(screen.getByRole("status").textContent).toMatch(
+      /changes you save now are included/i
+    );
+  });
+});
+
 describe("when it should say nothing at all", () => {
   it("renders no chrome for a document in no release", () => {
     // The common case by far. A bar reading "not in any release" on every

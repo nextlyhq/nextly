@@ -67,6 +67,7 @@ function deps(over: {
 }): ApplyDueReleasesDeps {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
+  const blocked = vi.fn(async (_id: string, _at: Date) => true);
   return {
     // Pinned, so every case below observes a STABLE component order and asserts
     // about the mechanism it names rather than about which rotation came up.
@@ -74,6 +75,11 @@ function deps(over: {
     random: () => 0,
     repository: {
       findDueReleases: async () => releases,
+      // A spy, reached through the port with `vi.mocked` so a case can assert
+      // WHICH releases the pass stopped. A stub returning true would let a pass
+      // that blocked the wrong ones — or every one — look identical to a pass
+      // that blocked exactly the hopeless.
+      blockRelease: blocked,
       listMembersOf: async ids =>
         members.filter(m => ids.includes(m.releaseId)),
       isStillDueAt: async (id: string, scheduledAt: Date) =>
@@ -936,5 +942,77 @@ describe("applyDueReleases", () => {
 
     expect(result).toMatchObject({ applied: 1, failed: 0 });
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a release nothing about retrying could fix is STOPPED", () => {
+  /** The releases this pass moved to `blocked`. */
+  function blockedBy(d: ReturnType<typeof deps>): string[] {
+    return vi.mocked(d.repository.blockRelease).mock.calls.map(call => call[0]);
+  }
+
+  it("blocks a member whose author was never recorded", async () => {
+    // Left scheduled it is replanned every tick forever, and reads as healthy
+    // the whole time — the operator learns nothing until the launch does not
+    // happen.
+    const d = deps({ members: [member({ createdBy: null })] });
+    const result = await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual(["r1"]);
+    expect(result.blocked).toBe(1);
+  });
+
+  it("blocks a member whose author has been DEACTIVATED", async () => {
+    // Found by breaking the classifier: with `AUTHOR_UNAVAILABLE` reclassified
+    // as retryable, the whole suite stayed green — so the commonest permanent
+    // failure of the three had no coverage at all. A departed colleague is the
+    // ordinary way a release becomes unrunnable.
+    const d = deps({
+      runAs: { findUser: async id => ({ id, isActive: false }) },
+    });
+    const result = await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual(["r1"]);
+    expect(result.blocked).toBe(1);
+  });
+
+  it("blocks a locale-scoped member", async () => {
+    const d = deps({ members: [member({ locale: "de" })] });
+    await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual(["r1"]);
+  });
+
+  it("does NOT block when the write merely failed", async () => {
+    // The control that carries the whole design. "Refused or errored" covers a
+    // dropped connection as well as a permission nobody will ever gain, and the
+    // two are indistinguishable here — so a momentary blip must not permanently
+    // halt a launch the next pass would have completed.
+    // The fixture's own way to say the write did not land, per its comment.
+    const d = deps({ mutations: { applied: async () => false } });
+    const result = await applyDueReleases(d);
+    // It still FAILED — the release is held open and retried, which is the
+    // point. It is simply not stopped.
+    expect(result.failed).toBeGreaterThan(0);
+    expect(blockedBy(d)).toEqual([]);
+    expect(result.blocked).toBe(0);
+  });
+
+  it("fences the block on the instant the pass PLANNED against", async () => {
+    // An editor who postpones a due release between the plan and this write
+    // leaves the row in `scheduled`, so a state-only predicate would match and
+    // replace the schedule they just chose with `blocked`. The release would
+    // then never run at the replacement instant, and nothing would say why.
+    const d = deps({ members: [member({ createdBy: null })] });
+    await applyDueReleases(d);
+    const call = vi.mocked(d.repository.blockRelease).mock.calls[0];
+    expect(call?.[1]).toBeInstanceOf(Date);
+    expect(call?.[1]?.getTime()).toBe(release().scheduledAt?.getTime());
+  });
+
+  it("blocks nothing when every member applies", async () => {
+    // The other control: without it, a pass that blocked everything it touched
+    // would satisfy the two positive cases above.
+    const d = deps({});
+    const result = await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual([]);
+    expect(result.blocked).toBe(0);
   });
 });

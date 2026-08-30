@@ -33,6 +33,7 @@ import type {
 import type {
   AddMemberInput,
   FindReleasesQuery,
+  ReleaseBlocker,
   ReleaseCapabilities,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
@@ -110,6 +111,15 @@ export interface ReleasesNamespace {
   capabilities(
     args: { releases: readonly ReleaseRow[] } & ReleaseCallerArgs
   ): Promise<Map<string, ReleaseCapabilities>>;
+  /**
+   * What stands between this release and its instant, per member.
+   *
+   * Derived from the members on every call rather than recorded when the drain
+   * stopped, so it stops reporting a cause somebody has fixed.
+   */
+  blockingReasons(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseBlocker[]>;
   /** Put a document into a release under a lifecycle action. */
   /**
    * Put a document into a release under a lifecycle action.
@@ -278,6 +288,9 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     // permissions for the edit view, not for every read.
     capabilities: args =>
       service().capabilities(args.releases, actorOf(ctx, args)),
+
+    blockingReasons: args =>
+      service().blockingReasons(args.releaseId, actorOf(ctx, args)),
 
     addMember: args => {
       const {

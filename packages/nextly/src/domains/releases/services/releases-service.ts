@@ -55,10 +55,15 @@ import {
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
   RELEASE_CANCELLABLE_FROM,
   RELEASE_SCHEDULABLE_FROM,
+  RELEASE_SCHEDULABLE_FROM_BLOCKED,
+  RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
+  RELEASE_STATES_SHOWN_ON_A_DOCUMENT,
   isReleaseMemberAction,
+  type ReleaseBlockerReason,
   type ReleaseMemberAction,
   type ReleaseState,
 } from "../../../schemas/releases/types";
+import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { documentRefKey } from "../releases-repository";
 import type {
@@ -201,6 +206,23 @@ function byEngineOrder(
   return a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0;
 }
 
+/**
+ * Why this member cannot be applied, or `null` if it can.
+ *
+ * The order matters and is the drain's: a member that is BOTH locale-scoped and
+ * authorless is reported as the one the drain would actually stop on, rather
+ * than whichever a loop noticed first.
+ */
+function blockerReasonFor(
+  member: ReleaseMemberRow,
+  liveAuthors: ReadonlySet<string>
+): ReleaseBlockerReason | null {
+  if (member.locale !== null) return "LOCALE_SCOPED";
+  if (member.createdBy === null) return "NO_AUTHOR";
+  if (!liveAuthors.has(member.createdBy)) return "AUTHOR_GONE";
+  return null;
+}
+
 /** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
 function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
   if (query.state !== undefined && row.state !== query.state) return false;
@@ -212,6 +234,35 @@ function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
     if (at === undefined || at > query.scheduledBefore.getTime()) return false;
   }
   return true;
+}
+
+/**
+ * One member standing between a release and its instant.
+ *
+ * Named per MEMBER rather than per release, because the fix is per member —
+ * remove that document, or restore that user — and a release-level "something
+ * is wrong" leaves an operator opening every row to find which.
+ */
+export interface ReleaseBlocker {
+  memberId: string;
+  reason: ReleaseBlockerReason;
+  /**
+   * What this member was going to DO, carried so a reader is not left to guess.
+   *
+   * A blocked takedown is not a failed publish, and a notice that says "could
+   * not be published" about one states the opposite of the truth.
+   */
+  action: ReleaseMemberAction;
+  /**
+   * Which document, so the fix names a row rather than an opaque id.
+   *
+   * `VersionScopeKind` rather than the two values releases accept today: it is
+   * the type the member row actually carries, and narrowing it here would be a
+   * second, quietly smaller vocabulary for the same field.
+   */
+  scopeKind: VersionScopeKind;
+  scopeSlug: string;
+  entryId: string;
 }
 
 export interface FindReleasesQuery {
@@ -469,7 +520,17 @@ export class ReleasesService {
     now: Date
   ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
     const ref = query.containing;
-    const grouped = await this.deps.repository.findDueMembersFor([ref], now);
+    // ASKED FOR, rather than filtered out of the answer afterwards. The
+    // repository's default is the read path's narrow list, so a banner that
+    // did not name its states here would receive scheduled releases only and
+    // its `blocked` case below could never run — which is exactly what this
+    // code did before: the widening sat one layer above the query that had
+    // already dropped the rows.
+    const grouped = await this.deps.repository.findDueMembersFor(
+      [ref],
+      now,
+      RELEASE_STATES_SHOWN_ON_A_DOCUMENT
+    );
     const members = grouped.get(documentRefKey(ref)) ?? [];
     if (members.length === 0) return [];
 
@@ -485,13 +546,23 @@ export class ReleasesService {
         // rather than rendered without its instant: a row saying a document is
         // scheduled, without saying when, is worse than not mentioning it.
         if (release === undefined) return [];
-        // RE-CHECKED, because these are two reads and the drain runs between
-        // them. `findDueMembersFor` selects members of scheduled releases; by
-        // the time the second read fetches those releases one may already have
-        // been published, and emitting it would report an action that has
+        // RE-CHECKED against the SECOND read, and that is all this now does:
+        // the query above already asked for these states, so this is not the
+        // filter but a guard on the window between the two reads. The drain
+        // runs in that window; by the time the second read fetches these
+        // releases one may already have been published, and emitting it would report an action that has
         // ALREADY HAPPENED as still coming. A reader polling until nothing is
         // pending would then stop on that row and keep the claim forever.
-        if (release.state !== "scheduled") return [];
+        //
+        // `blocked` is kept for the OPPOSITE reason. A release that stopped
+        // still holds this document and is still going nowhere, so dropping it
+        // makes the document's banner vanish — and a banner disappearing reads
+        // as resolved. The editor concludes the release already ran or was
+        // called off, when in truth the launch has failed and needs somebody to
+        // fix a member. Silence would be worse here than never having shown
+        // anything.
+        if (!RELEASE_STATES_SHOWN_ON_A_DOCUMENT.includes(release.state))
+          return [];
         return [{ ...release, memberAction: member.action, member }];
       })
       // THE ENGINE'S OWN ORDER, not a simpler one that agrees with it most of
@@ -501,7 +572,19 @@ export class ReleasesService {
       // Sorting on the instant alone leaves those ties in whatever order the
       // database returned, so a reader taking the last row as the final state —
       // which is exactly what this ordering invites — could read the loser.
-      .sort((a, b) => byEngineOrder(a.member, b.member));
+      //
+      // The instant comes from the RE-READ row, not from the member. These are
+      // two reads: a release moved between them carries its new time on the row
+      // that is displayed, and sorting by the old one renders dates out of
+      // order — and, under a limit, keeps rows that are no longer the earliest.
+      // The tie-breakers stay the member's, because that is what the engine
+      // breaks ties on.
+      .sort((a, b) =>
+        byEngineOrder(
+          { ...a.member, scheduledAt: a.scheduledAt ?? a.member.scheduledAt },
+          { ...b.member, scheduledAt: b.scheduledAt ?? b.member.scheduledAt }
+        )
+      );
 
     // The document filter NARROWS the list; it does not replace it. A caller
     // combining it with a window or a limit asked for both, and answering with
@@ -539,6 +622,80 @@ export class ReleasesService {
       );
     }
     return this.deps.repository.findReleases(query);
+  }
+
+  /**
+   * Why this release cannot proceed, worked out from its members right now.
+   *
+   * DERIVED rather than stored, and that is the whole design. Every reason a
+   * release blocks is a fact about a member that is still true when the row is
+   * read — no author recorded, an author who is gone, a locale-scoped member —
+   * so recording the reason at block time would create a second copy that goes
+   * stale the moment somebody fixes the cause. An operator who restores the
+   * deleted user would still be told the author is missing, and the only way
+   * out would be to reschedule and watch it block again.
+   *
+   * Answered for any release, not only a blocked one. The same predicate over a
+   * DRAFT is a preview of what would block it, which is the cheaper place to
+   * learn it — and having one implementation means the preview and the verdict
+   * cannot disagree.
+   *
+   * `liveAuthors` is asked ONCE for every author in the release rather than per
+   * member, so a release of fifty documents costs one lookup.
+   */
+  async blockingReasons(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<ReleaseBlocker[]> {
+    await this.authorize(actor, "read");
+    return this.derivedBlockers(releaseId);
+  }
+
+  /**
+   * The same verdict, for a caller that has ALREADY established its authority.
+   *
+   * Split from {@link blockingReasons} because the read grant belongs to the
+   * public surface and not to the derivation. `schedule` authorizes `publish`
+   * and then needs this answer; routing it through the public method demanded
+   * `read` as well, and an API key scoped to `publish-content-releases` alone
+   * has no such grant — the exact-grant lookup answers before the service's
+   * create-or-publish-implies-read fallback. Such a key could schedule every
+   * release on the site except a repaired one, which is the single case the
+   * check exists for.
+   *
+   * Private, and reachable only after an authorization: the caller has to have
+   * decided already, because nothing here checks.
+   */
+  private async derivedBlockers(releaseId: string): Promise<ReleaseBlocker[]> {
+    const members = await this.deps.repository.listMembers(releaseId);
+    if (members.length === 0) return [];
+
+    const authors = members
+      .map(member => member.createdBy)
+      .filter((id): id is string => id !== null);
+    const live =
+      authors.length === 0
+        ? new Set<string>()
+        : await this.deps.repository.liveAuthors(authors);
+
+    return members.flatMap<ReleaseBlocker>(member => {
+      // Ordered as the drain checks them, so the reason reported is the one it
+      // would actually stop on rather than whichever this loop noticed first.
+      const reason = blockerReasonFor(member, live);
+      if (reason === null) return [];
+      return [
+        {
+          memberId: member.id,
+          reason,
+          // Carried so a reader is not left with an opaque id and a sentence
+          // that assumes a publish: a blocked takedown is not a failed publish.
+          action: member.action,
+          scopeKind: member.scopeKind,
+          scopeSlug: member.scopeSlug,
+          entryId: member.entryId,
+        },
+      ];
+    });
   }
 
   async listMembers(
@@ -804,12 +961,64 @@ export class ReleasesService {
         logContext: { reason: "invalid-timezone", length: timezone.length },
       });
     }
+    // A BLOCKED release is refused while what stopped it is still true.
+    // Scheduling it again would reach the instant, hit the same member, and
+    // stop again — and the operator would learn that only by waiting for a
+    // launch that does not happen. Checked here rather than left to the drain
+    // because this is the moment somebody is asking, and the answer is already
+    // derivable from the members.
+    //
+    // Only for a blocked release: every other state pays no extra read.
+    const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    const wasBlocked = current?.state === "blocked";
+    if (wasBlocked) {
+      // `derivedBlockers`, not `blockingReasons`: `publish` was authorized
+      // above, and going through the public method would demand `read` as
+      // well — a grant a publish-scoped API key need not hold.
+      const blockers = await this.derivedBlockers(id);
+      if (blockers.length > 0) {
+        throw NextlyError.conflict({
+          message:
+            "This release cannot be scheduled until the documents blocking it are fixed or removed.",
+          logContext: {
+            reason: "release-still-blocked",
+            releaseId: id,
+            blockers: blockers.length,
+          },
+        });
+      }
+    }
+
+    // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what
+    // makes the check and the write one decision rather than two.
+    //
+    // The read and this write are separated by the blocker derivation, and the
+    // drain runs in that window. Both interleavings are refused rather than
+    // silently accepted:
+    //
+    //   - Read `scheduled`, so no blockers were examined; the drain then blocks
+    //     the release. Fencing on the full schedulable list would accept
+    //     `blocked` here and reschedule a release whose permanent blockers
+    //     nobody looked at — it would reach the new instant and stop again.
+    //     Excluding `blocked` makes that update match nothing.
+    //   - Read `blocked` and found it clean; something reschedules or cancels
+    //     it first. Fencing on `blocked` alone refuses, rather than overwriting
+    //     a decision made after the verdict.
+    //
+    // Either way the caller is told, and a retry re-derives against what is
+    // now true. The alternative — a transaction — is not available: the port
+    // exposes no transaction, which is the same constraint the drain's
+    // blocking pass works within.
+    const from = wasBlocked
+      ? RELEASE_SCHEDULABLE_FROM_BLOCKED
+      : RELEASE_SCHEDULABLE_FROM_UNBLOCKED;
+
     // The fence answers `false` for a release whose current state forbids the
     // move — a published one, most importantly, because re-scheduling it makes
     // the drain re-apply members against documents that have changed since.
     // Reported as a CONFLICT rather than swallowed: a caller told nothing would
     // read a no-op as a schedule that took.
-    if (!(await this.deps.repository.scheduleRelease(id, at, timezone))) {
+    if (!(await this.deps.repository.scheduleRelease(id, at, timezone, from))) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-schedulable", releaseId: id },
       });

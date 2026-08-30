@@ -56,6 +56,7 @@ function result(
   return {
     due: 1,
     published: 1,
+    blocked: 0,
     applied: 1,
     failed: 0,
     outcomes: [],
@@ -193,6 +194,7 @@ describe("reportReleasesOutcome", () => {
     reportReleasesOutcome(log, {
       due: 5,
       published: 1,
+      blocked: 0,
       applied: 1,
       failed: 0,
       deferred: 4,
@@ -215,6 +217,7 @@ describe("reportReleasesOutcome", () => {
     reportReleasesOutcome(log, {
       due: 9,
       published: 2,
+      blocked: 0,
       applied: 2,
       failed: 0,
       deferred: 0,
@@ -267,9 +270,32 @@ describe("reportReleasesOutcome", () => {
     // would bury the pass that mattered.
     const log = logger();
 
-    reportReleasesOutcome(log, result({ due: 0, published: 0, applied: 0 }));
+    reportReleasesOutcome(
+      log,
+      result({ due: 0, published: 0, blocked: 0, applied: 0 })
+    );
 
     expect(log.info).not.toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
+  });
+  it("reports the releases this pass STOPPED", () => {
+    // One failed member can stop a whole overlapping component, so the per-
+    // member error below names one release while several were moved. Without
+    // this line the operator reading the log never learns the others stopped.
+    const log = logger();
+    reportReleasesOutcome(log, {
+      due: 2,
+      published: 0,
+      blocked: 2,
+      applied: 0,
+      failed: 1,
+      deferred: 0,
+      undischarged: 0,
+      outcomes: [],
+    });
+    expect(log.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ blocked: 2 })
+    );
   });
 });

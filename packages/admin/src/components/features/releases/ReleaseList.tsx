@@ -40,12 +40,16 @@ import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
  */
 const STATE_VARIANT: Record<
   ReleaseState,
-  "default" | "outline" | "success" | "warning"
+  "default" | "outline" | "success" | "warning" | "destructive"
 > = {
   draft: "outline",
   scheduled: "warning",
   published: "success",
   cancelled: "outline",
+  // The only state that needs someone to DO something. `cancelled` is quiet
+  // because it is a decision somebody made; this is a launch that will not
+  // happen and nobody has noticed.
+  blocked: "destructive",
 };
 
 /**

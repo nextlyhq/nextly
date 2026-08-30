@@ -379,4 +379,8 @@ export * from "./security-config"; // Zod — review in Task 19
 // and must not be able to name one the engine cannot produce, and a second
 // spelling of these unions in a client is how a screen starts describing a
 // state the server has never sent.
-export type { ReleaseState, ReleaseMemberAction } from "./releases/types";
+export type {
+  ReleaseState,
+  ReleaseMemberAction,
+  ReleaseBlockerReason,
+} from "./releases/types";

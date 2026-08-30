@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { deactivate, seedLiveAuthor } from "./helpers/live-author";
 
 import { defineCollection, text } from "../../../config";
+import { RELEASE_STATES_SHOWN_ON_A_DOCUMENT } from "../../../schemas/releases/types";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -204,6 +205,58 @@ describe.each(getConfiguredTestDialects())(
       // due-but-unmaterialised release free.
       const after = await repo.findDueMembersFor([ref("e1")], new Date());
       expect(after.get(documentRefKey(ref("e1"))) ?? []).toEqual([]);
+    });
+
+    it("stops returning a BLOCKED release to the read path", async () => {
+      // The safety half of the state, and the reason the read path may not
+      // simply widen its filter: a release that stopped must stop projecting
+      // its effect onto what a visitor sees, or "stopped" would mean nothing
+      // to a reader.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const release = await repo.createRelease({ title: "Spring launch" });
+      await repo.addMember({
+        releaseId: release.id,
+        ...ref("e1"),
+        action: "publish",
+      });
+      await repo.scheduleRelease(release.id, PAST, "UTC");
+      expect(await repo.blockRelease(release.id, PAST)).toBe(true);
+
+      const found = await repo.findDueMembersFor([ref("e1")], new Date());
+      expect(found.get(documentRefKey(ref("e1"))) ?? []).toEqual([]);
+    });
+
+    it("returns a BLOCKED release to a caller that asks for one", async () => {
+      // The half a unit test cannot reach, and the half that was wrong. The
+      // banner widened its own state list one layer ABOVE this query, which
+      // filtered `scheduled` alone — so the row it asked for had already been
+      // dropped and the widening could never fire. Only a real query answers
+      // whether the states a caller names are the states it gets.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const release = await repo.createRelease({ title: "Spring launch" });
+      await repo.addMember({
+        releaseId: release.id,
+        ...ref("e1"),
+        action: "publish",
+      });
+      await repo.scheduleRelease(release.id, PAST, "UTC");
+      expect(await repo.blockRelease(release.id, PAST)).toBe(true);
+
+      // The list the document's banner actually passes, imported rather than
+      // spelled again: a test naming its own states would keep passing after
+      // the banner's list changed underneath it.
+      const found = await repo.findDueMembersFor(
+        [ref("e1")],
+        new Date(),
+        RELEASE_STATES_SHOWN_ON_A_DOCUMENT
+      );
+      const members = found.get(documentRefKey(ref("e1"))) ?? [];
+      expect(members).toHaveLength(1);
+      // Still carrying the instant it was going to run at, which is what the
+      // banner orders and dates the row by.
+      expect(members[0]?.scheduledAt.getTime()).toBe(PAST.getTime());
     });
 
     it("keeps each document's members apart", async () => {
