@@ -16,6 +16,7 @@ export { users, accounts, sessions } from "../users/mysql";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
+export { nextlyDocumentLock } from "../document-lock/mysql";
 
 export {
   emailVerificationTokens,
