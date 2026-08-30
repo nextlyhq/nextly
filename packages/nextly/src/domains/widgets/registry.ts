@@ -73,6 +73,14 @@ export function registerWidget(
  *
  * Separate from `registerWidget` so replacing someone else's widget is always
  * a deliberate act that reads as one at the call site.
+ *
+ * The replacement must AGREE with the key it is replacing. The store is keyed
+ * by id and the definition carries its own, so a mismatch stores an object
+ * under "core/a" that announces itself as "core/b": `getWidget("core/a")`
+ * answers with the wrong identity, anything keying off `definition.id` -- a
+ * picker, a saved layout, a diagnostic naming the offender -- disagrees with
+ * the registry, and "core/b" is still free for a second widget to claim
+ * alongside it. Refusing here keeps the key and the identity one fact.
  */
 export function overrideWidget(
   id: string,
@@ -80,6 +88,13 @@ export function overrideWidget(
   opts: { source?: string } = {}
 ): void {
   validateWidgetDefinition(def);
+  if (def.id !== id) {
+    throw NextlyError.invalidInput({
+      message:
+        `Cannot override widget "${id}" with a definition whose id is ` +
+        `"${def.id}". The replacement must carry the id it replaces.`,
+    });
+  }
   if (!store().has(id)) {
     throw NextlyError.notFound({
       message: `Cannot override widget "${id}": it is not registered.`,

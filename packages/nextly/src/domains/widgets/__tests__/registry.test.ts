@@ -62,6 +62,19 @@ describe("widget registry", () => {
     expect(getWidget("core/totals")?.title).toBe("Our totals");
   });
 
+  it("refuses an override whose definition claims a different id", () => {
+    // `overrideWidget("core/a", def)` stores `def` under key "core/a", so a
+    // `def.id` of "core/b" makes `getWidget("core/a")` answer with an object
+    // announcing itself as "core/b" -- and leaves "core/b" free for someone
+    // else to register alongside it. Anything keying off the definition's own
+    // id (a picker, a layout, a diagnostic) then disagrees with the registry.
+    registerWidget(def("core/totals"), { source: "core" });
+    expect(() => overrideWidget("core/totals", def("stripe/revenue"))).toThrow(
+      /stripe\/revenue/
+    );
+    expect(getWidget("core/totals")?.id).toBe("core/totals");
+  });
+
   it("refuses to override a widget that was never registered", () => {
     // This guard is what stops a plugin bypassing registerWidget's duplicate-id
     // check by calling overrideWidget instead -- overrideWidget must never be
