@@ -13,12 +13,11 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { getNextly } from "../../direct-api/nextly";
 import type { FindArgs } from "../../direct-api/types/collections";
-import { NextlyError } from "../../errors/nextly-error";
 import type { WhereFilter } from "../collections/query/query-operators";
 import type { UserContext } from "../collections/services/collection-types";
 
 import type { WidgetQuery } from "./query";
-import { getSource } from "./sources";
+import { failUnavailableSourceOrOp, getSource } from "./sources";
 
 /**
  * Who is asking, in the two shapes an access decision reads. Structurally the
@@ -48,21 +47,26 @@ function toSelect(
   return Object.fromEntries(fields.map(field => [field, true]));
 }
 
-/** Resolves `query.source` against the live registry, or fails loudly. */
+/**
+ * Resolves `query.source` against the live registry, or fails loudly.
+ *
+ * Both refusals go through `failUnavailableSourceOrOp`, so a source that does
+ * not exist and one that exists but is not executable answer the caller
+ * identically -- the second would otherwise confirm the source is real. The
+ * distinction survives in the log.
+ */
 function resolveExecutableSource(sourceId: string) {
   // Re-resolve rather than trusting the caller's copy: a source can be
   // deregistered between configuration and execution, and a query pointing at
   // a source that no longer exists must fail rather than fall through.
   const source = getSource(sourceId);
   if (!source) {
-    throw NextlyError.invalidInput({
-      message: `Widget query names unknown source "${sourceId}"`,
-    });
+    failUnavailableSourceOrOp(`unknown source "${sourceId}" at execution`);
   }
   if (source.kind !== "collection") {
-    throw NextlyError.invalidInput({
-      message: `Source kind "${source.kind}" is not executable yet; only collections are.`,
-    });
+    failUnavailableSourceOrOp(
+      `source "${sourceId}" has kind "${source.kind}", which is not executable yet; only collections are`
+    );
   }
   return source;
 }
@@ -164,7 +168,10 @@ export async function executeWidgetQuery(
   if (query.op === "count") return runCount(collection, query, caller);
   if (query.op === "list") return runList(collection, query, caller);
 
-  throw NextlyError.invalidInput({
-    message: `Widget op "${query.op}" is not implemented yet.`,
-  });
+  // Same refusal as every other source/op dead end, for the same reason: this
+  // one is reachable only for an op a source DECLARED support for, so a
+  // distinct message would say which sources declare which ops.
+  failUnavailableSourceOrOp(
+    `op "${query.op}" on source "${query.source}" is not implemented yet`
+  );
 }

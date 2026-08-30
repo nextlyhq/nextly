@@ -7,6 +7,7 @@ vi.mock("../../../direct-api/nextly", () => ({
   getNextly: () => ({ find, count }),
 }));
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
 import { clearSources, registerSource } from "../sources";
@@ -124,8 +125,18 @@ describe("executeWidgetQuery", () => {
   it("refuses to execute a query whose source vanished", async () => {
     const q = validateWidgetQuery({ source: "collection:posts", op: "count" });
     clearSources();
-    await expect(executeWidgetQuery(q, caller)).rejects.toThrow(
-      /collection:posts/
+
+    // The public message is shared with every other source/op refusal on
+    // purpose -- naming the source would confirm to a caller which sources
+    // exist. The id survives in `logContext`, which is what this asserts, so
+    // an executor that refused everything indiscriminately would not pass.
+    const err = await executeWidgetQuery(q, caller).catch(
+      (e: unknown) => e as NextlyError
     );
+    expect(NextlyError.is(err)).toBe(true);
+    expect(err.publicMessage).toBe(
+      "Invalid widget query: unavailable source or unsupported op"
+    );
+    expect(err.logContext?.widgetQuery).toMatch(/collection:posts/);
   });
 });

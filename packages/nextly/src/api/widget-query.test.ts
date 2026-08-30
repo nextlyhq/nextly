@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // `isErrorResponse` keeps its real shape (a plain predicate, not a vi.fn())
 // so the mock survives strict typing at the call site the same way
@@ -32,10 +32,31 @@ vi.mock("./authenticated-read", () => ({ readCaller }));
 
 import { requireAuthentication } from "../auth/middleware";
 import { clearSources, registerSource } from "../domains/widgets/sources";
+import { NextlyError } from "../errors/nextly-error";
+import { setNextlyLogger } from "../observability/logger";
 
 import { postWidgetQuery } from "./widget-query";
 
 const reqAuth = vi.mocked(requireAuthentication);
+
+/** Captures what the boundary logs, so "it was logged" is observed, not assumed. */
+const logged: object[] = [];
+const testLogger = {
+  error: (p: object) => void logged.push(p),
+  warn: (p: object) => void logged.push(p),
+  info: () => {},
+  debug: () => {},
+};
+
+/** Reads the slots out of a batch response. */
+async function slotsOf(
+  res: Response
+): Promise<Array<{ ok: boolean; error?: string }>> {
+  const body = (await res.json()) as {
+    results: Array<{ ok: boolean; error?: string }>;
+  };
+  return body.results;
+}
 
 function makeReq(body: unknown): Request {
   return new Request("http://localhost/api/dashboard/query", {
@@ -65,6 +86,12 @@ beforeEach(() => {
     supports: ["count", "list"],
     fields: [{ name: "status", type: "string" }],
   });
+  logged.length = 0;
+  setNextlyLogger(testLogger);
+});
+
+afterEach(() => {
+  setNextlyLogger(undefined);
 });
 
 describe("POST /api/dashboard/query", () => {
@@ -129,12 +156,10 @@ describe("POST /api/dashboard/query", () => {
     const res = await postWidgetQuery(
       makeReq({ queries: [{ source: "collection:nope", op: "count" }] })
     );
-    const body = (await res.json()) as {
-      results: Array<{ ok: boolean; error?: string }>;
-    };
+    const slots = await slotsOf(res);
     expect(res.status).toBe(200);
-    expect(body.results[0].ok).toBe(false);
-    expect(body.results[0].error).toMatch(/collection:nope/);
+    expect(slots[0].ok).toBe(false);
+    expect(slots[0].error).toBeTruthy();
   });
 
   it("refuses a batch larger than the cap", async () => {
@@ -144,5 +169,93 @@ describe("POST /api/dashboard/query", () => {
     }));
     const res = await postWidgetQuery(makeReq({ queries }));
     expect(res.status).toBe(400);
+  });
+
+  describe("a failed slot says nothing internal and is never swallowed", () => {
+    it("does not put a non-NextlyError's own text on the wire", async () => {
+      // The realistic shape: a driver or DbError message carrying SQL
+      // fragments and column names, reaching any authenticated caller
+      // verbatim under HTTP 200. Everywhere else the boundary maps a
+      // non-NextlyError to `NextlyError.internal`, whose public message is
+      // generic; this slot must answer the same way.
+      const leak =
+        'SQLITE_ERROR: no such column: posts.secret_salary in "SELECT ..."';
+      executeWidgetQuery.mockRejectedValueOnce(new Error(leak));
+
+      const res = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+      );
+
+      const slots = await slotsOf(res);
+      expect(slots[0].ok).toBe(false);
+      expect(slots[0].error).not.toContain("SQLITE_ERROR");
+      expect(slots[0].error).not.toContain("secret_salary");
+      expect(slots[0].error).toBe("An unexpected error occurred.");
+    });
+
+    it("LOGS the original error the caller never sees", async () => {
+      // The other half of the same catch: it swallowed the failure entirely,
+      // so nothing in the observability stack ever learned a widget query
+      // broke. Redacting the wire without logging would trade one defect for
+      // a blinder one.
+      const leak = "SQLITE_ERROR: no such column: posts.secret_salary";
+      executeWidgetQuery.mockRejectedValueOnce(new Error(leak));
+
+      await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+      );
+
+      expect(JSON.stringify(logged)).toContain("widget-query-failed");
+      expect(JSON.stringify(logged)).toContain("secret_salary");
+    });
+
+    it("passes a NextlyError's public message through", async () => {
+      // A named refusal is the whole value of the error to the caller -- a
+      // widget filtering on a read-ruled field must be told which guard
+      // refused it, not handed "an unexpected error occurred".
+      executeWidgetQuery.mockRejectedValueOnce(NextlyError.forbidden());
+
+      const res = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+      );
+
+      const slots = await slotsOf(res);
+      expect(slots[0].error).toBe(
+        "You don't have permission to perform this action."
+      );
+    });
+
+    it("answers the same for an unknown source and an unsupported op", async () => {
+      // Distinguishable refusals make the endpoint a source-enumeration
+      // oracle: "does not support op" confirms the source EXISTS, so a caller
+      // can walk collection names and learn the schema of an install it was
+      // never shown. The detail belongs in the log, not the reply.
+      const unknownSource = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:salaries", op: "count" }] })
+      );
+      const unsupportedOp = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:posts", op: "groupBy" }] })
+      );
+
+      const a = (await slotsOf(unknownSource))[0];
+      const b = (await slotsOf(unsupportedOp))[0];
+
+      expect(a.ok).toBe(false);
+      expect(b.ok).toBe(false);
+      expect(a.error).toBe(b.error);
+      expect(a.error).not.toContain("salaries");
+      expect(b.error).not.toContain("groupBy");
+    });
+
+    it("keeps the source/op detail in the log", async () => {
+      // The negative control for the test above: made indistinguishable to
+      // the caller, NOT thrown away. An operator debugging a broken dashboard
+      // still needs to know which source was named.
+      await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:salaries", op: "count" }] })
+      );
+
+      expect(JSON.stringify(logged)).toContain("collection:salaries");
+    });
   });
 });

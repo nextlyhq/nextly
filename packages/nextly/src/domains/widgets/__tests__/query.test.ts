@@ -4,6 +4,25 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { MAX_WIDGET_LIMIT, validateWidgetQuery } from "../query";
 import { clearSources, registerSource } from "../sources";
 
+/** The one message every source/op refusal answers with. */
+const SOURCE_OR_OP_REFUSAL =
+  "Invalid widget query: unavailable source or unsupported op";
+
+/**
+ * Runs `fn`, requiring it to throw a `NextlyError`, and hands the error back
+ * so a test can read `logContext` -- the only place the source/op detail
+ * survives now that the public message is shared.
+ */
+function caught(fn: () => unknown): NextlyError {
+  try {
+    fn();
+  } catch (err) {
+    expect(err).toBeInstanceOf(NextlyError);
+    return err as NextlyError;
+  }
+  throw new Error("expected the call to throw, and it returned");
+}
+
 beforeEach(() => {
   clearSources();
   registerSource({
@@ -54,19 +73,40 @@ describe("validateWidgetQuery", () => {
 
   it("refuses an unregistered source", () => {
     // The source id is resolved against the registry, so no caller-invented
-    // table name can ever reach the compiler. Anchored to the guard's own
-    // message text (M6): a catch-all `fail(JSON.stringify(query))` would
-    // also satisfy a loose `/collection:secrets/` match, so we match the
-    // "unknown source" vocabulary that only this guard produces.
-    expect(() =>
+    // table name can ever reach the compiler. Anchored to `logContext` rather
+    // than to the message, because the message is deliberately identical for
+    // every source/op refusal (an enumeration oracle otherwise) -- a catch-all
+    // that refused everything would satisfy a match on the shared message and
+    // could not produce this detail.
+    const err = caught(() =>
       validateWidgetQuery({ source: "collection:secrets", op: "count" })
-    ).toThrow(/unknown source "collection:secrets"/);
+    );
+    expect(err.publicMessage).toBe(SOURCE_OR_OP_REFUSAL);
+    expect(err.logContext?.widgetQuery).toMatch(
+      /unknown source "collection:secrets"/
+    );
   });
 
   it("refuses an op the source does not support", () => {
-    expect(() =>
+    const err = caught(() =>
       validateWidgetQuery({ source: "collection:posts", op: "timeseries" })
-    ).toThrow(/does not support op "timeseries"/);
+    );
+    expect(err.publicMessage).toBe(SOURCE_OR_OP_REFUSAL);
+    expect(err.logContext?.widgetQuery).toMatch(
+      /does not support op "timeseries"/
+    );
+  });
+
+  it("gives an unknown source and an unsupported op the SAME public message", () => {
+    // The oracle, stated directly: a caller who can tell the two apart can
+    // walk collection names and learn which exist.
+    const unknownSource = caught(() =>
+      validateWidgetQuery({ source: "collection:secrets", op: "count" })
+    );
+    const unsupportedOp = caught(() =>
+      validateWidgetQuery({ source: "collection:posts", op: "timeseries" })
+    );
+    expect(unknownSource.publicMessage).toBe(unsupportedOp.publicMessage);
   });
 
   it("refuses a where clause naming an undeclared field", () => {

@@ -171,6 +171,31 @@ export function getSource(id: string): WidgetSource | undefined {
   return store().get(id);
 }
 
+/**
+ * The ONE refusal every "you cannot query that" answer gives.
+ *
+ * A widget query names a source and an op, and both are caller input on a
+ * batch endpoint any authenticated session or API key can reach. Answering
+ * "unknown source" for one id and "does not support op" for another tells the
+ * caller which sources EXIST -- a source-enumeration oracle over the install's
+ * schema, walked one collection name at a time. Same for "kind is not
+ * executable yet": it too confirms the source is real.
+ *
+ * So all of them collapse to one string here, and the thing that actually
+ * happened rides in `logContext` where an operator debugging a broken
+ * dashboard can still read it. Made indistinguishable, not thrown away.
+ *
+ * NOT `invalidInput` with the detail as its message: that factory puts its
+ * message straight onto the wire, which is exactly the disclosure being
+ * closed.
+ */
+export function failUnavailableSourceOrOp(detail: string): never {
+  throw NextlyError.invalidInput({
+    message: "Invalid widget query: unavailable source or unsupported op",
+    logContext: { widgetQuery: detail },
+  });
+}
+
 export function listSources(): WidgetSource[] {
   return [...store().values()];
 }

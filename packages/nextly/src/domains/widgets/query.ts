@@ -16,7 +16,12 @@ import {
   isValidOperator,
 } from "../collections/query/query-operators";
 
-import { getSource, type WidgetOp, type WidgetSource } from "./sources";
+import {
+  failUnavailableSourceOrOp,
+  getSource,
+  type WidgetOp,
+  type WidgetSource,
+} from "./sources";
 
 /** Nothing may return more rows than this, whatever the caller asked for. */
 export const MAX_WIDGET_LIMIT = 50;
@@ -93,16 +98,26 @@ function readEachFieldOnce(query: unknown): RawWidgetQuery {
 
 /** Resolves `source` against the registry. A caller-invented id cannot exist here. */
 function resolveSource(source: unknown): WidgetSource {
-  if (typeof source !== "string") fail("source is required");
+  if (typeof source !== "string") {
+    failUnavailableSourceOrOp("source is required");
+  }
   const found = getSource(source);
-  if (!found) fail(`unknown source "${source}"`);
+  if (!found) failUnavailableSourceOrOp(`unknown source "${source}"`);
   return found;
 }
 
-/** Confirms the source declares support for the requested op. */
+/**
+ * Confirms the source declares support for the requested op.
+ *
+ * Refuses through `failUnavailableSourceOrOp`, the same refusal an unknown
+ * source gets, deliberately: "does not support op" would otherwise confirm the
+ * source EXISTS and let a caller enumerate the install's collections.
+ */
 function assertSupportedOp(source: WidgetSource, op: unknown): WidgetOp {
   if (typeof op !== "string" || !source.supports.includes(op as WidgetOp)) {
-    fail(`source "${source.id}" does not support op "${String(op)}"`);
+    failUnavailableSourceOrOp(
+      `source "${source.id}" does not support op "${String(op)}"`
+    );
   }
   return op as WidgetOp;
 }

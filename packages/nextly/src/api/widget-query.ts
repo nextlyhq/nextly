@@ -18,7 +18,9 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import { validateWidgetQuery } from "../domains/widgets/query";
+import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 
 import { readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
@@ -59,7 +61,35 @@ function parseQueriesBody(body: unknown): unknown[] | Response {
   return queries;
 }
 
-/** Runs one query, converting any failure -- validation or execution -- into its own slot. */
+/**
+ * What a slot says when the failure is not a `NextlyError`.
+ *
+ * The same sentence `NextlyError.internal` carries, deliberately: a driver or
+ * `DbError` message names columns, tables and SQL fragments, and this endpoint
+ * is reachable by any authenticated session or API key.
+ */
+const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
+
+/**
+ * Runs one query, converting any failure -- validation or execution -- into
+ * its own slot.
+ *
+ * Two things this catch must do that the original did neither of.
+ *
+ * It must not put `error.message` on the wire. Every other boundary in this
+ * package maps a non-`NextlyError` to `NextlyError.internal`, whose
+ * `publicMessage` is generic, and only `toResponseJSON` reaches a caller. Here
+ * a `DbError` or a raw driver error was serialized verbatim under HTTP 200 --
+ * reproducible with
+ * `{"source":"collection:posts","op":"list","where":{"createdAt":{"greater_than":"not-a-date"}}}`.
+ * A `NextlyError`'s `publicMessage` IS public by construction, so it passes
+ * through; anything else is replaced.
+ *
+ * And it must not swallow the failure. Isolating a widget's error into its own
+ * slot is the point of the batch shape, but the batch still answers 200, so
+ * `withErrorHandler` never sees it and neither did the logger. A dashboard
+ * whose widgets all fail left no trace anywhere.
+ */
 async function runOne(
   raw: unknown,
   caller: Awaited<ReturnType<typeof readCaller>>
@@ -69,9 +99,23 @@ async function runOne(
     const result = await executeWidgetQuery(query, caller);
     return { ok: true, result };
   } catch (error) {
+    // Guarded the way `withErrorHandler` guards its own logging call: a
+    // thrower's `logContext` is arbitrary, and a cycle or a BigInt in it would
+    // throw from inside this catch and fail the whole batch over one slot.
+    try {
+      getNextlyLogger().error({
+        kind: "widget-query-failed",
+        ...(NextlyError.is(error)
+          ? error.toLogJSON("widget-query")
+          : { err: error instanceof Error ? error.stack : String(error) }),
+      });
+    } catch {
+      // Deliberately swallowed; see above.
+    }
+
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
     };
   }
 }
