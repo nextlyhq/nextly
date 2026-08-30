@@ -67,6 +67,15 @@ export type ReleaseAuthority = "read" | "create" | "publish";
 export const RELEASES_RESOURCE = "content-releases";
 
 /**
+ * The longest title every supported dialect can store.
+ *
+ * MySQL holds it in `varchar(255)`; PostgreSQL and SQLite use unbounded `text`.
+ * Stated once and enforced above the database so the narrowest engine defines
+ * the contract, rather than the contract depending on which engine is running.
+ */
+export const MAX_RELEASE_TITLE_LENGTH = 255;
+
+/**
  * Who is asking, and whether to ask at all.
  *
  * `overrideAccess` matches every other service in this package: the Direct API
@@ -205,6 +214,17 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseRow> {
     await this.authorize(actor, "create");
+    // ONE limit, applied before the write, because the column is not one shape:
+    // `nextly_releases.title` is `varchar(255)` on MySQL and unbounded `text` on
+    // PostgreSQL and SQLite. Left to the database, the same call succeeds on two
+    // engines and either errors or silently TRUNCATES on the third — and a
+    // truncating write returns a row that disagrees with what is stored.
+    if (input.title.length > MAX_RELEASE_TITLE_LENGTH) {
+      throw NextlyError.invalidInput({
+        message: `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`,
+        logContext: { reason: "title-too-long", length: input.title.length },
+      });
+    }
     // `createdBy` comes from the ACTOR, never from the input. Materialisation
     // performs each member as its recorded author, so an author a caller could
     // name would be an identity they could borrow at a future instant.
@@ -275,6 +295,15 @@ export class ReleasesService {
         },
       });
     }
+    // Once a release is SCHEDULED, changing what is in it changes what goes
+    // live at an instant a publisher already committed to. The drain reads
+    // membership at the instant, not at scheduling time, so `create` alone
+    // would let a caller append content to a committed launch without ever
+    // passing the publish gate — the escalation this authority exists to
+    // prevent, arriving after the decision rather than before it.
+    if (parent.state === "scheduled") {
+      await this.authorize(actor, "publish");
+    }
 
     try {
       return await this.deps.repository.addMember({
@@ -318,6 +347,16 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<void> {
     await this.authorize(actor, "publish");
+    // An unusable instant is refused HERE rather than at the driver. A NaN date
+    // reaches timestamp encoding and fails differently per dialect, so the
+    // caller's mistake arrives as an opaque database error instead of the
+    // sentence naming it.
+    if (Number.isNaN(at.getTime())) {
+      throw NextlyError.invalidInput({
+        message: "`at` is not a valid instant.",
+        logContext: { reason: "invalid-schedule-instant", releaseId: id },
+      });
+    }
     // The fence answers `false` for a release whose current state forbids the
     // move — a published one, most importantly, because re-scheduling it makes
     // the drain re-apply members against documents that have changed since.

@@ -290,3 +290,53 @@ describe("ReleasesService refuses members that would act on nothing", () => {
     );
   });
 });
+
+describe("ReleasesService protects a committed release", () => {
+  it("requires publish authority to add to a SCHEDULED release", async () => {
+    // The drain reads membership at the scheduled instant, not at scheduling
+    // time. So `create` alone would let a caller append content to a launch a
+    // publisher already committed to — the escalation the publish authority
+    // exists to prevent, arriving after the decision instead of before it.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("lets a publisher add to a scheduled release", async () => {
+    // The control on the case above: the refusal must be about the AUTHORITY,
+    // not about the state. Without this, freezing membership outright would
+    // pass the test above and be wrong.
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(repo.addMember).toHaveBeenCalled();
+  });
+
+  it("refuses an unusable schedule instant before touching the release", async () => {
+    // A NaN date reaches timestamp encoding and fails differently per dialect,
+    // so the caller's mistake arrives as an opaque driver error rather than the
+    // sentence naming it.
+    const { svc, repo } = service({ holds: ["publish"] });
+    await expect(
+      svc.schedule("r1", new Date("not a date"), "UTC", ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("applies one title limit, so the narrowest dialect defines the contract", async () => {
+    // `title` is varchar(255) on MySQL and unbounded text elsewhere. Left to the
+    // database, the same call succeeds on two engines and truncates on the
+    // third — returning a row that disagrees with what is stored.
+    const { svc, repo } = service({ holds: ["create"] });
+    await expect(
+      svc.create({ title: "x".repeat(256) }, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.createRelease).not.toHaveBeenCalled();
+
+    await svc.create({ title: "x".repeat(255) }, ADMIN);
+    expect(repo.createRelease).toHaveBeenCalled();
+  });
+});

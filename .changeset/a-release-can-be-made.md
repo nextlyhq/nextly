@@ -26,4 +26,4 @@
 "@nextlyhq/ui": patch
 ---
 
-Make content releases reachable: a `nextly.releases.*` Direct API namespace over a service that finally enforces the three release permissions, refusing to schedule a document the caller could not publish themselves.
+Honour the declared null-ordering control in the Drizzle adapter, which was read nowhere, and make content releases reachable: a `nextly.releases.*` Direct API namespace over a service that finally enforces the three release permissions, refusing to schedule a document the caller could not publish themselves.
