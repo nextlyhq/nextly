@@ -143,3 +143,76 @@ describe("releases namespace identity", () => {
     );
   });
 });
+
+describe("releases namespace credential lifetime", () => {
+  it("does not carry the instance's key scope onto an overridden identity", async () => {
+    // The instance's key authorizes the instance's user. A call that names
+    // somebody else — or nobody — must not keep it: `authorize` checks the key
+    // scope BEFORE the anonymous guard, so an inherited scope authorizes
+    // `userId: null` outright.
+    const releases = createReleasesNamespace(
+      instance({
+        overrideAccess: false,
+        user: { id: "u1", roles: ["editor"] },
+        actor: { actorType: "apiKey", permissions: ["read-content-releases"] },
+      })
+    );
+    await releases.find({ userId: null });
+    expect(service.find).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        userId: null,
+        authenticatedScope: undefined,
+        userRoles: undefined,
+      })
+    );
+  });
+
+  it("keeps the instance's credentials when the identity is NOT overridden", async () => {
+    // The control: clearing them unconditionally would strip the scope from
+    // every ordinary call on a key-configured instance and pass the case above.
+    const scope = {
+      actorType: "apiKey",
+      permissions: ["read-content-releases"],
+    };
+    const releases = createReleasesNamespace(
+      instance({
+        overrideAccess: false,
+        user: { id: "u1", roles: ["editor"] },
+        actor: scope,
+      })
+    );
+    await releases.find();
+    expect(service.find).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        userId: "u1",
+        authenticatedScope: scope,
+        userRoles: ["editor"],
+      })
+    );
+  });
+
+  it("lets a transport supply the scope for the identity it is serving", async () => {
+    // A REST request resolves the key for the request it is handling; that wins
+    // over anything the instance was built with.
+    const requestScope = {
+      actorType: "apiKey" as const,
+      permissions: ["publish-content-releases"],
+    };
+    const releases = createReleasesNamespace(
+      instance({
+        overrideAccess: false,
+        actor: { actorType: "apiKey", permissions: ["read-content-releases"] },
+      })
+    );
+    await releases.find({ userId: "u2", authenticatedScope: requestScope });
+    expect(service.find).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        userId: "u2",
+        authenticatedScope: requestScope,
+      })
+    );
+  });
+});

@@ -182,8 +182,115 @@ describe("registerReleaseServices document authority", () => {
     const { svc, actor } = await withOwnerAllowed([
       "create-content-releases",
       "publish-posts",
+      // The base write grant too: an ordinary lifecycle write needs `update`
+      // alongside the verb, so a key holding only `publish-posts` cannot
+      // perform one.
+      "update-posts",
     ]);
     await expect(svc.addMember("r1", MEMBER, actor)).rejects.not.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+});
+
+describe("registerReleaseServices lifecycle grants", () => {
+  afterEach(() => {
+    vi.doUnmock("../container");
+    vi.doUnmock("../../services/lib/permissions");
+    vi.resetModules();
+  });
+
+  async function build(opts: {
+    scopePermissions?: string[];
+    ownerAllows?: (operation: string) => boolean;
+  }) {
+    const singletons = new Map<string, unknown>();
+    vi.resetModules();
+    vi.doMock("../../services/lib/permissions", () => ({
+      hasPermission: async () => true,
+    }));
+    vi.doMock("../container", () => ({
+      container: {
+        registerSingleton: (name: string, factory: () => unknown) => {
+          singletons.set(name, factory());
+        },
+        has: (name: string) => name === "rbacAccessControlService",
+        get: () => ({
+          checkAccess: async ({ operation }: { operation: string }) =>
+            opts.ownerAllows ? opts.ownerAllows(operation) : true,
+          getRegisteredAccess: () => undefined,
+        }),
+      },
+    }));
+    const { registerReleaseServices } = await import(
+      "../registrations/register-releases"
+    );
+    registerReleaseServices({ adapter: { select: async () => [] } } as never);
+    return {
+      svc: singletons.get("releasesService") as {
+        addMember: (r: string, m: unknown, a: unknown) => Promise<unknown>;
+      },
+      actor: {
+        userId: "owner",
+        overrideAccess: false,
+        ...(opts.scopePermissions
+          ? {
+              authenticatedScope: {
+                actorType: "apiKey" as const,
+                permissions: opts.scopePermissions,
+              },
+            }
+          : {}),
+      },
+    };
+  }
+
+  const MEMBER = {
+    scopeKind: "collection",
+    scopeSlug: "posts",
+    entryId: "e1",
+    locale: null,
+    action: "publish",
+  };
+
+  it("refuses a key holding the lifecycle verb but not the base update grant", async () => {
+    // An ordinary lifecycle write requires `update-posts` as well as
+    // `publish-posts`. Asking only about the verb admits a key that may publish
+    // but may not write the document — and the drain then executes as the
+    // owner, turning a release into a way around the missing grant.
+    const { svc, actor } = await build({
+      scopePermissions: ["create-content-releases", "publish-posts"],
+    });
+    await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("refuses when the AUTHOR cannot perform the action, however scoped the key", async () => {
+    // The author is who executes: `createJobContentApi` strips `actor`, so the
+    // key's scope is gone at materialisation. A member admitted on the key's
+    // authority alone is one the drain refuses forever, leaving the release
+    // scheduled and the content absent.
+    const { svc, actor } = await build({
+      scopePermissions: [
+        "create-content-releases",
+        "publish-posts",
+        "update-posts",
+      ],
+      ownerAllows: operation => operation !== "publish",
+    });
+    await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("refuses a session caller who lacks the base update grant", async () => {
+    // Not a key-only rule: an ordinary user scheduling a publish must be able
+    // to write the document too.
+    const { svc, actor } = await build({
+      ownerAllows: operation => operation !== "update",
+    });
+    await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
   });

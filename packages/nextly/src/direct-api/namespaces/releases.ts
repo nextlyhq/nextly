@@ -24,6 +24,7 @@
  * @module direct-api/namespaces/releases
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
 import type {
   ReleaseMemberRow,
@@ -59,6 +60,14 @@ export interface ReleaseCallerArgs {
   userId?: string | null;
   /** Defaults to the instance's setting, which itself defaults to `true`. */
   overrideAccess?: boolean;
+  /**
+   * The scoped API key's own grants, when the TRANSPORT already resolved them.
+   *
+   * A REST request authenticates before this layer and holds the key's stamped
+   * permissions; the instance config does not. Supplied explicitly it wins,
+   * because it is the scope of the request actually being served.
+   */
+  authenticatedScope?: AuthenticatedScope;
 }
 
 export interface ReleasesNamespace {
@@ -138,6 +147,13 @@ function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
     mergeConfig(ctx.defaultConfig, supplied as never)
   );
 
+  // An explicit identity REPLACES the instance's, and the credentials that
+  // belong to it go with it. Keeping the instance's key scope while swapping the
+  // user leaves a call made as somebody else — or as nobody — still authorized
+  // by a key that was never theirs: `find({ userId: null })` passes the scope
+  // check before the anonymous guard is ever reached.
+  const overridesIdentity = "userId" in args;
+
   return {
     // `"userId" in args` rather than `??`, because an explicit `null` MEANS
     // anonymous and must survive. A route that turns an absent session into
@@ -145,17 +161,20 @@ function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
     // and receive that person's release permissions — the caller asked to be
     // refused and would be authorized instead. Omitted and present-but-null are
     // different questions.
-    userId:
-      "userId" in args ? (args.userId ?? null) : (access.user?.id ?? null),
+    userId: overridesIdentity
+      ? (args.userId ?? null)
+      : (access.user?.id ?? null),
     overrideAccess: access.overrideAccess ?? true,
-    // Carried, not dropped. Without it release authority resolves from the KEY
-    // OWNER's grants: a restricted key inherits authority it was never given,
-    // and a key granted release authority is denied when its owner lacks it.
-    authenticatedScope: access.authenticatedScope,
-    // Forwarded so code-defined access rules evaluate against the real user
-    // rather than an empty role set, which would deny a rule that names a role
-    // the caller actually holds.
-    userRoles: access.user?.roles,
+    // A scope supplied WITH the call belongs to that call and always wins: a
+    // REST request resolved it for the identity it is serving. An inherited one
+    // travels only while the identity does.
+    authenticatedScope:
+      args.authenticatedScope ??
+      (overridesIdentity ? undefined : access.authenticatedScope),
+    // Roles describe the instance's user, so they follow the same rule — a rule
+    // evaluated against someone else's roles is worse than one evaluated
+    // against none.
+    userRoles: overridesIdentity ? undefined : access.user?.roles,
   };
 }
 
@@ -174,18 +193,30 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       ),
 
     find: (args = {}) => {
-      const { userId, overrideAccess, ...query } = args;
+      // Caller keys are stripped from the QUERY as well as read for the actor.
+      // Leaving them in sends `authenticatedScope` to the repository as a filter
+      // column, which is a query nobody wrote and a credential in a place it
+      // does not belong.
+      const { userId, overrideAccess, authenticatedScope, ...query } = args;
       void userId;
       void overrideAccess;
+      void authenticatedScope;
       return service().find(query, actorOf(ctx, args));
     },
 
     findByID: args => service().findByID(args.id, actorOf(ctx, args)),
 
     addMember: args => {
-      const { releaseId, userId, overrideAccess, ...member } = args;
+      const {
+        releaseId,
+        userId,
+        overrideAccess,
+        authenticatedScope,
+        ...member
+      } = args;
       void userId;
       void overrideAccess;
+      void authenticatedScope;
       return service().addMember(releaseId, member, actorOf(ctx, args));
     },
 

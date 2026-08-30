@@ -81,30 +81,52 @@ export function registerReleaseServices({
             "rbacAccessControlService"
           );
 
-          // A scoped API key is judged by its OWN grants, and by the full
-          // question the ordinary write path asks: the `{action}-{slug}` grant
-          // AND the code-defined access rule, evaluated against the key rather
-          // than its owner. Checking only the permission slug here would be a
-          // partial answer that reads like a complete one — and resolving from
-          // the owner at all is how a narrow key ends up scheduling a publish
-          // it was never granted, materialised later as a privileged person.
+          // TWO questions, because two different principals are involved.
           //
-          // `null` means the caller is not a key, so the ordinary resolution
-          // below applies.
-          const byKey = await apiKeyWriteAllowed(
+          // The AUTHOR is who performs the write later. `createJobContentApi`
+          // strips `actor` from every bound call, so the key's scope is GONE at
+          // materialisation and the recorded author's own grants are the only
+          // thing that can authorize it. A member admitted on a key's authority
+          // alone is one the drain will refuse forever, leaving the release
+          // scheduled with content that never appears.
+          //
+          // An ordinary lifecycle write needs the base `update` grant as well as
+          // the lifecycle verb, so both are asked. Checking only `publish` would
+          // admit a caller who may publish but may not write the document.
+          const authorMay =
+            (await rbac.checkAccess({
+              userId,
+              operation: "update",
+              resource: scopeSlug,
+            })) &&
+            (await rbac.checkAccess({
+              userId,
+              operation: action,
+              resource: scopeSlug,
+            }));
+          if (!authorMay) return false;
+
+          // And a scoped API key must hold the grants ITSELF, or a narrow key
+          // borrows the owner's authority to schedule a write it was never
+          // given. `null` means the caller is not a key, and the author check
+          // above is then the whole answer.
+          const asUser = { id: userId, roles: userRoles };
+          const keyMayAct = await apiKeyWriteAllowed(
             authenticatedScope,
             action,
             scopeSlug,
-            { id: userId, roles: userRoles },
+            asUser,
             rbac
           );
-          if (byKey !== null) return byKey;
-
-          return rbac.checkAccess({
-            userId,
-            operation: action,
-            resource: scopeSlug,
-          });
+          if (keyMayAct === null) return true;
+          const keyMayUpdate = await apiKeyWriteAllowed(
+            authenticatedScope,
+            "update",
+            scopeSlug,
+            asUser,
+            rbac
+          );
+          return keyMayAct && keyMayUpdate === true;
         },
       })
   );
