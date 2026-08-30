@@ -45,6 +45,10 @@
  * @module domains/releases/services/releases-service
  */
 
+import {
+  apiKeyScopeAllows,
+  type AuthenticatedScope,
+} from "../../../auth/authenticated-scope";
 import { NextlyError } from "../../../errors";
 import {
   isReleaseMemberAction,
@@ -97,6 +101,21 @@ export const MAX_RELEASE_TIMEZONE_LENGTH = 64;
 export interface ReleaseActor {
   userId: string | null;
   overrideAccess?: boolean;
+  /**
+   * The scoped API key's OWN grants, when the caller is one.
+   *
+   * Authoritative in BOTH directions and checked before the owner's database
+   * permissions: a key without the grant is denied however privileged its owner,
+   * and a key with it is allowed however unprivileged. Resolving release
+   * authority from the owner instead is how a key scoped to read content ends
+   * up able to schedule a publish.
+   */
+  authenticatedScope?: AuthenticatedScope;
+  /**
+   * The caller's role set, forwarded so code-defined access rules evaluate
+   * against the real user rather than against an empty list.
+   */
+  userRoles?: string[];
 }
 
 export interface ReleasesServiceDeps {
@@ -119,11 +138,21 @@ export interface ReleasesServiceDeps {
    * The same question the ordinary write path asks (`publish-<slug>` /
    * `unpublish-<slug>`), asked here at add time. Injected for the same reason.
    */
-  canActOnDocument: (
-    userId: string,
-    scopeSlug: string,
-    action: ReleaseMemberAction
-  ) => Promise<boolean>;
+  canActOnDocument: (params: {
+    userId: string;
+    scopeSlug: string;
+    action: ReleaseMemberAction;
+    /**
+     * The scoped API key's own grants, when the caller is one.
+     *
+     * Passed through rather than resolved here. The document verdict is the
+     * permission slug AND the code-defined access rule, and only the wiring
+     * holds both — checking the slug alone in the domain would be a partial
+     * answer that reads like a complete one.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    userRoles?: string[];
+  }) => Promise<boolean>;
 }
 
 export interface FindReleasesQuery {
@@ -190,6 +219,26 @@ export class ReleasesService {
     authority: ReleaseAuthority
   ): Promise<void> {
     if (actor.overrideAccess === true) return;
+
+    // The KEY's stamped scope wins over the owner's grants, in both directions.
+    // `null` means the caller is not a scoped key, so the ordinary resolution
+    // below applies.
+    const byKey = apiKeyScopeAllows(
+      actor.authenticatedScope,
+      authority,
+      RELEASES_RESOURCE
+    );
+    if (byKey === true) return;
+    if (byKey === false) {
+      throw NextlyError.forbidden({
+        logContext: {
+          reason: "api-key-scope-lacks-release-authority",
+          authority,
+          resource: RELEASES_RESOURCE,
+        },
+      });
+    }
+
     // An anonymous caller holds no permissions, and asking the store about a
     // null user would be a lookup whose only possible answer is "no".
     if (actor.userId === null) {
@@ -417,6 +466,12 @@ export class ReleasesService {
     authority: ReleaseAuthority
   ): Promise<boolean> {
     if (actor.overrideAccess === true) return true;
+    const byKey = apiKeyScopeAllows(
+      actor.authenticatedScope,
+      authority,
+      RELEASES_RESOURCE
+    );
+    if (byKey !== null) return byKey;
     if (actor.userId === null) return false;
     return this.deps.canManageReleases(actor.userId, authority);
   }
@@ -503,7 +558,15 @@ export class ReleasesService {
         logContext: { reason: "anonymous", action, scopeSlug },
       });
     }
-    if (await this.deps.canActOnDocument(actor.userId, scopeSlug, action)) {
+    if (
+      await this.deps.canActOnDocument({
+        userId: actor.userId,
+        scopeSlug,
+        action,
+        authenticatedScope: actor.authenticatedScope,
+        userRoles: actor.userRoles,
+      })
+    ) {
       return;
     }
     // Logged as the DOCUMENT authority, not the release one. The two refusals

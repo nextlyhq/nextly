@@ -15,6 +15,7 @@
  * @module di/registrations/register-releases
  */
 
+import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
@@ -63,7 +64,13 @@ export function registerReleaseServices({
         // `register-auth`, and resolving at registration time would make this
         // depend on an ordering between two registrations rather than on the
         // container — the first reordering would break it silently.
-        canActOnDocument: async (userId, scopeSlug, action) => {
+        canActOnDocument: async ({
+          userId,
+          scopeSlug,
+          action,
+          authenticatedScope,
+          userRoles,
+        }) => {
           if (!container.has("rbacAccessControlService")) {
             // No permission store means no basis for saying yes. A minimal boot
             // without RBAC can still construct this service; it simply cannot
@@ -73,11 +80,53 @@ export function registerReleaseServices({
           const rbac = container.get<RBACAccessControlService>(
             "rbacAccessControlService"
           );
-          return rbac.checkAccess({
-            userId,
-            operation: action,
-            resource: scopeSlug,
-          });
+
+          // TWO questions, because two different principals are involved.
+          //
+          // The AUTHOR is who performs the write later. `createJobContentApi`
+          // strips `actor` from every bound call, so the key's scope is GONE at
+          // materialisation and the recorded author's own grants are the only
+          // thing that can authorize it. A member admitted on a key's authority
+          // alone is one the drain will refuse forever, leaving the release
+          // scheduled with content that never appears.
+          //
+          // An ordinary lifecycle write needs the base `update` grant as well as
+          // the lifecycle verb, so both are asked. Checking only `publish` would
+          // admit a caller who may publish but may not write the document.
+          const authorMay =
+            (await rbac.checkAccess({
+              userId,
+              operation: "update",
+              resource: scopeSlug,
+            })) &&
+            (await rbac.checkAccess({
+              userId,
+              operation: action,
+              resource: scopeSlug,
+            }));
+          if (!authorMay) return false;
+
+          // And a scoped API key must hold the grants ITSELF, or a narrow key
+          // borrows the owner's authority to schedule a write it was never
+          // given. `null` means the caller is not a key, and the author check
+          // above is then the whole answer.
+          const asUser = { id: userId, roles: userRoles };
+          const keyMayAct = await apiKeyWriteAllowed(
+            authenticatedScope,
+            action,
+            scopeSlug,
+            asUser,
+            rbac
+          );
+          if (keyMayAct === null) return true;
+          const keyMayUpdate = await apiKeyWriteAllowed(
+            authenticatedScope,
+            "update",
+            scopeSlug,
+            asUser,
+            rbac
+          );
+          return keyMayAct && keyMayUpdate === true;
         },
       })
   );

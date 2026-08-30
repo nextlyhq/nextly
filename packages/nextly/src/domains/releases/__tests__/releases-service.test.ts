@@ -53,7 +53,14 @@ function service(over?: {
     canManageReleases: vi.fn(async (_id: string, a: ReleaseAuthority) =>
       held.has(a)
     ),
-    canActOnDocument: vi.fn(async () => over?.mayActOnDocument !== false),
+    canActOnDocument: vi.fn(
+      async (_params: {
+        userId: string;
+        scopeSlug: string;
+        action: string;
+        authenticatedScope?: unknown;
+      }) => over?.mayActOnDocument !== false
+    ),
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -149,9 +156,11 @@ describe("ReleasesService add-time document check", () => {
     const { svc, deps } = service({ holds: ["create"] });
     await svc.addMember("r1", { ...MEMBER, action: "unpublish" }, ADMIN);
     expect(deps.canActOnDocument).toHaveBeenCalledWith(
-      "u1",
-      "posts",
-      "unpublish"
+      expect.objectContaining({
+        userId: "u1",
+        scopeSlug: "posts",
+        action: "unpublish",
+      })
     );
   });
 
@@ -428,5 +437,75 @@ describe("ReleasesService refuses input the database would answer differently", 
       code: "INVALID_INPUT",
     });
     expect(repo.findReleases).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService honours a scoped API key over its owner", () => {
+  const KEY = (permissions: string[]) => ({
+    userId: "owner",
+    overrideAccess: false,
+    authenticatedScope: { actorType: "apiKey" as const, permissions },
+  });
+
+  it("allows a key holding the grant even when its owner does not", async () => {
+    // The stamped scope is authoritative in BOTH directions. Resolving from the
+    // owner instead would deny a key that was explicitly granted the authority.
+    const { svc, repo, deps } = service({ holds: [] });
+    await svc.find({}, KEY(["read-content-releases"]));
+    expect(repo.findReleases).toHaveBeenCalled();
+    // The owner's grants are never consulted for a scoped key.
+    expect(deps.canManageReleases).not.toHaveBeenCalled();
+  });
+
+  it("denies a key without the grant however privileged its owner", async () => {
+    // The direction that matters more: a key scoped to read content must not
+    // inherit the power to schedule a publish from the person who created it.
+    const { svc, repo } = service({ holds: ["read", "create", "publish"] });
+    await expect(
+      svc.schedule("r1", new Date(), "UTC", KEY(["read-content-releases"]))
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService carries the key scope into the DOCUMENT check", () => {
+  it("hands the scope to the document check, not just the release check", async () => {
+    // The gap this closes: honouring the key for the release resource and then
+    // resolving the DOCUMENT from the owner admits a key that holds
+    // create-content-releases but not publish-posts, whose owner can publish
+    // posts. The member is inserted and later materialised AS that privileged
+    // owner — a narrow key scheduling a publish it was never granted.
+    const scope = {
+      actorType: "apiKey" as const,
+      permissions: ["create-content-releases"],
+    };
+    const { svc, deps } = service({ holds: [] });
+    await svc.addMember("r1", MEMBER, {
+      userId: "owner",
+      overrideAccess: false,
+      authenticatedScope: scope,
+      userRoles: ["editor"],
+    });
+    expect(deps.canActOnDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticatedScope: scope,
+        userRoles: ["editor"],
+      })
+    );
+  });
+
+  it("refuses when the document check denies the key, however privileged the owner", async () => {
+    const { svc, repo } = service({ holds: [], mayActOnDocument: false });
+    await expect(
+      svc.addMember("r1", MEMBER, {
+        userId: "owner",
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["create-content-releases"],
+        },
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.addMember).not.toHaveBeenCalled();
   });
 });
