@@ -69,20 +69,45 @@ describe("core/quote, once it can style the quotation inside its figure", () => 
     expect(bare).not.toContain(blockPartClassName("core/quote", "quotation"));
   });
 
-  it("zeroes that blockquote's inline margin in the compiled sheet", () => {
+  it("zeroes that blockquote's own margin in the compiled sheet", () => {
     // The measured defect: a user agent indents a `<blockquote>` about 40px,
     // and inside the figure that ADDED to the block's own padding — so the same
     // quote sat at 24px bare and 64px attributed. Typing an attribution moved
     // the text.
     const css = sheetFor("core/quote");
     expect(css).toContain(blockPartClassName("core/quote", "quotation"));
-    expect(css).toContain("margin-inline-start: 0");
+    // ALL FOUR sides, not the one the measurement happened to be about. A user
+    // agent gives this element a margin on every side, the figure around it
+    // already states the block ones, and a test naming a single side lets the
+    // other three come back while staying green.
+    for (const side of [
+      "margin-block-start: 0",
+      "margin-block-end: 0",
+      "margin-inline-start: 0",
+      "margin-inline-end: 0",
+    ]) {
+      expect(css).toContain(side);
+    }
+  });
+
+  it("MARKS the attribution element", () => {
+    // Asserted on the markup, separately from the sheet, because the two halves
+    // fail independently: a rule for a mark nobody wears reaches no element,
+    // and the stylesheet looks perfectly correct while it happens. Removing the
+    // mark left every other assertion in this file green.
+    expect(markup("Ada")).toContain(
+      `<figcaption class="${blockPartClassName("core/quote", "attribution")}"`
+    );
   });
 
   it("sets the attribution apart from the quotation it follows", () => {
     const css = sheetFor("core/quote");
     expect(css).toContain(blockPartClassName("core/quote", "attribution"));
     expect(css).toContain("font-size: 0.875em");
+    // BOTH declarations, because the part states two things and a test naming
+    // only one lets the other regress while staying green — the attribution
+    // could run straight into the quotation above it and nothing would say so.
+    expect(css).toContain("margin-block-start: 0.75em");
   });
 });
 
@@ -113,6 +138,10 @@ describe("core/image, once it can style its caption", () => {
     const css = sheetFor("core/image");
     expect(css).toContain(blockPartClassName("core/image", "caption"));
     expect(css).toContain("font-size: 0.875em");
+    // The part states smaller type AND a distance from the picture. Asserting
+    // the size alone lets the caption regress to sitting flush against the
+    // image while the test claiming to cover its presentation stays green.
+    expect(css).toContain("margin-block-start: 0.5em");
   });
 
   it("does not style the IMG through the caption's rule", () => {

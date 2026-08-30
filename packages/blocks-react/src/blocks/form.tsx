@@ -12,18 +12,22 @@
  *
  * **Every element is a DIRECT child of the form, which is the layout.** The
  * root is a grid, so each label and each control becomes its own row and the
- * label sits above the control it names. The alternative — wrapping each pair
- * in a `<label>` — needs a rule on a DESCENDANT to stack them, and the style
- * catalog compiles one selector per node; only a handful of catalog entries
- * (`linkColor` among them) reach inside a block at all, and none of them
- * reaches an arbitrary child. Flattening puts the whole layout on the one
- * selector that exists.
+ * label sits above the control it names. Nothing is wrapped: a `<label>` around
+ * each pair would be a second element per field, and the grouping it exists to
+ * produce is available without one.
  *
- * What that costs is grouping: one `gap` separates a label from its control and
- * one field from the next, so the rows are evenly spaced rather than clustered
- * into fields. It is honest spacing rather than wrong spacing, and a site
- * stylesheet can tighten it. Inline styles are not an option and should not
- * be — see `root-inline-styles.test.tsx` for why a block may not write one.
+ * **The grouping comes from TWO distances rather than one.** A single `gap`
+ * spaced a label from the control it names exactly as far as from the next
+ * question, so nothing read as belonging together. The `gap` is now the smaller
+ * of the two — label to its own control — and each control states the larger one
+ * below itself, which falls between fields and before the submit. Stating it
+ * below the control rather than above the label is what keeps the FIRST label
+ * flush with the top of the form instead of pushed down by a leading margin.
+ *
+ * The control's distance is a PART, which is how a block states a rule for an
+ * element it renders inside its own root. Inline styles are not an option and
+ * should not be — see `root-inline-styles.test.tsx` for why a block may not
+ * write one.
  *
  * **Labels are associated explicitly, not by wrapping.** `htmlFor` and `id` are
  * the association that survives the flattening above, and the id is derived
@@ -129,8 +133,12 @@ const MAX_FIELDS = 100;
  * question, and nothing asks it.**
  *
  * A length is correct until the site stylesheet is wired into the render path.
- * `1rem` because that is what `space.4` itself declares, so the value does not
- * change when this becomes a token again.
+ *
+ * The VALUE is no longer `space.4`, and that is a change of meaning rather than
+ * of taste: this gap once carried the whole of the form's spacing, and now
+ * carries only the distance from a label to the control it names. The field
+ * separation moved to the control's own part, where the two together still come
+ * to `1rem`. So a future token here is a label-to-control token, not `space.4`.
  *
  * Both `display` and `gap` are in `STYLE_CATALOG`. A property that is not is
  * dropped by the compiler rather than passed through, so the test asserts the
