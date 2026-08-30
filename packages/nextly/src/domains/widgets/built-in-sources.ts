@@ -70,9 +70,11 @@ export function registerBuiltInSources(
       id: `collection:${collection.slug}`,
       label: collection.slug,
       kind: "collection",
-      // The same resource namespace the permission table uses, so selecting a
-      // source and reading a collection ask one question.
-      requiredPermission: `${collection.slug}:read`,
+      // `read-<slug>`: the spelling the permission table and `canReadEntity`
+      // use, so a picker filtering on this asks the same question the read
+      // path answers. Advisory only -- see `WidgetSource.requiredPermission`
+      // for why nothing enforces it.
+      requiredPermission: `read-${collection.slug}`,
       supports: ["count", "list"],
       fields: [
         ...declared,

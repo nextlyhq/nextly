@@ -54,10 +54,16 @@ describe("built-in sources", () => {
     expect(names).not.toContain("password");
   });
 
-  it("derives a read permission from the collection slug", () => {
+  it("derives a read permission from the collection slug, in the PermissionSlug spelling", () => {
+    // `read-<slug>` is the vocabulary the permission table and
+    // `canReadEntity` use (`auth/entity-read-access.ts`). The same field name
+    // on `WidgetDefinition` and `PluginAdminWidget` already carries that
+    // spelling, so a source emitting `posts:read` meant one field name held
+    // two vocabularies -- and a consumer that eventually compares them would
+    // match nothing while looking entirely correct.
     registerBuiltInSources([{ slug: "posts", fields: [] }]);
     expect(getSource("collection:posts")?.requiredPermission).toBe(
-      "posts:read"
+      "read-posts"
     );
   });
 

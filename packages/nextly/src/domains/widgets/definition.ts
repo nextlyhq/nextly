@@ -61,6 +61,9 @@ export interface WidgetDefinition {
   /**
    * Gates whether the CARD renders. It does NOT constrain the rows the query
    * returns -- that is `execute`'s job, and it is not optional there.
+   *
+   * A `PermissionSlug` spelling (`read-posts`), the same vocabulary
+   * `WidgetSource.requiredPermission` and `PluginAdminWidget` carry.
    */
   requiredPermission?: string;
   /** Required for every data archetype; forbidden for `text` and `actions`. */

@@ -47,7 +47,23 @@ export interface WidgetSource {
   id: string;
   label: string;
   kind: WidgetSourceKind;
-  /** Gates who may SELECT this source when configuring a widget. */
+  /**
+   * ADVISORY, and deliberately so: nothing reads it, and nothing should.
+   *
+   * It exists to tell a widget-configuration UI which sources are worth
+   * OFFERING, so a picker can hide a collection the user cannot read instead
+   * of listing one whose every query will be refused. It is not a gate: the
+   * gate is `executeWidgetQuery`'s `overrideAccess: false` plus the caller,
+   * which is the ordinary read path and answers with the row-level rules a
+   * permission slug cannot see. Enforcing this here would be a SECOND access
+   * implementation, and the two drifting apart is the failure this domain is
+   * built to avoid -- Strapi's homepage widgets gated the card on a permission
+   * while the query returned rows the viewer could not see.
+   *
+   * Spelled `read-<slug>`, the vocabulary the permission table and
+   * `canReadEntity` use, and the one the same field name already carries on
+   * `WidgetDefinition` and `PluginAdminWidget`. One field name, one spelling.
+   */
   requiredPermission?: string;
   supports: readonly WidgetOp[];
   /** The only field names a query may reference. */
