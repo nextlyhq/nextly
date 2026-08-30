@@ -394,6 +394,25 @@ export type NodeStyles = Partial<
   Record<StyleState, Partial<Record<BreakpointId, StyleValues>>>
 >;
 
+/** One named element a block renders inside its own root. */
+export interface BlockPart {
+  /**
+   * The element this part names, as a plain HTML tag.
+   *
+   * A tag and nothing else — no class, no combinator, no list. This value
+   * reaches a SELECTOR, and a block definition is code a plugin supplies, so
+   * `"figcaption, body"` would otherwise close the block's rule and open one of
+   * the author's choosing over every `body` on the page. The narrow grammar
+   * refuses that by construction rather than by escaping a wider one, and it
+   * spans what the library actually renders: `figcaption`, `blockquote`,
+   * `cite`, `li`, `label`, `input`. Widening it later is additive; starting
+   * wide and narrowing is not.
+   */
+  selector: string;
+  /** Shared default styles for this part on every instance of the block type. */
+  baseStyles?: NodeStyles;
+}
+
 /** True if a style value is a design-token reference. */
 export function isTokenRef(value: unknown): value is TokenRef {
   // A reference must be a plain record, not merely an object carrying the key.
@@ -489,6 +508,42 @@ export function isBlockType(value: unknown): value is string {
     typeof value === "string" &&
     value.length <= MAX_BLOCK_TYPE_LENGTH &&
     BLOCK_TYPE_RE.test(value)
+  );
+}
+
+/**
+ * The element grammar a {@link BlockPart} selector is held to: an HTML tag.
+ *
+ * Deliberately narrower than what the compiler could emit. This value becomes
+ * part of a SELECTOR and arrives from a block definition, which is code a
+ * plugin supplies, so a value carrying a comma, a brace or a combinator would
+ * let a block close its own rule and open another over elements it does not
+ * render. Every tag reachable this way is inert on its own.
+ *
+ * Not escaped instead, because escaping a wider grammar produces a rule that
+ * matches nothing: `figcaption, body` becomes a class-shaped string no element
+ * carries, which is a style silently missing rather than a declaration refused.
+ * A refusal names the block, the part and the value.
+ */
+const BLOCK_PART_RE = /^[a-z][a-z0-9]*$/;
+
+/**
+ * Longest part selector accepted. A tag longer than this is not one, and the
+ * bound keeps a pathological value out of an issue message.
+ */
+const MAX_BLOCK_PART_LENGTH = 32;
+
+/**
+ * True if a value names an element a block may state a rule for.
+ *
+ * The ONE answer, for the same reason {@link isBlockType} is: a caller that
+ * bounds this where another does not emits a rule its neighbour refuses.
+ */
+export function isPartSelector(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_BLOCK_PART_LENGTH &&
+    BLOCK_PART_RE.test(value)
   );
 }
 

@@ -9,7 +9,7 @@
  * return type is opaque here and narrowed by the React binding package. That is
  * what keeps this package dependency-free and usable from any runtime.
  */
-import type { BlockNode, NodeStyles } from "./document";
+import type { BlockNode, BlockPart, NodeStyles } from "./document";
 import type { MigrationMap } from "./migration";
 
 /**
@@ -346,6 +346,25 @@ export interface BlockDefinition<
   localized?: (keyof P & string)[];
   /** Shared default styles for every instance of this block type. */
   baseStyles?: NodeStyles;
+  /**
+   * Elements this block renders INSIDE its root, named so a style can reach
+   * one of them.
+   *
+   * {@link baseStyles} is keyed by block TYPE, so it compiles to one rule on
+   * one class. A block that draws more than one element — a figure wrapping an
+   * image and a caption, a list wrapping its items — can put that class on the
+   * root or on one child and has no third option, so every element but the one
+   * holding it is unstyleable. These are the others.
+   *
+   * NAMED rather than written as selectors at the point of use, so a block may
+   * change what it renders without invalidating styles addressed to it: the
+   * name is the contract and the selector is the current implementation of it.
+   * That is the same trade `::part()` makes, and the reason it is a closed set
+   * the block publishes rather than an open selector anyone may write — an open
+   * one couples every stored style to markup the block is otherwise free to
+   * change.
+   */
+  parts?: Readonly<Record<string, BlockPart>>;
   /** Named child regions; only container blocks declare these. */
   slots?: Record<string, SlotSpec>;
   /**

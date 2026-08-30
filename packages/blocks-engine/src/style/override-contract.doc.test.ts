@@ -63,6 +63,17 @@ function contractCss(): string {
           },
         },
       },
+      {
+        // Carries the row for an element a block draws inside itself. A second
+        // node rather than a part bolted onto the section above, because the
+        // table is read as a worked example and a section does not draw a
+        // caption — a row nobody could meet in a real document teaches the
+        // wrong thing even while the compiler emits it.
+        id: "n2",
+        type: "core/image",
+        version: 1,
+        props: {},
+      },
     ],
     settings: {
       styles: { base: { base: { color: "#111", linkColor: "#222" } } },
@@ -74,6 +85,14 @@ function contractCss(): string {
     elementBases: { h1: { base: { base: { fontSize: "2.25rem" } } } },
     blockBases: {
       "core/section": { base: { base: { backgroundColor: "#eee" } } },
+    },
+    blockParts: {
+      "core/image": {
+        caption: {
+          selector: "figcaption",
+          baseStyles: { base: { base: { fontSize: "0.875em" } } },
+        },
+      },
     },
   });
 

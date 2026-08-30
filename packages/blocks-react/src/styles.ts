@@ -6,8 +6,10 @@ import {
   nodeClassNames,
   walkNodes,
   DEFAULT_LIMITS,
+  type AnyBlockDefinition,
   type BlockDocument,
   type BlockNode,
+  type BlockPart,
   type CompiledPageCss,
   type DocumentLimits,
   type MayFetchUrl,
@@ -199,12 +201,53 @@ export function blockBasesFor(
   blocks: BlockResolver,
   stated?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
-  const bases: Record<string, NodeStyles> = {};
+  return perUsedType(
+    document,
+    blocks,
+    definition => definition.baseStyles,
+    stated
+  );
+}
+
+/**
+ * The parts of each block type this document draws, keyed by type.
+ *
+ * The same question as {@link blockBasesFor} asked of a different field, and it
+ * goes through the same walk for that reason: two walkers agreeing today drift
+ * apart later, and the drift would be silent — one tier of a block's styles
+ * would keep reaching the sheet while the other stopped, which reads as the
+ * block having declared nothing.
+ */
+export function blockPartsFor(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
+): Record<string, Readonly<Record<string, BlockPart>>> {
+  return perUsedType(document, blocks, definition => definition.parts, stated);
+}
+
+/**
+ * One reading of "which block types does this tree use", answered for whichever
+ * field the caller names.
+ *
+ * `stated` narrows a supplied record to this tree instead of reading the
+ * resolver, and it is the same walk because it is the same question.
+ */
+function perUsedType<T>(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  read: (definition: AnyBlockDefinition) => T | undefined,
+  stated?: Readonly<Record<string, T>>
+): Record<string, T> {
+  const found: Record<string, T> = {};
   walkNodes(document.nodes, node => {
-    if (bases[node.type] !== undefined) return;
-    const baseStyles =
+    if (found[node.type] !== undefined) return;
+    const definition = blocks.get(node.type);
+    const value =
       stated === undefined
-        ? blocks.get(node.type)?.baseStyles
+        ? definition === undefined
+          ? undefined
+          : read(definition)
         : // OWN properties only, because that is the boundary `compilePageCss`
           // draws: it emits a base for a used type only when
           // `Object.hasOwn(bases, type)` succeeds. A record reached through
@@ -216,9 +259,9 @@ export function blockBasesFor(
           Object.hasOwn(stated, node.type)
           ? stated[node.type]
           : undefined;
-    if (baseStyles !== undefined) bases[node.type] = baseStyles;
+    if (value !== undefined) found[node.type] = value;
   });
-  return bases;
+  return found;
 }
 
 /**
@@ -268,6 +311,11 @@ function compileContextFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockBases
+    ),
+    blockParts: blockPartsFor(
+      storedDocument ?? document,
+      blocks,
+      styleContext.blockParts
     ),
     drawsNothing,
   });

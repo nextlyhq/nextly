@@ -20,6 +20,7 @@
 import type {
   BlockDocument,
   BlockNode,
+  BlockPart,
   BreakpointDef,
   BreakpointSet,
   NodeStyles,
@@ -32,6 +33,7 @@ import {
   MAX_NAMED_CLASSES,
   STYLE_STATES,
   isBlockType,
+  isPartSelector,
 } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
@@ -144,6 +146,22 @@ export interface StyleCompileContext {
    * improving a block's default look reaches pages that already exist.
    */
   blockBases?: Readonly<Record<string, NodeStyles>>;
+  /**
+   * Base styles for the elements a block renders inside its root, keyed by
+   * block name and then by part name.
+   *
+   * A sibling of {@link blockBases} rather than a richer value inside it,
+   * matching how {@link elementBases} and the named-class tier already sit
+   * beside it. The two answer different questions — one styles the element the
+   * block-type class is ON, the other styles elements it is not — and a block
+   * declaring neither, one, or both are all ordinary.
+   *
+   * The selector travels with the styles because this package holds no
+   * registry: it cannot look a part's element up from its name, so the caller
+   * that does hold the definitions resolves both together, the same way
+   * `drawsNothing` answers from a registry this compiler cannot see.
+   */
+  blockParts?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>;
 
   /**
    * Typographic defaults per HTML element, keyed by tag name.
@@ -1198,6 +1216,16 @@ function unknownBreakpointWarnings(
 /** What one envelope is, and what may be written from it. */
 interface EnvelopeContext {
   origin: StyleOrigin;
+  /**
+   * An element INSIDE the envelope's own, which every rule from it attaches to.
+   *
+   * Prepended to each declaration's own `descendant` rather than folded into
+   * the selector string, so the two reach the cascade by one path: a rule for a
+   * part gets the part's weight added exactly as a link colour inside a node
+   * already does, and the provenance trace records which element a declaration
+   * landed on instead of reporting the block's root for all of them.
+   */
+  part?: string;
   /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
@@ -1270,6 +1298,10 @@ function envelopeRules(
   // disagree between a node's base rule and its hover one.
   const stateSelectors =
     previewStates === true ? PREVIEW_STATE_SELECTORS : STATE_SELECTORS;
+  // Same reasoning as `stateSelectors` above: a property of the envelope, read
+  // once, so a base rule and a hover rule cannot disagree about which element
+  // they are for.
+  const partStep = about.part === undefined ? "" : ` ${about.part}`;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1361,8 +1393,8 @@ function envelopeRules(
           // the only part that weighs.
           selector:
             weightlessAnchor === undefined
-              ? `${selector}${stateSelectors[state]}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
+              ? `${selector}${stateSelectors[state]}${partStep}${rule.descendant}`
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${partStep}${rule.descendant})`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1374,7 +1406,9 @@ function envelopeRules(
             origin,
             property: declaration.property,
             value: declaration.value,
-            ...(rule.descendant === "" ? {} : { descendant: rule.descendant }),
+            ...(partStep + rule.descendant === ""
+              ? {}
+              : { descendant: partStep + rule.descendant }),
             state,
             breakpoint: context.id,
             ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
@@ -1844,8 +1878,15 @@ export function compilePageCss(
     if (typeof node.type === "string") usedTypes.add(node.type);
   }
   const bases = ctx.blockBases ?? {};
+  const partsByType = ctx.blockParts ?? {};
   for (const type of [...usedTypes].sort()) {
-    if (!Object.hasOwn(bases, type)) continue;
+    // Own properties only, and for the same reason the caller narrowing these
+    // records checks the same thing: a record reached through a polluted
+    // prototype answers this lookup with an inherited value, which would emit a
+    // rule against a selector built from a node type nobody declared.
+    const hasBase = Object.hasOwn(bases, type);
+    const hasParts = Object.hasOwn(partsByType, type);
+    if (!hasBase && !hasParts) continue;
     // A node type reaches a SELECTOR, and this compiler reads persisted data
     // whether or not a caller validated it. Unchecked, `"evil/x, body"` emits
     // `.nx-pb-page .nx-bt-evil--x, body { … }` — a second selector of the
@@ -1866,29 +1907,73 @@ export function compilePageCss(
       });
       continue;
     }
-    rules.push(
-      ...envelopeRules(
-        bases[type],
-        // Escaped as well as refused above. The check is what makes this safe;
-        // escaping is what keeps it safe if the check is ever loosened, and it
-        // changes nothing for a type that passed, whose characters are all
-        // legal in a class already.
-        `.${escapeIdentifier(blockTypeClassName(type))}`,
-        pointer("/blockBases", type),
-        contexts,
-        tokenPrefix,
-        warnings,
-        budget,
-        warningAllowance,
-        {
-          origin: { kind: "blockType", type },
-          previewStates,
-          trace,
-          mayFetchUrl,
-          weightlessAnchor: defaultsAnchor,
-        }
-      )
-    );
+    // Escaped as well as refused above. The check is what makes this safe;
+    // escaping is what keeps it safe if the check is ever loosened, and it
+    // changes nothing for a type that passed, whose characters are all legal in
+    // a class already. Built once because both tiers below anchor to it.
+    const typeClass = `.${escapeIdentifier(blockTypeClassName(type))}`;
+    if (hasBase)
+      rules.push(
+        ...envelopeRules(
+          bases[type],
+          typeClass,
+          pointer("/blockBases", type),
+          contexts,
+          tokenPrefix,
+          warnings,
+          budget,
+          warningAllowance,
+          {
+            origin: { kind: "blockType", type },
+            previewStates,
+            trace,
+            mayFetchUrl,
+            weightlessAnchor: defaultsAnchor,
+          }
+        )
+      );
+    if (!hasParts) continue;
+    const parts = partsByType[type];
+    // Sorted so one document always serializes the same way, exactly as the
+    // type loop above and `groupByDescendant` below both do.
+    for (const name of Object.keys(parts).sort()) {
+      const part = parts[name];
+      // A part's selector reaches a SELECTOR, and a block definition is code a
+      // plugin supplies. Held to a bare tag rather than escaped into something
+      // safe: escaping would let `figcaption, body` through as a class-shaped
+      // string that matches no element, which is a rule nobody can find rather
+      // than a rule nobody wrote. Refusing says so.
+      if (!isPartSelector(part?.selector)) {
+        pushBoundedWarning(warningAllowance, warnings, {
+          path: pointer(pointer("/blockParts", type), name),
+          code: "invalid-block-part",
+          severity: "warning",
+          message: `"${describeValue(part?.selector)}" is not an element name, so the "${name}" part of "${type}" was not styled.`,
+          suggestion: 'Name the element as a plain tag, such as "figcaption".',
+        });
+        continue;
+      }
+      rules.push(
+        ...envelopeRules(
+          part.baseStyles,
+          typeClass,
+          pointer(pointer("/blockParts", type), name),
+          contexts,
+          tokenPrefix,
+          warnings,
+          budget,
+          warningAllowance,
+          {
+            origin: { kind: "blockType", type },
+            part: part.selector,
+            previewStates,
+            trace,
+            mayFetchUrl,
+            weightlessAnchor: defaultsAnchor,
+          }
+        )
+      );
+    }
   }
 
   // The named classes, in library order — the tier between a block's defaults and a node's own

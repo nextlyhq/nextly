@@ -241,6 +241,7 @@ export type {
   BlockIcon,
   BlockMigrationInfo,
   BlockNode,
+  BlockPart,
   BlockRenderResult,
   BlockSeoContribution,
   BlockSeoImage,

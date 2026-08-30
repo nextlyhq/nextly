@@ -42,6 +42,7 @@ export {
 export type {
   BlockDocument,
   BlockNode,
+  BlockPart,
   Binding,
   BindingSource,
   BindingFormat,
