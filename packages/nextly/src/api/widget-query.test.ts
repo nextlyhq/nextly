@@ -355,6 +355,65 @@ describe("POST /api/dashboard/query", () => {
       expect(body.error?.requestId).toEqual(expect.any(String));
     });
 
+    it("rejects an oversized batch WITHOUT reading the collection registry", async () => {
+      // The refusal is a quota, so it is a precondition and runs first. It ran
+      // last: the handler refreshed the collection sources -- a live
+      // `getAllCollections()` read against `dynamic_collections` -- before it
+      // had looked at the body at all, so repeating an invalid request bought
+      // a database round trip per attempt while executing no query.
+      //
+      // Asserted on what the handler CONSUMED rather than on the 400, because
+      // the status was already correct while the read was still happening: a
+      // fix that only moved the message would leave this green.
+      const queries = Array.from({ length: 40 }, () => ({
+        source: "collection:posts",
+        op: "count",
+      }));
+      const { status } = await envelopeOf({ queries });
+
+      expect(status).toBe(400);
+      expect(containerGet).not.toHaveBeenCalledWith(
+        "collectionRegistryService"
+      );
+    });
+
+    it("rejects a missing queries array WITHOUT reading the collection registry", async () => {
+      const { status } = await envelopeOf({});
+
+      expect(status).toBe(400);
+      expect(containerGet).not.toHaveBeenCalledWith(
+        "collectionRegistryService"
+      );
+    });
+
+    it("rejects a body that is not JSON at all, and reads no registry for it", async () => {
+      // `readJsonBody`'s refusal is the third way this body can be invalid,
+      // and it too used to arrive after the read.
+      const res = await postWidgetQuery(
+        new Request("http://localhost/api/dashboard/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{ not json",
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(containerGet).not.toHaveBeenCalledWith(
+        "collectionRegistryService"
+      );
+    });
+
+    it("DOES read the registry for a well-formed batch", async () => {
+      // The control. Every assertion above is satisfied by a handler that
+      // never reads the registry under any circumstances, which would break
+      // the Schema-Builder collections this endpoint exists to serve.
+      await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:posts", op: "count" }] })
+      );
+
+      expect(containerGet).toHaveBeenCalledWith("collectionRegistryService");
+    });
+
     it("answers an oversized batch with a coded error object", async () => {
       const queries = Array.from({ length: 40 }, () => ({
         source: "collection:posts",

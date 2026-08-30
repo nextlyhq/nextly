@@ -242,15 +242,16 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  await getCachedNextly();
-
-  // ONCE for the whole batch, before any query is resolved. The collection
-  // sources are derived from the live collection registry rather than from the
-  // boot config, which is what makes a Schema-Builder collection queryable at
-  // all -- it has no config entry, and it can be created while this process is
-  // running. See `domains/widgets/collection-sources.ts`.
-  await refreshCollectionSources();
-
+  // The body is read and checked BEFORE anything touches the database, and the
+  // ordering is the point rather than a tidying. The cap is a QUOTA and the
+  // shape check is a validity check, so both are preconditions: they run
+  // first, whatever they cost. They ran last, behind `refreshCollectionSources`
+  // -- a live `getAllCollections()` against `dynamic_collections` -- so an
+  // authenticated caller sending a truncated body, no `queries` array, or 40
+  // of them bought a registry round trip on every attempt while executing no
+  // query at all. Nothing below this point needs the body, and nothing here
+  // needs the container.
+  //
   // Through `readJsonBody` rather than a bare `req.json()`. A raw
   // `SyntaxError` reaches `withErrorHandler` as an unclassified failure and is
   // wrapped as internal, so a truncated body answered 500 while the body-SHAPE
@@ -261,6 +262,15 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   // one here.
   const body = await readJsonBody(req);
   const queries = parseQueriesBody(body);
+
+  await getCachedNextly();
+
+  // ONCE for the whole batch, before any query is resolved. The collection
+  // sources are derived from the live collection registry rather than from the
+  // boot config, which is what makes a Schema-Builder collection queryable at
+  // all -- it has no config entry, and it can be created while this process is
+  // running. See `domains/widgets/collection-sources.ts`.
+  await refreshCollectionSources();
 
   // Resolve the caller ONCE for the whole batch: role-slug resolution is a
   // database read, and doing it per query would make a 20-widget dashboard pay
