@@ -171,7 +171,7 @@ describe("the content-width rule", () => {
     expect(css).toContain("var(--site-content-width)");
   });
 
-  it.each(["none", "initial", "unset", "auto"])(
+  it.each(["none", "inherit", "initial", "unset", "auto"])(
     "writes nothing when the width is %s, which bounds nothing",
     width => {
       // Legal for `max-width` and no maximum at all, so `margin-inline: auto`

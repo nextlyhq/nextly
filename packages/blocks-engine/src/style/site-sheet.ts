@@ -127,6 +127,11 @@ const CONTENT_WIDTH_KIND = "dimension";
  */
 const UNBOUNDED_WIDTHS = new Set([
   "none",
+  // `max-width` is not an inherited property, so `inherit` takes the parent's
+  // computed value — which is `none` unless something up the tree happened to
+  // set one. A site stylesheet cannot promise that, and the failure is the same
+  // as the others here.
+  "inherit",
   "initial",
   "unset",
   "revert",
