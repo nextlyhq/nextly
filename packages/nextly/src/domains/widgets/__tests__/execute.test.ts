@@ -48,10 +48,40 @@ describe("executeWidgetQuery", () => {
         where: { status: { equals: "draft" } },
         overrideAccess: false,
         user: { id: "user-1", roles: ["editor"] },
-        frameworkFilter: true,
       })
     );
     expect(result).toEqual({ op: "count", total: 7 });
+  });
+
+  it("never exempts the caller's where from the read-rule guard", async () => {
+    // `frameworkFilter` short-circuits `assertFilterableFields` and
+    // `assertSortableField`. A widget query arrives verbatim from the request
+    // body, so setting it would hand any authenticated caller a field-value
+    // oracle over every read-ruled column. Asserted on ABSENCE, at the seam
+    // where it would be added, because `execute-access.integration.test.ts`
+    // proves the consequence and this names the cause.
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "count",
+      where: { status: { equals: "draft" } },
+    });
+    await executeWidgetQuery(q, caller);
+
+    const args = count.mock.calls[0][0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty("frameworkFilter");
+  });
+
+  it("never exempts the caller's sort either", async () => {
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      sort: "-title",
+    });
+    await executeWidgetQuery(q, caller);
+
+    const args = find.mock.calls[0][0] as Record<string, unknown>;
+    expect(args).not.toHaveProperty("frameworkFilter");
+    expect(args.sort).toBe("-title");
   });
 
   it("lists through the access-controlled path", async () => {

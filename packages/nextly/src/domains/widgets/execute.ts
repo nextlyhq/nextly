@@ -69,8 +69,31 @@ function resolveExecutableSource(sourceId: string) {
 
 /**
  * The arguments every op shares: the caller WHOLE (never reduced to an id),
- * the framework-authored `where` exempted from the probe guard, and the
- * optional draft/published scope.
+ * the caller's `where`, and the optional draft/published scope.
+ *
+ * There is deliberately NO `frameworkFilter` here. That flag short-circuits
+ * both `assertFilterableFields` and `assertSortableField`
+ * (`shared/lib/filterable-fields.ts`), the guards that refuse a filter or an
+ * ORDER BY naming a field the caller may not read. It is for a `where` the
+ * FRAMEWORK built -- a route resolving a page by its slug -- which addresses a
+ * row rather than choosing probe values.
+ *
+ * A widget query is not that. It arrives VERBATIM from the request body of
+ * `POST /api/dashboard/query` (`api/widget-query.ts`), so it is caller input,
+ * not stored configuration: there is no widget lookup, no comparison against a
+ * registered definition, and nothing gating who may author one. Exempting it
+ * would hand any authenticated caller the exact oracle those guards exist to
+ * close -- `count` with `{ id: { equals: X }, salary: { greater_than: N } }`
+ * answers 1 or 0, and ~20 of those bisect a figure the caller may never read,
+ * while `sort: "-salary"` leaks the same value by ordering. Nor can
+ * `validateWidgetQuery` carry the exemption on its behalf: `built-in-sources.ts`
+ * declares every field of every collection except type `password`, so its
+ * allow-list includes precisely the read-ruled fields the guards protect.
+ *
+ * Without the flag a widget `where` naming a read-ruled field gets the same
+ * named refusal (`FIELD_NOT_FILTERABLE`) every other caller gets, which is the
+ * correct answer. If a genuinely trusted, stored-and-verified widget definition
+ * ever exists, the exemption belongs at THAT seam, judged there.
  *
  * NOTE the field name: the Direct API calls it `actor`, not
  * `authenticatedScope` (that is the internal name one layer down). Verified
@@ -96,15 +119,6 @@ function sharedReadArgs(query: WidgetQuery, caller: ReadCaller) {
           "actor"
         >)
       : {}),
-    // `frameworkFilter: true` exempts this `where` from the guard that refuses
-    // a filter naming a field the caller may not read. It is correct here and
-    // only here: the guard's subject is a caller CHOOSING probe values to
-    // bisect a hidden value, and this `where` is stored configuration written
-    // by someone who already held permission to configure it, replayed
-    // verbatim. It addresses; it does not probe. Authoring a widget is
-    // therefore a stronger permission than viewing one, and is gated
-    // separately.
-    frameworkFilter: true as const,
     ...(query.status ? { status: query.status } : {}),
   };
 }
