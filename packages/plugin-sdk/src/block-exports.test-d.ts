@@ -3,6 +3,7 @@ import { expectTypeOf } from "vitest";
 
 import { blockSupports, defineBlock } from "@nextlyhq/plugin-sdk/blocks";
 import type {
+  AnyBlockDefinition,
   BlockEditorMeta,
   BlockExample,
   BlockSeoContribution,
@@ -17,6 +18,32 @@ import type {
   SlotLock,
   SlotSpec,
 } from "@nextlyhq/plugin-sdk/blocks";
+
+// A definition written through THIS package's `defineBlock` is something the
+// engine's registry accepts.
+//
+// The two helpers are separate declarations: `BlockDefinition` here extends
+// `EngineBlockDefinition<P, BlockRenderContext>` and narrows the supports keys
+// and the render contract, so an author compiling against the SDK is checked
+// against a different type from the one `registerBlocks` consumes. Nothing
+// previously asserted that the narrower type still satisfies the wider one, and
+// a change to either could separate them while every suite on both sides stayed
+// green — the failure would first appear in somebody's plugin.
+//
+// Assignability is the whole claim, so it is asserted at the type level rather
+// than by registering anything: the registry's runtime checks are the engine's
+// to test, and a value assertion here would re-test those instead.
+const sdkDefined = defineBlock<{ text?: string }>({
+  name: "acme/assignable",
+  version: 1,
+  description: "Declared through the SDK, consumed by the engine's registry.",
+  props: { text: { type: "string", label: "Text" } },
+  defaultProps: { text: "" },
+  example: { props: { text: "Hello" } },
+  supports: { spacing: true },
+  render: () => null,
+});
+expectTypeOf(sdkDefined).toExtend<AnyBlockDefinition>();
 
 // Everything a definition asks an author to fill in is reachable from the SDK,
 // so writing a block never means importing the engine directly.

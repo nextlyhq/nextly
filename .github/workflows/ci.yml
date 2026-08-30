@@ -762,6 +762,113 @@ jobs:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
+  # The exit demo, against a PRODUCTION build.
+  #
+  # POST-MERGE ONLY, which is the whole design of this job. It needs `next build`
+  # before `next start`, and that is not a variation on the dev-server suite
+  # above — it is the environment the suite exists for. A production build
+  # resolves modules, bundles and prerenders differently enough that a route can
+  # answer 500 on every path there while serving correctly under `next dev`, so
+  # a suite that boots a dev server certifies the one environment in which that
+  # class of failure cannot appear.
+  #
+  # Running it on every pull request would roughly double the most expensive job
+  # in this pipeline: `Browser tests` already spends 10.8-14.7 minutes against a
+  # 20-minute budget, and a production build lands on top of that. The tiered
+  # arrangement this follows is the ordinary one — a fast subset on the pull
+  # request, the full suite as a gate on merge — and it fits how this repository
+  # already reads verdicts: only one check blocks a merge, so a job reporting on
+  # `main`'s health is worth more here than a fourth check on a branch.
+  #
+  # `needs: [ci]` keeps it behind the fast tests. A production build is a poor
+  # way to discover a type error.
+  e2e-production:
+    name: Production browser tests
+    needs: [ci]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # Higher than `Browser tests` because the build is inside the budget rather
+    # than done for it. The suite itself is two specs.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Nothing here pushes; keep the token out of git config.
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Scoped to this job for the reason the job above documents at length: six
+      # jobs cache `.turbo` on one commit and build different filter sets, so a
+      # key without `github.job` hands a reader someone else's `dist`.
+      - name: Restore Turbo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+          restore-keys: |
+            turbo-v2-${{ runner.os }}-${{ github.job }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium and its system dependencies
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 8
+        run: pnpm --filter @nextlyhq/e2e exec playwright install --with-deps chromium
+
+      - name: Install Chromium's system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        timeout-minutes: 8
+        run: pnpm --filter @nextlyhq/e2e exec playwright install-deps chromium
+
+      # The playground loads the admin and the plugins from their built output,
+      # so a stale dist is a stale test — and here it would be a stale test of
+      # the one thing this job exists to check.
+      - name: Build packages
+        run: pnpm turbo build --filter='./packages/*'
+        env:
+          TURBO_CACHE_DIR: .turbo
+
+      # The config runs `next build` then `next start` itself, on its own port
+      # and its own database, so nothing here has to arrange that.
+      - name: Run production browser tests
+        run: pnpm --filter @nextlyhq/e2e test:e2e:prod
+
+      # Its own folder, matching the port and database this config already keeps
+      # separate: run both suites on one machine and a shared folder means
+      # whichever finished last is the only report either of them has.
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report-production
+          path: e2e/.playwright/report-production
+          retention-days: 7
+
+      - name: Save Turbo cache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .turbo
+          key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh
   # installs. Runs after the main `ci` job to avoid wasting minutes when

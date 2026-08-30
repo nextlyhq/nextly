@@ -48,6 +48,21 @@ const TOKEN_PROPERTY = "--site-color-e2e-accent";
 const TOKEN_LIGHT = "#1b7f5c";
 const TOKEN_DARK = "#8fe3c0";
 
+/**
+ * The stored font face, and the family its `@font-face` declares.
+ *
+ * A family no other tier names, for the reason the token above is named that
+ * way: a family the engine or this app's config already ships would appear in
+ * the sheet whether or not the stored document was read.
+ *
+ * The file need not exist. The claim is that a stored face reaches the served
+ * sheet as a rule a browser would act on — whether the browser then finds the
+ * file is the host's business, and asserting on a real download would make
+ * this a test of static serving instead.
+ */
+const FONT_FAMILY = "E2E Sans";
+const FONT_URL = "/fonts/e2e-sans.woff2";
+
 /** The stored class, and the colour its rule applies. */
 const CLASS_ID = "e2e-accent-class";
 const CLASS_SLUG = "e2e-accent";
@@ -93,6 +108,12 @@ const STORED_STYLE = {
       slug: CLASS_SLUG,
       orderIndex: 0,
       styles: { base: { base: { color: CLASS_COLOR } } },
+    },
+  ],
+  fonts: [
+    {
+      family: FONT_FAMILY,
+      src: [{ url: FONT_URL, format: "woff2" }],
     },
   ],
 };
@@ -177,6 +198,35 @@ test("a stored token reaches the published page's site sheet, both modes", async
   const darkIndex = sheet.indexOf(`${TOKEN_PROPERTY}:${TOKEN_DARK}`);
   expect(darkIndex).toBeGreaterThan(-1);
   expect(sheet.slice(0, darkIndex)).toContain('[data-nx-theme="dark"]');
+});
+
+test("a stored font face reaches the published page as a rule a browser would act on", async ({
+  request,
+}) => {
+  // The third authorable tier, and the one neither assertion above reaches. A
+  // token becomes a custom property and a class becomes a selector; a font
+  // becomes an AT-RULE, which is emitted by different code down a different
+  // path, so a break between stored font data and the served sheet shows up
+  // here or nowhere.
+  const response = await request.get(`/blocks/${PAGE_SLUG}`);
+  await expectOk(response, "fetching the published page");
+  const sheet = siteSheetOf(await response.text());
+
+  // The family, quoted as the emitter writes it. A face that failed validation
+  // contributes NOTHING rather than half a rule, so the family appearing at all
+  // means the stored face was read, validated and emitted whole.
+  expect(sheet).toContain(`@font-face`);
+  expect(sheet).toContain(`font-family:"${FONT_FAMILY}"`);
+
+  // The source, with its format. Asserting the url alone would pass on a rule
+  // that named the file and told the browser nothing about how to parse it.
+  expect(sheet).toContain(`url("${FONT_URL}") format("woff2")`);
+
+  // `swap` is the emitter's default and the reason it has one: text stays
+  // readable while the file loads. Its absence would be a face that renders
+  // invisible text on a slow connection, which is a real regression and not a
+  // formatting difference.
+  expect(sheet).toContain("font-display:swap");
 });
 
 test("a stored class is emitted as a rule and applied to a referencing node", async ({
