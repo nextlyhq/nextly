@@ -18,10 +18,16 @@ import type { ValidationIssue } from "../validation";
 
 import { compilePageCss } from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
+import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
-import { hashId } from "./node-class";
-import type { FontFaceDef, SiteTokenSet } from "./site-tokens";
-import { emitFontFaces, emitTokenBlocks } from "./site-tokens";
+import { CONTENT_WIDTH_CLASS, hashId, PAGE_ROOT_CLASS } from "./node-class";
+import type { FontFaceDef, SiteToken, SiteTokenSet } from "./site-tokens";
+import {
+  emitFontFaces,
+  emitTokenBlocks,
+  resolveTokenPrefix,
+  tokenIdentity,
+} from "./site-tokens";
 
 /** Everything the shared sheet is built from. All of it is site configuration, not document content. */
 export interface SiteSheetInput {
@@ -109,6 +115,36 @@ export interface SiteSheetArtifact {
 const TOKEN_SELECTOR = ":root";
 
 /**
+ * The token the content-width rule reads.
+ *
+ * Its KIND is no longer checked here. Asking whether a value is a `max-width`
+ * is the compiler's question, and a token-kind check answered a narrower
+ * version of it — a `dimension` may carry a bare identifier the property
+ * refuses.
+ */
+const CONTENT_WIDTH_TOKEN = "content.width";
+
+/**
+ * Values that are legal for `max-width` and bound nothing.
+ *
+ * `none` says so outright; the CSS-wide keywords resolve to it or to whatever a
+ * cascade decides, which a site stylesheet cannot promise on behalf of a page.
+ */
+const UNBOUNDED_WIDTHS = new Set([
+  "none",
+  // `max-width` is not an inherited property, so `inherit` takes the parent's
+  // computed value — which is `none` unless something up the tree happened to
+  // set one. A site stylesheet cannot promise that, and the failure is the same
+  // as the others here.
+  "inherit",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+  "auto",
+]);
+
+/**
  * A document that uses every block type and styles nothing itself.
  *
  * `compilePageCss` emits a type's default only for a type present in the document, which is right
@@ -131,6 +167,133 @@ function documentUsingEveryType(
         props: {},
       })),
   } as unknown as BlockDocument;
+}
+
+/**
+ * The rule behind the content-width class.
+ *
+ * `margin-inline` rather than `margin: 0 auto`, so the centring follows writing
+ * direction and leaves any block-direction margin an author set alone.
+ *
+ * **No fallback width, deliberately.** A site whose token set omits
+ * `content.width` gets no rule at all, which is the same posture the rest of
+ * this compiler takes: what the merged style does not define is omitted rather
+ * than invented. A literal here would hand a site that deliberately removed the
+ * token a width from a place it cannot see.
+ *
+ * **The two declarations stand or fall together, which is why the CALLER gates
+ * on the token rather than this function emitting an unusable half.** An
+ * undeclared custom property invalidates its own declaration and nothing else,
+ * so a rule written without the token would drop `max-width` and keep
+ * `margin-inline: auto` — centring a contained node that has an authored width
+ * of its own, in exactly the configuration documented as producing no
+ * containment. Centring is not the smaller half of this rule; it is a separate
+ * effect that only makes sense once a width bounds it.
+ *
+ * Wrapped in `:where()` so it weighs nothing. It is a default that must lose to
+ * anything an author states, including a `max-width` on the node itself, and
+ * zero specificity is what makes that true without depending on source order.
+ */
+/**
+ * Whether one emitted token can actually bound the content width.
+ *
+ * ONE predicate rather than a list of conditions, and that is the point. The
+ * rule it guards has been reached from five directions — the token absent, the
+ * token refused by the emitter, the right identity with the wrong kind, the
+ * right kind with a value that is not one, and now a value that is a legal
+ * `max-width` yet bounds nothing. Each was patched as its own condition, and a
+ * fifth said the shape was wrong rather than the list incomplete: every one of
+ * them is the same question, which is whether `max-width` will end up with a
+ * usable maximum.
+ *
+ * Asked once, it also covers cases nobody has hit yet. `none` is valid CSS and
+ * removes the bound; `initial`, `unset` and `revert` resolve to `none` or to
+ * whatever a cascade decides, which is not something a site stylesheet can
+ * promise. All of them leave `margin-inline: auto` centring an element that has
+ * an authored width and no maximum — the failure this whole gate exists to
+ * refuse.
+ */
+function boundsTheContent(token: SiteToken): boolean {
+  if (tokenIdentity(token) !== CONTENT_WIDTH_TOKEN) return false;
+  const values = Object.values(token.values ?? {});
+  if (values.length === 0) return false;
+  return values.every(value => typeof value === "string" && boundsWidth(value));
+}
+
+/**
+ * Whether one value would give `max-width` a usable maximum.
+ *
+ * Two questions with two authorities, rather than one weaker check standing in
+ * for both.
+ *
+ * **Is it a `max-width` at all?** Asked of the COMPILER, by compiling the
+ * declaration and seeing whether one came out. A parallel check here would be a
+ * second statement of the property's grammar, and a narrower one — a token
+ * declared `dimension` may carry a bare identifier like `wide`, which the
+ * token-kind check passes because it cannot know what a dimension may say,
+ * while `max-width` rejects it outright.
+ *
+ * **Does it bound anything?** Asked here, because that is not a grammar
+ * question. `none` is a perfectly valid `max-width` and removes the maximum;
+ * the CSS-wide keywords resolve to it or to whatever a cascade decides, which a
+ * site stylesheet cannot promise on behalf of a page. Every one of them leaves
+ * `margin-inline: auto` centring an element with an authored width and no
+ * ceiling.
+ */
+function boundsWidth(value: string): boolean {
+  const normalised = value.trim().toLowerCase();
+  if (UNBOUNDED_WIDTHS.has(normalised)) return false;
+  // A value that resolves in the browser cannot be judged here at all.
+  // `var(--x, none)` compiles — it is valid CSS — and computes to `none` when
+  // the referenced property is absent, which is the unbounded case arriving
+  // through a door no static check can watch. Refused rather than guessed at,
+  // for the same reason an undefined token is: what the merged style does not
+  // establish is omitted rather than assumed.
+  if (normalised.includes("var(")) return false;
+  const { declarations } = compileStyleValues({ maxWidth: value }, "/maxWidth");
+  return declarations.length > 0;
+}
+
+function emitContentWidth(
+  declaredTokens: readonly SiteToken[],
+  prefix: string | undefined
+): string {
+  // The decision lives here rather than at the call site so the caller pushes
+  // unconditionally: whether this rule applies is a fact about what the token
+  // emitter wrote, and every branch spent asking about it up there is one the
+  // sheet compiler carries for a question it does not own.
+  //
+  // Matched on IDENTITY rather than on the display name, because those are
+  // different fields and the custom property is built from the first. A site
+  // that renames this token keeps the identity and therefore keeps
+  // `--site-content-width`, so a name check would withdraw containment from
+  // every opted-in section while the property it reads was still declared.
+  //
+  // The KIND is part of the question, not decoration. A token carrying this
+  // identity with a colour kind is emitted happily — the emitter's job is to
+  // declare what it was given — and `max-width: #ff0000` is invalid at
+  // computed-value time, so it drops while `margin-inline: auto` beside it does
+  // not. Same half-rule, arrived at from a third direction.
+  const declared = declaredTokens.some(boundsTheContent);
+  if (!declared) return "";
+
+  // Resolved through the same function the token emitter uses, not read raw. A
+  // prefix that fails validation is REPLACED with the default there rather than
+  // rejected, so a reference built from the raw value would name a property
+  // nothing declared — silently, because an unresolved custom property
+  // invalidates its declaration instead of reporting.
+  const property = tokenCustomProperty(
+    CONTENT_WIDTH_TOKEN,
+    resolveTokenPrefix(prefix).prefix
+  );
+  // Anchored to the page root, like every other default this engine emits.
+  // `override-contract.md` states the invariant plainly — "nothing the builder
+  // emits can match outside the page root" — and an unanchored `:where()`
+  // matches anywhere in the document, so a host element or a second rendered
+  // page wearing this class would be constrained by a sheet that is not its
+  // own. One class in the anchor keeps the whole selector at 0-1-0, which is
+  // the weight the contract gives an element or block-type default.
+  return `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){max-width:var(${property});margin-inline:auto}`;
 }
 
 /**
@@ -157,6 +320,12 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   // once here is what makes that impossible rather than merely unlikely.
   const tokenPrefix = input.tokenPrefix ?? input.tokens?.prefix;
 
+  // What the token emitter actually WROTE, carried forward rather than
+  // re-derived. `emitTokenBlocks` refuses a token on five separate conditions
+  // and reports the survivors for exactly this reason: a second statement of
+  // those conditions agrees today and drifts the first time one changes.
+  let declaredTokens: readonly SiteToken[] = [];
+
   if (input.tokens !== undefined) {
     const tokens = emitTokenBlocks(
       {
@@ -167,7 +336,19 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
     );
     warnings.push(...tokens.issues);
     if (tokens.css !== "") blocks.push(tokens.css);
+    declaredTokens = tokens.emitted;
   }
+
+  // After the tokens that declare the property it reads, and before the block
+  // defaults, which is where a structural rule belongs in this cascade: it must
+  // lose to a block's own default and to everything after it.
+  //
+  // Pushed unconditionally; the rule withholds ITSELF when the width token it
+  // reads is undeclared. The engine's default set carries `content.width`, but
+  // those defaults are layered a tier above this function, so a caller
+  // compiling a set that omits it arrives here with the property undeclared —
+  // and half of this rule is worse than none of it.
+  blocks.push(emitContentWidth(declaredTokens, tokenPrefix));
 
   const blockBases = input.blockBases ?? {};
   const tiers = compilePageCss(documentUsingEveryType(blockBases), {
@@ -192,6 +373,8 @@ export function compileSiteSheet(input: SiteSheetInput): SiteSheetArtifact {
   warnings.push(...tiers.warnings);
   if (tiers.css !== "") blocks.push(tiers.css);
 
-  const css = blocks.join("\n");
+  // Empty entries are dropped here rather than guarded at each push, so a
+  // section that decides it has nothing to say can simply say nothing.
+  const css = blocks.filter(block => block !== "").join("\n");
   return { css, contentHash: hashId(css), warnings };
 }

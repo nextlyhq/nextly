@@ -183,20 +183,33 @@ function decodeEntities(html) {
  * Derived rather than listed so the two cannot drift: editing the fixture's
  * copy changes what is required, with nothing here to keep in step.
  */
+/**
+ * What each block type contributes to the required set, keyed by type.
+ *
+ * A table rather than a chain of tests inside the walk, so the walk does one
+ * thing — descend — and a block added here cannot make it harder to read.
+ */
+const MARKERS_BY_TYPE = {
+  "core/heading": props => (typeof props.text === "string" ? [props.text] : []),
+  "core/image": props =>
+    typeof props.alt === "string" && props.decorative !== true
+      ? [props.alt]
+      : [],
+  // A list's text is a PROP rather than child nodes, so a walk that only
+  // descended into slots would take nothing from it — and a list that stopped
+  // rendering would leave the guard satisfied by the prose around it and the
+  // measurement BETTER for having lost content.
+  "core/list": props =>
+    Array.isArray(props.items)
+      ? props.items.filter(item => typeof item === "string" && item !== "")
+      : [],
+};
+
 function expectedMarkers(node) {
   const markers = [];
   const visit = current => {
-    const props = current.props ?? {};
-    if (current.type === "core/heading" && typeof props.text === "string") {
-      markers.push(props.text);
-    }
-    if (
-      current.type === "core/image" &&
-      typeof props.alt === "string" &&
-      props.decorative !== true
-    ) {
-      markers.push(props.alt);
-    }
+    const contribute = MARKERS_BY_TYPE[current.type];
+    if (contribute !== undefined) markers.push(...contribute(current.props ?? {}));
     for (const children of Object.values(current.slots ?? {})) {
       for (const child of children) visit(child);
     }

@@ -74,6 +74,72 @@ function declaredProperties(styles: NodeStyles): string[] {
  * per shape. Every scalar entry in the catalog is the plain kebab-case of its
  * property name, which is what {@link isScalarDeclaration} confines this to.
  */
+/**
+ * How many scalar leaves one declared property carries, across every state and
+ * breakpoint it is declared in.
+ *
+ * A token reference is a leaf rather than a branch: `{ $token }` compiles to a
+ * single `var()`, so descending into it would count a declaration twice.
+ */
+function leafCount(styles: NodeStyles, property: string): number {
+  const countLeaves = (value: unknown): number => {
+    if (typeof value !== "object" || value === null) return 1;
+    if (typeof (value as { $token?: unknown }).$token === "string") return 1;
+    return Object.values(value as Record<string, unknown>).reduce<number>(
+      (total, nested) => total + countLeaves(nested),
+      0
+    );
+  };
+  let total = 0;
+  for (const byBreakpoint of Object.values(styles)) {
+    if (byBreakpoint === undefined) continue;
+    for (const values of Object.values(byBreakpoint)) {
+      if (values === undefined) continue;
+      if (!(property in values)) continue;
+      total += countLeaves((values as Record<string, unknown>)[property]);
+    }
+  }
+  return total;
+}
+
+/**
+ * How many declarations inside THIS block's rule belong to the given css
+ * property — its own expansions, and not a SIBLING property whose name happens
+ * to extend it.
+ *
+ * `borderRadius` compiles to `border-radius`, which a plain `border-` prefix
+ * counts as one of `border`'s own leaves. On `core/button` that inflated five
+ * expected border declarations to six matches, so a border side that stopped
+ * compiling still reached the expected count and the case passed while a
+ * default it names was absent. Sibling properties the block also declares are
+ * therefore subtracted by name.
+ *
+ * Scoped to the rule carrying the block's own selector, because the compiled
+ * sheet holds every block in the document — a `padding` counted from a
+ * neighbouring rule would report this block's as present.
+ */
+function declarationsFor(
+  css: string,
+  selector: string,
+  cssName: string,
+  siblings: readonly string[]
+): number {
+  const rules = css
+    .split("}")
+    .filter(rule => rule.includes(`.${selector}`))
+    .join("}");
+  const count = (name: string, expanded: boolean): number => {
+    const tail = expanded ? "(-[a-z-]+)?" : "";
+    return [
+      ...rules.matchAll(new RegExp(`(^|[;{\\s])${name}${tail}\\s*:`, "g")),
+    ].length;
+  };
+  const owned = siblings
+    .filter(other => other !== cssName && other.startsWith(`${cssName}-`))
+    .reduce((total, other) => total + count(other, true), 0);
+  return count(cssName, true) - owned;
+}
+
 function cssNameOf(property: string): string {
   return property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
 }
@@ -180,11 +246,15 @@ describe("every default the core library declares", () => {
     // pass having inspected nothing at all.
     expect(DECLARING.map(block => block.name).sort()).toEqual([
       "core/accordion",
+      "core/button",
       "core/card",
       "core/column",
       "core/columns",
       "core/form",
       "core/gallery",
+      "core/image",
+      "core/list",
+      "core/quote",
     ]);
   });
 
@@ -224,26 +294,61 @@ describe("every default the core library declares", () => {
       // A catalog property can still be DROPPED for a value whose grammar the
       // compiler refuses, and the membership check above cannot see that. Each
       // declared property is looked for by its own CSS name.
-      const scalars = declaredProperties(block.baseStyles as NodeStyles).filter(
-        property =>
-          isScalarDeclaration(block.baseStyles as NodeStyles, property)
-      );
+      const declared = declaredProperties(block.baseStyles as NodeStyles);
 
-      // The population assertion for THIS case: a block whose declarations were
-      // all object-shaped would check nothing and pass.
+      // A scalar compiles to its own name and is looked for exactly. An
+      // object-shaped one compiles to SEVERAL declarations whose names extend
+      // it, and it is checked by COUNT rather than by a shared prefix: one
+      // needle of `padding-` is satisfied by any surviving side, so a
+      // `padding.inlineStart` the compiler refused would hide behind the
+      // `padding.blockEnd` beside it and the case would stay green while a
+      // default it names is silently absent.
+      //
+      // Counting sidesteps having to predict the expanded NAMES, which are not
+      // a join of the path — `border.width.blockStart` compiles to
+      // `border-block-start-width`, not `border-width-block-start`. How many
+      // leaves went in is knowable without knowing what each one is called.
+      const expected = declared.map(property => {
+        const cssName = cssNameOf(property);
+        const scalar = isScalarDeclaration(
+          block.baseStyles as NodeStyles,
+          property
+        );
+        return {
+          property,
+          scalar,
+          leaves: scalar
+            ? 1
+            : leafCount(block.baseStyles as NodeStyles, property),
+          emitted: declarationsFor(
+            css,
+            selector,
+            cssName,
+            declared.map(cssNameOf)
+          ),
+        };
+      });
+
+      // The population assertion for THIS case: a block that declared nothing
+      // at all would check nothing and pass.
       expect(
-        scalars.length,
-        `${name} declared no scalar-valued property to check`
+        expected.length,
+        `${name} declared no property to check`
       ).toBeGreaterThan(0);
 
-      const missing = scalars.filter(
-        property => !css.includes(`${cssNameOf(property)}:`)
-      );
+      const missing = expected
+        .filter(({ leaves, emitted }) => emitted < leaves)
+        .map(
+          ({ property, leaves, emitted }) =>
+            `${property} (${emitted} of ${leaves} emitted)`
+        );
       expect(
         missing,
         `${name} declares ${missing.join(", ")} but the compiled stylesheet ` +
-          `does not carry it. A catalog property is still dropped when its ` +
-          `VALUE does not match the grammar the catalog declares for it.`
+          `does not carry every leaf. A catalog property is still dropped when ` +
+          `its VALUE does not match the grammar the catalog declares for it, ` +
+          `and one refused side of an object-shaped declaration is invisible ` +
+          `beside the sides that survived.`
       ).toEqual([]);
     }
   );

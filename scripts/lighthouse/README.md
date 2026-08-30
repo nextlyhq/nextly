@@ -70,86 +70,67 @@ They sit just above what the page transfers today, so the payload cannot grow
 without the night going red. They are a ratchet rather than a target: the number
 they are set against is the measured present, not a budget anybody chose.
 
+Set against a CI run rather than a laptop, because the runner is what the
+nightly measures on:
+
+|                 | measured | ceiling | headroom                |
+| --------------- | -------- | ------- | ----------------------- |
+| script requests | 5        | 8       | room for a chunk or two |
+| script bytes    | 148,056  | 165,000 | 11%                     |
+| total bytes     | 206,368  | 230,000 | 11%                     |
+
+The byte figures carry about a tenth of headroom because they are deterministic
+per build — the payload does not vary between runs the way a timing does — so a
+tight ceiling costs no flakiness and catches a regression the run it arrives in.
+The request count is looser in proportion because one legitimate new chunk is a
+whole unit rather than a percentage.
+
+**Re-set them whenever the floor moves on purpose.** They were 30 / 1,000,000 /
+1,100,000 while the page still carried the contributor harness's client shell;
+leaving them there after that shell came off would have let the payload grow
+back to six times its size without the night noticing.
+
 ---
 
 ## Baseline
 
-Recorded 2026-08-29. **Every figure below is a property of the conditions listed
-with it.** A score without them is not comparable to anything.
+Recorded 2026-08-30 from a CI run of this exact fixture, **not from a laptop** —
+the runner is what the nightly measures on. **Every figure below is a property
+of the conditions listed with it**, and the fixture is a file that changes: a
+number here describes the document as it stood when the number was taken, so
+re-record whenever the fixture is edited rather than assuming the conditions
+still hold.
 
-| condition            | value                                                                  |
-| -------------------- | ---------------------------------------------------------------------- |
-| page                 | `http://localhost:3111/` — the `homepage` Single, field `layout`       |
-| document             | `scripts/lighthouse/dogfood-page.json`, 2 sections, 16 nodes, 2 images |
-| route classification | `ƒ Dynamic — server-rendered on demand` (per `next build`)             |
-| server               | `next build` + `next start`, `NODE_ENV=production`, SQLite             |
-| Lighthouse           | 12.6.1, via `@lhci/cli` 0.15.1                                         |
-| browser              | HeadlessChrome 151.0.0.0                                               |
-| throttling           | `simulate`                                                             |
-| host                 | Apple Silicon laptop, load average 7.5, **not a CI runner**            |
+| condition            | value                                                                        |
+| -------------------- | ---------------------------------------------------------------------------- |
+| page                 | `http://localhost:3111/` — the `homepage` Single, field `layout`             |
+| document             | `scripts/lighthouse/dogfood-page.json` — 22 nodes, 2 images, one 3-item list |
+| route classification | `ƒ Dynamic — server-rendered on demand`                                      |
+| server               | `next build` + `next start`, `NODE_ENV=production`, SQLite                   |
+| Lighthouse           | 12.6.1, via `@lhci/cli` 0.15.1                                               |
+| browser              | HeadlessChrome 151                                                           |
+| throttling           | `simulate`                                                                   |
+| host                 | `ubuntu-latest` GitHub runner                                                |
 
-### Desktop preset — 5 runs, this is what gates
-
-| metric         | median  | range     |
-| -------------- | ------- | --------- |
-| Performance    | **99**  | 99–99     |
-| Accessibility  | 100     | 100–100   |
-| Best Practices | 100     | 100–100   |
-| SEO            | 100     | 100–100   |
-| FCP            | 244 ms  | 244–245   |
-| LCP            | 1033 ms | 1032–1035 |
-| TBT            | 8.5 ms  | 6–9       |
-| CLS            | 0       | 0–0       |
-| TTI            | 1302 ms | 1295–1303 |
-
-### Mobile preset — 3 runs, recorded only
-
-| metric      | median  | range     |
-| ----------- | ------- | --------- |
-| Performance | **79**  | 79–79     |
-| FCP         | 904 ms  | 904       |
-| LCP         | 5484 ms | 5483–5484 |
-| TBT         | 105 ms  | 102–114   |
-| TTI         | 7024 ms | 7017–7039 |
-
-An earlier collection on the same build, on a less busy machine, scored mobile
-performance 90–91 with LCP 3.4 s. The desktop figure did not move between those
-collections. That difference is the reason the mobile number is not gated.
-
-### On a GitHub-hosted runner
-
-The figures above come from a laptop. The same harness on `ubuntu-latest`,
-Lighthouse 12.6.1, HeadlessChrome 151, read from the uploaded reports:
-
-| metric                               | desktop (5 runs)  | mobile (3 runs)     |
-| ------------------------------------ | ----------------- | ------------------- |
-| Performance                          | **100** (98-100)  | **68** (67-88)      |
-| Accessibility / Best Practices / SEO | 100               | 100                 |
-| FCP                                  | 260 ms            | 917 ms              |
-| LCP                                  | 768 ms (679-1085) | 5284 ms (1743-5826) |
-| TBT                                  | 60 ms             | 472 ms              |
-| CLS                                  | 0                 | 0                   |
-
-Every desktop assertion passed, so the floor is reachable on the machine the
-nightly actually uses.
-
-The mobile column is the second reason that profile is recorded rather than
-gated, and a stronger reason than the local numbers were. Across three runs of
-one build on one machine, mobile performance ranged 67-88 and LCP ranged
-1743-5826 ms - a 21-point swing with nothing changing but the run. Gated, that
-is a coin toss; recorded, it is a number worth watching.
+| metric                               | desktop (5 runs)  | mobile (3 runs) |
+| ------------------------------------ | ----------------- | --------------- |
+| Performance                          | **100** (100–100) | **99** (99–99)  |
+| Accessibility / Best Practices / SEO | 100               | 100             |
+| FCP                                  | 216 ms            | 767 ms          |
+| LCP                                  | 493 ms            | 2179 ms         |
+| TBT                                  | 0 ms              | 47 ms           |
+| TTI                                  | 495 ms            | 2218 ms         |
 
 ### Payload
 
 | resource   | requests | transferred       |
 | ---------- | -------- | ----------------- |
-| Script     | 27       | 910,121 bytes     |
-| Image      | 2        | 46,748 bytes      |
-| Stylesheet | 2        | 21,112 bytes      |
-| Document   | 1        | 9,118 bytes       |
-| **Total**  | **33**   | **988,023 bytes** |
+| Script     | 5        | 148,056 bytes     |
+| Stylesheet | 1        | 2,754 bytes       |
+| **Total**  | **10**   | **206,452 bytes** |
 
-`unused-javascript` scores 0 on this page, with an estimated 461 KiB of savings.
+The whole presentation layer — every block default and the site sheet — is those
+2,754 bytes.
 
 ### What this baseline does NOT measure
 

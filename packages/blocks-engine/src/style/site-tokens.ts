@@ -240,6 +240,45 @@ export interface FontFaceDef {
  */
 export const DARK_MODE_ATTRIBUTE = "data-nx-theme";
 
+/** The selector root-scoped tokens are declared under. */
+const ROOT_TOKEN_SELECTOR = ":root";
+
+/**
+ * The dark block, written for whichever element can actually carry the switch.
+ *
+ * **Root-scoped tokens are declared on the attribute-bearing element itself,
+ * not on the root.** Custom properties inherit, so declaring them wherever the
+ * host put the attribute cascades to everything below — which is the only shape
+ * that works for all three placements a host chooses between. Measured, with
+ * the attribute moved between `<html>`, `<body>` and a wrapper: this form
+ * applies in every one. A form anchored to `:root` applies only when the
+ * attribute is on `<html>`, because `:root` IS that element and cannot be
+ * reached by a rule describing an ancestor.
+ *
+ * Its specificity equals the light block's `:root`, and it is emitted after it,
+ * so order decides and dark wins where both match.
+ *
+ * **A scoped selector keeps the ancestor form**, because a bare attribute
+ * selector would declare these tokens for the whole document and a scoped
+ * sheet exists precisely so it does not. There the host has somewhere above the
+ * element to put the switch, so the ancestor form is both available and
+ * correct.
+ */
+function darkSelectorFor(selector: string, dark: readonly string[]): string {
+  const body = `{${dark.join(";")}}`;
+  if (selector === ROOT_TOKEN_SELECTOR) {
+    return `[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+  }
+  // `:is()` around the whole selector, because this one may be a LIST. Appending
+  // the attribute to `.preview-a,.preview-b` yields `.preview-a` bare and only
+  // `.preview-b[...]` qualified, so the first member would take the dark values
+  // unconditionally and a scoped preview would render dark for good. `:is()`
+  // takes the specificity of its most specific argument, so a list of single
+  // classes weighs exactly what one of them did.
+  const scoped = `:is(${selector})`;
+  return `[${DARK_MODE_ATTRIBUTE}="dark"] ${scoped},${scoped}[${DARK_MODE_ATTRIBUTE}="dark"]${body}`;
+}
+
 /** The `format()` hints a face may declare: plain keywords, nothing else. */
 /**
  * The longest font format this engine will write.
@@ -1111,7 +1150,7 @@ export function emitTokenBlocks(
     css +=
       (set.darkMode ?? "attribute") === "media"
         ? `@media (prefers-color-scheme:dark){${body}}`
-        : `[${DARK_MODE_ATTRIBUTE}="dark"] ${body}`;
+        : darkSelectorFor(selector, dark);
   }
   return { css, issues, emitted };
 }

@@ -6,14 +6,20 @@
       "id": "dogfood-hero",
       "type": "core/section",
       "version": 1,
-      "props": { "as": "header", "contained": true },
+      "props": {
+        "as": "header",
+        "contained": true
+      },
       "slots": {
         "children": [
           {
             "id": "dogfood-title",
             "type": "core/heading",
             "version": 1,
-            "props": { "text": "Build pages, not pipelines", "level": "h1" }
+            "props": {
+              "text": "Build pages, not pipelines",
+              "level": "h1"
+            }
           },
           {
             "id": "dogfood-lede",
@@ -50,34 +56,48 @@
       "id": "dogfood-body",
       "type": "core/section",
       "version": 1,
-      "props": { "as": "main", "contained": true },
+      "props": {
+        "as": "main",
+        "contained": true
+      },
       "slots": {
         "children": [
           {
             "id": "dogfood-features-title",
             "type": "core/heading",
             "version": 1,
-            "props": { "text": "What you get", "level": "h2" }
+            "props": {
+              "text": "What you get",
+              "level": "h2"
+            }
           },
           {
             "id": "dogfood-columns",
             "type": "core/columns",
             "version": 1,
-            "props": { "as": "div", "contained": false },
+            "props": {
+              "as": "div",
+              "contained": false
+            },
             "slots": {
               "children": [
                 {
                   "id": "dogfood-column-schema",
                   "type": "core/column",
                   "version": 1,
-                  "props": { "as": "div" },
+                  "props": {
+                    "as": "div"
+                  },
                   "slots": {
                     "children": [
                       {
                         "id": "dogfood-column-schema-title",
                         "type": "core/heading",
                         "version": 1,
-                        "props": { "text": "A typed schema", "level": "h3" }
+                        "props": {
+                          "text": "A typed schema",
+                          "level": "h3"
+                        }
                       },
                       {
                         "id": "dogfood-column-schema-body",
@@ -94,14 +114,19 @@
                   "id": "dogfood-column-editor",
                   "type": "core/column",
                   "version": 1,
-                  "props": { "as": "div" },
+                  "props": {
+                    "as": "div"
+                  },
                   "slots": {
                     "children": [
                       {
                         "id": "dogfood-column-editor-title",
                         "type": "core/heading",
                         "version": 1,
-                        "props": { "text": "A real editor", "level": "h3" }
+                        "props": {
+                          "text": "A real editor",
+                          "level": "h3"
+                        }
                       },
                       {
                         "id": "dogfood-column-editor-body",
@@ -118,14 +143,19 @@
                   "id": "dogfood-column-database",
                   "type": "core/column",
                   "version": 1,
-                  "props": { "as": "div" },
+                  "props": {
+                    "as": "div"
+                  },
                   "slots": {
                     "children": [
                       {
                         "id": "dogfood-column-database-title",
                         "type": "core/heading",
                         "version": 1,
-                        "props": { "text": "One database", "level": "h3" }
+                        "props": {
+                          "text": "One database",
+                          "level": "h3"
+                        }
                       },
                       {
                         "id": "dogfood-column-database-body",
@@ -149,6 +179,19 @@
               "mediaId": "@media:sample-2.webp",
               "alt": "The Nextly admin listing entries in a collection",
               "loading": "lazy"
+            }
+          },
+          {
+            "id": "dogfood-list",
+            "type": "core/list",
+            "version": 1,
+            "props": {
+              "kind": "unordered",
+              "items": [
+                "Declare a collection in TypeScript and the generated types follow.",
+                "Arrange a page in the builder and a visitor is served that same document.",
+                "Point it at Postgres, MySQL or SQLite without rewriting a query."
+              ]
             }
           },
           {

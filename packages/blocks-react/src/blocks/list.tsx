@@ -77,6 +77,50 @@ export function renderList({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
+/**
+ * What restores a list's markers after a reset has removed them.
+ *
+ * A list without markers is not a plainer list, it is a stack of paragraphs:
+ * the one thing that distinguishes an item from a line of text is gone, and the
+ * reader loses the grouping the markup still claims. Tailwind's Preflight sets
+ * `list-style: none` on every `ul` and `ol` and says so in a comment, and this
+ * library's own scaffold imports it — so on a site built from `create-nextly-app`
+ * this is a repair rather than a decoration.
+ *
+ * **`revert` rather than a marker, because one rule serves two elements.** This
+ * block renders `<ul>` or `<ol>` from a PROP, and both wear the same block-type
+ * class, so a rule naming `disc` would put bullets on ordered lists. `revert`
+ * rolls back to the user-agent value for whichever element it lands on, which
+ * is discs for one and numerals for the other, and it stays correct if the prop
+ * grows a third kind.
+ *
+ * The inline padding is the other half. A marker is drawn OUTSIDE the content
+ * box, so restoring one to a list whose padding a reset has zeroed paints it
+ * beyond the element's own edge — clipped by any ancestor that hides overflow,
+ * which `core/card` does in order to make its own rounding mean something.
+ *
+ * **`2.5em`, which is what a browser itself reserves.** Measured at 16px system
+ * UI rather than reasoned about: `99.` is 23.6px, `999.` is 33.4px, `9999.` is
+ * 43.3px, and a bullet is 7.2px. An earlier `2.5ch` gutter came to 25.2px and
+ * so began clipping at THREE digits — an ordinary list of a hundred items, not
+ * an exotic one. `2.5em` is 40px and carries three comfortably.
+ *
+ * It does not carry four, and no fixed gutter carries the `start` this block
+ * accepts, which runs to 1,000,000. That is a property of the range rather than
+ * of this default, and a browser's own list has exactly the same limit at
+ * exactly the same width; a list numbered into the thousands wants a gutter its
+ * author chose. What this value must not do is clip a case a browser would have
+ * shown, and at 40px it does not.
+ */
+const LIST_BASE_STYLES = {
+  base: {
+    base: {
+      listStyleType: "revert",
+      padding: { inlineStart: "2.5em" },
+    },
+  },
+} as const;
+
 export const list = defineBlock<ListProps, PageContext>({
   name: "core/list",
   version: 1,
@@ -91,6 +135,7 @@ export const list = defineBlock<ListProps, PageContext>({
     category: CONTENT,
     keywords: ["bullets", "ordered", "unordered", "items"],
   },
+  baseStyles: LIST_BASE_STYLES,
   props: {
     kind: { type: "select", options: [...LIST_KINDS] },
     items: { type: "array", of: "text" },
@@ -99,6 +144,8 @@ export const list = defineBlock<ListProps, PageContext>({
   defaultProps: { kind: "unordered", items: [] },
   example: { props: { kind: "unordered", items: ["First", "Second"] } },
   supports: {
+    // The one block whose rendered element has markers to control.
+    list: true,
     typography: true,
     color: true,
     spacing: true,
