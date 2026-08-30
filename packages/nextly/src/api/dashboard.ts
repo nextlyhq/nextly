@@ -158,7 +158,8 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     : 5;
 
   const service = await getActivityLogService();
-  const result = await service.getRecentActivity({ limit });
+  const scope = await resolveReadableResources(auth.userId);
+  const result = await service.getRecentActivity({ limit, scope });
 
   // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
   // Spread into a fresh literal so the response-shape generic accepts the

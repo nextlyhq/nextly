@@ -190,3 +190,56 @@ describe("dashboard read scope", () => {
     });
   });
 });
+
+describe("dashboard activity scope", () => {
+  it("scopes the activity feed to the caller's readable resources", async () => {
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "posts:read",
+    ]);
+
+    const getRecentActivity = vi
+      .fn()
+      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      getRecentActivity,
+    });
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity")
+    );
+
+    // The defect was that no scope was passed at all, so every caller saw
+    // every collection's activity.
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { kind: "some", resources: new Set(["posts"]) },
+      })
+    );
+  });
+
+  it("passes an EMPTY scope through rather than omitting it", async () => {
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(
+      []
+    );
+
+    const getRecentActivity = vi
+      .fn()
+      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      getRecentActivity,
+    });
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity")
+    );
+
+    // The fail-closed branch. An omitted scope would let the service's own
+    // default decide, and a service default is exactly what went wrong in
+    // dashboard-service. The handler states it.
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: { kind: "some", resources: new Set() } })
+    );
+  });
+});
