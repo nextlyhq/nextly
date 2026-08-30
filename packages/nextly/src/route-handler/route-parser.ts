@@ -96,6 +96,18 @@ export function requiresAuthOnly(service: string, method: string): boolean {
 }
 
 /**
+ * The all-locales lifecycle routes, by their URL token.
+ *
+ * A table rather than a branch per direction. The takedown was built, tested and
+ * reachable by nothing for exactly as long as its wiring was a second copy of
+ * the publish branch that nobody wrote.
+ */
+const ALL_LOCALES_ENTRY_ROUTES: Record<string, string> = {
+  "publish-all": "publishAllLocales",
+  "unpublish-all": "unpublishAllLocales",
+};
+
+/**
  * Map parsed route operation to permission action.
  *
  * More reliable than `getActionFromMethod()` for bulk operations where the
@@ -746,19 +758,28 @@ function parseCollectionEntryPublishAllRoute(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // Both directions of the all-locales lifecycle, as a lookup rather than two
+  // branches. They differ only in the token and the method it names, and stating
+  // that difference twice is how a route and its twin start to disagree about
+  // the shape they both match.
+  const allLocales = ALL_LOCALES_ENTRY_ROUTES[additionalParams[0] ?? ""];
   if (
     id &&
     subresource === "entries" &&
     subId &&
-    additionalParams[0] === "publish-all" &&
+    allLocales &&
     httpMethod === "POST"
   ) {
     routeParams.collectionName = id;
     routeParams.entryId = subId;
     return {
       service: "collections",
+      // Authorized as an `update` in BOTH directions: no route-level gate can
+      // express publish or unpublish, so the service judges a scoped key's own
+      // grant on top of this. Giving either its own operation would invent a
+      // permission name nothing seeds.
       operation: "update",
-      method: "publishAllLocales",
+      method: allLocales,
       routeParams,
     };
   }
