@@ -168,6 +168,11 @@ function buildNextlyInstance(
     // `await getNextly()` path.
     jobs: directAPI.jobs,
 
+    // Content releases. Forwarded for the reason stated above: a namespace that
+    // stops at the class is absent from the documented `await getNextly()`
+    // path, which is the one the REST handlers use.
+    releases: directAPI.releases,
+
     // RBAC namespaces
     roles: directAPI.roles,
     permissions: directAPI.permissions,
