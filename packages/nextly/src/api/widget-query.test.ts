@@ -456,3 +456,54 @@ describe("POST /api/dashboard/query", () => {
     });
   });
 });
+
+describe("a body that is not JSON at all", () => {
+  /** A request whose body the JSON parser cannot finish reading. */
+  function makeRawReq(raw: string): Request {
+    return new Request("http://localhost/api/dashboard/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: raw,
+    });
+  }
+
+  it("answers 400 in the canonical validation envelope", async () => {
+    // `req.json()` throws a raw `SyntaxError`, which `withErrorHandler`
+    // classifies as internal -- so a truncated body answered 500 while the
+    // body-SHAPE failures right below it answered with the canonical envelope.
+    // Two refusals about the same request body, told two different ways.
+    const res = await postWidgetQuery(makeRawReq('{"queries": ['));
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as {
+      error: { code: string; data?: { errors: Array<{ code: string }> } };
+    };
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.data?.errors[0].code).toBe("invalid_json");
+  });
+
+  it("answers the same way as a well-formed body of the wrong shape", async () => {
+    // The property that was missing: both are refusals about the request body,
+    // so a client has one envelope to parse and one code to branch on.
+    const malformed = await postWidgetQuery(makeRawReq("not json"));
+    const wrongShape = await postWidgetQuery(makeReq({ queries: "nope" }));
+
+    expect(malformed.status).toBe(wrongShape.status);
+    const a = (await malformed.json()) as { error: { code: string } };
+    const b = (await wrongShape.json()) as { error: { code: string } };
+    expect(a.error.code).toBe(b.error.code);
+  });
+
+  it("refuses the REQUEST rather than reporting a per-slot failure", async () => {
+    // The batch shape isolates one query's failure into its own slot under a
+    // 200, so "did not execute" alone does not separate the two outcomes -- a
+    // 500 does not execute either. What separates them is that the body is a
+    // canonical error envelope rather than a `results` array.
+    const res = await postWidgetQuery(makeRawReq("{"));
+    const body = (await res.json()) as { results?: unknown; error?: unknown };
+    expect(body.results).toBeUndefined();
+    expect(body.error).toBeDefined();
+    expect(res.status).toBe(400);
+    expect(executeWidgetQuery).not.toHaveBeenCalled();
+  });
+});

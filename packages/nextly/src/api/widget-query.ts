@@ -35,6 +35,7 @@ import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
 import { readAccessCaller, readCaller } from "./authenticated-read";
+import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -250,7 +251,15 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   // running. See `domains/widgets/collection-sources.ts`.
   await refreshCollectionSources();
 
-  const body = (await req.json()) as unknown;
+  // Through `readJsonBody` rather than a bare `req.json()`. A raw
+  // `SyntaxError` reaches `withErrorHandler` as an unclassified failure and is
+  // wrapped as internal, so a truncated body answered 500 while the body-SHAPE
+  // refusals in `parseQueriesBody` answered with the canonical validation
+  // envelope -- two refusals about the same request body told two different
+  // ways. This is the helper every other body-reading endpoint in this package
+  // already uses, so the `invalid_json` code a client branches on is the same
+  // one here.
+  const body = await readJsonBody(req);
   const queries = parseQueriesBody(body);
 
   // Resolve the caller ONCE for the whole batch: role-slug resolution is a
