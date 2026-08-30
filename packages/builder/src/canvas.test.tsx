@@ -1195,6 +1195,100 @@ describe("what the canvas reports about the box it got", () => {
     });
   });
 
+  describe("where in the region a box narrower than it sits", () => {
+    /*
+     * Every case here asserts `marginInline`, and it is the whole subject
+     * rather than an incidental of one: measured in a browser, a 912px region
+     * leaves a half-scale box 228px of free space on each side WITH the margin
+     * and 456px on one side without it. The alignment is the only thing that
+     * differs, so nothing else in these cases can carry the assertion.
+     *
+     * The control is not here. "Previewing with no width" — in the box suite
+     * above — requires `marginInline` to be EMPTY, because a box that fills its
+     * region has no free space to distribute and a margin governing nothing
+     * misleads whoever reads the canvas root. That case and these are the two
+     * halves of the same rule, and a change that makes all of them agree has
+     * broken one of them.
+     */
+    it("centres a tier at the scale its author chose, not only where it fits", () => {
+      /*
+       * The tier is 600px in a 912px region either way. FITTING, the canvas
+       * centres it; the moment a scale is chosen the same tier took the branch
+       * below, which set a width and no margin — so touching the zoom control
+       * moved the page to the left edge without changing what it was showing.
+       *
+       * Asserted at 1 deliberately. A defect reported as "zooming out breaks
+       * centring" is really "choosing a scale breaks it", and 1 is the value
+       * that separates the two: at 1 nothing is magnified or shrunk, so a fix
+       * addressing only scales below 1 leaves this case exactly as it was.
+       */
+      const { container } = atWidth(600, { kind: "fixed", scale: 1 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(root.style.width).toBe("600px");
+      expect(root.style.marginInline).toBe("auto");
+    });
+
+    it("keeps that tier centred at a scale below 1", () => {
+      // The reported case. Separate from the one above rather than a second
+      // assertion inside it, because they fail independently: the branch is
+      // shared but a fix guarded on `scale < 1` passes here and not there.
+      const { container } = atWidth(600, { kind: "fixed", scale: 0.5 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(root.style.width).toBe("600px");
+      expect(root.style.marginInline).toBe("auto");
+    });
+
+    it("centres the widest tier when an author zooms out of it", () => {
+      /*
+       * The widest tier requests no width, so the box IS the region — until a
+       * scale is chosen, which pins the width and paints it smaller. That is
+       * the state the editor opens in, so it is where the zoom control is used
+       * most, and it reached a different branch from the case above.
+       */
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+          zoom={{ kind: "fixed", scale: 0.5 }}
+        />
+      );
+
+      expect(rootOf(container).style.marginInline).toBe("auto");
+    });
+
+    it("centres a site that previews no viewport at all", () => {
+      // No container name and no declared tiers is the DEFAULT configuration,
+      // so this is the branch most sites take. It carries no preview object at
+      // all, which is why it is reached separately from every case above.
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          zoom={{ kind: "fixed", scale: 0.5 }}
+        />
+      );
+
+      expect(rootOf(container).style.marginInline).toBe("auto");
+    });
+  });
+
   /** A canvas previewing, with a reporter the test can read. */
   function measured(onMeasured: (width: number | undefined) => void) {
     return render(
