@@ -19,7 +19,11 @@ import type {
   ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import type { VersionsDbApi, VersionsWhere } from "../versions/db-api";
+import type {
+  VersionsDbApi,
+  VersionsWhere,
+  VersionsWhereCondition,
+} from "../versions/db-api";
 
 import { releaseMemberKey } from "./release-member-key";
 import { releaseRevalidationIntent } from "./release-revalidation";
@@ -223,8 +227,25 @@ export class ReleasesRepository {
   }
 
   /** Move a release to `scheduled`, which is what makes reads consult it. */
-  async scheduleRelease(id: string, at: Date, timezone: string): Promise<void> {
-    await this.db.update(
+  /**
+   * Commit a release to an instant, and say whether it moved.
+   *
+   * FENCED on the states a schedule may legally leave. A `published` release is
+   * excluded: moving one back to `scheduled` makes the drain re-apply members
+   * whose documents have changed since, republishing or re-withdrawing content
+   * nobody asked it to touch. `draft` and `cancelled` are both legitimate
+   * sources — the second is how a called-off launch is put back on.
+   *
+   * Answering `false` rather than throwing follows `markReleasePublished`: the
+   * repository reports what the fence did, and the caller decides whether a
+   * refusal is a conflict for its transport.
+   */
+  async scheduleRelease(
+    id: string,
+    at: Date,
+    timezone: string
+  ): Promise<boolean> {
+    const affected = await this.db.updateCount(
       RELEASES,
       {
         scheduledAt: at,
@@ -232,9 +253,20 @@ export class ReleasesRepository {
         state: "scheduled" satisfies ReleaseState,
         updatedAt: new Date(),
       },
-      { and: [{ column: "id", op: "=", value: id }] }
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          {
+            column: "state",
+            op: "IN",
+            value: ["draft", "scheduled", "cancelled"],
+          },
+        ],
+      }
     );
+    if (affected === 0) return false;
     await this.revalidateMembersOf(id);
+    return true;
   }
 
   /**
@@ -245,19 +277,33 @@ export class ReleasesRepository {
    * consulted. That is what makes cancelling a due-but-unmaterialised release
    * free, and it is why there is no restore path here.
    */
-  async cancelRelease(id: string): Promise<void> {
-    await this.db.update(
+  /**
+   * Call a release off, and say whether it moved.
+   *
+   * Fenced away from `published` for the same reason scheduling is: that
+   * release already happened, and marking it cancelled would describe history
+   * that did not occur while leaving the published content in place.
+   */
+  async cancelRelease(id: string): Promise<boolean> {
+    const affected = await this.db.updateCount(
       RELEASES,
       {
         state: "cancelled" satisfies ReleaseState,
         updatedAt: new Date(),
       },
-      { and: [{ column: "id", op: "=", value: id }] }
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "IN", value: ["draft", "scheduled"] },
+        ],
+      }
     );
+    if (affected === 0) return false;
     // Cancelling changes what a read returns just as scheduling does: a page
     // cached with a lifetime derived from this release is now bounded by an
     // instant that will never arrive.
     await this.revalidateMembersOf(id);
+    return true;
   }
 
   /**
@@ -270,6 +316,130 @@ export class ReleasesRepository {
    * 09:00 is in effect AT 09:00, not from the first request after it — to be
    * got wrong, and the two would disagree silently.
    */
+  /**
+   * Releases matching a window and a state, newest scheduled instant first.
+   *
+   * The product read, as opposed to {@link findDueReleases}, which answers the
+   * drain's question and nothing else. Two shapes ask this with different
+   * bounds — a release index wants a page of everything, a dashboard widget
+   * wants the next seven days — so the caller supplies the window and the limit
+   * rather than receiving fixed ones. Fixing either here is what forces the
+   * second caller to grow a second query.
+   *
+   * The bounds are pushed to the database rather than filtered in JS. The window
+   * is the whole point of the query, so discarding rows in memory would mean
+   * reading every release on the site to answer "what ships this week".
+   *
+   * Ordered by `scheduledAt` DESCENDING with `createdAt` breaking ties, so the
+   * order is total: several releases scheduled for one instant is the ordinary
+   * case for a coordinated launch, and an unstable order there makes a paged
+   * list skip and repeat rows.
+   */
+  /**
+   * Touch a release ONLY if it is still assemblable, and say whether it was.
+   *
+   * One conditional UPDATE rather than a read followed by a decision. A caller
+   * that reads `draft`, decides, and then writes can be overtaken by a publisher
+   * scheduling in between — and the write then lands on a committed launch
+   * without ever passing the publish gate. Folding the check into the statement
+   * removes that window from the check itself; see `addMember` in the service
+   * for how the remaining window around the member write is closed.
+   *
+   * `updateCount` rather than `update({ returning })` for the reason
+   * `markReleasePublished` gives: MySQL has no RETURNING and the adapter
+   * emulates it by re-selecting on a predicate the write invalidates.
+   */
+  async touchIfAssemblable(id: string): Promise<boolean> {
+    const affected = await this.db.updateCount(
+      RELEASES,
+      { updatedAt: new Date() },
+      {
+        and: [
+          { column: "id", op: "=", value: id },
+          { column: "state", op: "IN", value: ["draft", "cancelled"] },
+        ],
+      }
+    );
+    return affected > 0;
+  }
+
+  /** One member by id, so a caller can learn which release it belongs to. */
+  async findMember(memberId: string): Promise<ReleaseMemberRow | undefined> {
+    const rows = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: { and: [{ column: "id", op: "=", value: memberId }] },
+    });
+    return rows[0];
+  }
+
+  /**
+   * Whether these author ids resolve to users who can still act.
+   *
+   * Public because the WRITE path needs the same question the read path asks. A
+   * member whose author is deleted or deactivated is recorded, scheduled, and
+   * then fails on every drain with `AUTHOR_UNAVAILABLE`, leaving the release
+   * scheduled forever — a failure that only ever shows up as content that did
+   * not appear.
+   */
+  async liveAuthors(ids: string[]): Promise<ReadonlySet<string>> {
+    return this.liveAuthorIds(ids);
+  }
+
+  async findReleases(query: {
+    ids?: string[];
+    state?: string;
+    scheduledAfter?: Date;
+    scheduledBefore?: Date;
+    limit?: number;
+  }): Promise<ReleaseRow[]> {
+    const conditions: VersionsWhereCondition[] = [];
+    // An explicitly EMPTY id list means "none of them", which is not the same
+    // question as "no id filter" — answering it with every release would be the
+    // widest possible wrong answer.
+    if (query.ids !== undefined) {
+      if (query.ids.length === 0) return [];
+      conditions.push({
+        column: "id",
+        op: "IN",
+        value: [...new Set(query.ids)],
+      });
+    }
+    if (query.state !== undefined) {
+      conditions.push({ column: "state", op: "=", value: query.state });
+    }
+    if (query.scheduledAfter !== undefined) {
+      conditions.push({
+        column: "scheduledAt",
+        op: ">=",
+        value: query.scheduledAfter,
+      });
+    }
+    if (query.scheduledBefore !== undefined) {
+      conditions.push({
+        column: "scheduledAt",
+        op: "<=",
+        value: query.scheduledBefore,
+      });
+    }
+    return this.db.select<ReleaseRow>(RELEASES, {
+      where: conditions.length > 0 ? { and: conditions } : undefined,
+      orderBy: [
+        // NULLS LAST, stated rather than defaulted. An unscheduled draft has a
+        // null instant, and the default differs per dialect — on PostgreSQL a
+        // descending order puts nulls first, so a limited "what ships next"
+        // query would return drafts and omit every scheduled release.
+        { column: "scheduledAt", direction: "desc", nulls: "last" },
+        { column: "createdAt", direction: "desc" },
+        // `id` last, so the order is actually total. `createdAt` is not unique
+        // and is stored coarsely enough for concurrent releases to tie —
+        // especially on SQLite — and two drafts tie on a null `scheduledAt` as
+        // well, so without this a limited page can return different rows across
+        // query plans and dialects.
+        { column: "id", direction: "desc" },
+      ],
+      limit: query.limit,
+    });
+  }
+
   async findDueReleases(now: Date): Promise<ReleaseRow[]> {
     const rows = await this.db.select<ReleaseRow>(RELEASES, {
       where: {

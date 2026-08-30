@@ -63,6 +63,7 @@ import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { MetaService } from "../domains/meta";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
+import type { ReleasesService } from "../domains/releases/services/releases-service";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearFieldTypes,
@@ -198,6 +199,7 @@ import {
   registerDashboardServices,
   registerEmailServices,
   registerJobServices,
+  registerReleaseServices,
   registerMediaServices,
   registerMetaServices,
   registerRevalidationServices,
@@ -413,6 +415,8 @@ export interface ServiceMap {
   userFieldDefinitionService: UserFieldDefinitionService;
   permissionSeedService: PermissionSeedService;
   rbacAccessControlService: RBACAccessControlService;
+  /** Content releases: the authorization boundary the Direct API namespace reaches. */
+  releasesService: ReleasesService;
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
@@ -1072,6 +1076,11 @@ export async function registerServices(
   // it anyway keeps the reason a fact about this file rather than a property of
   // the container that a future refactor could remove without noticing.
   registerJobServices(ctx);
+  // After the jobs registration, which registers the drain that materialises
+  // what this service schedules. Order is not load-bearing — both resolve their
+  // dependencies from the container — but keeping them adjacent means a reader
+  // meets the two halves of releases together.
+  registerReleaseServices(ctx);
 
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections

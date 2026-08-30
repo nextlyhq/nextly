@@ -11,9 +11,10 @@
  * @packageDocumentation
  */
 
-import { asc, desc, getColumns } from "drizzle-orm";
+import { getColumns } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
+import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
   createTransactionForwarders,
@@ -23,7 +24,6 @@ import type {
   SupportedDialect,
   SqlParam,
   WhereClause,
-  OrderBySpec,
   SelectOptions,
   InsertOptions,
   UpdateOptions,
@@ -1085,15 +1085,14 @@ export abstract class DrizzleAdapter {
           }
         }
 
+        // Guarded, so `getColumns` is not reached for a select that does not
+        // order. Hoisting it out of this check ran it on every select and broke
+        // callers whose table handle cannot answer it.
         if (options?.orderBy?.length) {
-          const columns = getColumns(tableObj as never);
-          const orderClauses = options.orderBy
-            .map((o: OrderBySpec) => {
-              const col = columns[o.column];
-              if (!col) return undefined;
-              return o.direction === "desc" ? desc(col) : asc(col);
-            })
-            .filter(Boolean);
+          const orderClauses = buildDrizzleOrderBy(
+            getColumns(tableObj as never),
+            options.orderBy
+          );
           if (orderClauses.length) {
             query = query.orderBy(...orderClauses);
           }
