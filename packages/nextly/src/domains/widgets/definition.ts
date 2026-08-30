@@ -112,12 +112,8 @@ function validateArchetype(d: Partial<WidgetDefinition>): void {
   }
 }
 
-/**
- * Confirms `defaultSize`, `minSize` and `maxSize` are each a real size and
- * that the bounds do not invert -- a min larger than its max would make every
- * resize the user attempts fail.
- */
-function validateSizes(d: Partial<WidgetDefinition>): void {
+/** Confirms each of the three size fields names a real size. */
+function validateSizeValues(d: Partial<WidgetDefinition>): void {
   if (!WIDGET_SIZES.includes(d.defaultSize as WidgetSize)) {
     fail(`${d.id}: defaultSize must be one of ${WIDGET_SIZES.join(", ")}`);
   }
@@ -127,8 +123,33 @@ function validateSizes(d: Partial<WidgetDefinition>): void {
       fail(`${d.id}: ${key} must be one of ${WIDGET_SIZES.join(", ")}`);
     }
   }
+}
+
+/**
+ * Confirms the size fields describe a range the widget can actually occupy.
+ *
+ * Two properties, not one. The bounds must not invert -- a min larger than its
+ * max leaves no size at all, so every resize the user attempts fails. And the
+ * DEFAULT must sit inside them: comparing only the bounds against each other
+ * accepts a widget that renders at a size the user is then forbidden to return
+ * it to, because `defaultSize` is where the card starts and `minSize`/`maxSize`
+ * are what a resize is clamped to. Both bounds are inclusive, so a default
+ * equal to either is in range.
+ */
+function validateSizeRange(d: Partial<WidgetDefinition>): void {
   if (d.minSize && d.maxSize && sizeRank(d.minSize) > sizeRank(d.maxSize)) {
     fail(`${d.id}: minSize (${d.minSize}) exceeds maxSize (${d.maxSize})`);
+  }
+  const defaultRank = sizeRank(d.defaultSize as WidgetSize);
+  if (d.minSize && defaultRank < sizeRank(d.minSize)) {
+    fail(
+      `${d.id}: defaultSize (${d.defaultSize}) is below minSize (${d.minSize})`
+    );
+  }
+  if (d.maxSize && defaultRank > sizeRank(d.maxSize)) {
+    fail(
+      `${d.id}: defaultSize (${d.defaultSize}) is above maxSize (${d.maxSize})`
+    );
   }
 }
 
@@ -184,7 +205,8 @@ export function validateWidgetDefinition(
   validateId(d);
   validateTitle(d);
   validateArchetype(d);
-  validateSizes(d);
+  validateSizeValues(d);
+  validateSizeRange(d);
   validateComponent(d);
   validateQuery(d);
 }

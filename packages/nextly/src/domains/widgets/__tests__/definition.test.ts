@@ -35,6 +35,43 @@ describe("validateWidgetDefinition", () => {
     ).toThrow(/minSize/);
   });
 
+  it("refuses a defaultSize below minSize", () => {
+    // The bounds are what a user may resize BETWEEN, and the default is what
+    // they start at. A default under the floor means the widget renders at a
+    // size no resize can return it to -- accepted at registration and
+    // unreachable for the rest of its life.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultSize: "sm", minSize: "lg" })
+    ).toThrow(/defaultSize/);
+  });
+
+  it("refuses a defaultSize above maxSize", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultSize: "full", maxSize: "md" })
+    ).toThrow(/defaultSize/);
+  });
+
+  it("accepts a defaultSize sitting on either bound", () => {
+    // The bounds are INCLUSIVE: `minSize` is a size the user may resize to, so
+    // a default equal to it is inside the range, not outside it.
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        defaultSize: "sm",
+        minSize: "sm",
+        maxSize: "lg",
+      })
+    ).not.toThrow();
+    expect(() =>
+      validateWidgetDefinition({
+        ...valid,
+        defaultSize: "lg",
+        minSize: "sm",
+        maxSize: "lg",
+      })
+    ).not.toThrow();
+  });
+
   it("requires a component for the custom archetype and forbids one otherwise", () => {
     expect(() =>
       validateWidgetDefinition({ ...valid, archetype: "custom" })
