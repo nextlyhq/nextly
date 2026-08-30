@@ -12,6 +12,19 @@
 import type { BlockNode, BlockPart, NodeStyles } from "./document";
 import type { MigrationMap } from "./migration";
 
+/** Why a block needs JavaScript in the browser. */
+export interface BlockIsland {
+  /**
+   * What the block does that markup and CSS cannot.
+   *
+   * Required, and the requirement is the point: a block becomes heavier for
+   * every visitor the moment it declares this, and the author is the only one
+   * who knows whether that trade was worth it. A reviewer reading `island: {}`
+   * learns that somebody opted in; reading a sentence, they can disagree.
+   */
+  reason: string;
+}
+
 /**
  * A prop's schema entry. Structural on purpose: the engine only needs each
  * prop's declared `type` (for the generated manifest and for deriving editor
@@ -386,6 +399,28 @@ export interface BlockDefinition<
    * change.
    */
   parts?: Readonly<Record<string, BlockPart>>;
+  /**
+   * Declared when this block needs JavaScript in the browser to do its job.
+   *
+   * NOT a hydration mechanism, and deliberately not one. React already decides
+   * what ships: a module carrying `"use client"` is bundled for the browser and
+   * one without it is not, so a block that needs interactivity becomes a client
+   * component and a block that does not costs nothing. Re-implementing that
+   * here would be a second answer to a question already answered.
+   *
+   * What no existing mechanism can answer is this one: **given a stored page,
+   * does it contain an interactive block?** `"use client"` is a fact about a
+   * MODULE, visible to a bundler. A page is stored as JSON naming block TYPES,
+   * and the engine has no bundler and no DOM — so nothing reading a document
+   * can tell an interactive block from an inert one without importing every
+   * block in the library and inspecting how it was compiled.
+   *
+   * A `reason` rather than a bare `true`, because the value of this field is
+   * read by people: an editor warning an author what a block costs, and a
+   * reviewer asking whether the interactivity is worth it. A boolean records
+   * that somebody opted in and nothing about whether they should have.
+   */
+  island?: BlockIsland;
   /** Named child regions; only container blocks declare these. */
   slots?: Record<string, SlotSpec>;
   /**

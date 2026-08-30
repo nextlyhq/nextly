@@ -8,6 +8,7 @@ import {
   DEFAULT_LIMITS,
   type AnyBlockDefinition,
   type BlockDocument,
+  type BlockIsland,
   type BlockNode,
   type BlockPart,
   type CompiledPageCss,
@@ -224,6 +225,32 @@ export function blockPartsFor(
   stated?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
 ): Record<string, Readonly<Record<string, BlockPart>>> {
   return perUsedType(document, blocks, definition => definition.parts, stated);
+}
+
+/**
+ * The islands a document contains, keyed by block type.
+ *
+ * The question `"use client"` cannot answer. A directive is a fact about a
+ * MODULE and is visible to a bundler; a stored page is JSON naming block types,
+ * and this package must answer from the document without importing every block
+ * in the library or inspecting how one was compiled.
+ *
+ * EMPTY means the page needs no JavaScript of its own — which is the claim
+ * Plan 03 wanted to make and could not test. It does not mean the page ships no
+ * script at all: a host framework has a floor of its own that no block library
+ * can remove, and conflating the two is what made the original criterion
+ * unmeasurable.
+ *
+ * Goes through the same walk as the style tiers because it is the same
+ * question asked of a different field — two walkers agreeing today drift, and
+ * the drift would be silent.
+ */
+export function islandsFor(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, BlockIsland>>
+): Record<string, BlockIsland> {
+  return perUsedType(document, blocks, definition => definition.island, stated);
 }
 
 /**

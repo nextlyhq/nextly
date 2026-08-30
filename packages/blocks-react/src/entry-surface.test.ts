@@ -363,6 +363,7 @@ describe("the root entry", () => {
       // The render-safe attribute rule. Public because the editor offering that
       // field asks it rather than keeping a copy that would drift.
       "isAllowedAttribute",
+      "islandsFor",
       "migrationSourceFor",
       "pageStyleTrace",
       "prepareDocumentForRead",

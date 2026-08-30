@@ -145,6 +145,11 @@ export {
   // every stored sheet would read as stale, and a site with a policy would
   // recompile its CSS on every render for ever.
   fetchPolicyLabel,
+  // The one question `"use client"` cannot answer: given a STORED page, does it
+  // contain a block that needs JavaScript? Public because the callers who need
+  // it are outside this package — a host deciding what to serve, an editor
+  // warning an author what a block costs.
+  islandsFor,
   resolvePageStyles,
   resolvePageStylesWithTrace,
   styleTextForInjection,
@@ -239,6 +244,7 @@ export type {
   BlockEditorMeta,
   BlockExample,
   BlockIcon,
+  BlockIsland,
   BlockMigrationInfo,
   BlockNode,
   BlockPart,

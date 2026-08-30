@@ -225,6 +225,27 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
   // validation, repair or insertion lookup, a long way from the definition that caused it and
   // naming neither. Checked here for the same reason `parent` is: the type rejects it at the
   // authoring site, and definitions also arrive from JavaScript plugins and from JSON.
+  // Same reason as `parts` and `slots` below: the TYPE rejects a bad
+  // declaration at the authoring site, and definitions also arrive from
+  // JavaScript plugins and from JSON, where nothing has. An empty or missing
+  // reason is refused rather than defaulted, because the whole value of this
+  // field is the sentence — a block that declares interactivity without saying
+  // what it is for records the cost and hides the justification.
+  if (def.island !== undefined) {
+    if (!isPlainRecord(def.island)) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" island must be a plain object stating why it needs JavaScript.`
+      );
+    }
+    const reason = (def.island as { reason?: unknown }).reason;
+    if (typeof reason !== "string" || reason.trim() === "") {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" island must state a non-empty reason for needing JavaScript.`
+      );
+    }
+  }
   // Checked here for the reason `slots` below is: the TYPE rejects a bad
   // declaration at the authoring site, and definitions also arrive from
   // JavaScript plugins and from JSON, where nothing has. Unchecked, a `null`
