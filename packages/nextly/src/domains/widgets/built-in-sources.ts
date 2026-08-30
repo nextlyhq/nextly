@@ -33,6 +33,24 @@ const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
 ];
 
 /**
+ * The column `status` creates, and the one a "needs review" widget filters on.
+ *
+ * Appended on exactly the same terms as the timestamps, and for the same
+ * reason: `status: true` is what makes the schema pipeline inject a `status`
+ * system column (`hasStatus`, `diff/build-from-fields.ts` -- varchar/text NOT
+ * NULL DEFAULT 'draft'), so the column's existence is a per-collection fact,
+ * not a constant. Leaving it undeclared is the mirror image of the timestamps
+ * defect and fails in the opposite direction: the read path has the column and
+ * the SOURCE refuses it, so a `status: "all"` table widget cannot select, sort
+ * or filter on a value its own rows carry.
+ *
+ * Typed `string` rather than a narrower kind because
+ * `WIDGET_SOURCE_FIELD_TYPES` has no enum member -- "draft"/"published" is
+ * text, which is what the column stores.
+ */
+const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
+
+/**
  * Field types a widget must never see, however the caller declares the
  * collection. `password`'s own type declares its value "never returned by any
  * read or mutation response" (collections/fields/types/password.ts) -- so
@@ -81,16 +99,24 @@ export interface WidgetSourceCollection {
    * stores it.
    */
   timestamps?: boolean;
+  /**
+   * Whether the collection has the Draft/Published `status` column.
+   *
+   * Absent means OFF -- the OPPOSITE default to `timestamps`, and deliberately
+   * so: `DynamicCollectionRecord.status` defaults to false, so an install's
+   * ordinary collection has no such column and declaring one would be the very
+   * promise the read path cannot keep that `timestamps` is careful about.
+   */
+  status?: boolean;
 }
 
 /** The widget source a single collection exposes. */
 function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const declared = exposedFields(collection.fields);
   const seen = new Set(declared.map(f => f.name));
-  const systemFields =
-    collection.timestamps === false
-      ? [IDENTITY_FIELD]
-      : [IDENTITY_FIELD, ...TIMESTAMP_FIELDS];
+  const systemFields: WidgetSourceField[] = [IDENTITY_FIELD];
+  if (collection.timestamps !== false) systemFields.push(...TIMESTAMP_FIELDS);
+  if (collection.status === true) systemFields.push(STATUS_FIELD);
 
   const id = `collection:${collection.slug}`;
 

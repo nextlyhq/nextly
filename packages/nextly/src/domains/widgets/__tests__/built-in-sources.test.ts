@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { registerBuiltInSources } from "../built-in-sources";
+import { validateWidgetQuery } from "../query";
 import { clearSources, getSource, listSources } from "../sources";
 
 beforeEach(() => clearSources());
@@ -110,6 +112,84 @@ describe("built-in sources", () => {
     const names = getSource("collection:posts")?.fields.map(f => f.name) ?? [];
     expect(names).toContain("createdAt");
     expect(names).toContain("updatedAt");
+  });
+
+  it("offers the status column to a collection that HAS Draft/Published", () => {
+    // `status: true` is what makes the schema pipeline inject a `status`
+    // system column (`hasStatus` in `diff/build-from-fields.ts`), so the
+    // column is REAL and a widget must be able to select, sort and filter on
+    // it. The source's `fields` is the only allowlist `validateWidgetQuery`
+    // checks against, so a column left out of it is refused as undeclared --
+    // a refusal about a field the table actually carries, which is the
+    // mirror-image of the `timestamps` defect.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+        status: true,
+      },
+    ]);
+
+    const status = getSource("collection:posts")?.fields.find(
+      f => f.name === "status"
+    );
+    // Typed `string`, because the column stores "draft"/"published" text.
+    expect(status).toEqual({ name: "status", type: "string" });
+  });
+
+  it("withholds it from a collection that does NOT", () => {
+    // The control. `status` defaults to OFF -- the opposite of `timestamps`,
+    // which defaults ON -- so an absent flag must leave the column out, and
+    // this assertion would also be satisfied by a build that never added the
+    // column to anything, which the case above rules out.
+    registerBuiltInSources([
+      { slug: "audit", fields: [{ name: "action", type: "text" }] },
+    ]);
+
+    const names = getSource("collection:audit")?.fields.map(f => f.name) ?? [];
+    expect(names).toContain("action");
+    expect(names).not.toContain("status");
+  });
+
+  it("lets a widget select, sort and filter on the status it declared", () => {
+    // The outcome, not the shape: a name in `fields` is only worth anything
+    // if `validateWidgetQuery` accepts it in all three positions, which is
+    // what a `status: "all"` table widget actually does.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        status: true,
+      },
+    ]);
+
+    expect(
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        status: "all",
+        select: ["title", "status"],
+        sort: "-status",
+        where: { status: { equals: "draft" } },
+      })
+    ).toMatchObject({ select: ["title", "status"], sort: "-status" });
+  });
+
+  it("refuses the same query against a collection with no status column", () => {
+    // The other half: an undeclared field must still be refused, so the case
+    // above is not passing because the validator stopped checking.
+    registerBuiltInSources([
+      { slug: "audit", fields: [{ name: "action", type: "text" }] },
+    ]);
+
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:audit",
+        op: "list",
+        select: ["status"],
+      })
+    ).toThrow(NextlyError);
   });
 
   it("is idempotent across a boot", () => {

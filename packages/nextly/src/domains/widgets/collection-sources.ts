@@ -53,6 +53,13 @@ interface RegisteredCollection {
    * that has none makes a query pass validation and fail in the read path.
    */
   timestamps?: unknown;
+  /**
+   * The Draft/Published `status` column. Read defensively for the same reason
+   * `timestamps` is, and carried for the same reason: the flag decides whether
+   * `status` exists as a COLUMN, and a source that omits a column the table has
+   * refuses a query the read path would have answered.
+   */
+  status?: unknown;
 }
 
 interface CollectionRegistrySurface {
@@ -160,6 +167,11 @@ export async function refreshCollectionSources(): Promise<void> {
         // Only an explicit `false` turns them off; absent means on, the way
         // `defineCollection` normalizes it and the registry stores it.
         timestamps: collection.timestamps !== false,
+        // The opposite default: only an explicit `true` turns Draft/Published
+        // on, matching `DynamicCollectionRecord.status` (required, defaults to
+        // false) and the `config.status === true` reading every other consumer
+        // of this flag takes.
+        status: collection.status === true,
       }))
   );
 }

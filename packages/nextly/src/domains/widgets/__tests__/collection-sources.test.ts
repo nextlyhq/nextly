@@ -23,6 +23,7 @@ type Row = {
   slug: string;
   fields: Array<{ name: string; type: string }>;
   timestamps?: boolean;
+  status?: boolean;
 };
 
 const containerGet = container.get as ReturnType<typeof vi.fn>;
@@ -163,6 +164,29 @@ describe("refreshCollectionSources", () => {
     // has them, so the assertion above is not satisfied by never adding any.
     expect(posts).toContain("createdAt");
     expect(posts).toContain("updatedAt");
+  });
+
+  it("carries the collection's status setting into its source", async () => {
+    // The same fact, one column over. `status: true` injects a `status` system
+    // column, so a source that omits it refuses a query the read path would
+    // have answered -- the timestamps defect running in the opposite
+    // direction. The registry knows; it has to reach the source.
+    registryHolds([
+      { slug: "audit", fields: [] },
+      { slug: "posts", fields: [], status: true },
+    ]);
+
+    await refreshCollectionSources();
+
+    const audit = getSource("collection:audit")?.fields.map(f => f.name) ?? [];
+    const posts = getSource("collection:posts")?.fields.map(f => f.name) ?? [];
+    // The control: the same refresh DOES publish it for a collection that has
+    // it, so the negative is not satisfied by never adding the column at all.
+    expect(posts).toContain("status");
+    expect(audit).not.toContain("status");
+    // `status` defaults OFF, so the absent flag above is the ordinary case
+    // rather than an explicit opt-out.
+    expect(audit).toContain("id");
   });
 
   it("skips a field that carries no name of its own", async () => {
