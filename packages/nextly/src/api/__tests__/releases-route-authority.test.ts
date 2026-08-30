@@ -40,12 +40,20 @@ function namespace() {
     // The member add resolves its target document before accepting it, so the
     // fake has to answer that read. Present rather than absent: a missing
     // reader would make the case fail for a reason unrelated to authority.
-    findByID: vi.fn(async (): Promise<{ id: string } | null> => ({ id: "e1" })),
+    findByID: vi.fn(
+      async (): Promise<{ id: string; status?: string } | null> => ({
+        id: "e1",
+        status: "draft",
+      })
+    ),
     findSingle: vi.fn(
-      async (): Promise<{ id: string } | null> => ({ id: "e1" })
+      async (): Promise<{ id: string; status?: string } | null> => ({
+        id: "single-real-id",
+        status: "draft",
+      })
     ),
     releases: {
-      find: vi.fn(async () => []),
+      find: vi.fn(async (): Promise<{ id: string }[]> => []),
       findByID: vi.fn(async () => ({ id: "r1" })),
       create: vi.fn(async () => ({ id: "r1" })),
       addMember: vi.fn(async () => ({ id: "m1" })),
@@ -361,5 +369,113 @@ describe("release route input validation", () => {
     expect(api.releases.find).toHaveBeenCalledWith(
       expect.objectContaining({ authenticatedScope: undefined })
     );
+  });
+});
+
+describe("release member targets", () => {
+  async function addMember(body: Record<string, unknown>) {
+    return handleReleaseRequest(
+      new Request("https://example.test/api/releases", {
+        method: "POST",
+        body: JSON.stringify({
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: "e1",
+          action: "publish",
+          ...body,
+        }),
+        headers: { "Content-Type": "application/json" },
+      }),
+      "addReleaseMember",
+      { releaseId: "r1" }
+    );
+  }
+
+  it("looks the target up across ALL lifecycle states", async () => {
+    // The document a release exists to publish is usually a DRAFT. An untrusted
+    // read defaults to `published`, so without this the ordinary
+    // draft-to-launch flow 404s at the moment it is assembled — the one case
+    // this check must not break.
+    await addMember({});
+    expect(api.findByID).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "all" })
+    );
+  });
+
+  it("refuses a target with no draft/published lifecycle", async () => {
+    // Materialisation works by writing the status field. With the lifecycle
+    // disabled the write produces no observable state, the drain records a
+    // failed action, and the release stays scheduled and retries forever.
+    api.findByID.mockResolvedValueOnce({ id: "e1" });
+    const res = await addMember({});
+    expect(res.status).toBe(400);
+    expect(api.releases.addMember).not.toHaveBeenCalled();
+  });
+
+  it("stores a Single's own id, not the one the caller sent", async () => {
+    // A Single is addressed by slug, so any id is accepted — but release
+    // visibility compares stored decisions against the row's real id, and a
+    // member carrying a stale one is invisible to reads until a drain runs.
+    await addMember({
+      scopeKind: "single",
+      scopeSlug: "homepage",
+      entryId: "stale",
+    });
+    expect(api.releases.addMember).toHaveBeenCalledWith(
+      expect.objectContaining({ entryId: "single-real-id" })
+    );
+  });
+});
+
+describe("release list windowing", () => {
+  it("reports truncation rather than presenting a partial schedule as whole", async () => {
+    // Without over-fetching, a page of two is reported as `total: 2,
+    // hasNext: false` whether two releases exist or two hundred do.
+    api.releases.find.mockResolvedValueOnce([
+      { id: "a" },
+      { id: "b" },
+      { id: "c" },
+    ]);
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases?limit=2"),
+      "listReleases",
+      {}
+    );
+    const body = (await res.json()) as {
+      items: unknown[];
+      meta: { hasNext: boolean };
+    };
+    expect(body.items).toHaveLength(2);
+    expect(body.meta.hasNext).toBe(true);
+    // The over-fetch is what makes truncation observable at all.
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 3 })
+    );
+  });
+
+  it("refuses a window bound that is not a real ISO instant", async () => {
+    // Held to the same contract as a scheduling instant. Two parsers for one
+    // concept is how they drift: this one accepted `1` and normalised it into a
+    // query bound nobody asked for.
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases?scheduledAfter=1"),
+      "listReleases",
+      {}
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts an instant at an offset that crosses midnight in UTC", async () => {
+    // 2026-09-01T00:30:00+02:00 is August 31 in UTC and entirely valid.
+    // Comparing the calendar day against the UTC rendering refused it — a real
+    // instant rejected for every caller east of Greenwich.
+    const res = await handleReleaseRequest(
+      new Request(
+        "https://example.test/api/releases?scheduledAfter=2026-09-01T00:30:00%2B02:00"
+      ),
+      "listReleases",
+      {}
+    );
+    expect(res.status).toBe(200);
   });
 });

@@ -231,7 +231,10 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     },
 
     removeMember: args =>
-      service().removeMember(args.memberId, actorOf(ctx, args)),
+      // `releaseId` FORWARDED, not folded into the caller bag. It was declared
+      // on the interface and dropped here — a parameter the type advertised and
+      // the implementation ignored, so the mismatch guard it enables never ran.
+      service().removeMember(args.memberId, actorOf(ctx, args), args.releaseId),
 
     listMembers: args =>
       service().listMembers(args.releaseId, actorOf(ctx, args)),

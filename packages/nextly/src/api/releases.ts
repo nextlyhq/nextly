@@ -137,13 +137,35 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
     throw badRequest(`\`${key}\` is not a valid instant.`, { value: raw });
   }
   // A well-formed but impossible date — 2026-02-30 — parses and normalises
-  // silently. Round-tripping the calendar fields is what catches it.
-  if (!raw.startsWith(at.toISOString().slice(0, 10))) {
+  // silently. Caught by re-reading the calendar fields IN THE STATED OFFSET,
+  // never against the UTC rendering: `2026-09-01T00:30:00+02:00` is August 31
+  // in UTC and perfectly valid, so comparing to `toISOString()` would refuse a
+  // legitimate instant for every caller east of Greenwich.
+  if (!statesTheSameDay(raw, at)) {
     throw badRequest(`\`${key}\` names a date that does not exist.`, {
       value: raw,
     });
   }
   return at;
+}
+
+/**
+ * Whether the parsed instant still names the calendar day the caller wrote.
+ *
+ * Compared in the offset the STRING states, by shifting the instant by that
+ * offset before reading its date parts. An impossible date normalises to a
+ * different day and is caught; a real one at an offset boundary is not, because
+ * its UTC rendering is irrelevant to what the author wrote.
+ */
+function statesTheSameDay(raw: string, at: Date): boolean {
+  const offset = raw.slice(19);
+  const minutes =
+    offset === "" || offset === "Z"
+      ? 0
+      : (offset.startsWith("-") ? -1 : 1) *
+        (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
+  const local = new Date(at.getTime() + minutes * 60_000);
+  return raw.startsWith(local.toISOString().slice(0, 10));
 }
 
 /**
@@ -204,13 +226,16 @@ function optionalCount(value: string | null): number | undefined {
   return n;
 }
 
+/**
+ * A window bound, held to the SAME contract as a scheduling instant.
+ *
+ * Two parsers for one concept is how they drift: this one accepted `1`,
+ * `2026-02-30` and locale-dependent forms and normalised them into query bounds
+ * nobody asked for, silently returning the wrong page of releases.
+ */
 function optionalInstant(value: string | null, key: string): Date | undefined {
   if (value === null) return undefined;
-  const at = new Date(value);
-  if (Number.isNaN(at.getTime())) {
-    throw badRequest(`\`${key}\` is not a valid instant.`);
-  }
-  return at;
+  return requireInstant({ [key]: value }, key);
 }
 
 /**
@@ -228,27 +253,34 @@ function optionalInstant(value: string | null, key: string): Date | undefined {
  * reader into the service, and this moves there so the Direct API path gets it
  * too.
  */
-async function requireTargetExists(
+async function resolveTarget(
   ctx: ReleaseContext,
   scopeKind: "collection" | "single",
   scopeSlug: string,
   entryId: string
-): Promise<void> {
-  const found =
-    scopeKind === "single"
-      ? await ctx.nextly.findSingle({
-          slug: scopeSlug as never,
-          overrideAccess: false,
-          user: { id: ctx.caller.userId },
-        })
-      : await ctx.nextly.findByID({
-          collection: scopeSlug as never,
-          id: entryId,
-          overrideAccess: false,
-          user: { id: ctx.caller.userId },
-        });
+): Promise<string> {
+  // `status: "all"` is REQUIRED, not incidental. An untrusted read defaults to
+  // `published`, and the document a release most often exists to publish is a
+  // DRAFT — so the ordinary draft-to-launch flow would 404 at the moment it is
+  // assembled, which is the one case this check must not break.
+  const found = (await (scopeKind === "single"
+    ? ctx.nextly.findSingle({
+        slug: scopeSlug as never,
+        overrideAccess: false,
+        user: { id: ctx.caller.userId } as never,
+        status: "all",
+      } as never)
+    : ctx.nextly.findByID({
+        collection: scopeSlug as never,
+        id: entryId,
+        overrideAccess: false,
+        user: { id: ctx.caller.userId } as never,
+        status: "all",
+      } as never))) as { id?: string; status?: unknown } | null | undefined;
 
   if (found === null || found === undefined) {
+    // Read AS the caller, so a document they may not see and one that is not
+    // there are the same answer and this cannot be used to probe for ids.
     throw NextlyError.notFound({
       logContext: {
         reason: "release-member-target-missing",
@@ -258,6 +290,36 @@ async function requireTargetExists(
       },
     });
   }
+
+  // A target with no publish lifecycle can never satisfy the member.
+  // Materialisation works by writing the status field; a collection with the
+  // lifecycle disabled has none, so the write produces no observable published
+  // or draft state, the drain records a failed action, and the release stays
+  // scheduled and retries forever.
+  //
+  // Probed on the ROW rather than read from configuration: the row is what the
+  // write will touch, and a schema that declares a lifecycle its table does not
+  // carry is a state this codebase has met before.
+  if (!("status" in found)) {
+    throw badRequest(
+      `\`${scopeSlug}\` has no draft/published lifecycle, so it cannot be scheduled in a release.`,
+      { reason: "target-without-lifecycle", scopeKind, scopeSlug }
+    );
+  }
+
+  // The SINGLE's own id, not the one the caller sent. A Single is addressed by
+  // slug, so any id is accepted here — but release visibility compares stored
+  // decisions against the row's real id, and a member carrying a stale one is
+  // invisible to reads until a background drain happens to run.
+  if (scopeKind === "single") {
+    if (typeof found.id !== "string") {
+      throw NextlyError.internal({
+        logContext: { reason: "single-without-id", scopeSlug },
+      });
+    }
+    return found.id;
+  }
+  return entryId;
 }
 
 /**
@@ -307,6 +369,10 @@ const RELEASE_OPERATIONS: Record<
   listReleases: async ({ request, caller, releases }) => {
     const params = new URL(request.url).searchParams;
     const limit = optionalCount(params.get("limit"));
+    // ONE row past the limit, so truncation is observable. Without it a page of
+    // five is reported as `total: 5, hasNext: false` whether five releases exist
+    // or five hundred do, and a client renders an incomplete schedule as the
+    // whole one.
     const found = await releases.find({
       ...caller,
       // The runtime guard belongs HERE, at the untyped boundary. The service
@@ -322,18 +388,24 @@ const RELEASE_OPERATIONS: Record<
         params.get("scheduledBefore"),
         "scheduledBefore"
       ),
-      limit,
+      limit: limit === undefined ? undefined : limit + 1,
     });
+    const page = limit === undefined ? found : found.slice(0, limit);
+    const hasNext = limit !== undefined && found.length > limit;
     // The canonical list envelope, so shared client tooling reads this like
     // every other list. The meta is synthetic because the query is windowed
     // rather than paged — `total` is what this page holds, and a second query
     // to count the whole table would be a read nobody asked for.
-    return respondList(found, {
-      total: found.length,
+    return respondList(page, {
+      // `total` is what this window holds, not a count of the table: the query
+      // is windowed rather than paged, and a second COUNT would be a read
+      // nobody asked for. `hasNext` is the honest part — it says whether more
+      // matched than were returned.
+      total: page.length,
       page: 1,
-      limit: limit ?? found.length,
-      totalPages: 1,
-      hasNext: false,
+      limit: limit ?? page.length,
+      totalPages: hasNext ? 2 : 1,
+      hasNext,
       hasPrev: false,
     });
   },
@@ -401,7 +473,9 @@ const RELEASE_OPERATIONS: Record<
       });
     }
 
-    await requireTargetExists(ctx, scopeKind, scopeSlug, entryId);
+    // Returns the id the member must carry, which for a Single is the row's
+    // own rather than whatever the caller sent.
+    const targetId = await resolveTarget(ctx, scopeKind, scopeSlug, entryId);
 
     return respondMutation(
       "Added to release.",
@@ -410,7 +484,7 @@ const RELEASE_OPERATIONS: Record<
         releaseId,
         scopeKind,
         scopeSlug,
-        entryId,
+        entryId: targetId,
         locale,
         action,
       }),
