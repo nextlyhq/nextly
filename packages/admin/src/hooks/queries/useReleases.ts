@@ -36,6 +36,7 @@ import {
 import type {
   AddReleaseMemberPayload,
   CreateReleasePayload,
+  ReleaseDocumentRef,
   ReleaseListParams,
   ScheduleReleasePayload,
 } from "@admin/types/releases";
@@ -57,6 +58,86 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
     // only outcome is a 403 in everyone's network log.
     enabled,
   });
+}
+
+/**
+ * The scheduled releases holding one document, soonest first.
+ *
+ * A narrowing of the same list, so it shares the list's cache key and is
+ * invalidated by every release write — adding this document to a release
+ * refreshes the banner without the banner knowing that happened.
+ */
+export function useReleasesContaining(
+  document: ReleaseDocumentRef | undefined,
+  enabled = true
+) {
+  // The route's ceiling rather than its default of 50. A document in more
+  // than fifty scheduled releases is implausible, and asking for the ceiling
+  // costs nothing when the real answer is one or two — but the banner presents
+  // the rows as a SEQUENCE whose last member is the document's final state, and
+  // a silently truncated sequence would present an incomplete answer as a
+  // complete one.
+  const params: ReleaseListParams = document
+    ? { containing: document, limit: 200 }
+    : {};
+  const query = useQuery({
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+    // Never asked without a complete reference: the route refuses a partial
+    // one, and a 404-shaped error in the console under every document editor
+    // is a poor way to say "this document has no id yet".
+    enabled: enabled && Boolean(document),
+    // Re-asked on TWO schedules, because two different things change this
+    // answer and neither runs an admin mutation that would invalidate it.
+    //
+    // A pending release is resolved by the background drain, so an editor
+    // holding the page across the instant would otherwise keep reading that a
+    // release is coming, and that saves are still included, after it has run.
+    //
+    // An EMPTY answer changes too, and that is the case a pending-only interval
+    // misses: another administrator schedules this document from their own
+    // browser, which invalidates their QueryClient and not this one. The first
+    // editor then goes on saving, indefinitely, without learning the document
+    // has an automatic pending change. Polled more slowly rather than not at
+    // all — nearly every document is in no release, and the answer is worth one
+    // request every few minutes rather than one a minute.
+    refetchInterval: data =>
+      hasPendingRelease(data.state.data)
+        ? PENDING_RELEASE_POLL_MS
+        : NO_RELEASE_POLL_MS,
+    // And on return to the tab, which is when an editor actually resumes
+    // typing. The global provider disables this everywhere; here the answer is
+    // a safety signal rather than a view of data the reader already has, and
+    // coming back to a stale one is exactly the moment it matters.
+    refetchOnWindowFocus: true,
+  });
+  return query;
+}
+
+/**
+ * How often to re-ask while a release is still ahead of this document.
+ *
+ * A minute. The banner is a safety signal rather than a clock, so the cost of
+ * being a minute late is that an editor briefly reads a promise that has just
+ * become moot; the cost of polling harder is a request per document editor per
+ * few seconds, for a page that mostly sits open.
+ */
+const PENDING_RELEASE_POLL_MS = 60_000;
+
+/**
+ * How often to re-ask when this document is in no release at all.
+ *
+ * Five minutes. Nearly every document is in this state, so the cost is paid on
+ * every open editor — but the answer is not static: somebody else can schedule
+ * this document at any moment, and nothing they do reaches this browser.
+ */
+const NO_RELEASE_POLL_MS = 300_000;
+
+/** Whether anything in this answer is still waiting to happen. */
+function hasPendingRelease(
+  data: { items: { state: string }[] } | undefined
+): boolean {
+  return (data?.items ?? []).some(release => release.state === "scheduled");
 }
 
 export function useRelease(id: string | undefined) {

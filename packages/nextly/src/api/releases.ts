@@ -25,7 +25,10 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import type { ReleaseRow } from "../domains/releases/releases-repository";
+import type {
+  DocumentRef,
+  ReleaseRow,
+} from "../domains/releases/releases-repository";
 import {
   RELEASES_RESOURCE,
   type ReleaseCapabilities,
@@ -409,6 +412,40 @@ interface ReleaseContext {
 }
 
 /**
+ * The document a caller is asking about, when they are asking about one.
+ *
+ * All three parts or none. A partial reference is REFUSED rather than ignored:
+ * dropping it would answer with every release instead of the ones holding the
+ * document, and a document editor rendering that would tell an author their
+ * post is in eleven launches.
+ *
+ * `locale` is deliberately absent. A member is whole-document — the service
+ * refuses a locale-scoped one — so accepting a locale here would offer a
+ * narrowing the engine does not have.
+ */
+function containingRef(
+  params: URLSearchParams
+): { containing: DocumentRef } | Record<string, never> {
+  const scopeKind = params.get("containingScopeKind");
+  const scopeSlug = params.get("containingScopeSlug");
+  const entryId = params.get("containingEntryId");
+  if (scopeKind === null && scopeSlug === null && entryId === null) return {};
+
+  if (scopeKind !== "collection" && scopeKind !== "single") {
+    throw badRequest(
+      "`containingScopeKind` must be `collection` or `single`.",
+      { received: scopeKind }
+    );
+  }
+  if (!scopeSlug || !entryId) {
+    throw badRequest(
+      "`containingScopeSlug` and `containingEntryId` are both required when filtering by document."
+    );
+  }
+  return { containing: { scopeKind, scopeSlug, entryId, locale: null } };
+}
+
+/**
  * Each release, with what THIS caller may do to it.
  *
  * Attached at the HTTP surface rather than inside the read, because a control
@@ -477,6 +514,7 @@ const RELEASE_OPERATIONS: Record<
         params.get("scheduledBefore"),
         "scheduledBefore"
       ),
+      ...containingRef(params),
       limit: limit + 1,
     });
     const page = found.slice(0, limit);

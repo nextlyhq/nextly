@@ -67,7 +67,13 @@ function namespace() {
       })
     ),
     releases: {
-      find: vi.fn(async (): Promise<{ id: string }[]> => []),
+      // Takes its query, so a case can assert on what the route ASKED for. A
+      // zero-argument stub records an empty call tuple, and a test reading
+      // `calls[0][0]` from it does not compile — which is the compiler saying
+      // the fake and the thing it stands in for have different shapes.
+      find: vi.fn(
+        async (_query: Record<string, unknown>): Promise<{ id: string }[]> => []
+      ),
       findByID: vi.fn(async () => ({ id: "r1" })),
       create: vi.fn(async () => ({ id: "r1" })),
       addMember: vi.fn(async () => ({ id: "m1" })),
@@ -574,5 +580,64 @@ describe("release route paging and body validation", () => {
     expect(api.releases.find).toHaveBeenCalledWith(
       expect.objectContaining({ userRoles: ["editor"] })
     );
+  });
+});
+
+describe("filtering the list to the releases holding ONE document", () => {
+  /** What the namespace's `find` received for this query string. */
+  async function queryFor(search: string) {
+    const api = namespace();
+    getCachedNextly.mockResolvedValue(api);
+    const res = await handleReleaseRequest(
+      new Request(`https://example.test/api/releases${search}`),
+      "listReleases",
+      {}
+    );
+    return { res, query: api.releases.find.mock.calls[0]?.[0] };
+  }
+
+  it("passes a COMPLETE reference through as a whole-document ref", async () => {
+    const { query } = await queryFor(
+      "?containingScopeKind=collection&containingScopeSlug=posts&containingEntryId=e1"
+    );
+    // Asserted on what the service RECEIVED rather than on the status, because
+    // a filter that is parsed and then dropped answers 200 with every release
+    // — which is the failure worth catching and which no status code reveals.
+    expect(query).toMatchObject({
+      containing: {
+        scopeKind: "collection",
+        scopeSlug: "posts",
+        entryId: "e1",
+        // A member is whole-document: the service refuses a locale-scoped one,
+        // so this surface must not invent a narrowing the engine lacks.
+        locale: null,
+      },
+    });
+  });
+
+  it("passes NO filter when none was asked for", async () => {
+    // The control. Without it, a parser that always produced a `containing`
+    // key would satisfy the case above just as well.
+    const { query } = await queryFor("?limit=5");
+    expect(query).not.toHaveProperty("containing");
+  });
+
+  it.each([
+    ["?containingScopeKind=collection"],
+    ["?containingScopeSlug=posts"],
+    ["?containingEntryId=e1"],
+    ["?containingScopeKind=collection&containingScopeSlug=posts"],
+    ["?containingScopeSlug=posts&containingEntryId=e1"],
+    [
+      "?containingScopeKind=widget&containingScopeSlug=posts&containingEntryId=e1",
+    ],
+  ])("refuses the PARTIAL or unmodelled reference %s", async search => {
+    // Refused rather than ignored. Dropping an incomplete reference answers
+    // with every release instead of the ones holding the document, and a
+    // document banner rendering that tells an author their post is in eleven
+    // launches.
+    const { res, query } = await queryFor(search);
+    expect(res.status).toBe(400);
+    expect(query).toBeUndefined();
   });
 });

@@ -60,6 +60,7 @@ import {
   type ReleaseState,
 } from "../../../schemas/releases/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { documentRefKey } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
@@ -179,6 +180,40 @@ export interface ReleasesServiceDeps {
   }) => Promise<boolean>;
 }
 
+/**
+ * The engine's total order over two members, ascending.
+ *
+ * The same three keys `resolveReleaseEffect` decides a winner with — instant,
+ * then the member's creation time, then its id — because a document's releases
+ * are read as a SEQUENCE and the last of them is its final state. Two releases
+ * naming one instant is not an edge case, and any comparator that stops at the
+ * instant leaves those in the order the driver happened to return, which
+ * differs by dialect.
+ */
+function byEngineOrder(
+  a: { scheduledAt: Date; createdAt: Date; memberId: string },
+  b: { scheduledAt: Date; createdAt: Date; memberId: string }
+): number {
+  const byScheduled = a.scheduledAt.getTime() - b.scheduledAt.getTime();
+  if (byScheduled !== 0) return byScheduled;
+  const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
+  if (byCreated !== 0) return byCreated;
+  return a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0;
+}
+
+/** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
+function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
+  if (query.state !== undefined && row.state !== query.state) return false;
+  const at = row.scheduledAt?.getTime();
+  if (query.scheduledAfter !== undefined) {
+    if (at === undefined || at < query.scheduledAfter.getTime()) return false;
+  }
+  if (query.scheduledBefore !== undefined) {
+    if (at === undefined || at > query.scheduledBefore.getTime()) return false;
+  }
+  return true;
+}
+
 export interface FindReleasesQuery {
   /**
    * Restrict to one lifecycle state.
@@ -197,6 +232,20 @@ export interface FindReleasesQuery {
    */
   scheduledAfter?: Date;
   scheduledBefore?: Date;
+  /**
+   * Only releases that CONTAIN this document.
+   *
+   * The inverse of `listMembers`, and the question a document editor asks: what
+   * is going to happen to the thing I am looking at. Expressed as a filter on
+   * the release list rather than a route of its own, because that is what it is
+   * — the same resource, narrowed — and because a literal path segment under
+   * `/api/releases` would be read as a release id.
+   *
+   * Answers about SCHEDULED releases only. A draft membership changes nothing on
+   * its own, and the question this serves is whether the document will change
+   * without anyone touching it again.
+   */
+  containing?: DocumentRef;
   /**
    * How many rows at most. Must be a non-negative integer when given.
    *
@@ -398,6 +447,74 @@ export class ReleasesService {
     );
   }
 
+  /**
+   * The scheduled releases holding this document, soonest first.
+   *
+   * Reuses `findDueMembersFor`, which returns every member of a scheduled
+   * release and leaves the dueness judgement to the pure rule — so the same
+   * query serves the read path's "what is live now" and this surface's "what is
+   * still coming", without a second implementation of either.
+   *
+   * The member's ACTION travels with each release, because it is the thing an
+   * editor needs and it belongs to the membership rather than to the release: a
+   * release can publish one document while unpublishing another.
+   *
+   * Ordered by instant ascending — the order the changes will actually happen —
+   * so a document in several releases reads as a sequence. The final state is
+   * then the last row, which is what `resolveReleaseEffect` will conclude, and
+   * saying it that way avoids a second implementation of that ordering.
+   */
+  private async findContaining(
+    query: FindReleasesQuery & { containing: DocumentRef },
+    now: Date
+  ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
+    const ref = query.containing;
+    const grouped = await this.deps.repository.findDueMembersFor([ref], now);
+    const members = grouped.get(documentRefKey(ref)) ?? [];
+    if (members.length === 0) return [];
+
+    const releases = await this.deps.repository.findReleases({
+      ids: [...new Set(members.map(member => member.releaseId))],
+    });
+    const byId = new Map(releases.map(release => [release.id, release]));
+
+    const rows = members
+      .flatMap(member => {
+        const release = byId.get(member.releaseId);
+        // A member whose release vanished between the two reads is dropped
+        // rather than rendered without its instant: a row saying a document is
+        // scheduled, without saying when, is worse than not mentioning it.
+        if (release === undefined) return [];
+        // RE-CHECKED, because these are two reads and the drain runs between
+        // them. `findDueMembersFor` selects members of scheduled releases; by
+        // the time the second read fetches those releases one may already have
+        // been published, and emitting it would report an action that has
+        // ALREADY HAPPENED as still coming. A reader polling until nothing is
+        // pending would then stop on that row and keep the claim forever.
+        if (release.state !== "scheduled") return [];
+        return [{ ...release, memberAction: member.action, member }];
+      })
+      // THE ENGINE'S OWN ORDER, not a simpler one that agrees with it most of
+      // the time. `resolveReleaseEffect` breaks a tied instant on the member's
+      // creation time and then on its id, precisely because two releases can
+      // name the same moment and the driver's row order differs by dialect.
+      // Sorting on the instant alone leaves those ties in whatever order the
+      // database returned, so a reader taking the last row as the final state —
+      // which is exactly what this ordering invites — could read the loser.
+      .sort((a, b) => byEngineOrder(a.member, b.member));
+
+    // The document filter NARROWS the list; it does not replace it. A caller
+    // combining it with a window or a limit asked for both, and answering with
+    // releases outside the window is answering a question nobody put.
+    return rows
+      .map(({ member, ...row }) => {
+        void member;
+        return row;
+      })
+      .filter(row => matchesListQuery(row, query))
+      .slice(0, query.limit ?? rows.length);
+  }
+
   async find(
     query: FindReleasesQuery,
     actor: ReleaseActor
@@ -414,6 +531,12 @@ export class ReleasesService {
         message: "`limit` must be a non-negative integer.",
         logContext: { reason: "invalid-limit", limit: query.limit },
       });
+    }
+    if (query.containing !== undefined) {
+      return this.findContaining(
+        { ...query, containing: query.containing },
+        new Date()
+      );
     }
     return this.deps.repository.findReleases(query);
   }

@@ -37,6 +37,7 @@ import type {
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
+import type { ReleaseMemberAction } from "../../schemas/releases/types";
 
 import type { NextlyContext } from "./context";
 import { accessOptions, mergeConfig } from "./helpers";
@@ -83,8 +84,19 @@ export interface ReleasesNamespace {
   create(
     args: { title: string; description?: string | null } & ReleaseCallerArgs
   ): Promise<ReleaseRow>;
-  /** Releases in a window, newest scheduled instant first. */
-  find(args?: FindReleasesQuery & ReleaseCallerArgs): Promise<ReleaseRow[]>;
+  /**
+   * Releases in a window, newest scheduled instant first.
+   *
+   * Filtering by `containing` returns them SOONEST first instead — the order
+   * they will be applied to that document — and each row carries the member's
+   * action, because a release can publish one document while taking another
+   * down. Declared in the return type rather than left to the runtime: a caller
+   * that cannot see `memberAction` cannot tell which way a release moves the
+   * document it just asked about.
+   */
+  find(
+    args?: FindReleasesQuery & ReleaseCallerArgs
+  ): Promise<Array<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
   findByID(
     args: { id: string } & ReleaseCallerArgs
   ): Promise<ReleaseRow | null>;
