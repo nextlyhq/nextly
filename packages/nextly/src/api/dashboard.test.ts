@@ -27,21 +27,25 @@ vi.mock("../di", () => ({
 }));
 
 vi.mock("../services/lib/permissions", () => ({
-  isSuperAdmin: vi.fn(),
-  listEffectivePermissions: vi.fn(),
   // `readCaller` (via `authenticated-read.ts`) resolves this to build the
   // caller it hands the dashboard service. Unmocked, it falls through to a
   // real database lookup that has nothing to connect to in this suite.
   resolveRoleSlugs: vi.fn(),
 }));
 
+// The scope's DECISION is `canReadEntity`'s, and
+// `__tests__/dashboard-read-scope.test.ts` drives the real one against a real
+// `RBACAccessControlService`. Stubbed here so these tests can assert the
+// handler's WIRING instead: which slugs it offers for a decision, under whose
+// resolved identity, and that the verdict reaches the service unchanged.
+const { readableEntities } = vi.hoisted(() => ({
+  readableEntities: vi.fn(),
+}));
+vi.mock("../auth/entity-read-access", () => ({ readableEntities }));
+
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { container } from "../di";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-  resolveRoleSlugs,
-} from "../services/lib/permissions";
+import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import {
   getDashboardActivity,
@@ -53,15 +57,59 @@ function makeReq(url: string): Request {
   return new Request(url);
 }
 
+/** Two collections and one single, standing in for the real registries. */
+const REGISTERED = ["posts", "pages", "site-settings"];
+
+/**
+ * The dashboard service (or activity log service) this test wants back.
+ *
+ * `container.get` now answers for the two registries as well, because the scope
+ * is resolved from the entities they list. A single `mockReturnValue` would
+ * hand the same object to every lookup, so the registries would answer with a
+ * service and the scope would silently come out empty -- which looks exactly
+ * like a working deny.
+ */
+let serviceStub: unknown = {};
+
+/** The slugs offered for a read decision, in the order they were offered. */
+function offeredSlugs(): string[] {
+  return [...((readableEntities.mock.calls[0]?.[0] as string[]) ?? [])].sort();
+}
+
+/** The identity the read decisions were taken under. */
+function decidingCaller(): Record<string, unknown> {
+  return readableEntities.mock.calls[0]?.[1] as Record<string, unknown>;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default to authenticated super-admin so the success-path tests below
-  // can override only the bits they care about.
+  serviceStub = {};
+  (container.get as ReturnType<typeof vi.fn>).mockImplementation(
+    (name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllCollections: vi
+            .fn()
+            .mockResolvedValue([{ slug: "posts" }, { slug: "pages" }]),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSingles: vi.fn().mockResolvedValue([{ slug: "site-settings" }]),
+        };
+      }
+      return serviceStub;
+    }
+  );
+  // Admits everything by default, so a test that cares about the scope states
+  // its own verdict and the rest are unaffected by it.
+  readableEntities.mockImplementation(
+    async (slugs: readonly string[]) => new Set(slugs)
+  );
   (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
     userId: "user-1",
   });
   (isErrorResponse as ReturnType<typeof vi.fn>).mockReturnValue(false);
-  (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
   (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
@@ -83,9 +131,9 @@ describe("getDashboardStats", () => {
       singles: 0,
       apiKeys: 0,
     };
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+    serviceStub = {
       getStats: vi.fn().mockResolvedValue(stats),
-    });
+    };
 
     const res = await getDashboardStats(
       makeReq("http://x/api/dashboard/stats")
@@ -109,9 +157,9 @@ describe("getDashboardRecentEntries", () => {
         { id: "p1", collection: "posts", updatedAt: "2026-04-29T00:00:00Z" },
       ],
     };
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+    serviceStub = {
       getRecentEntries: vi.fn().mockResolvedValue(entries),
-    });
+    };
 
     const res = await getDashboardRecentEntries(
       makeReq("http://x/api/dashboard/recent-entries?limit=5")
@@ -139,9 +187,9 @@ describe("getDashboardRecentEntries", () => {
     ]);
 
     const getRecentEntries = vi.fn().mockResolvedValue({ entries: [] });
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+    serviceStub = {
       getRecentEntries,
-    });
+    };
 
     await getDashboardRecentEntries(
       makeReq("http://x/api/dashboard/recent-entries?limit=5")
@@ -155,7 +203,7 @@ describe("getDashboardRecentEntries", () => {
     // role-guarded collection silently returned zero rows.
     expect(getRecentEntries).toHaveBeenCalledWith(
       5,
-      { kind: "all" },
+      { kind: "some", resources: new Set(REGISTERED) },
       { user: { id: "user-1", roles: ["editor"], role: "editor" } }
     );
   });
@@ -168,9 +216,9 @@ describe("getDashboardActivity", () => {
       total: 1,
       hasMore: false,
     };
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+    serviceStub = {
       getRecentActivity: vi.fn().mockResolvedValue(result),
-    });
+    };
 
     const res = await getDashboardActivity(
       makeReq("http://x/api/dashboard/activity?limit=5")
@@ -183,77 +231,120 @@ describe("getDashboardActivity", () => {
   });
 });
 
+/**
+ * What the handler does with the access layer's answer.
+ *
+ * The DECISION itself belongs to `canReadEntity` and is driven for real, with a
+ * real `RBACAccessControlService` and real code-defined rules, in
+ * `__tests__/dashboard-read-scope.test.ts`. Everything here is about the wiring
+ * around it, which has its own ways of being wrong: offering the wrong SET of
+ * candidates, offering them under the wrong IDENTITY, or widening the verdict on
+ * the way to the service.
+ */
 describe("dashboard read scope", () => {
-  it("asks the service for nothing when the caller holds no read permissions", async () => {
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(
-      []
-    );
-
+  it("offers every registered entity for a decision -- singles as well as collections", async () => {
+    // A single is an entity with its own `access` rules, and
+    // `getRegisteredAccess` reads both maps. Omitting the single registry here
+    // would leave every single permanently invisible on the dashboard, with no
+    // error to say so.
     const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+    serviceStub = { getStats };
 
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
-    // The defect was that an empty permission set reached the service as
-    // "no filter" and returned every collection. The scope must arrive as an
-    // EMPTY `some`, which admits nothing.
+    expect(offeredSlugs()).toEqual([...REGISTERED].sort());
+  });
+
+  it("forwards exactly what the access layer admitted, and nothing beside it", async () => {
+    readableEntities.mockResolvedValue(new Set(["posts"]));
+
+    const getStats = vi.fn().mockResolvedValue({});
+    serviceStub = { getStats };
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    // `pages` and `site-settings` were offered and refused, so they must not
+    // appear: the handler carries the verdict, it does not re-decide it.
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(["posts"]) },
+    });
+  });
+
+  it("passes an EMPTY `some` through when the access layer admits nothing", async () => {
+    readableEntities.mockResolvedValue(new Set());
+
+    const getStats = vi.fn().mockResolvedValue({});
+    serviceStub = { getStats };
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    // The original defect was an empty set reaching the service as "no
+    // filter", so the least-privileged caller got the most access. An empty
+    // `some` admits nothing, and that is what must arrive.
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set() },
     });
   });
 
-  it("asks the service for everything when the caller is a super-admin", async () => {
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-
+  it("never resolves an unbounded `all`, even when everything is admitted", async () => {
+    // The positive control for the two above: an implementation that answered
+    // `all` whenever nothing was refused would satisfy both of them, and would
+    // then let `recentChanges24h` count activity for collections that are no
+    // longer registered at all.
     const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+    serviceStub = { getStats };
 
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
-    expect(getStats).toHaveBeenCalledWith({ scope: { kind: "all" } });
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(REGISTERED) },
+    });
   });
 
-  it("passes only the readable resources through", async () => {
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue([
-      "posts:read",
-      "posts:update",
-      "pages:update",
+  it("decides under the caller's RESOLVED identity, not the raw auth context", async () => {
+    // Session auth carries role IDS; a role-based access rule matches SLUGS.
+    // The two strings are deliberately different so this can tell "the handler
+    // asked as the resolved caller" apart from "the handler forwarded the raw
+    // context" -- the second answers no for every role-guarded entity, silently.
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "user-1",
+      authMethod: "session",
+      permissions: [],
+      roles: ["role-7"],
+    });
+    (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "editor",
     ]);
 
-    const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+    serviceStub = { getStats: vi.fn().mockResolvedValue({}) };
 
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
-    // `pages` is writable but not readable, so it must not appear.
-    expect(getStats).toHaveBeenCalledWith({
-      scope: { kind: "some", resources: new Set(["posts"]) },
+    expect(decidingCaller()).toEqual({
+      userId: "user-1",
+      authMethod: "session",
+      // A session carries none: its grants are resolved from the database.
+      permissions: [],
+      roles: ["editor"],
     });
   });
 });
 
 describe("dashboard activity scope", () => {
-  it("scopes the activity feed to the caller's readable resources", async () => {
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue([
-      "posts:read",
-    ]);
+  it("scopes the activity feed to the entities the access layer admitted", async () => {
+    readableEntities.mockResolvedValue(new Set(["posts"]));
 
     const getRecentActivity = vi
       .fn()
       .mockResolvedValue({ activities: [], total: 0, hasMore: false });
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-      getRecentActivity,
-    });
+    serviceStub = { getRecentActivity };
 
     await getDashboardActivity(
       makeReq("http://localhost/api/dashboard/activity")
     );
 
     // The defect was that no scope was passed at all, so every caller saw
-    // every collection's activity.
+    // every collection's activity -- entry titles, user names and emails.
     expect(getRecentActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         scope: { kind: "some", resources: new Set(["posts"]) },
@@ -262,17 +353,12 @@ describe("dashboard activity scope", () => {
   });
 
   it("passes an EMPTY scope through rather than omitting it", async () => {
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(false);
-    (listEffectivePermissions as ReturnType<typeof vi.fn>).mockResolvedValue(
-      []
-    );
+    readableEntities.mockResolvedValue(new Set());
 
     const getRecentActivity = vi
       .fn()
       .mockResolvedValue({ activities: [], total: 0, hasMore: false });
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-      getRecentActivity,
-    });
+    serviceStub = { getRecentActivity };
 
     await getDashboardActivity(
       makeReq("http://localhost/api/dashboard/activity")
@@ -288,22 +374,21 @@ describe("dashboard activity scope", () => {
 });
 
 /**
- * The api-key branch of `resolveReadableResources`.
+ * An API-KEY caller reaches the decision as the KEY, not as its owner.
  *
- * `auth.userId` for an API-key request is the key's OWNER, so authorizing by
- * that id judges the key on the owner's roles rather than on the grant the key
- * was actually minted with. The whole point of a narrowly scoped key is that it
- * carries LESS reach than its owner, and a super-admin owner is where that gap
- * is widest -- so every test here makes the owner a super-admin, because a test
- * with an ordinary owner passes on the broken implementation too.
+ * `auth.userId` for an API-key request is the key's OWNER, so a decision taken
+ * on that id alone judges the key by the owner's roles. The whole point of a
+ * narrowly scoped key is that it carries LESS reach than its owner, and a
+ * super-admin owner is where that gap is widest -- so the tests here make the
+ * owner a super-admin, because a test with an ordinary owner passes on the
+ * broken implementation too.
  *
- * The two permission vocabularies are not interchangeable and this is the seam
- * where they meet. `listEffectivePermissions` (session RBAC) builds
- * `${resource}:${action}` -- `posts:read`. An API key's `auth.permissions`
- * carries the `permissions.slug` column, seeded as `${action}-${resource}` --
- * `read-posts`. Reading either spelling with the other's parser yields an empty
- * scope, which fails closed and therefore looks like a working deny rather than
- * a broken read.
+ * `canReadEntity`'s api-key branch is what enforces it, and it reads
+ * `permissions` in the KEY's vocabulary: the `permissions.slug` column, seeded
+ * as `${action}-${resource}` -- `read-posts`. A session's grants are spelled
+ * `${resource}:${action}` and resolved from the database instead, so handing
+ * either branch the other's list answers "denied" for every check, which fails
+ * closed and reads as a working deny rather than as a broken read.
  */
 describe("dashboard read scope for an API-KEY caller", () => {
   /** A key whose OWNER is a super-admin, bearing the key's own narrow grant. */
@@ -315,71 +400,43 @@ describe("dashboard read scope for an API-KEY caller", () => {
       roles: ["viewer-of-posts"],
       apiKeyId: "key-1",
     });
-    // The owner really is a super-admin. If the handler authorizes by owner id
-    // this resolves true and the caller gets `all` -- the defect under test.
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "viewer-of-posts",
+    ]);
   }
 
-  it("scopes /stats to the KEY's grant, not the super-admin owner's roles", async () => {
-    authenticateAsApiKey(["read-posts"]);
+  it("takes the decision as the key, carrying the key's OWN stamped grant", async () => {
+    authenticateAsApiKey(["read-posts", "create-pages"]);
 
-    const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
-
-    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
-
-    expect(getStats).toHaveBeenCalledWith({
-      scope: { kind: "some", resources: new Set(["posts"]) },
-    });
-    // The owner's RBAC must not be consulted at all for an API key: the key's
-    // resolved set already reflects any super-admin bypass it was entitled to.
-    expect(listEffectivePermissions).not.toHaveBeenCalled();
-  });
-
-  it("scopes /activity to the KEY's grant, not the super-admin owner's roles", async () => {
-    authenticateAsApiKey(["read-posts"]);
-
-    const getRecentActivity = vi
-      .fn()
-      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-      getRecentActivity,
-    });
-
-    await getDashboardActivity(
-      makeReq("http://localhost/api/dashboard/activity")
-    );
-
-    // Without this the response carries entryTitle, userName, userEmail and
-    // metadata for every collection the key holds no grant on.
-    expect(getRecentActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: { kind: "some", resources: new Set(["posts"]) },
-      })
-    );
-  });
-
-  it("admits only `read-` slugs, so a write grant confers no visibility", async () => {
-    authenticateAsApiKey(["read-posts", "create-pages", "delete-orders"]);
-
-    const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+    serviceStub = { getStats: vi.fn().mockResolvedValue({}) };
 
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
-    expect(getStats).toHaveBeenCalledWith({
-      scope: { kind: "some", resources: new Set(["posts"]) },
+    expect(decidingCaller()).toEqual({
+      userId: "owner-1",
+      authMethod: "api-key",
+      // Verbatim, unparsed. The prefix stripping that used to happen here is
+      // gone: `canReadEntity` tests membership of `read-{slug}` instead, so a
+      // hyphenated resource name needs no special handling to stay whole.
+      permissions: ["read-posts", "create-pages"],
+      roles: ["viewer-of-posts"],
     });
   });
 
-  it("keeps a hyphenated resource name whole", async () => {
-    // `read-site-settings` names the resource `site-settings`. A parser that
-    // splits on "-" and takes index 1 yields `site`, which matches no
-    // collection -- a silent empty dashboard that reads as a working deny.
+  it("offers a hyphenated slug for decision whole, never split", async () => {
+    // `read-site-settings` names `site-settings`. The old parser split on "-"
+    // and had to strip by LENGTH to avoid yielding `site`, which matches no
+    // entity -- a silent empty dashboard that reads as a working deny.
     authenticateAsApiKey(["read-site-settings"]);
+    readableEntities.mockImplementation(
+      async (slugs: readonly string[], caller: { permissions: string[] }) =>
+        new Set(
+          slugs.filter(slug => caller.permissions.includes(`read-${slug}`))
+        )
+    );
 
     const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+    serviceStub = { getStats };
 
     await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
 
@@ -388,35 +445,23 @@ describe("dashboard read scope for an API-KEY caller", () => {
     });
   });
 
-  it("admits nothing for a key whose grant is empty", async () => {
-    // A role-based key whose role was deleted resolves to `[]`. That must
-    // stay empty rather than widening to the owner's reach.
-    authenticateAsApiKey([]);
+  it("scopes /activity through the same decision", async () => {
+    authenticateAsApiKey(["read-posts"]);
+    readableEntities.mockResolvedValue(new Set(["posts"]));
 
-    const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+    const getRecentActivity = vi
+      .fn()
+      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+    serviceStub = { getRecentActivity };
 
-    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity")
+    );
 
-    expect(getStats).toHaveBeenCalledWith({
-      scope: { kind: "some", resources: new Set() },
-    });
-  });
-
-  it("still grants everything to a SESSION super-admin -- the branch must not over-restrict", async () => {
-    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
-      userId: "user-1",
-      authMethod: "session",
-      permissions: [],
-      roles: ["super-admin"],
-    });
-    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-
-    const getStats = vi.fn().mockResolvedValue({});
-    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
-
-    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
-
-    expect(getStats).toHaveBeenCalledWith({ scope: { kind: "all" } });
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { kind: "some", resources: new Set(["posts"]) },
+      })
+    );
   });
 });

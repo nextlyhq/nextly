@@ -39,7 +39,6 @@
  * @module domains/i18n/services/translation-worklist-service
  */
 
-import { NextlyError } from "../../../errors/nextly-error";
 import { resolveLocalizedFieldNames } from "../classify-fields";
 import type { TranslationFilterState } from "../companion-join";
 
@@ -152,67 +151,17 @@ export function worklistTotalPages(total: number, limit: number): number {
 }
 
 /**
- * How many authorization decisions may be in flight at once.
+ * How many authorization decisions may be in flight at once, and the order they
+ * are taken in.
  *
- * The cap above bounds QUERIES; this bounds the far cheaper decision that
- * precedes them, and it exists for a different resource. `canReadEntity`
- * resolves a session caller through `isSuperAdmin`, which is a per-user TTL
- * cache: fired concurrently from a cold cache, every call misses before the
- * first one populates it, so a site with a hundred localized collections opens
- * a hundred simultaneous permission reads to answer one question a hundred
- * times. Grouping them keeps the pool intact and lets the cache do its job.
+ * Both live beside {@link canReadEntity} — the function whose per-user caches
+ * they exist to protect — and are re-exported here because this fan-out was
+ * their first caller and its tests name them at this path.
  */
-export const AUTHORIZATION_CONCURRENCY = 8;
-
-/**
- * The order authorization decisions are taken in: one, then bounded groups.
- *
- * The lone first group is not a rounding artefact — it is the warm-up. The
- * shared per-user caches (`isSuperAdmin`, and the role/permission reads behind
- * it) are populated by whichever call resolves first, so letting one finish
- * before the rest fan out converts N cold misses into one miss and N-1 hits.
- * Fanning out immediately is what makes a cold cache expensive.
- *
- * Deliberately NOT a cap on how many collections are authorized. Every
- * candidate still gets a decision, because a collection that is skipped without
- * one cannot be safely named as unconsulted (naming it discloses that it
- * exists) nor safely omitted (that is the silent "nothing to do there" this
- * endpoint exists to prevent). What is bounded here is concurrency, which is
- * the resource that actually breaks.
- */
-export function authorizationGroups(
-  slugs: readonly string[],
-  concurrency: number = AUTHORIZATION_CONCURRENCY
-): string[][] {
-  // A non-positive step never advances `i`, and a negative one walks it
-  // backwards: either spins forever on a non-empty list. Unreachable today —
-  // the only caller takes the default — which is precisely what makes the guard
-  // cheap: it reads two values already in hand and its branch never runs.
-  //
-  // It THROWS where `worklistTotalPages` returns a safe value for the same
-  // shape of bad input, and the difference is where the value comes from.
-  // `limit` is a request parameter, clamped upstream, so a caller can put a
-  // zero in front of it and refusing there would be a 500 for a request the
-  // system chose to accept. `concurrency` is a module constant no request can
-  // reach, so a bad one is a programming error — `INTERNAL_ERROR` is the honest
-  // classification, and the value travels in `logContext` where an operator can
-  // see it without it reaching the response.
-  if (!Number.isInteger(concurrency) || concurrency < 1) {
-    throw NextlyError.internal({
-      logContext: {
-        concurrency,
-        reason: "authorization concurrency must be a positive integer",
-      },
-    });
-  }
-  if (slugs.length === 0) return [];
-  const groups: string[][] = [[slugs[0]]];
-  const rest = slugs.slice(1);
-  for (let i = 0; i < rest.length; i += concurrency) {
-    groups.push(rest.slice(i, i + concurrency));
-  }
-  return groups;
-}
+export {
+  AUTHORIZATION_CONCURRENCY,
+  authorizationGroups,
+} from "../../../auth/entity-read-access";
 
 /** One document's outstanding work in one language. */
 export interface TranslationWorkRow {

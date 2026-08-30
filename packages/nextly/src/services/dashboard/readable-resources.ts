@@ -22,7 +22,20 @@ export type ReadableResources =
   | { readonly kind: "all" }
   | { readonly kind: "some"; readonly resources: ReadonlySet<string> };
 
-/** Every resource. Super-admins only. */
+/**
+ * Every resource, with no enumeration and no filter.
+ *
+ * No HTTP handler produces this any more. `resolveReadableResources` asks the
+ * access layer per registered entity, and a super-admin's bypass arrives as
+ * every entity being ADMITTED rather than as an unbounded scope -- so an
+ * `activity_log` row naming an entity that is no longer registered cannot be
+ * read by anyone, which is the deny-by-default posture the rest of this module
+ * exists for.
+ *
+ * It remains for a TRUSTED internal caller that legitimately reads across the
+ * whole installation (an account-erasure sweep, say), where narrowing to the
+ * registry would silently skip rows the sweep must reach.
+ */
 export function allResources(): ReadableResources {
   return { kind: "all" };
 }

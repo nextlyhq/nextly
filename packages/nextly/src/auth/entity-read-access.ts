@@ -15,6 +15,7 @@
 
 import { container } from "../di/container";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import { NextlyError } from "../errors/nextly-error";
 import type {
   AccessControlContext,
   CollectionAccessControl,
@@ -139,4 +140,97 @@ export async function canReadEntity(
   // the safe direction; the route-level gate has already run for any real
   // request that reaches a dispatcher handler.
   return false;
+}
+
+/**
+ * How many read decisions may be in flight at once.
+ *
+ * This bounds the cheap decision that PRECEDES a query rather than the queries
+ * themselves, and it exists for a different resource. {@link canReadEntity}
+ * resolves a session caller through `isSuperAdmin`, which is a per-user TTL
+ * cache: fired concurrently from a cold cache, every call misses before the
+ * first one populates it, so a site with a hundred entities opens a hundred
+ * simultaneous permission reads to answer one question a hundred times.
+ * Grouping them keeps the pool intact and lets the cache do its job.
+ */
+export const AUTHORIZATION_CONCURRENCY = 8;
+
+/**
+ * The order authorization decisions are taken in: one, then bounded groups.
+ *
+ * The lone first group is not a rounding artefact — it is the warm-up. The
+ * shared per-user caches (`isSuperAdmin`, and the role/permission reads behind
+ * it) are populated by whichever call resolves first, so letting one finish
+ * before the rest fan out converts N cold misses into one miss and N-1 hits.
+ * Fanning out immediately is what makes a cold cache expensive.
+ *
+ * Deliberately NOT a cap on how many entities are authorized. Every candidate
+ * still gets a decision, because one skipped without a verdict cannot be safely
+ * named as unconsulted (naming it discloses that it exists) nor safely omitted
+ * (that is the silent "nothing there" the callers of this exist to prevent).
+ * What is bounded here is concurrency, which is the resource that actually
+ * breaks.
+ */
+export function authorizationGroups(
+  slugs: readonly string[],
+  concurrency: number = AUTHORIZATION_CONCURRENCY
+): string[][] {
+  // A non-positive step never advances `i`, and a negative one walks it
+  // backwards: either spins forever on a non-empty list. Unreachable today —
+  // every caller takes the default — which is precisely what makes the guard
+  // cheap: it reads two values already in hand and its branch never runs.
+  //
+  // It THROWS rather than clamping because `concurrency` is a module constant
+  // no request can reach, so a bad one is a programming error;
+  // `INTERNAL_ERROR` is the honest classification, and the value travels in
+  // `logContext` where an operator can see it without it reaching the response.
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw NextlyError.internal({
+      logContext: {
+        concurrency,
+        reason: "authorization concurrency must be a positive integer",
+      },
+    });
+  }
+  if (slugs.length === 0) return [];
+  const groups: string[][] = [[slugs[0]]];
+  const rest = slugs.slice(1);
+  for (let i = 0; i < rest.length; i += concurrency) {
+    groups.push(rest.slice(i, i + concurrency));
+  }
+  return groups;
+}
+
+/**
+ * Which of `slugs` this caller may read, decided one entity at a time.
+ *
+ * The decision is {@link canReadEntity}'s, taken per entity, because that is
+ * the only thing that agrees with what a row read will answer. Deriving the set
+ * from permission SLUGS instead — filtering `read-{slug}` or `{slug}:read` —
+ * looks equivalent and is not: `checkAccess` resolves a code-defined
+ * `access.read` BEFORE it falls back to the stored grants, so a collection
+ * authorized purely in code has no permission row to find, and one REFUSED in
+ * code still has the row that a slug filter would admit it on.
+ *
+ * Coarse only in WHAT it decides — whether an entity is in reach at all. The
+ * per-row rules of whatever query follows still decide which documents come
+ * back.
+ */
+export async function readableEntities(
+  slugs: readonly string[],
+  caller: ReadAccessCaller
+): Promise<Set<string>> {
+  const allowed = new Set<string>();
+  for (const group of authorizationGroups(slugs)) {
+    const verdicts = await Promise.all(
+      group.map(async slug => ({
+        slug,
+        allowed: await canReadEntity(slug, caller),
+      }))
+    );
+    for (const verdict of verdicts) {
+      if (verdict.allowed) allowed.add(verdict.slug);
+    }
+  }
+  return allowed;
 }

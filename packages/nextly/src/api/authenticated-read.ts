@@ -15,6 +15,7 @@
  * @module api/authenticated-read
  */
 
+import type { ReadAccessCaller } from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
@@ -123,5 +124,33 @@ export async function readCaller(auth: AuthContext): Promise<ReadCaller> {
           },
         } satisfies Required<Pick<ReadCaller, "authenticatedScope">>)
       : {}),
+  };
+}
+
+/**
+ * The same caller, in the shape an ENTITY-LEVEL read decision reads.
+ *
+ * Derived from {@link ReadCaller} rather than rebuilt from the `AuthContext`,
+ * and that is the whole point: `readCaller` has already resolved role IDs to
+ * slugs, and resolving them a second time is both an extra database read per
+ * request and a second chance to resolve them differently. One question, one
+ * resolution — the narrower view is derived from the richer one.
+ *
+ * `authenticatedScope` is present only for an API key, so its presence IS the
+ * auth method. Reading `actorType` rather than mere presence keeps that true if
+ * a future actor kind starts carrying a scope: a non-key actor must not be
+ * judged by `canReadEntity`'s api-key branch, which reads
+ * `permissions` as the key's own `{action}-{resource}` grants.
+ */
+export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
+  const isApiKey = caller.authenticatedScope?.actorType === "apiKey";
+  return {
+    userId: caller.user.id,
+    authMethod: isApiKey ? "api-key" : "session",
+    // A session caller carries none here on purpose: its grants are resolved
+    // from the database by `checkAccess`. Handing it the key vocabulary would
+    // answer "denied" for every check.
+    permissions: isApiKey ? (caller.authenticatedScope?.permissions ?? []) : [],
+    roles: caller.user.roles ?? [],
   };
 }

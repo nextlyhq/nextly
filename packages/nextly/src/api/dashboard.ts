@@ -18,7 +18,7 @@
  * @since 1.0.0
  */
 
-import type { AuthContext } from "../auth/middleware";
+import { readableEntities } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -26,16 +26,12 @@ import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
 import {
-  allResources,
   someResources,
   type ReadableResources,
+  type ReadCaller,
 } from "../services/dashboard/readable-resources";
-import {
-  isSuperAdmin,
-  listEffectivePermissions,
-} from "../services/lib/permissions";
 
-import { readCaller } from "./authenticated-read";
+import { readAccessCaller, readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -54,60 +50,76 @@ async function getActivityLogService(): Promise<ActivityLogService> {
   return container.get<ActivityLogService>("activityLogService");
 }
 
-/** The `action-resource` prefix an API key's read grant is spelled with. */
-const API_KEY_READ_PREFIX = "read-";
+/**
+ * Every entity the dashboard can describe: collections and singles alike.
+ *
+ * Read from the two registries the dashboard service itself reads, so the set
+ * being authorized is the set that would be counted. A registry that cannot be
+ * reached yields NOTHING rather than an unbounded list -- an empty scope admits
+ * nothing, which is visible and reportable; the alternative is a dashboard that
+ * widens when the container is degraded.
+ */
+async function registeredEntitySlugs(): Promise<string[]> {
+  const slugs: string[] = [];
+  try {
+    const collections = await container
+      .get<{
+        getAllCollections: () => Promise<Array<{ slug: string }>>;
+      }>("collectionRegistryService")
+      .getAllCollections();
+    for (const collection of collections) slugs.push(String(collection.slug));
+  } catch {
+    // Unreachable registry: contribute nothing rather than guess.
+  }
+  try {
+    const singles = await container
+      .get<{
+        getAllSingles: () => Promise<Array<{ slug: string }>>;
+      }>("singleRegistryService")
+      .getAllSingles();
+    for (const single of singles) slugs.push(String(single.slug));
+  } catch {
+    // As above.
+  }
+  return slugs;
+}
 
 /**
- * Resolve what this caller may read.
+ * Resolve what this caller may read, by ASKING the access layer.
  *
- * The AUTHENTICATION METHOD decides which grant is authoritative, so this takes
- * the whole auth context rather than a bare user id. For an API key
- * `auth.userId` is the key's OWNER, and a key exists precisely to carry less
- * reach than that owner: a super-admin who mints a role-based key bound to a
- * narrow role and hands it to an integration has deliberately narrowed it.
- * Authorizing by owner id resolves `isSuperAdmin` to true and returns `all`,
- * so the key reads every collection it holds no grant on. `collections-schema`
- * branches the same way, for the same reason.
+ * The decision is `canReadEntity`'s, taken once per registered entity, because
+ * that is the only answer that agrees with what a row read will give. This used
+ * to derive the set from permission SLUGS -- filtering `read-{slug}` for a key
+ * and `{slug}:read` for a session -- and that is a second implementation of a
+ * decision `checkAccess` already makes, which was more permissive than the
+ * original in one direction and less in the other:
  *
- * The two paths also speak different permission vocabularies, and neither
- * parser reads the other's spelling:
+ * - A collection whose `access.read` REFUSES the caller still has the
+ *   `{slug}:read` row a slug filter admits it on, so `/stats` disclosed its
+ *   count and `/activity` its entry titles, user names and emails, while
+ *   `GET /api/collections/{slug}` correctly answered 403.
+ * - A collection authorized ENTIRELY in code has no permission row to find, so
+ *   a slug filter dropped a collection the caller can actually open.
  *
- * - SESSION -- `listEffectivePermissions` builds `${resource}:${action}` from
- *   the `permissions` table's own columns, so a read grant is `posts:read`.
- * - API KEY -- `auth.permissions` carries the `permissions.slug` column, which
- *   is seeded as `${action}-${resource}`, so the same grant is `read-posts`.
+ * Asking removes both, and with them the two hand-rolled parsers and their
+ * subtleties: there is no prefix to strip by length so that `read-site-settings`
+ * keeps naming `site-settings`, because nothing is parsed. There is no
+ * super-admin branch either -- `checkAccess` short-circuits on `isSuperAdmin`
+ * before it reads any rule, so the bypass arrives through the same call as
+ * everything else.
  *
- * The api-key branch strips the prefix by LENGTH rather than splitting on `-`,
- * because a resource name may itself contain one: `read-site-settings` names
- * `site-settings`, and splitting yields `site`, which matches no collection.
- * That failure is silent -- it fails closed, so it reads as a working deny
- * rather than as a parser that cannot see the resource.
- *
- * Both branches preserve the EMPTY case rather than inverting it into "no
- * filter": `listEffectivePermissions` returns `[]` on any thrown error, and a
- * role-based key whose role was deleted resolves to `[]` too.
+ * One consequence is deliberate and worth naming: a super-admin's scope is now
+ * the ENUMERATED set of registered entities rather than the unbounded `all`, so
+ * an `activity_log` row naming a collection that is no longer registered is
+ * filtered out. An unregistered slug has no rule and no registry entry to
+ * decide against, and admitting what cannot be judged is the inversion this
+ * whole endpoint was fixed to remove.
  */
 async function resolveReadableResources(
-  auth: AuthContext
+  caller: ReadCaller
 ): Promise<ReadableResources> {
-  if (auth.authMethod === "api-key") {
-    // The key's own resolved set is the whole bound -- no super-admin bypass,
-    // because any super-admin reach the key was entitled to is already
-    // reflected in the set `resolveApiKeyPermissions` stamped onto it.
-    return someResources(
-      auth.permissions
-        .filter(slug => slug.startsWith(API_KEY_READ_PREFIX))
-        .map(slug => slug.slice(API_KEY_READ_PREFIX.length))
-    );
-  }
-
-  if (await isSuperAdmin(auth.userId)) return allResources();
-  const permissionPairs = await listEffectivePermissions(auth.userId);
-  return someResources(
-    permissionPairs
-      .filter(pair => pair.endsWith(":read"))
-      .map(pair => pair.split(":")[0])
-  );
+  const slugs = await registeredEntitySlugs();
+  return someResources(await readableEntities(slugs, readAccessCaller(caller)));
 }
 
 /**
@@ -125,7 +137,10 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const service = await getDashboardService();
-  const scope = await resolveReadableResources(auth);
+  // The caller WHOLE, not an id. `readCaller` resolves session role IDs to the
+  // SLUGS an access rule matches and carries an API key's own stamped scope.
+  const caller = await readCaller(auth);
+  const scope = await resolveReadableResources(caller);
   const stats = await service.getStats({ scope });
 
   // Bare-object read: stats is the dashboard summary itself; no envelope.
@@ -155,12 +170,12 @@ export const getDashboardRecentEntries = withErrorHandler(
       : 5;
 
     const service = await getDashboardService();
-    const scope = await resolveReadableResources(auth);
     // The caller WHOLE, not an id: `readCaller` resolves role IDs to the
     // SLUGS a role-based access rule matches, and carries an API key's own
     // stamped scope separately so it is judged on that rather than on
     // whoever minted it. See `getRecentFromCollection`'s use of it.
     const caller = await readCaller(auth);
+    const scope = await resolveReadableResources(caller);
     const entries = await service.getRecentEntries(limit, scope, caller);
 
     // Service returns `{ entries: [...] }` (a named-field object). This is a
@@ -201,7 +216,7 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     : 5;
 
   const service = await getActivityLogService();
-  const scope = await resolveReadableResources(auth);
+  const scope = await resolveReadableResources(await readCaller(auth));
   const result = await service.getRecentActivity({ limit, scope });
 
   // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
