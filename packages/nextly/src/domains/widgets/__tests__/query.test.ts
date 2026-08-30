@@ -19,8 +19,20 @@ beforeEach(() => {
 });
 
 describe("validateWidgetQuery", () => {
-  it("accepts a query naming a registered source and declared fields", () => {
-    const q = validateWidgetQuery({
+  it("accepts a query naming a registered source and declared fields, and returns every field unchanged", () => {
+    // I5(a): assert the WHOLE returned object, not just `limit` -- a version
+    // that silently dropped `select` or collapsed `sort`'s leading `-`
+    // (reversing sort direction) would still pass a `limit`-only assertion.
+    const input = {
+      source: "collection:posts",
+      op: "list",
+      select: ["title"],
+      sort: "-updatedAt",
+      where: { status: { equals: "draft" } },
+      limit: 5,
+    };
+    const q = validateWidgetQuery(input);
+    expect(q).toEqual({
       source: "collection:posts",
       op: "list",
       select: ["title"],
@@ -28,21 +40,32 @@ describe("validateWidgetQuery", () => {
       where: { status: { equals: "draft" } },
       limit: 5,
     });
-    expect(q.limit).toBe(5);
+  });
+
+  it("accepts a bare scalar under a field name as an implicit equality shorthand", () => {
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "count",
+      where: { status: "draft" },
+    });
+    expect(q.where).toEqual({ status: "draft" });
   });
 
   it("refuses an unregistered source", () => {
     // The source id is resolved against the registry, so no caller-invented
-    // table name can ever reach the compiler.
+    // table name can ever reach the compiler. Anchored to the guard's own
+    // message text (M6): a catch-all `fail(JSON.stringify(query))` would
+    // also satisfy a loose `/collection:secrets/` match, so we match the
+    // "unknown source" vocabulary that only this guard produces.
     expect(() =>
       validateWidgetQuery({ source: "collection:secrets", op: "count" })
-    ).toThrow(/collection:secrets/);
+    ).toThrow(/unknown source "collection:secrets"/);
   });
 
   it("refuses an op the source does not support", () => {
     expect(() =>
       validateWidgetQuery({ source: "collection:posts", op: "timeseries" })
-    ).toThrow(/timeseries/);
+    ).toThrow(/does not support op "timeseries"/);
   });
 
   it("refuses a where clause naming an undeclared field", () => {
@@ -52,7 +75,7 @@ describe("validateWidgetQuery", () => {
         op: "count",
         where: { secretScore: { equals: 1 } },
       })
-    ).toThrow(/secretScore/);
+    ).toThrow(/where references undeclared field "secretScore"/);
   });
 
   it("refuses a select naming an undeclared field", () => {
@@ -62,7 +85,7 @@ describe("validateWidgetQuery", () => {
         op: "list",
         select: ["title", "secretScore"],
       })
-    ).toThrow(/secretScore/);
+    ).toThrow(/select references undeclared field "secretScore"/);
   });
 
   it("refuses a sort naming an undeclared field, with or without the minus", () => {
@@ -72,7 +95,7 @@ describe("validateWidgetQuery", () => {
         op: "list",
         sort: "-secretScore",
       })
-    ).toThrow(/secretScore/);
+    ).toThrow(/sort references undeclared field "secretScore"/);
   });
 
   it("clamps the limit rather than trusting it", () => {
@@ -96,5 +119,161 @@ describe("validateWidgetQuery", () => {
         where: deep,
       })
     ).toThrow(/nested too deeply/);
+  });
+
+  // ---------------------------------------------------------------------
+  // C1: a non-array `and`/`or` value must not silently drop its subtree
+  // from the field walk. Each shape below names the undeclared field
+  // "secretScore" but through a combinator value the old code coerced to
+  // `[]` (zero branches) via `Array.isArray(value) ? value : []` -- which
+  // walked nothing, refused nothing, and let the query through.
+  // ---------------------------------------------------------------------
+  describe("C1: non-array and/or combinators fail closed", () => {
+    it("refuses a non-array `and` value instead of treating it as zero branches", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { and: { secretScore: { equals: 1 } } },
+        })
+      ).toThrow(/where "and" must be an array/);
+    });
+
+    it("refuses a non-array `and` value even alongside a valid sibling condition", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: {
+            status: { equals: "draft" },
+            and: { secretScore: { equals: 1 } },
+          },
+        })
+      ).toThrow(/where "and" must be an array/);
+    });
+
+    it("refuses a non-object branch inside an `and` array", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { and: ["secretScore"] },
+        })
+      ).toThrow(/where "and" branch must be an object/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // I2: the returned query must be independent of the input, `where`
+  // included -- not merely a fresh top-level envelope wrapped around a
+  // shared `where` reference.
+  // ---------------------------------------------------------------------
+  it("returns a `where` independent of the input -- mutating the input afterward does not touch it", () => {
+    const input: {
+      source: string;
+      op: string;
+      where: Record<string, unknown>;
+    } = {
+      source: "collection:posts",
+      op: "count",
+      where: { status: { equals: "draft" } },
+    };
+    const q = validateWidgetQuery(input);
+    expect(q.where).not.toBe(input.where);
+
+    // Mutate the ORIGINAL input's `where` after validation returned. If the
+    // returned query shares the reference, this mutation would smuggle an
+    // undeclared field into an object that already passed the gate and that
+    // a caller now treats as safe to compile.
+    (input.where as Record<string, unknown>).secretScore = { equals: 1 };
+
+    expect(q.where).toEqual({ status: { equals: "draft" } });
+  });
+
+  // ---------------------------------------------------------------------
+  // I3: `limit` must clamp even when it is not a well-formed finite number.
+  // ---------------------------------------------------------------------
+  describe("I3: limit clamping survives non-finite and non-integer input", () => {
+    it("falls back to a finite, in-range limit when the requested limit is NaN", () => {
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        limit: Number.NaN,
+      });
+      expect(Number.isFinite(q.limit)).toBe(true);
+      expect(q.limit).toBeGreaterThanOrEqual(1);
+      expect(q.limit).toBeLessThanOrEqual(MAX_WIDGET_LIMIT);
+    });
+
+    it("truncates a non-integer limit to a whole number", () => {
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        limit: 5.7,
+      });
+      expect(Number.isInteger(q.limit)).toBe(true);
+      expect(q.limit).toBe(5);
+    });
+
+    it("still clamps a negative limit up to 1", () => {
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        limit: -1,
+      });
+      expect(q.limit).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // I4: operator keys inside a field condition must be checked against the
+  // known operator vocabulary -- the field-name check alone lets an
+  // arbitrary operator key (and anything nested under it) through.
+  // ---------------------------------------------------------------------
+  describe("I4: where operators are checked against the known vocabulary", () => {
+    it("refuses a where clause using an operator outside the known vocabulary", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: { $ne: null, notAnOperator: "x", $where: "1=1" } },
+        })
+      ).toThrow(/unknown operator "\$ne" on field "status"/);
+    });
+
+    it("refuses an unrecognised operator key even when it hides a nested condition", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: { some: { secretScore: { equals: 1 } } } },
+        })
+      ).toThrow(/unknown operator "some" on field "status"/);
+    });
+
+    it("refuses a nested object value under a recognised operator", () => {
+      // "equals" IS a known operator; its VALUE should never be a plain
+      // object (every real operator takes a scalar or an array), so this
+      // is refused rather than walked -- see query.ts for why.
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: { equals: { secretScore: 1 } } },
+        })
+      ).toThrow(
+        /operator "equals" on field "status" may not take a nested object/
+      );
+    });
+
+    it("refuses a bare array as a field's condition", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: ["draft"] },
+        })
+      ).toThrow(/where condition for "status" must be an operator object/);
+    });
   });
 });
