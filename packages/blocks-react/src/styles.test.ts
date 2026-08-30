@@ -575,10 +575,7 @@ describe("the parts a block declares for elements it renders", () => {
       render: () => null,
       baseStyles: { base: { base: { color: "#111" } } },
       parts: {
-        caption: {
-          selector: "figcaption",
-          baseStyles: { base: { base: { fontSize: "0.875em" } } },
-        },
+        caption: { baseStyles: { base: { base: { fontSize: "0.875em" } } } },
       },
     },
   ] as unknown as Parameters<typeof createBlockResolver>[0]);
@@ -594,7 +591,7 @@ describe("the parts a block declares for elements it renders", () => {
       { breakpoints: { viewport: [], container: [] } },
       captioned
     );
-    expect(css).toContain("figcaption");
+    expect(css).toContain("nx-bp-test--text--caption");
     expect(css).toContain("font-size: 0.875em");
   });
 
@@ -607,6 +604,6 @@ describe("the parts a block declares for elements it renders", () => {
       { breakpoints: { viewport: [], container: [] } },
       blocks
     );
-    expect(css).not.toContain("figcaption");
+    expect(css).not.toContain("nx-bp-");
   });
 });

@@ -316,3 +316,41 @@ describe("an INHERITED block base is not turned into an emitted one", () => {
     expect(css).toContain("#abcdef");
   });
 });
+
+describe("a block that changes one of its own parts", () => {
+  // A block adding or changing a part changes the CSS `compilePageCss` emits.
+  // If the identity cannot see it, the `styles && !untrusted` path reuses the
+  // artifact compiled before the change and the new rules never appear — a
+  // stale sheet served as a fresh one, which nothing downstream can detect.
+  const withPart = (colour: string): StyleCompileContext => ({
+    ...context(),
+    blockParts: {
+      "test/text": {
+        caption: { baseStyles: { base: { base: { color: colour } } } },
+      },
+    },
+  });
+
+  const stampWith = (ctx: StyleCompileContext) =>
+    resolvePageStyles(doc(), undefined, ctx, blocks).sharedInputsId;
+
+  it("moves the identity when a part's value changes", () => {
+    expect(stampWith(withPart("#010101"))).not.toBe(
+      stampWith(withPart("#020202"))
+    );
+  });
+
+  it("moves the identity when a part is added at all", () => {
+    expect(stampWith(context())).not.toBe(stampWith(withPart("#010101")));
+  });
+
+  it("leaves the identity alone when no block declares a part", () => {
+    // The control the two above need. Without it, an identity that changed on
+    // EVERY compile would satisfy both while seeing nothing — and it also pins
+    // the reason the tier is spread rather than slotted: while nothing declares
+    // a part, every artifact already stored keeps its stamp.
+    expect(stampWith(context())).toBe(
+      stampWith({ ...context(), blockParts: { "test/text": {} } })
+    );
+  });
+});

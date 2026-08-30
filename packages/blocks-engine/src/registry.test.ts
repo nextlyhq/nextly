@@ -103,6 +103,10 @@ describe("the define-then-register workflow keeps its prop types", () => {
       // call that omits them is not the call a renderer makes.
       renderSlot: () => undefined,
       ctx: undefined,
+      // Required for the same reason: this block declares no parts, so the
+      // answer is empty for every name, and a renderer that could omit it would
+      // leave every block's parts unmarked with nothing to report.
+      partClass: () => "",
     });
     expect(output).toBe("hello reader");
   });

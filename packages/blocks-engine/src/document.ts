@@ -396,19 +396,6 @@ export type NodeStyles = Partial<
 
 /** One named element a block renders inside its own root. */
 export interface BlockPart {
-  /**
-   * The element this part names, as a plain HTML tag.
-   *
-   * A tag and nothing else — no class, no combinator, no list. This value
-   * reaches a SELECTOR, and a block definition is code a plugin supplies, so
-   * `"figcaption, body"` would otherwise close the block's rule and open one of
-   * the author's choosing over every `body` on the page. The narrow grammar
-   * refuses that by construction rather than by escaping a wider one, and it
-   * spans what the library actually renders: `figcaption`, `blockquote`,
-   * `cite`, `li`, `label`, `input`. Widening it later is additive; starting
-   * wide and narrowing is not.
-   */
-  selector: string;
   /** Shared default styles for this part on every instance of the block type. */
   baseStyles?: NodeStyles;
 }
@@ -512,38 +499,36 @@ export function isBlockType(value: unknown): value is string {
 }
 
 /**
- * The element grammar a {@link BlockPart} selector is held to: an HTML tag.
+ * The grammar a part NAME is held to.
  *
- * Deliberately narrower than what the compiler could emit. This value becomes
- * part of a SELECTOR and arrives from a block definition, which is code a
- * plugin supplies, so a value carrying a comma, a brace or a combinator would
- * let a block close its own rule and open another over elements it does not
- * render. Every tag reachable this way is inert on its own.
+ * A part name is compiled into a class, so it reaches a selector — and a block
+ * definition is code a plugin supplies. The same shape a block type's own
+ * segments use, for the same reason: no dot, no bracket, no space can appear,
+ * so nothing here can close a rule and open another.
  *
- * Not escaped instead, because escaping a wider grammar produces a rule that
- * matches nothing: `figcaption, body` becomes a class-shaped string no element
- * carries, which is a style silently missing rather than a declaration refused.
- * A refusal names the block, the part and the value.
+ * Consecutive dashes are excluded deliberately. The class joins the block type
+ * and the part with a DOUBLED dash, so a name containing one would make the
+ * boundary ambiguous and let two different blocks compile to a single class.
  */
-const BLOCK_PART_RE = /^[a-z][a-z0-9]*$/;
+const BLOCK_PART_NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
- * Longest part selector accepted. A tag longer than this is not one, and the
+ * Longest part name accepted. A name longer than this is not a name, and the
  * bound keeps a pathological value out of an issue message.
  */
 const MAX_BLOCK_PART_LENGTH = 32;
 
 /**
- * True if a value names an element a block may state a rule for.
+ * True if a value names a part a block may state styles for.
  *
  * The ONE answer, for the same reason {@link isBlockType} is: a caller that
- * bounds this where another does not emits a rule its neighbour refuses.
+ * bounds this where another does not emits a class its neighbour refuses.
  */
-export function isPartSelector(value: unknown): value is string {
+export function isPartName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length <= MAX_BLOCK_PART_LENGTH &&
-    BLOCK_PART_RE.test(value)
+    BLOCK_PART_NAME_RE.test(value)
   );
 }
 

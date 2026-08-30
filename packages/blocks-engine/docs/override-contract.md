@@ -112,17 +112,17 @@ Not every builder rule weighs the same. Specificity is written the way devtools
 shows it: (ids, classes, types), where a pseudo-class such as `:hover` counts in
 the middle column.
 
-| What it styles                         | Selector                                            | Specificity |
-| -------------------------------------- | --------------------------------------------------- | ----------- |
-| A heading or paragraph's baseline      | `.nx-pb-page :where(h1)`                            | 0-1-0       |
-| A block type's defaults                | `.nx-pb-page :where(.nx-bt-core--section)`          | 0-1-0       |
-| An element a block draws inside itself | `.nx-pb-page :where(.nx-bt-core--image figcaption)` | 0-1-0       |
-| Page-wide settings                     | `.nx-pb-page.nx-pb-page`                            | 0-2-0       |
-| Links inside the page                  | `.nx-pb-page.nx-pb-page a`                          | 0-2-1       |
-| One node's own styles                  | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`                | 0-3-0       |
-| Links inside a node                    | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a`              | 0-3-1       |
-| Hovered links inside a node            | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a:hover`        | 0-4-1       |
-| Hiding a node at a breakpoint          | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2`     | 0-4-0       |
+| What it styles                         | Selector                                          | Specificity |
+| -------------------------------------- | ------------------------------------------------- | ----------- |
+| A heading or paragraph's baseline      | `.nx-pb-page :where(h1)`                          | 0-1-0       |
+| A block type's defaults                | `.nx-pb-page :where(.nx-bt-core--section)`        | 0-1-0       |
+| An element a block draws inside itself | `.nx-pb-page :where(.nx-bp-core--image--caption)` | 0-1-0       |
+| Page-wide settings                     | `.nx-pb-page.nx-pb-page`                          | 0-2-0       |
+| Links inside the page                  | `.nx-pb-page.nx-pb-page a`                        | 0-2-1       |
+| One node's own styles                  | `.nx-pb-page.nx-pb-page .nx-pb-a1b2`              | 0-3-0       |
+| Links inside a node                    | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a`            | 0-3-1       |
+| Hovered links inside a node            | `.nx-pb-page.nx-pb-page .nx-pb-a1b2 a:hover`      | 0-4-1       |
+| Hiding a node at a breakpoint          | `.nx-pb-page.nx-pb-page .nx-pb-a1b2.nx-pb-a1b2`   | 0-4-0       |
 
 The rule behind the table, which matters more than the rows: **a property that
 styles something inside the element adds that thing's own weight.** Link colour
@@ -147,12 +147,16 @@ That is the whole contract for those tiers: **a default is something your
 site can override with ordinary CSS, and an authored value is not.**
 
 **An element a block draws inside itself weighs the same as the block's own
-default**, because it is the same tier: `figcaption` sits inside the `:where()`
-and adds nothing. That is the opposite of the descendant rule two paragraphs up,
-and deliberately so — that rule is about a value somebody CHOSE, and the reason a
-choice picks up the descendant's weight is that it should outrank your
-stylesheet. Nobody chose a block's defaults, so they keep the floor wherever they
-land: your `.content figcaption` still wins.
+default**, because it is the same tier — one class, inside the `:where()`. Your
+`.content figcaption` at 0-1-1 still wins, which is the point: nobody chose a
+block's defaults, so they keep the floor wherever they land.
+
+**It is a CLASS the block marks its element with, not a descendant selector.**
+`.nx-bt-core--form label` would read more naturally and is wrong: it also matches
+a `label` rendered by another block sitting in one of the form's slots, so a
+container would style markup whose structure it does not own, and the deeper the
+page the more it takes. The class carries the owning block type, so it matches
+only elements that block itself marked.
 
 **Page settings weigh less** than a node's own styles because they are the
 outermost element's own styles, and everything inside should be able to say

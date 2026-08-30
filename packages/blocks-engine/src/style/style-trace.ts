@@ -25,7 +25,17 @@ export type StyleOrigin =
   /** The page's own settings, on the root everything else is anchored to. */
   | { kind: "page" }
   /** A block type's default look, shared by every node of that type. */
-  | { kind: "blockType"; type: string }
+  /**
+   * A block type's default look, shared by every node of that type.
+   *
+   * `part` names one of the elements the block renders inside its own root,
+   * absent when the rule is for the element the block-type class is on. Carried
+   * here rather than left to be read off the selector because a provenance
+   * reader answers "where did this value come from", and two rules from one
+   * block that differ only in which element they landed on are otherwise
+   * indistinguishable.
+   */
+  | { kind: "blockType"; type: string; part?: string }
   /**
    * The typographic baseline for one element, shared by every `h1` on the page.
    *

@@ -352,6 +352,7 @@ export type {
   BlockEditorMeta,
   BlockExample,
   BlockIcon,
+  BlockPart,
   BlockSeoContribution,
   BlockSeoImage,
   BlockVariation,

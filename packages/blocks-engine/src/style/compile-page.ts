@@ -33,7 +33,7 @@ import {
   MAX_NAMED_CLASSES,
   STYLE_STATES,
   isBlockType,
-  isPartSelector,
+  isPartName,
 } from "../document";
 import { describeValue, pointer } from "../issue-text";
 import { DEFAULT_LIMITS } from "../limits";
@@ -60,6 +60,7 @@ import {
   NAMED_CLASS_SLUG_RE,
 } from "./named-class";
 import {
+  blockPartClassName,
   blockTypeClassName,
   nodeClassNames,
   PAGE_ROOT_CLASS,
@@ -1216,16 +1217,6 @@ function unknownBreakpointWarnings(
 /** What one envelope is, and what may be written from it. */
 interface EnvelopeContext {
   origin: StyleOrigin;
-  /**
-   * An element INSIDE the envelope's own, which every rule from it attaches to.
-   *
-   * Prepended to each declaration's own `descendant` rather than folded into
-   * the selector string, so the two reach the cascade by one path: a rule for a
-   * part gets the part's weight added exactly as a link colour inside a node
-   * already does, and the provenance trace records which element a declaration
-   * landed on instead of reporting the block's root for all of them.
-   */
-  part?: string;
   /** Appended to as declarations are emitted; absent when no caller asked for a trace. */
   trace?: StyleTraceEntry[];
   /** Which hosts this site will fetch from; unasked when absent. */
@@ -1298,10 +1289,6 @@ function envelopeRules(
   // disagree between a node's base rule and its hover one.
   const stateSelectors =
     previewStates === true ? PREVIEW_STATE_SELECTORS : STATE_SELECTORS;
-  // Same reasoning as `stateSelectors` above: a property of the envelope, read
-  // once, so a base rule and a hover rule cannot disagree about which element
-  // they are for.
-  const partStep = about.part === undefined ? "" : ` ${about.part}`;
   if (styles === undefined) return [];
   // A stored envelope that is not an object — `[]`, a string, `null` — styles
   // nothing, and this compiler reads persisted data whether or not a caller
@@ -1393,8 +1380,8 @@ function envelopeRules(
           // the only part that weighs.
           selector:
             weightlessAnchor === undefined
-              ? `${selector}${stateSelectors[state]}${partStep}${rule.descendant}`
-              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${partStep}${rule.descendant})`,
+              ? `${selector}${stateSelectors[state]}${rule.descendant}`
+              : `${weightlessAnchor} :where(${selector}${stateSelectors[state]}${rule.descendant})`,
           declarations: rule.declarations,
         });
         // Recorded here, from the same declarations that were just emitted, in the same loop.
@@ -1406,9 +1393,7 @@ function envelopeRules(
             origin,
             property: declaration.property,
             value: declaration.value,
-            ...(partStep + rule.descendant === ""
-              ? {}
-              : { descendant: partStep + rule.descendant }),
+            ...(rule.descendant === "" ? {} : { descendant: rule.descendant }),
             state,
             breakpoint: context.id,
             ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
@@ -1937,26 +1922,30 @@ export function compilePageCss(
     // Sorted so one document always serializes the same way, exactly as the
     // type loop above and `groupByDescendant` below both do.
     for (const name of Object.keys(parts).sort()) {
-      const part = parts[name];
-      // A part's selector reaches a SELECTOR, and a block definition is code a
-      // plugin supplies. Held to a bare tag rather than escaped into something
-      // safe: escaping would let `figcaption, body` through as a class-shaped
-      // string that matches no element, which is a rule nobody can find rather
-      // than a rule nobody wrote. Refusing says so.
-      if (!isPartSelector(part?.selector)) {
+      // A part name is compiled INTO a class, so it reaches a selector, and a
+      // block definition is code a plugin supplies. Refused rather than escaped
+      // for the reason the block type above is: escaping produces a class no
+      // renderer will ever write, which is a style silently missing rather than
+      // a value reported.
+      if (!isPartName(name)) {
         pushBoundedWarning(warningAllowance, warnings, {
           path: pointer(pointer("/blockParts", type), name),
           code: "invalid-block-part",
           severity: "warning",
-          message: `"${describeValue(part?.selector)}" is not an element name, so the "${name}" part of "${type}" was not styled.`,
-          suggestion: 'Name the element as a plain tag, such as "figcaption".',
+          message: `"${describeValue(name)}" is not a part name, so that part of "${type}" was not styled.`,
+          suggestion: 'Use a lowercase slug such as "caption".',
         });
         continue;
       }
       rules.push(
         ...envelopeRules(
-          part.baseStyles,
-          typeClass,
+          parts[name]?.baseStyles,
+          // The block type is encoded in the class rather than left as an
+          // ancestor. `.nx-bt-core--form label` would also match labels a CHILD
+          // block renders into one of the form's slots, so a container's
+          // defaults would reach markup it does not own; a single class matches
+          // only what the block itself marked.
+          `.${escapeIdentifier(blockPartClassName(type, name))}`,
           pointer(pointer("/blockParts", type), name),
           contexts,
           tokenPrefix,
@@ -1964,8 +1953,10 @@ export function compilePageCss(
           budget,
           warningAllowance,
           {
-            origin: { kind: "blockType", type },
-            part: part.selector,
+            // The part travels with the origin so a provenance reader can say
+            // WHICH element a declaration landed on. Without it two rules from
+            // one block report the same source and differ only by property.
+            origin: { kind: "blockType", type, part: name },
             previewStates,
             trace,
             mayFetchUrl,

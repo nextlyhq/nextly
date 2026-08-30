@@ -413,6 +413,7 @@ export type {
   StyleCompileContext,
 } from "./style/compile-page";
 export {
+  blockPartClassName,
   blockTypeClassName,
   // The digest itself, for a caller naming something other than a node from an
   // id — a per-document scope class, say. Exported so that caller reaches for

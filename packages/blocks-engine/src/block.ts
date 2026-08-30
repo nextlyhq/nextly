@@ -220,10 +220,31 @@ export interface BlockRenderArgs<P, C = unknown> {
   props: P;
   node: BlockNode;
   /**
-   * The generated class the block MUST place on its own root element. Blocks
-   * render a single element and never wrap it, so styles target that element.
+   * The generated class the block MUST place on its own root element.
+   *
+   * Styles for the block's own element target this. A block that draws more
+   * than one element marks the others with {@link partClass} instead — this
+   * one names the root and only the root, so two elements never answer to one
+   * node's identity.
    */
   className: string;
+  /**
+   * The class marking one of the elements this block declares in `parts`.
+   *
+   * Placed on the element the part names: `<figcaption className={partClass("caption")}>`.
+   *
+   * Supplied by the renderer rather than composed by the block, because the
+   * renderer is the only party that already knows which block is rendering. A
+   * block building the class itself would have to repeat its own type, and a
+   * block that repeated a NEIGHBOUR'S type would silently wear another block's
+   * defaults — a mistake nothing could catch, since the result is a valid class
+   * that the compiler happily emits rules for.
+   *
+   * Returns an empty string for a name the block does not declare, so a typo
+   * leaves the element unstyled rather than marked with a class no rule
+   * targets. Both are inert; only one of them is greppable.
+   */
+  partClass: (name: string) => string;
   /**
    * Marks the element that carries a named prop's value, for an editor.
    *

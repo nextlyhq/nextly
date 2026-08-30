@@ -88,10 +88,7 @@ function contractCss(): string {
     },
     blockParts: {
       "core/image": {
-        caption: {
-          selector: "figcaption",
-          baseStyles: { base: { base: { fontSize: "0.875em" } } },
-        },
+        caption: { baseStyles: { base: { base: { fontSize: "0.875em" } } } },
       },
     },
   });

@@ -1,4 +1,8 @@
-import { blockTypeClassName, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  blockPartClassName,
+  blockTypeClassName,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 import { Suspense, cloneElement, isValidElement, type ReactNode } from "react";
 
 import type { BlockHostPolicy, PageContext } from "./context";
@@ -986,6 +990,14 @@ export function BlockBoundary({
       props: node.props,
       node,
       className,
+      // Built from the DEFINITION being rendered, so a block cannot name a
+      // neighbour's type and quietly wear its defaults. An undeclared name
+      // returns "" rather than a class, so a typo leaves the element unstyled
+      // instead of marked with a class no rule targets.
+      partClass: (name: string) =>
+        definition.parts !== undefined && Object.hasOwn(definition.parts, name)
+          ? blockPartClassName(definition.name, name)
+          : "",
       ctx: context,
       // Undefined rather than a no-op function when this is not an editor
       // render, so `markProp?.("text")` spreads nothing and a published page
