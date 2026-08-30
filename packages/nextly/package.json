@@ -131,6 +131,10 @@
       "types": "./dist/api/email-templates-preview.d.ts",
       "import": "./dist/api/email-templates-preview.mjs"
     },
+    "./api/email-templates-draft-preview": {
+      "types": "./dist/api/email-templates-draft-preview.d.ts",
+      "import": "./dist/api/email-templates-draft-preview.mjs"
+    },
     "./api/email-send": {
       "types": "./dist/api/email-send.d.ts",
       "import": "./dist/api/email-send.mjs"

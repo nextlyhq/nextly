@@ -46,6 +46,7 @@ const serverEntries = [
   "src/api/email-templates.ts",
   "src/api/email-templates-detail.ts",
   "src/api/email-templates-preview.ts",
+  "src/api/email-templates-draft-preview.ts",
   "src/api/email-send.ts",
   "src/api/email-send-template.ts",
   "src/api/storage-upload-url.ts",

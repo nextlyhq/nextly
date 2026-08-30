@@ -39,7 +39,12 @@ import {
 } from "../template-activity";
 import type { EmailAttachmentInput } from "../types";
 
-import { DEFAULT_APP_NAME, renderTemplate } from "./render-template";
+import {
+  DEFAULT_APP_NAME,
+  renderTemplate,
+  type RenderedTemplate,
+  type TemplateFields,
+} from "./render-template";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -446,15 +451,27 @@ export class EmailTemplateService extends BaseService {
     sampleData: Record<string, unknown>
   ): Promise<{ subject: string; html: string }> {
     const template = await this.getTemplate(id);
-    const layout = template.useLayout
-      ? await this.getLayoutFor(template)
-      : null;
+    const { subject, html } = await this.previewDraft(template, sampleData);
+    return { subject, html };
+  }
 
-    const { subject, html } = renderTemplate(template, layout, sampleData, {
+  /**
+   * Render fields that may never have been saved.
+   *
+   * The authoring surface previews what is being typed, which the id-addressed
+   * preview structurally cannot show: it reads the stored row, and during
+   * creation there is no row at all. Resolving WHICH layout wraps the draft
+   * still needs the database, so that half stays here while the composition is
+   * the shared one — the saved and unsaved paths cannot drift apart.
+   */
+  async previewDraft(
+    draft: TemplateFields & Pick<EmailTemplateRecord, "layoutId">,
+    sampleData: Record<string, unknown>
+  ): Promise<RenderedTemplate> {
+    const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
+    return renderTemplate(draft, layout, sampleData, {
       appName: this.appName,
     });
-
-    return { subject, html };
   }
 
   // ============================================================
@@ -607,7 +624,7 @@ export class EmailTemplateService extends BaseService {
    * Returns null when no layout exists at all.
    */
   async getLayoutFor(
-    template: EmailTemplateRecord
+    template: Pick<EmailTemplateRecord, "layoutId">
   ): Promise<EmailTemplateRecord | null> {
     if (template.layoutId) {
       try {

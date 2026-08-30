@@ -56,14 +56,20 @@ export interface TemplateFields {
   kind: EmailTemplateKind;
 }
 
-/** The complete artifact: everything the transport is handed. */
-export interface RenderedTemplate {
+/**
+ * The complete artifact: everything the transport is handed.
+ *
+ * A type alias rather than an interface so it carries an implicit index
+ * signature, which is what lets a route hand it straight to `respondData`
+ * without a copy whose fields could fall out of step with these.
+ */
+export type RenderedTemplate = {
   subject: string;
   /** Layout-wrapped, with the preheader prepended. */
   html: string;
   /** The authored plain text, else one derived from the body. */
   text: string;
-}
+};
 
 export interface RenderTemplateOptions {
   /** Value for `{{appName}}` when the caller's data supplies none. */
