@@ -59,6 +59,35 @@ export function futureExpression(
   return sql`clock_timestamp() + make_interval(secs => ${seconds})`;
 }
 
+/**
+ * How many seconds remain until `column`, as an expression the database evaluates itself.
+ *
+ * A DURATION rather than the instant itself, and that is the point. An expiry read back as a value
+ * has to be parsed by the driver, and the three drivers disagree: PostgreSQL hands back a `Date`
+ * from a `timestamptz`, MySQL a zoneless `DATETIME` the driver interprets in ITS session zone, and
+ * SQLite a bare integer of unix seconds that is not a date to anything. Normalising those into one
+ * instant is a per-dialect conversion in the read path, which is the same class of bug the
+ * expressions above exist to remove from the write path.
+ *
+ * A remaining span has no such problem. Both sides of the subtraction happen inside one database,
+ * on one clock, in one statement, and what crosses the boundary is a number of seconds — the same
+ * length in every timebase and on every driver.
+ *
+ * Negative when the instant has passed, which callers are expected to read as expired rather than
+ * clamp: "how long ago" and "not yet" are different answers and only one of them is zero.
+ */
+export function remainingSecondsExpression(
+  dialect: SupportedDialect,
+  column: string
+): SQL {
+  const target = sql.identifier(column);
+  if (dialect === "sqlite") return sql`(${target} - unixepoch())`;
+  if (dialect === "mysql") {
+    return sql`TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), ${target})`;
+  }
+  return sql`EXTRACT(EPOCH FROM (${target} - clock_timestamp()))`;
+}
+
 /** Every timing a lease needs, so a caller cannot hold two of them that disagree. */
 export interface LeaseTimings {
   /** How long a confirmation grants. */
