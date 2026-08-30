@@ -26,4 +26,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-Bound the content-releases drain by the deadline its runner supplies rather than a budget of its own, so a pass that starts late fits inside what is left of the tick instead of overrunning it.
+Bound the content-releases drain by the deadline its runner supplies rather than a budget of its own, so a pass that starts late fits inside what is left of the tick instead of overrunning it, and measure the remaining pass from the runner's own clock in both built-in drains so an injected clock no longer starves one or overruns the other.

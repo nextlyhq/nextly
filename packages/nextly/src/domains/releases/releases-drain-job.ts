@@ -30,6 +30,7 @@ import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { JobContentSource } from "../jobs/job-content-api";
 import { defineJob } from "../jobs/job-registry";
 import type { JobDefinition } from "../jobs/job-registry";
+import { remainingPassMs } from "../jobs/remaining-pass";
 
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
@@ -77,9 +78,9 @@ export function createReleasesDrainJob(deps: {
       // remaining than any constant could know: an earlier job that overran
       // leaves this one starting with seconds rather than a whole tick. Taking a
       // full budget anyway means outliving the invocation and being killed
-      // part-way. The webhook drain fits itself inside the same field the same
-      // way, so the two answer "how long have I got" identically.
-      const remainingMs = Math.max(0, context.deadline.getTime() - startedAt);
+      // part-way. Shared with the webhook drain, so the two answer "how long
+      // have I got" with one implementation rather than two that agree today.
+      const remainingMs = remainingPassMs(context);
       const result = await applyDueReleases({
         // ONE clock for both halves. The deadline is derived from the runner's
         // `context.now`, so the comparison has to read the same source — left to
@@ -92,13 +93,12 @@ export function createReleasesDrainJob(deps: {
         // offset by the difference. That keeps a virtual clock authoritative for
         // WHEN the pass thinks it is, without making the budget unmeasurable.
         now: () => new Date(context.now.getTime() + (Date.now() - startedAt)),
-        // The remaining pass expressed on THAT clock, rather than passed
-        // through. `context.deadline` is a REAL instant — `runJobs` derives it
-        // from the wall clock at the start of the pass — while `now` above is
-        // virtual, `context.now` offset by elapsed time. Handing the field
-        // across unchanged would compare two timebases: a runner clock behind
-        // wall time would stop the pass after the first release, and one ahead
-        // would never stop it at all.
+        // The remaining SPAN re-anchored to this handler's clock, rather than
+        // `context.deadline` passed through. The clock above advances with real
+        // elapsed time from `context.now`, so a deadline must share that origin
+        // to be comparable — and `context.deadline`'s origin is the runner's
+        // clock, which a caller may have injected. Re-anchoring keeps the two
+        // sides of `now() >= deadline` on one timebase whether or not it was.
         deadline: new Date(context.now.getTime() + remainingMs),
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({ contentApi: deps.contentApi }),

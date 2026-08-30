@@ -39,10 +39,11 @@ const REAL_START = new Date("2026-06-01T12:00:00.000Z");
 /**
  * The instant the RUNNER is treating as now, deliberately years from wall time.
  *
- * `JobContext.now` is injected so a job is testable, so the two clocks are not
- * required to agree — and an implementation that mixes them is only wrong when
- * they differ. Pinning them together would make both cases below pass against
- * the defect they exist to catch.
+ * `runJobs` resolves ONE clock (`deps.now ?? (() => new Date())`) and derives
+ * both `context.now` and `context.deadline` from it, so a caller supplying the
+ * documented `now` option moves BOTH away from wall time together. The gap here
+ * is what makes an implementation anchored to `Date.now()` observably wrong;
+ * pinning this to wall time would let that defect pass every case below.
  */
 const CONTEXT_NOW = new Date("2020-01-01T00:00:00.000Z");
 
@@ -52,8 +53,14 @@ const CONTEXT_NOW = new Date("2020-01-01T00:00:00.000Z");
  * `msLeftInPass` is what the RUNNER has left, which is what the drain must fit
  * inside — not a budget of the job's own.
  */
-async function runHandler(msLeftInPass: number): Promise<ApplyDueReleasesDeps> {
-  vi.setSystemTime(REAL_START);
+let wallStart = REAL_START;
+
+async function runHandler(
+  msLeftInPass: number,
+  wallClockAtEntry: Date = REAL_START
+): Promise<ApplyDueReleasesDeps> {
+  wallStart = wallClockAtEntry;
+  vi.setSystemTime(wallClockAtEntry);
   let captured: ApplyDueReleasesDeps | undefined;
   applyMock.mockImplementation(async (deps: ApplyDueReleasesDeps) => {
     captured = deps;
@@ -71,7 +78,11 @@ async function runHandler(msLeftInPass: number): Promise<ApplyDueReleasesDeps> {
     user: null,
     now: CONTEXT_NOW,
     content: {} as never,
-    deadline: new Date(REAL_START.getTime() + msLeftInPass),
+    // Derived from CONTEXT_NOW, because that is the only context `runJobs` can
+    // emit: it builds the deadline from the same clock it builds `now` from. A
+    // fixture pairing an injected `now` with a wall-time deadline pins an input
+    // the runner cannot produce, and leaves the reachable one unasserted.
+    deadline: new Date(CONTEXT_NOW.getTime() + msLeftInPass),
   });
 
   if (captured === undefined) throw new Error("the pass never ran");
@@ -80,7 +91,7 @@ async function runHandler(msLeftInPass: number): Promise<ApplyDueReleasesDeps> {
 
 /** What the pass asks itself before starting more work. */
 function passWouldStop(deps: ApplyDueReleasesDeps, atRealMs: number): boolean {
-  vi.setSystemTime(new Date(REAL_START.getTime() + atRealMs));
+  vi.setSystemTime(new Date(wallStart.getTime() + atRealMs));
   const now = deps.now?.() ?? new Date();
   return now.getTime() >= (deps.deadline?.getTime() ?? Infinity);
 }
@@ -95,10 +106,10 @@ describe("createReleasesDrainJob", () => {
     vi.useFakeTimers();
     const deps = await runHandler(4_000);
 
-    // The runner's clock and wall time are years apart here. `deadline` is a
-    // REAL instant and `now()` is virtual, so an implementation that hands
-    // `context.deadline` straight through compares 2026 against 2020 and the
-    // pass never stops at all.
+    // The runner's clock is years behind wall time, which is the case an
+    // implementation anchored to `Date.now()` gets wrong: the remaining span
+    // collapses to zero and the drain starts nothing on any pass. Both fields
+    // come from the runner, so the span must be measured between them.
     expect(passWouldStop(deps, 3_000)).toBe(false);
     expect(passWouldStop(deps, 4_000)).toBe(true);
   });
@@ -115,12 +126,34 @@ describe("createReleasesDrainJob", () => {
     expect(passWouldStop(deps, 2_000)).toBe(true);
   });
 
-  it("starts nothing when the pass is already at its deadline", async () => {
+  it("grants no budget when the pass is already spent, rather than a negative one", async () => {
     vi.useFakeTimers();
-    // Never a negative budget, which would read as a deadline in the past on the
-    // virtual clock and defer every component including ones this pass applied.
+    // Deliberately NOT titled "starts nothing". `applyWithinBudget` exempts the
+    // first component from the deadline, so an exhausted budget still performs
+    // one component's mutations — which is correct and is not something this
+    // case can observe, because the pass is mocked here. Skipping the pass
+    // outright instead would report a clean empty drain while work was
+    // deferred, which is the failure #1360 exists to prevent.
     const deps = await runHandler(0);
 
     expect(passWouldStop(deps, 0)).toBe(true);
+  });
+
+  it("does not grant more than the pass has, when the runner's clock runs ahead", async () => {
+    vi.useFakeTimers();
+    // The overrun direction, and the more dangerous one: a span measured against
+    // wall time from a runner clock AHEAD of it is longer than the pass, so the
+    // drain keeps starting content mutations after the invocation should have
+    // ended. Both fields move together, so the span must not.
+    // Wall time an hour BEHIND the runner's clock, which is the same thing as
+    // the runner's clock running ahead. Passed in, because the fixture pins wall
+    // time on entry and setting it beforehand would simply be overwritten.
+    const deps = await runHandler(
+      3_000,
+      new Date(CONTEXT_NOW.getTime() - 60 * 60 * 1000)
+    );
+
+    expect(passWouldStop(deps, 2_500)).toBe(false);
+    expect(passWouldStop(deps, 3_000)).toBe(true);
   });
 });
