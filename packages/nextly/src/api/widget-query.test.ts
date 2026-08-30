@@ -171,6 +171,43 @@ describe("POST /api/dashboard/query", () => {
     expect(res.status).toBe(400);
   });
 
+  describe("a malformed body answers in the canonical error envelope", () => {
+    // Both refusals used to hand-build `{ error: "some sentence" }` and return
+    // it directly, bypassing `withErrorHandler`. A client parsing
+    // `{ error: { code, message, requestId } }` -- which is what every other
+    // endpoint in this package answers with, and what `parseApiError` reads --
+    // sees `error` as a STRING here and cannot read a code off it.
+    async function envelopeOf(body: unknown) {
+      const res = await postWidgetQuery(makeReq(body));
+      return {
+        status: res.status,
+        body: (await res.json()) as {
+          error?: { code?: string; message?: string; requestId?: string };
+        },
+      };
+    }
+
+    it("answers a missing queries array with a coded error object", async () => {
+      const { status, body } = await envelopeOf({});
+      expect(status).toBe(400);
+      expect(typeof body.error).toBe("object");
+      expect(body.error?.code).toBe("VALIDATION_ERROR");
+      expect(body.error?.requestId).toEqual(expect.any(String));
+    });
+
+    it("answers an oversized batch with a coded error object", async () => {
+      const queries = Array.from({ length: 40 }, () => ({
+        source: "collection:posts",
+        op: "count",
+      }));
+      const { status, body } = await envelopeOf({ queries });
+      expect(status).toBe(400);
+      expect(typeof body.error).toBe("object");
+      expect(body.error?.code).toBe("VALIDATION_ERROR");
+      expect(body.error?.requestId).toEqual(expect.any(String));
+    });
+  });
+
   describe("a failed slot says nothing internal and is never swallowed", () => {
     it("does not put a non-NextlyError's own text on the wire", async () => {
       // The realistic shape: a driver or DbError message carrying SQL

@@ -40,23 +40,47 @@ interface QuerySlot {
   error?: string;
 }
 
-/** Parses and validates the request body's shape, without looking at any one query yet. */
-function parseQueriesBody(body: unknown): unknown[] | Response {
+/**
+ * Parses and validates the request body's shape, without looking at any one
+ * query yet.
+ *
+ * THROWS rather than returning a hand-built `Response`. Both refusals are
+ * about the request body, so they belong in the canonical
+ * `{ error: { code, message, requestId } }` envelope every other endpoint in
+ * this package answers with and that `parseApiError` reads -- and the only
+ * thing that produces it is `withErrorHandler` serializing a thrown
+ * `NextlyError`. A response returned from here carried `error` as a STRING, so
+ * a client had no code to branch on, no `requestId` to quote in a bug report,
+ * and a shape its parser could not read at all.
+ *
+ * `validation` rather than `invalidInput` because both name a FIELD of the
+ * body: the path tells the caller which one, which a flat sentence cannot.
+ */
+function parseQueriesBody(body: unknown): unknown[] {
   const queries = (body as { queries?: unknown } | null)?.queries;
 
   if (!Array.isArray(queries)) {
-    return new Response(
-      JSON.stringify({ error: "Body must be { queries: WidgetQuery[] }" }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "queries",
+          code: "INVALID_VALUE",
+          message: "Body must be { queries: WidgetQuery[] }.",
+        },
+      ],
+    });
   }
   if (queries.length > MAX_QUERIES_PER_REQUEST) {
-    return new Response(
-      JSON.stringify({
-        error: `At most ${MAX_QUERIES_PER_REQUEST} queries per request.`,
-      }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
-    );
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "queries",
+          code: "TOO_MANY",
+          message: `At most ${MAX_QUERIES_PER_REQUEST} queries per request.`,
+        },
+      ],
+      logContext: { submitted: queries.length },
+    });
   }
   return queries;
 }
@@ -128,7 +152,6 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
 
   const body = (await req.json()) as unknown;
   const queries = parseQueriesBody(body);
-  if (queries instanceof Response) return queries;
 
   // Resolve the caller ONCE for the whole batch: role-slug resolution is a
   // database read, and doing it per query would make a 20-widget dashboard pay
