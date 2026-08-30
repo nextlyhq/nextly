@@ -20,7 +20,7 @@ import { compilePageCss } from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
 import { tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
-import { CONTENT_WIDTH_CLASS, hashId } from "./node-class";
+import { CONTENT_WIDTH_CLASS, hashId, PAGE_ROOT_CLASS } from "./node-class";
 import type { FontFaceDef, SiteToken, SiteTokenSet } from "./site-tokens";
 import {
   emitFontFaces,
@@ -204,7 +204,14 @@ function emitContentWidth(
     CONTENT_WIDTH_TOKEN,
     resolveTokenPrefix(prefix).prefix
   );
-  return `:where(.${CONTENT_WIDTH_CLASS}){max-width:var(${property});margin-inline:auto}`;
+  // Anchored to the page root, like every other default this engine emits.
+  // `override-contract.md` states the invariant plainly — "nothing the builder
+  // emits can match outside the page root" — and an unanchored `:where()`
+  // matches anywhere in the document, so a host element or a second rendered
+  // page wearing this class would be constrained by a sheet that is not its
+  // own. One class in the anchor keeps the whole selector at 0-1-0, which is
+  // the weight the contract gives an element or block-type default.
+  return `.${PAGE_ROOT_CLASS} :where(.${CONTENT_WIDTH_CLASS}){max-width:var(${property});margin-inline:auto}`;
 }
 
 /**

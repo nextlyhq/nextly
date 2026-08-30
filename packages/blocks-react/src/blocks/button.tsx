@@ -143,8 +143,19 @@ const BUTTON_BASE_STYLES = {
         style: "none",
       },
       textDecoration: "none",
+      // Every inherited typography longhand, not just family and size. A user
+      // agent styles a `<button>` with its own complete font — measured against
+      // an ancestor stating Georgia/20px/700/italic/2 line-height/2px tracking,
+      // the anchor took all six and the button took two, so weight, style,
+      // line-height and letter-spacing all differed. Adding a destination
+      // changed the label's metrics, which is the one thing this set exists to
+      // prevent.
       fontFamily: "inherit",
       fontSize: "inherit",
+      fontWeight: "inherit",
+      fontStyle: "inherit",
+      lineHeight: "inherit",
+      letterSpacing: "inherit",
     },
   },
 } as const;

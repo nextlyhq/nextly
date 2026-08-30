@@ -14,6 +14,7 @@ import { FIXTURE_BREAKPOINTS } from "../validation.fixtures";
 import { compilePageCss } from "./compile-page";
 import type { NamedClass } from "./named-class";
 import { previewStateClass } from "./compile-page";
+import { CONTENT_WIDTH_CLASS } from "./node-class";
 import { compileSiteSheet } from "./site-sheet";
 
 const styles = (values: Record<string, unknown>): NodeStyles =>
@@ -99,7 +100,7 @@ describe("the content-width rule", () => {
   it("constrains the class the container block applies, and centres it", () => {
     const css = sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css;
     expect(css).toContain(
-      ":where(.nx-pb-contained){max-width:var(--site-content-width);margin-inline:auto}"
+      ".nx-pb-page :where(.nx-pb-contained){max-width:var(--site-content-width);margin-inline:auto}"
     );
   });
 
@@ -123,6 +124,19 @@ describe("the content-width rule", () => {
       tokens: { tokens: [WIDTH_TOKEN] },
     }).css;
     expect(css).toContain("var(--site-content-width)");
+  });
+
+  it("cannot match outside the page root", () => {
+    // The invariant `override-contract.md` states: nothing the builder emits
+    // may match an element outside `.nx-pb-page`. An unanchored `:where()`
+    // matches anywhere, so a host element wearing this class — or a second
+    // rendered page — would be constrained by a sheet that is not its own.
+    const css = sheet({ tokens: { tokens: [WIDTH_TOKEN] } }).css;
+    const rule = css
+      .split("\n")
+      .find(line => line.includes(CONTENT_WIDTH_CLASS));
+    expect(rule).toBeDefined();
+    expect(rule).toMatch(/^\.nx-pb-page\s/);
   });
 
   it("is not written at all when there is no token set to read", () => {
