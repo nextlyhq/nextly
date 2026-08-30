@@ -54,13 +54,16 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
     BuilderShell: ({
       renderPanel,
       availablePanels,
+      topBar,
     }: {
       renderPanel?: (panel: string) => React.ReactNode;
       availablePanels?: readonly string[];
+      topBar?: React.ReactNode;
     }): React.JSX.Element => (
       <div>
         <div data-testid="rail">{(availablePanels ?? []).join(",")}</div>
         <div data-testid="panel">{renderPanel?.("settings")}</div>
+        <div data-testid="topbar">{topBar}</div>
       </div>
     ),
     BlockKeyboardActions: passthrough,
@@ -94,11 +97,31 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }),
 }));
 
+/** What the status pill was told on the most recent render. */
+const pillDirty: boolean[] = [];
+
+vi.mock("./DocumentStatusPill", () => ({
+  DocumentStatusPill: ({ isDirty }: { isDirty: boolean }) => {
+    pillDirty.push(isDirty);
+    return <span data-testid="pill">{isDirty ? "dirty" : "clean"}</span>;
+  },
+}));
+
 const { BlocksField } = await import("./BlocksField");
 
 function Host(): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: undefined } });
-  return <BlocksField name="body" control={control} />;
+  const { control, register } = useForm({
+    defaultValues: { body: undefined, title: "" },
+  });
+  return (
+    <>
+      {/* Stands in for a field the settings panel edits. It is registered on
+          the SAME form, which is what makes it dirty the way that panel's
+          fields are. */}
+      <input aria-label="title" {...register("title")} />
+      <BlocksField name="body" control={control} />
+    </>
+  );
 }
 
 function openEditor(): void {
@@ -112,6 +135,7 @@ const rail = (): string => screen.getByTestId("rail").textContent ?? "";
 beforeEach(() => {
   entryFields = null;
   askedFor.length = 0;
+  pillDirty.length = 0;
 });
 
 afterEach(cleanup);
@@ -182,5 +206,32 @@ describe("offering the Settings panel", () => {
 
     expect(askedFor.length).toBeGreaterThan(0);
     expect(new Set(askedFor)).toEqual(new Set(["body"]));
+  });
+
+  it("reports the document dirty when only a SETTINGS field was edited", () => {
+    /*
+     * The pill read `undoDepth` alone, which is the editor's own history. Once
+     * this panel makes the entry's fields editable, an author can rename the
+     * page, touch no block, and be told the document is saved — two surfaces
+     * writing to one document with the status answering for only one of them.
+     */
+    entryFields = <p>fields</p>;
+    openEditor();
+    expect(pillDirty.at(-1)).toBe(false);
+
+    fireEvent.change(screen.getByLabelText("title"), {
+      target: { value: "Renamed" },
+    });
+
+    expect(pillDirty.at(-1)).toBe(true);
+  });
+
+  it("still reports clean when nothing has been touched at all", () => {
+    // The control. A pill hardwired to dirty would satisfy the case above.
+    entryFields = <p>fields</p>;
+    openEditor();
+
+    expect(pillDirty.length).toBeGreaterThan(0);
+    expect(pillDirty.every(d => d === false)).toBe(true);
   });
 });

@@ -123,6 +123,7 @@ import {
 } from "react";
 import {
   useController,
+  useFormState,
   useWatch,
   type Control,
   type FieldValues,
@@ -1235,6 +1236,33 @@ function shownStyleStateFor(
   return switcherIsOnScreen ? editing : "base";
 }
 
+/**
+ * Whether this document holds unsaved work, from EITHER surface that writes it.
+ *
+ * The status pill otherwise reads the editor's `undoDepth` alone, which is its
+ * own history and says nothing about the form — so an author who renamed the
+ * page and touched no block was told the document was saved. Two surfaces now
+ * write to one document, and the pill has to answer for both.
+ *
+ * `dirtyFields` rather than `isDirty`, with this field excluded. The blocks
+ * field belongs to the editor and is committed on the way out, so while the
+ * editor is open it is either clean or dirty from a previous visit; counting it
+ * here would double the undo history or report work that is already saved.
+ *
+ * The editor's own history is taken as an argument rather than combined at the
+ * call site, so "is this document dirty" is answered in one place. It is also
+ * one fewer branch inside the largest component in this package, which the
+ * complexity gate refuses to let grow.
+ */
+function useDocumentDirty<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  ownField: string,
+  editorDirty: boolean
+): boolean {
+  const { dirtyFields } = useFormState({ control });
+  return editorDirty || Object.keys(dirtyFields).some(f => f !== ownField);
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -1387,6 +1415,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * a collection whose only fields are its title, its slug and this one.
    */
   const entryFields = useEntryFieldsPanel(name);
+
+  const documentDirty = useDocumentDirty(control, name, editor.undoDepth > 0);
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -1999,7 +2029,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // editor is open, because the document is committed on the way out.
         topBar={
           <>
-            <DocumentStatusPill isDirty={editor.undoDepth > 0} />
+            <DocumentStatusPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the

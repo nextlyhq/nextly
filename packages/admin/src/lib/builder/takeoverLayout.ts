@@ -72,6 +72,50 @@ function controllerName(f: LayoutField): string | undefined {
 }
 
 /**
+ * Whether a field's own condition currently lets it render.
+ *
+ * `FieldRenderer` returns `null` for a field whose condition is false, so a
+ * caller counting fields without asking this counts rows that will not appear —
+ * which is how a panel comes to be offered with a heading over a blank body.
+ * Only the CONDITION is duplicated here, never the verdict: both sides call
+ * `evaluateCondition`, so the semantics have one implementation and this adds
+ * the lookup the renderer does with `useWatch`.
+ *
+ * A field with no condition is visible, and so is one whose condition names a
+ * field this caller did not watch — an unwatched name reads as `undefined`,
+ * and hiding a field on the strength of a value nobody supplied would withhold
+ * a panel that has content in it.
+ */
+function isConditionallyVisible(
+  f: LayoutField,
+  values: Record<string, unknown>
+): boolean {
+  const condition = f.admin?.condition as FieldCondition | undefined;
+  const watches = condition?.field;
+  if (condition === undefined || watches === undefined) return true;
+  if (!(watches in values)) return true;
+  return evaluateCondition(condition, values[watches]);
+}
+
+/**
+ * Every field name a condition on these fields watches.
+ *
+ * The set a caller must observe for {@link computeFieldsBeside} to answer about
+ * the fields as they currently render rather than as they were declared. Kept
+ * beside the rule that consumes it so the two cannot name different sets.
+ */
+export function conditionFieldNames<T extends LayoutField>(
+  fields: T[]
+): string[] {
+  const names = new Set<string>();
+  for (const f of fields) {
+    const watches = (f.admin?.condition as FieldCondition | undefined)?.field;
+    if (watches !== undefined) names.add(watches);
+  }
+  return [...names];
+}
+
+/**
  * Field types flagged `layout: "takeover"` in the admin branding metadata,
  * paired with their editor component path.
  */
@@ -196,7 +240,8 @@ export interface FieldsBeside<T> {
  */
 export function computeFieldsBeside<T extends LayoutField>(
   fields: T[],
-  excludePath: string
+  excludePath: string,
+  values: Record<string, unknown> = {}
 ): FieldsBeside<T> {
   /*
    * The field whose value decides whether the asking field is visible at all is
@@ -213,6 +258,7 @@ export function computeFieldsBeside<T extends LayoutField>(
   const offered = fields.filter(
     f =>
       !isHidden(f) &&
+      isConditionallyVisible(f, values) &&
       (f.name ?? "") !== excludePath &&
       (f.name ?? "") !== controller
   );

@@ -28,6 +28,7 @@ import type * as React from "react";
 import { computeFieldsBeside } from "@admin/lib/builder/takeoverLayout";
 
 import { EntryFormContent } from "./EntryFormContent";
+import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 
 export interface EntryFieldsPanelProps {
   /** The document's identity — title, slug. */
@@ -38,6 +39,41 @@ export interface EntryFieldsPanelProps {
   disabled?: boolean;
   /** Form mode, which write-only fields adjust their affordances for. */
   mode?: "create" | "edit";
+  /**
+   * The slug field's name, when this panel is offering one and the document
+   * has a public address. Absent means no warning is warranted.
+   */
+  slugName?: string;
+}
+
+/**
+ * Stop a keystroke in this panel from submitting the form behind it.
+ *
+ * These inputs are mounted inside the entry's own `<form>`, so pressing Enter
+ * in a single-line field is an implicit submission. A takeover surface holds
+ * its work privately and writes it back on the way out — the page builder says
+ * so in as many words — and nothing in the form's contract lets it be asked to
+ * flush first. An implicit submit therefore saves the value the field held
+ * BEFORE the editor opened, and in create mode the navigation that follows
+ * unmounts the editor and takes the unwritten work with it.
+ *
+ * Refusing the keystroke rather than teaching the form to flush, deliberately:
+ * a flush-before-submit contract is a real change to how every surface commits
+ * and is not something to introduce from a settings panel. This closes the way
+ * IN that this panel opened; the wider gap is unchanged and still applies to
+ * any save started from a button or a palette.
+ *
+ * Scoped to what actually submits implicitly. A textarea takes Enter as a
+ * newline, and a control that has opened a listbox or a menu is using Enter to
+ * choose — intercepting either would break the field to protect the form.
+ */
+function blockImplicitSubmit(event: React.KeyboardEvent<HTMLDivElement>): void {
+  if (event.key !== "Enter" || event.shiftKey) return;
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.tagName !== "INPUT") return;
+  if (target.getAttribute("aria-expanded") === "true") return;
+  event.preventDefault();
 }
 
 /**
@@ -47,23 +83,38 @@ export interface EntryFieldsPanelProps {
  * a labelled region containing nothing reads as a control that has failed,
  * which is the same thing the panel as a whole is withheld to avoid. Whether
  * to offer the panel at all is decided before this renders — see
- * `renderEntryFields` in `EntryForm` — so this component is never asked to draw
- * two empty groups.
+ * `fieldsBesidePanel` below — so this component is never asked to draw two
+ * empty groups.
  */
 export function EntryFieldsPanel({
   page,
   content,
   disabled,
   mode,
+  slugName,
 }: EntryFieldsPanelProps) {
   return (
-    <div className="space-y-4 p-4">
+    <div className="space-y-4 p-4" onKeyDown={blockImplicitSubmit}>
       {page.length === 0 ? null : (
         <FormSection
           label="Page"
           description="How this document is identified and addressed."
         >
           <EntryFormContent fields={page} disabled={disabled} mode={mode} />
+          {/*
+            The same warning the meta strip carries, for the same reason and in
+            the only other place the slug is editable. This editor covers the
+            strip that would otherwise show it, so without this the one surface
+            that hides the notice is also a surface that can rewrite a live
+            address and save it.
+          */}
+          {slugName === undefined ? null : (
+            <PublicUrlChangeNotice
+              slugName={slugName}
+              active
+              className="mt-3 block"
+            />
+          )}
         </FormSection>
       )}
       {content.length === 0 ? null : (
@@ -91,16 +142,36 @@ export function EntryFieldsPanel({
 export function fieldsBesidePanel(
   allFields: FieldConfig[],
   excludePath: string,
-  options: { disabled?: boolean; mode?: "create" | "edit" } = {}
+  options: {
+    disabled?: boolean;
+    mode?: "create" | "edit";
+    /**
+     * The current values of every field a condition watches. Without them a
+     * field whose condition is false is counted here and renders nothing,
+     * which offers the panel and draws a heading over blank space.
+     */
+    values?: Record<string, unknown>;
+    /** Whether the document has a public address the slug decides. */
+    hasPublicAddress?: boolean;
+  } = {}
 ): React.ReactNode | null {
-  const beside = computeFieldsBeside(allFields, excludePath);
+  const beside = computeFieldsBeside(allFields, excludePath, options.values);
   if (beside.page.length === 0 && beside.content.length === 0) return null;
+  // Warned about only where the slug is actually offered AND the document has
+  // an address to break: a notice on a document nobody can reach is noise, and
+  // one beside a field this panel is not showing points at nothing.
+  const slug = beside.page.find(f => f.name === "slug");
   return (
     <EntryFieldsPanel
       page={beside.page}
       content={beside.content}
       disabled={options.disabled}
       mode={options.mode}
+      slugName={
+        options.hasPublicAddress === true && slug !== undefined
+          ? (slug.name ?? "slug")
+          : undefined
+      }
     />
   );
 }
