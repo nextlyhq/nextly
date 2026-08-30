@@ -30,13 +30,22 @@ interface Row {
   /** The MEMBER's creation time, which breaks a tied instant. */
   created?: string;
   memberId?: string;
+  /** The state the SECOND read reports — the release's actual state. */
   state?: string;
+  /**
+   * The state at the FIRST read, when it differs from `state`.
+   *
+   * Only a release the drain settled between the two reads has two states, and
+   * making that explicit is what keeps the re-check honest: the first read has
+   * to hand the row over for the second read to have anything to drop.
+   */
+  stateAtFirstRead?: string;
   /** A new instant the SECOND read sees, as if somebody rescheduled it. */
   movedTo?: string;
 }
 
 function service(rows: Row[]) {
-  const members = rows.map(r => ({
+  const memberOf = (r: Row) => ({
     memberId: r.memberId ?? `m-${r.id}`,
     releaseId: r.id,
     action: r.action ?? ("publish" as const),
@@ -44,10 +53,31 @@ function service(rows: Row[]) {
     // is what happens when somebody reschedules between the two.
     scheduledAt: new Date(r.at),
     createdAt: new Date(r.created ?? r.at),
-  }));
+  });
   const repository = {
+    // HONOURS `states`, because the real query does and a mock that does not
+    // hands the service rows the database would never have returned. That is
+    // not hypothetical: this returned every member regardless, so the case
+    // below asserting a blocked release survives passed while the production
+    // query dropped it one layer down and the banner showed nothing.
     findDueMembersFor: vi.fn(
-      async () => new Map([["collection:posts:e1:", members]])
+      async (
+        _refs: unknown,
+        _now: Date,
+        // The repository's own default, so a caller that names no states gets
+        // the read path's narrow list here too.
+        states: readonly string[] = ["scheduled"]
+      ) =>
+        new Map([
+          [
+            "collection:posts:e1:",
+            rows
+              .filter(r =>
+                states.includes(r.stateAtFirstRead ?? r.state ?? "scheduled")
+              )
+              .map(memberOf),
+          ],
+        ])
     ),
     findReleases: vi.fn(async () =>
       rows.map(r => ({
@@ -175,6 +205,10 @@ describe("a release the drain settled between the two reads", () => {
       {
         id: "already-ran",
         at: "2026-09-02T00:00:00.000Z",
+        // Still scheduled when the members were read, published by the time
+        // the releases were. Without the first-read state the query would
+        // never have returned it and the re-check would have nothing to do.
+        stateAtFirstRead: "scheduled",
         state: "published",
       },
     ]);

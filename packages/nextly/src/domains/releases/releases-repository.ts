@@ -18,6 +18,7 @@ import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_CANCELLABLE_FROM,
   RELEASE_SCHEDULABLE_FROM,
+  RELEASE_STATES_AFFECTING_CONTENT,
   type ReleaseMemberAction,
   type ReleaseState,
 } from "../../schemas/releases/types";
@@ -246,7 +247,8 @@ export class ReleasesRepository {
   async scheduleRelease(
     id: string,
     at: Date,
-    timezone: string
+    timezone: string,
+    from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
   ): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,
@@ -262,10 +264,18 @@ export class ReleasesRepository {
           // The fence IS the declaration, not a copy of it: the admin decides
           // which controls to offer from the same list, so a change here cannot
           // leave a button offering a move the database refuses.
+          //
+          // NARROWED BY THE CALLER when it has already formed a judgement about
+          // this release's state. Scheduling a blocked release is a recovery
+          // and is valid only once nothing blocks it, which the service decides
+          // from a read; passing the state that read observed makes this update
+          // a compare-and-set on it. A release blocked between the two simply
+          // fails the fence, rather than being rescheduled with its blockers
+          // never examined.
           {
             column: "state",
             op: "IN",
-            value: [...RELEASE_SCHEDULABLE_FROM],
+            value: [...from],
           },
         ],
       }
@@ -275,21 +285,6 @@ export class ReleasesRepository {
     return true;
   }
 
-  /**
-   * Call a release off.
-   *
-   * Nothing is undone and nothing is written to any document: the read rule
-   * consults only `scheduled` releases, so a cancelled one simply stops being
-   * consulted. That is what makes cancelling a due-but-unmaterialised release
-   * free, and it is why there is no restore path here.
-   */
-  /**
-   * Call a release off, and say whether it moved.
-   *
-   * Fenced away from `published` for the same reason scheduling is: that
-   * release already happened, and marking it cancelled would describe history
-   * that did not occur while leaving the published content in place.
-   */
   /**
    * Stop a release the drain can never apply, and say whether it moved.
    *
@@ -329,6 +324,19 @@ export class ReleasesRepository {
     return true;
   }
 
+  /**
+   * Call a release off, and say whether it moved.
+   *
+   * Nothing is undone and nothing is written to any document: the read rule
+   * consults only the states in `RELEASE_STATES_AFFECTING_CONTENT`, so a
+   * cancelled release simply stops being consulted. That is what makes
+   * cancelling a due-but-unmaterialised release free, and why there is no
+   * restore path here.
+   *
+   * Fenced away from `published` for the same reason scheduling is: that
+   * release already happened, and marking it cancelled would describe history
+   * that did not occur while leaving the published content in place.
+   */
   async cancelRelease(id: string): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,
@@ -663,8 +671,15 @@ export class ReleasesRepository {
   }
 
   /**
-   * Members of SCHEDULED releases for each of `refs`, in a CONSTANT number of
+   * Members of releases IN `states` for each of `refs`, in a CONSTANT number of
    * queries — two, and never one per document.
+   *
+   * `states` decides which releases count, and it defaults to the read path's
+   * {@link RELEASE_STATES_AFFECTING_CONTENT} because that is the caller which
+   * must never widen by accident: admitting a blocked release here would let a
+   * release that has stopped go on deciding what a visitor sees. A surface that
+   * wants more — a document's banner, which must keep reporting a release that
+   * stopped — asks for it explicitly and says why at the call site.
    *
    * Never call this per row. A listing read resolves its whole result set here
    * and then asks `resolveReleaseEffect` per document, so the database cost
@@ -679,7 +694,8 @@ export class ReleasesRepository {
    */
   async findDueMembersFor(
     refs: DocumentRef[],
-    _now: Date
+    _now: Date,
+    states: readonly ReleaseState[] = RELEASE_STATES_AFFECTING_CONTENT
   ): Promise<Map<string, DueMember[]>> {
     const grouped = new Map<string, DueMember[]>();
     // No refs means no question to ask. Returning early keeps an empty listing
@@ -706,8 +722,9 @@ export class ReleasesRepository {
     // when there are members at all, so the common case — nothing scheduled
     // anywhere — still costs the single query above.
     if (scheduled.length === 0) return grouped;
-    const releases = await this.loadScheduledReleases(
-      scheduled.map(m => m.releaseId)
+    const releases = await this.loadReleasesInStates(
+      scheduled.map(m => m.releaseId),
+      states
     );
 
     const wanted = new Set(refs.map(documentRefKey));
@@ -783,8 +800,11 @@ export class ReleasesRepository {
     });
     if (members.length === 0) return NO_DECISIONS;
 
-    const releases = await this.loadScheduledReleases(
-      members.map(m => m.releaseId)
+    const releases = await this.loadReleasesInStates(
+      members.map(m => m.releaseId),
+      // The READ path, so the narrow list: a blocked release must not decide
+      // what a visitor sees.
+      RELEASE_STATES_AFFECTING_CONTENT
     );
     if (releases.size === 0) return NO_DECISIONS;
 
@@ -910,8 +930,8 @@ export class ReleasesRepository {
   /**
    * Of the given author ids, those whose user still exists and is still active.
    *
-   * A second `IN` query rather than a join, matching {@link loadScheduledReleases}
-   * directly above: the adapter layer is dialect-agnostic and expresses no joins,
+   * A second `IN` query rather than a join, matching {@link loadReleasesInStates}
+   * below: the adapter layer is dialect-agnostic and expresses no joins,
    * and two small keyed reads are the shape this repository already pays on a
    * read that reaches here at all.
    *
@@ -949,8 +969,21 @@ export class ReleasesRepository {
     return new Set(rows.map(r => r.id));
   }
 
-  private async loadScheduledReleases(
-    ids: string[]
+  /**
+   * Of the given releases, those in `states`, keyed by id.
+   *
+   * The states are the CALLER'S, and there is no default. Two callers reach
+   * here wanting different answers — a content read must see only what may
+   * change a page, a document's banner must also see what stopped — and a
+   * shared constant baked in here would silently decide for both. It did once:
+   * this filtered `scheduled` alone, so the banner's wider list sat one layer
+   * above a query that had already dropped every row it named, and the widening
+   * could not fire. Requiring the argument makes that a compile error rather
+   * than a screen that quietly says nothing.
+   */
+  private async loadReleasesInStates(
+    ids: string[],
+    states: readonly ReleaseState[]
   ): Promise<Map<string, { scheduledAt: Date | null }>> {
     const rows = await this.db.select<{
       id: string;
@@ -961,7 +994,9 @@ export class ReleasesRepository {
       where: {
         and: [
           { column: "id", op: "IN", value: [...new Set(ids)] },
-          { column: "state", op: "=", value: "scheduled" },
+          // `IN` even for a single state, so widening the list is a change to
+          // the argument and never to the shape of the query.
+          { column: "state", op: "IN", value: [...states] },
         ],
       },
     });

@@ -148,6 +148,31 @@ export function useRelease(id: string | undefined) {
     // resolves, and a request for `/releases/undefined` is a 404 the editor
     // would see as "this release is gone".
     enabled: Boolean(id),
+    // Re-asked on the SAME two schedules as the document banner, and for the
+    // same reason: a scheduled release settles by itself, and nothing about
+    // that reaches this browser.
+    //
+    // This page is the one somebody watches a launch on. Held open across the
+    // instant, it would otherwise go on showing `scheduled` however the drain
+    // resolved it — no interval, and the provider disables focus refetching
+    // globally, so nothing would ask again until an unrelated mutation or a
+    // remount. A `staleTime` does not help: it governs whether a NEW subscriber
+    // refetches, and never initiates a request for a query already mounted. So
+    // the person most likely to be watching is the last to learn it stopped.
+    //
+    // The blockers travel on this response, so refreshing it is also what
+    // replaces "scheduled" with the list of what has to be fixed.
+    //
+    // Two SPEEDS rather than an interval and a stop, deliberately. A condition
+    // that halts polling can be satisfied by a wrong answer — a stale row read
+    // once as settled would then never be corrected, and the page would keep
+    // that claim for as long as it stayed open. Slowing down cannot do that.
+    refetchInterval: data =>
+      data.state.data?.state === "scheduled"
+        ? PENDING_RELEASE_POLL_MS
+        : NO_RELEASE_POLL_MS,
+    // And on return to the tab, which is when somebody actually looks.
+    refetchOnWindowFocus: true,
   });
 }
 

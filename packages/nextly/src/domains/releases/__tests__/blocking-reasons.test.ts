@@ -12,6 +12,10 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import {
+  RELEASE_SCHEDULABLE_FROM,
+  type ReleaseState,
+} from "../../../schemas/releases/types";
 import { ReleasesService } from "../services/releases-service";
 import type { ReleasesServiceDeps } from "../services/releases-service";
 
@@ -196,5 +200,145 @@ describe("scheduling a blocked release", () => {
     await expect(svc.schedule("r1", AT, "UTC", ACTOR)).resolves.toBeUndefined();
     expect(liveAuthors).not.toHaveBeenCalled();
     expect(scheduleRelease).toHaveBeenCalled();
+  });
+});
+
+describe("the blocker verdict and the write share a fence", () => {
+  const AT = new Date("2026-09-01T00:00:00.000Z");
+
+  /**
+   * A release the DRAIN moves between the service's read and its write.
+   *
+   * The service reads the state, derives blockers from it, and only then
+   * writes — and the drain runs in that window. `scheduleRelease` here models
+   * the repository's conditional UPDATE rather than recording the call: it
+   * answers whether the row's state AT WRITE TIME satisfies the fence the
+   * service passed. Asserting on the argument instead would pass for any list
+   * that merely looked plausible.
+   *
+   * The `from` default is the repository's own, so a service that passes no
+   * fence at all behaves here exactly as it did before this was fixed — which
+   * is what makes the two racing cases below fail on that version.
+   */
+  function racing(atRead: string, atWrite: ReleaseState, live: string[] = []) {
+    const liveAuthors = vi.fn(async () => new Set(live));
+    const scheduleRelease = vi.fn(
+      async (
+        _id: string,
+        _at: Date,
+        _tz: string,
+        from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+      ) => from.includes(atWrite)
+    );
+    const deps = {
+      repository: {
+        listMembers: vi.fn(async () => [
+          {
+            id: "m1",
+            releaseId: "r1",
+            scopeKind: "collection" as const,
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+            action: "publish" as const,
+            createdBy: "author",
+            createdAt: new Date(),
+          },
+        ]),
+        liveAuthors,
+        findReleases: vi.fn(async () => [{ id: "r1", state: atRead }]),
+        scheduleRelease,
+      } as unknown as ReleasesServiceDeps["repository"],
+      canManageReleases: vi.fn(async () => true),
+      canActOnDocument: vi.fn(async () => true),
+    };
+    return { svc: new ReleasesService(deps), scheduleRelease, liveAuthors };
+  }
+
+  it("REFUSES a release the drain blocked after the state was read", async () => {
+    // The interleaving that made the precondition bypassable. The service saw
+    // `scheduled`, so it examined no blockers; the drain then stopped the
+    // release. A fence spanning every schedulable state accepts `blocked` here
+    // and reschedules a release nobody checked — which reaches its new instant
+    // and stops again, for the same permanent reason.
+    const { svc, liveAuthors } = racing("scheduled", "blocked");
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    // And it was refused for the right reason: no blocker was ever derived,
+    // because at the moment of the read there was nothing to derive.
+    expect(liveAuthors).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a blocked release that somebody else moved after it was cleared", async () => {
+    // The opposite interleaving. The verdict said "nothing blocks it", and by
+    // the time of the write that release had been cancelled — a decision made
+    // AFTER the verdict, which the write must not silently overwrite.
+    const { svc } = racing("blocked", "cancelled", ["author"]);
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("allows a cleared blocked release that nothing moved", async () => {
+    // The control for the recovery path: without it, a fence that refused
+    // everything would satisfy both cases above.
+    const { svc, scheduleRelease } = racing("blocked", "blocked", ["author"]);
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).resolves.toBeUndefined();
+    expect(scheduleRelease).toHaveBeenCalled();
+  });
+
+  it("allows an ordinary reschedule that nothing moved", async () => {
+    // The control for the common path, which must stay free of all this.
+    const { svc, scheduleRelease } = racing("scheduled", "scheduled");
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).resolves.toBeUndefined();
+    expect(scheduleRelease).toHaveBeenCalled();
+  });
+});
+
+describe("what authority rescheduling actually costs", () => {
+  const AT = new Date("2026-09-01T00:00:00.000Z");
+
+  /** A scoped API key holding exactly the grants it is given, and no others. */
+  function keyHolding(...permissions: string[]) {
+    return {
+      userId: "u1",
+      authenticatedScope: {
+        actorType: "apiKey",
+        permissions,
+      },
+    } as unknown as Parameters<ReleasesService["schedule"]>[3];
+  }
+
+  it("does not demand a READ grant to reschedule a repaired release", async () => {
+    // A key stamped `publish-content-releases` may schedule every release on
+    // the site. Deriving the blockers through the public `blockingReasons`
+    // asked for `read` as well — and for an API key the stamped scope is
+    // authoritative, so the missing grant is refused outright rather than
+    // falling back to publish-implies-read. Such a key could schedule anything
+    // EXCEPT a repaired blocked release, the one case the check exists for.
+    const { svc } = service([{ id: "m1", createdBy: "u9" }], ["u9"]);
+    await expect(
+      svc.schedule("r1", AT, "UTC", keyHolding("publish-content-releases"))
+    ).resolves.toBeUndefined();
+  });
+
+  it("still refuses a key that cannot publish", async () => {
+    // The control. Without it the case above is satisfied by a service that
+    // stopped authorizing scheduling at all.
+    const { svc } = service([{ id: "m1", createdBy: "u9" }], ["u9"]);
+    await expect(
+      svc.schedule("r1", AT, "UTC", keyHolding("read-content-releases"))
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("still refuses to READ the blockers without a read grant", async () => {
+    // The authority did not move, it was only taken off the derivation. The
+    // public surface must still demand `read`, or this fix would have widened
+    // who can enumerate a release's members.
+    const { svc } = service([{ id: "m1", createdBy: "u9" }], ["u9"]);
+    await expect(
+      svc.blockingReasons("r1", keyHolding("publish-content-releases"))
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });
