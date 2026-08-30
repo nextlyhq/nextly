@@ -37,6 +37,13 @@ const { handleReleaseRequest } = await import("../releases");
 /** Every namespace call the handler can make, all inert. */
 function namespace() {
   return {
+    // The member add resolves its target document before accepting it, so the
+    // fake has to answer that read. Present rather than absent: a missing
+    // reader would make the case fail for a reason unrelated to authority.
+    findByID: vi.fn(async (): Promise<{ id: string } | null> => ({ id: "e1" })),
+    findSingle: vi.fn(
+      async (): Promise<{ id: string } | null> => ({ id: "e1" })
+    ),
     releases: {
       find: vi.fn(async () => []),
       findByID: vi.fn(async () => ({ id: "r1" })),
@@ -192,6 +199,167 @@ describe("release route input at the untyped boundary", () => {
     );
     expect(api.releases.find).toHaveBeenCalledWith(
       expect.objectContaining({ state: "scheduled" })
+    );
+  });
+});
+
+describe("release route input validation", () => {
+  async function post(
+    method: string,
+    body: unknown,
+    params = { releaseId: "r1" }
+  ) {
+    return handleReleaseRequest(
+      new Request("https://example.test/api/releases", {
+        method: "POST",
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json" },
+      }),
+      method,
+      params
+    );
+  }
+
+  it("refuses an instant that parses but is not ISO 8601", async () => {
+    // `new Date("1")` is 2001-01-01 and `new Date("09/01/2026")` is
+    // locale-dependent. Both are valid Dates at an instant the author never
+    // chose — and a release publishes at it.
+    for (const at of ["1", "09/01/2026", "next friday"]) {
+      const res = await post("scheduleRelease", { at, timezone: "UTC" });
+      expect(res.status, `accepted ${at}`).toBe(400);
+    }
+    expect(api.releases.schedule).not.toHaveBeenCalled();
+  });
+
+  it("refuses an instant with no zone, which the server would resolve in its own", async () => {
+    // The case only the SHAPE check catches. "2026-09-01T09:00:00" parses, and
+    // round-trips to the same calendar day, so every other guard admits it —
+    // but it carries no zone, so the server resolves it locally and the same
+    // request schedules different instants on two deployments.
+    //
+    // Added after a break-verify: disabling the shape check left the other
+    // cases green, which meant the suite proved the round-trip guard and said
+    // nothing about the shape one.
+    const res = await post("scheduleRelease", {
+      at: "2026-09-01T09:00:00",
+      timezone: "UTC",
+    });
+    expect(res.status).toBe(400);
+    expect(api.releases.schedule).not.toHaveBeenCalled();
+  });
+
+  it("refuses a date that does not exist", async () => {
+    // 2026-02-30 is well-formed and normalises silently to March 2.
+    const res = await post("scheduleRelease", {
+      at: "2026-02-30T09:00:00Z",
+      timezone: "UTC",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("accepts a real ISO instant", async () => {
+    // The control: the guard must not refuse every instant, which would make
+    // scheduling impossible and still pass the cases above.
+    const res = await post("scheduleRelease", {
+      at: "2026-09-01T09:00:00Z",
+      timezone: "Europe/Berlin",
+    });
+    expect(res.status).toBe(200);
+    expect(api.releases.schedule).toHaveBeenCalled();
+  });
+
+  it("refuses a timezone the platform cannot format in", async () => {
+    // A length check accepts `Europe/Berln`, which is stored, shown back to the
+    // author as their intent, and throws whenever anything formats with it.
+    const res = await post("scheduleRelease", {
+      at: "2026-09-01T09:00:00Z",
+      timezone: "Europe/Berln",
+    });
+    expect(res.status).toBe(400);
+    expect(api.releases.schedule).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-string locale rather than widening the member", async () => {
+    // Coercing a numeric locale id to `null` silently widens the member from
+    // one language to the WHOLE document — the opposite of the request, and
+    // indistinguishable downstream from a legitimate document-wide member.
+    const res = await post("addReleaseMember", {
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      entryId: "e1",
+      action: "publish",
+      locale: 42,
+    });
+    expect(res.status).toBe(400);
+    expect(api.releases.addMember).not.toHaveBeenCalled();
+  });
+
+  it("refuses a member whose target document is not there", async () => {
+    // Nothing joins a member to a document, so a typo is accepted by the write
+    // path and fails at the scheduled instant instead — holding the release
+    // open and reporting a failure nobody is watching for.
+    api.findByID.mockResolvedValueOnce(null);
+    const res = await post("addReleaseMember", {
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      entryId: "gone",
+      action: "publish",
+    });
+    expect(res.status).toBe(404);
+    expect(api.releases.addMember).not.toHaveBeenCalled();
+  });
+
+  it("binds a member removal to the release in the path", async () => {
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1/members/m1", {
+        method: "DELETE",
+      }),
+      "removeReleaseMember",
+      { releaseId: "r1", memberId: "m1" }
+    );
+    // Without the releaseId, `/releases/A/members/B` removes B even when it
+    // belongs to release C, and the response says it worked.
+    expect(api.releases.removeMember).toHaveBeenCalledWith(
+      expect.objectContaining({ memberId: "m1", releaseId: "r1" })
+    );
+  });
+
+  it("forwards an API key's own grants rather than its owner's", async () => {
+    requireAnyPermission.mockResolvedValueOnce({
+      userId: "owner",
+      authMethod: "api-key",
+      permissions: ["read-content-releases"],
+    });
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases"),
+      "listReleases",
+      {}
+    );
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-content-releases"],
+        },
+      })
+    );
+  });
+
+  it("carries no scope for a session, so ordinary RBAC applies", async () => {
+    // The control: stamping a scope on a session request would make every
+    // session resolve against an empty permission list and be refused.
+    requireAnyPermission.mockResolvedValueOnce({
+      userId: "u1",
+      authMethod: "session",
+      permissions: [],
+    });
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases"),
+      "listReleases",
+      {}
+    );
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({ authenticatedScope: undefined })
     );
   });
 });

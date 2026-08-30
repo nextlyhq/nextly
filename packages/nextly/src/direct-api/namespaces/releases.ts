@@ -83,7 +83,17 @@ export interface ReleasesNamespace {
   addMember(
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow>;
-  removeMember(args: { memberId: string } & ReleaseCallerArgs): Promise<void>;
+  /**
+   * Take a document back out of a release.
+   *
+   * `releaseId` is optional but SHOULD be supplied by any caller that knows it —
+   * a transport addressing `/releases/A/members/B` knows which release it meant,
+   * and passing it turns a stale or crafted member id into a refusal instead of
+   * a silent edit to a different release.
+   */
+  removeMember(
+    args: { memberId: string; releaseId?: string } & ReleaseCallerArgs
+  ): Promise<void>;
   listMembers(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow[]>;
