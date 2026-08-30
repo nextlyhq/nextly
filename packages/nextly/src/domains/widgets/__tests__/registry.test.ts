@@ -38,10 +38,16 @@ describe("widget registry", () => {
   });
 
   it("names both claimants when two sources register one id", () => {
-    registerWidget(def("core/totals"), { source: "core" });
+    // The id itself must not contain either source's name, or a message that
+    // drops one claimant entirely can still satisfy a regex that only checks
+    // for the substrings' presence somewhere in the failure.
+    registerWidget(def("metrics/totals"), { source: "core" });
     expect(() =>
-      registerWidget(def("core/totals"), { source: "@acme/stripe" })
-    ).toThrow(/core.*@acme\/stripe|@acme\/stripe.*core/);
+      registerWidget(def("metrics/totals"), { source: "@acme/stripe" })
+    ).toThrow(/"core"/);
+    expect(() =>
+      registerWidget(def("metrics/totals"), { source: "@acme/stripe" })
+    ).toThrow(/"@acme\/stripe"/);
   });
 
   it("validates at registration", () => {
@@ -54,6 +60,15 @@ describe("widget registry", () => {
       source: "@acme/stripe",
     });
     expect(getWidget("core/totals")?.title).toBe("Our totals");
+  });
+
+  it("refuses to override a widget that was never registered", () => {
+    // This guard is what stops a plugin bypassing registerWidget's duplicate-id
+    // check by calling overrideWidget instead -- overrideWidget must never be
+    // usable to create a widget, only to replace one that already exists.
+    expect(() =>
+      overrideWidget("metrics/missing", def("metrics/missing"))
+    ).toThrow(/metrics\/missing/);
   });
 
   it("lets a plugin patch named fields of a core widget", () => {
@@ -73,11 +88,18 @@ describe("widget registry", () => {
     );
   });
 
-  it("re-validates the result of a patch", () => {
+  it("re-validates the result of a patch, leaving the store unmutated", () => {
     registerWidget(def("core/totals"), { source: "core" });
     expect(() =>
       extendWidget("core/totals", { minSize: "xl", maxSize: "sm" })
     ).toThrow(/minSize/);
+
+    // A rejected patch must not be written even partially: the stored widget
+    // still has no minSize/maxSize bounds, not the invalid ones the patch
+    // tried to set. This would stay green if validation ran AFTER the write.
+    const survivor = getWidget("core/totals");
+    expect(survivor?.minSize).toBeUndefined();
+    expect(survivor?.maxSize).toBeUndefined();
   });
 
   it("reports whether a deregistration removed anything", () => {
