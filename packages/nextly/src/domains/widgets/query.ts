@@ -91,26 +91,34 @@ function isAllowedWhereOperator(operator: string): boolean {
 }
 
 /**
- * Confirms a single field's condition value cannot smuggle in an operator or
- * a field name the earlier checks never see.
+ * Confirms a field's condition value is usable, and returns its operator
+ * entries to check -- or `undefined` for a bare scalar, which has no keys
+ * of its own and so nothing further to check (it is an implicit equality
+ * test, e.g. `{ status: "draft" }`, and is accepted as-is).
  *
- * A bare scalar (string/number/boolean/null) is an implicit equality test --
- * `{ status: "draft" }` -- and is accepted as-is: it has no keys of its own,
- * so there is nothing further to check. An array under a field name matches
- * none of the shapes the query operators produce (`buildWhereClause` treats
- * it as neither a field condition nor plain equality and silently drops it),
- * so admitting it here would be a no-op at best and a hiding place for a
- * nested field reference (`["x", { secretScore: 1 }]`) at worst -- refused.
- * Otherwise the value must be a plain object whose every key is a known
- * operator, and whose every operator VALUE is not itself a plain object:
- * none of the operators in the vocabulary take an object as their value
- * (comparisons take scalars, `in`/`not_in` take arrays), so an object there
- * has no legitimate use and is the only place left a field name could hide.
- * It is refused rather than walked for exactly that reason -- there is no
- * operator whose semantics a nested object could ever satisfy.
+ * `null` and `{}` are refused rather than treated as "nothing to check
+ * either": both compile to NO condition at all downstream --
+ * `buildWhereClause` does `if (value === null) continue`, and `{}` has no
+ * operator keys for `isFieldCondition` to recognise. An accepted query whose
+ * author wrote a condition that silently vanishes returns a WIDER result
+ * set than the query reads as promising, which is exactly the "accepted
+ * means something different from what it says" failure this validator
+ * exists to prevent.
+ *
+ * An array under a field name is refused too: it matches none of the shapes
+ * the query operators produce (`buildWhereClause` treats it as neither a
+ * field condition nor plain equality and silently drops it), so admitting
+ * it here would be a no-op at best and a hiding place for a nested field
+ * reference (`["x", { secretScore: 1 }]`) at worst.
  */
-function assertFieldConditionShape(field: string, value: unknown): void {
-  if (value === null || typeof value !== "object") return;
+function assertFieldConditionUsable(
+  field: string,
+  value: unknown
+): Array<[string, unknown]> | undefined {
+  if (value === null) {
+    fail(`where condition for "${field}" is null, which matches every row`);
+  }
+  if (typeof value !== "object") return undefined;
 
   if (Array.isArray(value)) {
     fail(
@@ -118,19 +126,55 @@ function assertFieldConditionShape(field: string, value: unknown): void {
     );
   }
 
-  for (const [operator, operatorValue] of Object.entries(value)) {
-    if (!isAllowedWhereOperator(operator)) {
-      fail(`where uses unknown operator "${operator}" on field "${field}"`);
-    }
-    if (
-      operatorValue !== null &&
-      typeof operatorValue === "object" &&
-      !Array.isArray(operatorValue)
-    ) {
-      fail(
-        `where operator "${operator}" on field "${field}" may not take a nested object`
-      );
-    }
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    fail(`where condition for "${field}" is empty, which matches every row`);
+  }
+  return entries;
+}
+
+/** Confirms `operator` is one the query layer actually understands. */
+function assertOperatorAllowed(field: string, operator: string): void {
+  if (!isAllowedWhereOperator(operator)) {
+    fail(`where uses unknown operator "${operator}" on field "${field}"`);
+  }
+}
+
+/**
+ * Confirms an operator's value is not itself a plain object. None of the
+ * operators in the vocabulary take an object as their value (comparisons
+ * take scalars, `in`/`not_in` take arrays), so an object here has no
+ * legitimate use and is the only place left a field name could hide -- it
+ * is refused rather than walked for exactly that reason: there is no
+ * operator whose semantics a nested object could ever satisfy.
+ */
+function assertOperatorValueShape(
+  field: string,
+  operator: string,
+  operatorValue: unknown
+): void {
+  if (
+    operatorValue !== null &&
+    typeof operatorValue === "object" &&
+    !Array.isArray(operatorValue)
+  ) {
+    fail(
+      `where operator "${operator}" on field "${field}" may not take a nested object`
+    );
+  }
+}
+
+/**
+ * Confirms a single field's condition value cannot smuggle in an operator or
+ * a field name the earlier checks never see, and cannot silently compile to
+ * no condition at all (see `assertFieldConditionUsable`).
+ */
+function assertFieldConditionShape(field: string, value: unknown): void {
+  const entries = assertFieldConditionUsable(field, value);
+  if (!entries) return;
+  for (const [operator, operatorValue] of entries) {
+    assertOperatorAllowed(field, operator);
+    assertOperatorValueShape(field, operator, operatorValue);
   }
 }
 
@@ -201,17 +245,56 @@ function walkWhereClause(
   }
 }
 
+/**
+ * Clones `where` up front -- before anything reads a single property of it
+ * -- and returns that clone, or `undefined` if there was no `where` to
+ * begin with. Every later step (the walk, and the value returned to the
+ * caller) operates on this SAME clone, never on the caller's original
+ * object.
+ *
+ * This closes a TOCTOU a clone-AFTER-validation order left open: a getter
+ * or Proxy on the caller's object can answer one value the first time a
+ * property is read and a different, hostile value the next time. With
+ * validate-then-clone, the walk's read and the later `structuredClone` read
+ * were two separate reads of the same accessor, and an accessor is free to
+ * answer differently each time it's called -- the walk could approve `{
+ * and: [] }` on its read and `structuredClone` could then capture `{ and:
+ * [{ secretScore: {...} }] }` moments later into the object actually
+ * returned. Reading each property exactly once, by validating the clone
+ * instead of the original, removes the seam that bug lived in: whatever the
+ * accessor returns on its one and only invocation is both what gets
+ * validated and what gets returned, with no way for those to diverge.
+ *
+ * `structuredClone` throws a raw `DOMException`/`TypeError` on a value it
+ * cannot clone (a function, symbol, or bigint nested in `where`) -- fails
+ * closed, but as an error outside the `NextlyError` contract, which would
+ * surface as an unhandled 500 rather than a named 400. Wrapped here so it
+ * reads the same as every other refusal in this module.
+ */
+function cloneWhereOrUndefined(
+  where: unknown
+): Record<string, unknown> | undefined {
+  if (where === undefined) return undefined;
+  if (typeof where !== "object" || where === null) {
+    fail("where must be an object");
+  }
+  try {
+    return structuredClone(where) as Record<string, unknown>;
+  } catch {
+    fail(
+      "where contains a value that cannot be cloned (functions, symbols, and bigints are not supported)"
+    );
+  }
+}
+
 /** Confirms every field named in `where` was declared, at every nesting depth. */
 function assertWhereFieldsDeclared(
   source: WidgetSource,
-  q: Partial<WidgetQuery>,
+  where: Record<string, unknown> | undefined,
   declared: ReadonlySet<string>
 ): void {
-  if (q.where === undefined) return;
-  if (typeof q.where !== "object" || q.where === null) {
-    fail("where must be an object");
-  }
-  walkWhereClause(q.where, 0, source, declared);
+  if (where === undefined) return;
+  walkWhereClause(where, 0, source, declared);
 }
 
 /** Confirms every field named in `select` was declared by the source. */
@@ -278,17 +361,17 @@ function clampLimit(q: Partial<WidgetQuery>): number {
 
 /**
  * Validate and normalize. Returns a query fully independent of the input:
- * a fresh envelope AND a deep copy of `where` (via `structuredClone`), not a
- * fresh object wrapped around a shared `where` reference. Without the deep
- * copy, code holding the pre-validation object could mutate an undeclared
- * field INTO the validated query after it already passed the gate -- the
- * envelope would be fresh, but the safety it is supposed to certify would
- * not be.
+ * a fresh envelope AND a `where` that was cloned BEFORE validation ever ran
+ * (see `cloneWhereOrUndefined`), not a fresh object wrapped around a shared
+ * `where` reference, and not one cloned only after the walk already trusted
+ * it. Both the walk and the value returned to the caller read the identical
+ * clone, so there is exactly one read of the caller's original object.
  *
  * The returned query is safe to compile: its source exists, its op is
  * supported, every field it names was declared by that source (at every
  * `where` nesting depth, and only via operators the query layer actually
- * understands), and its limit is a bounded, finite integer.
+ * understands, on conditions that are neither `null` nor empty), and its
+ * limit is a bounded, finite integer.
  */
 export function validateWidgetQuery(query: unknown): WidgetQuery {
   const q = asRecord(query);
@@ -296,7 +379,9 @@ export function validateWidgetQuery(query: unknown): WidgetQuery {
   const op = assertSupportedOp(source, q);
   const declared = new Set(source.fields.map(f => f.name));
 
-  assertWhereFieldsDeclared(source, q, declared);
+  const where = cloneWhereOrUndefined(q.where);
+
+  assertWhereFieldsDeclared(source, where, declared);
   assertSelectFieldsDeclared(source, q, declared);
   assertSortFieldDeclared(source, q, declared);
   assertValidStatus(q);
@@ -304,7 +389,7 @@ export function validateWidgetQuery(query: unknown): WidgetQuery {
   return {
     source: source.id,
     op,
-    ...(q.where ? { where: structuredClone(q.where) } : {}),
+    ...(where ? { where } : {}),
     ...(q.status ? { status: q.status } : {}),
     ...(q.select ? { select: [...q.select] } : {}),
     ...(q.sort ? { sort: q.sort } : {}),

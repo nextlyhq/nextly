@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { MAX_WIDGET_LIMIT, validateWidgetQuery } from "../query";
 import { clearSources, registerSource } from "../sources";
 
@@ -274,6 +275,101 @@ describe("validateWidgetQuery", () => {
           where: { status: ["draft"] },
         })
       ).toThrow(/where condition for "status" must be an operator object/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // R2-1: `where` must be read exactly once. Cloning AFTER the walk let a
+  // getter/Proxy answer benignly to the walker's read and hostilely to a
+  // second, later read (structuredClone) -- a TOCTOU. Cloning FIRST and
+  // validating (and returning) that clone means only one read ever happens,
+  // so there is no second read left for a hostile answer to arrive on.
+  // ---------------------------------------------------------------------
+  describe("R2-1: where is read exactly once (clone-first closes the clone-after-walk TOCTOU)", () => {
+    it("a getter on `and` cannot answer differently to the walk than to the returned value", () => {
+      let reads = 0;
+      const where = {
+        get and() {
+          reads++;
+          // First (and, after the fix, ONLY) read is benign. A getter-based
+          // TOCTOU relies on a second read landing after the first read was
+          // approved -- that second read must never happen.
+          return reads === 1 ? [] : [{ secretScore: { equals: 1 } }];
+        },
+      };
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "count",
+        where,
+      });
+      expect(reads).toBe(1);
+      expect(q.where).toEqual({ and: [] });
+    });
+
+    it("a getter on a declared field's condition cannot answer differently to the walk than to the returned value", () => {
+      let reads = 0;
+      const where = {
+        get status() {
+          reads++;
+          return reads === 1 ? { equals: "draft" } : { $where: "1=1 OR 1=1" };
+        },
+      };
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "count",
+        where,
+      });
+      expect(reads).toBe(1);
+      expect(q.where).toEqual({ status: { equals: "draft" } });
+    });
+
+    it("wraps an uncloneable where value in NextlyError rather than a raw DOMException", () => {
+      let caught: unknown;
+      try {
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: () => "not clonable" },
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(NextlyError);
+      expect((caught as Error).message).toMatch(
+        /where contains a value that cannot be cloned/
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // R2-2: an accepted query must mean what it says. `null` and `{}` under a
+  // field name both compile to NO condition downstream (buildWhereClause
+  // skips `null`; `{}` has no operator keys), so accepting them would let a
+  // query the author wrote as filtered silently return every row instead.
+  // ---------------------------------------------------------------------
+  describe("R2-2: a condition that compiles to nothing is refused, not silently accepted", () => {
+    it("refuses `null` as a field's condition", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: null },
+        })
+      ).toThrow(
+        /where condition for "status" is null, which matches every row/
+      );
+    });
+
+    it("refuses an empty object as a field's condition", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { status: {} },
+        })
+      ).toThrow(
+        /where condition for "status" is empty, which matches every row/
+      );
     });
   });
 });
