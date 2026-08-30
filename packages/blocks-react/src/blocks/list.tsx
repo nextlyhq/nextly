@@ -77,6 +77,38 @@ export function renderList({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
+/**
+ * What restores a list's markers after a reset has removed them.
+ *
+ * A list without markers is not a plainer list, it is a stack of paragraphs:
+ * the one thing that distinguishes an item from a line of text is gone, and the
+ * reader loses the grouping the markup still claims. Tailwind's Preflight sets
+ * `list-style: none` on every `ul` and `ol` and says so in a comment, and this
+ * library's own scaffold imports it — so on a site built from `create-nextly-app`
+ * this is a repair rather than a decoration.
+ *
+ * **`revert` rather than a marker, because one rule serves two elements.** This
+ * block renders `<ul>` or `<ol>` from a PROP, and both wear the same block-type
+ * class, so a rule naming `disc` would put bullets on ordered lists. `revert`
+ * rolls back to the user-agent value for whichever element it lands on, which
+ * is discs for one and numerals for the other, and it stays correct if the prop
+ * grows a third kind.
+ *
+ * The inline padding is the other half. A marker is drawn OUTSIDE the content
+ * box by default, so restoring it to a list whose padding a reset has zeroed
+ * paints it beyond the element's own edge — clipped, or overlapping whatever
+ * sits alongside. Browsers pair their markers with roughly `40px`; `2.5ch`
+ * tracks the text instead, so a long numeral in a wide font still has room.
+ */
+const LIST_BASE_STYLES = {
+  base: {
+    base: {
+      listStyleType: "revert",
+      padding: { inlineStart: "2.5ch" },
+    },
+  },
+} as const;
+
 export const list = defineBlock<ListProps, PageContext>({
   name: "core/list",
   version: 1,
@@ -91,6 +123,7 @@ export const list = defineBlock<ListProps, PageContext>({
     category: CONTENT,
     keywords: ["bullets", "ordered", "unordered", "items"],
   },
+  baseStyles: LIST_BASE_STYLES,
   props: {
     kind: { type: "select", options: [...LIST_KINDS] },
     items: { type: "array", of: "text" },

@@ -187,6 +187,8 @@ describe("every default the core library declares", () => {
       "core/form",
       "core/gallery",
       "core/image",
+      "core/list",
+      "core/quote",
     ]);
   });
 
@@ -226,21 +228,31 @@ describe("every default the core library declares", () => {
       // A catalog property can still be DROPPED for a value whose grammar the
       // compiler refuses, and the membership check above cannot see that. Each
       // declared property is looked for by its own CSS name.
-      const scalars = declaredProperties(block.baseStyles as NodeStyles).filter(
-        property =>
-          isScalarDeclaration(block.baseStyles as NodeStyles, property)
-      );
+      const declared = declaredProperties(block.baseStyles as NodeStyles);
 
-      // The population assertion for THIS case: a block whose declarations were
-      // all object-shaped would check nothing and pass.
+      // A scalar compiles to its own name and is looked for exactly. An
+      // object-shaped one compiles to SEVERAL properties whose names extend it
+      // — `padding` becomes `padding-inline-start` — so it is looked for by
+      // that stem. Both are checked rather than only the first: a block
+      // declaring nothing but per-side values is a legitimate shape, and
+      // skipping it would let the whole case pass having inspected nothing.
+      const expected = declared.map(property => {
+        const name = cssNameOf(property);
+        return isScalarDeclaration(block.baseStyles as NodeStyles, property)
+          ? { property, needle: `${name}:` }
+          : { property, needle: `${name}-` };
+      });
+
+      // The population assertion for THIS case: a block that declared nothing
+      // at all would check nothing and pass.
       expect(
-        scalars.length,
-        `${name} declared no scalar-valued property to check`
+        expected.length,
+        `${name} declared no property to check`
       ).toBeGreaterThan(0);
 
-      const missing = scalars.filter(
-        property => !css.includes(`${cssNameOf(property)}:`)
-      );
+      const missing = expected
+        .filter(({ needle }) => !css.includes(needle))
+        .map(({ property }) => property);
       expect(
         missing,
         `${name} declares ${missing.join(", ")} but the compiled stylesheet ` +

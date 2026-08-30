@@ -84,6 +84,42 @@ export function renderQuote({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
+/**
+ * What makes a quotation look quoted once a reset has flattened it.
+ *
+ * A browser marks a `<blockquote>` by indenting it — roughly `40px` on each
+ * side — and that indent is the only thing separating it from a paragraph.
+ * Tailwind's Preflight zeroes margin and padding on every element, and this
+ * library's own scaffold imports it, so the element keeps its meaning for a
+ * screen reader and loses it entirely for everyone else. Restoring the indent
+ * is repair; it is not a look anyone chose.
+ *
+ * **Indented on the inline start only, not both sides.** A symmetric indent
+ * reads as a narrower column rather than as a quotation, and it fights the
+ * container width the site sheet already sets. One-sided is what a reader
+ * recognises, and it follows writing direction rather than assuming
+ * left-to-right.
+ *
+ * **No rule, no italics, no colour.** A vertical rule beside a quotation is the
+ * commonest treatment and it is still a treatment: WordPress ships exactly that
+ * border in its OPT-IN theme layer rather than its structural one, and italics
+ * change how the words read rather than how the block is recognised. The line
+ * this stops at is the one that separates a block that renders correctly from a
+ * block that has been styled.
+ *
+ * `em` rather than `rem` for the same reason the typographic defaults use it:
+ * the indent stays proportional to the quotation's own type size, so an author
+ * who enlarges the quote does not leave its indent behind.
+ */
+const QUOTE_BASE_STYLES = {
+  base: {
+    base: {
+      margin: { blockStart: "1.5em", blockEnd: "1.5em" },
+      padding: { inlineStart: "1.5em" },
+    },
+  },
+} as const;
+
 export const quote = defineBlock<QuoteProps, PageContext>({
   name: "core/quote",
   version: 1,
@@ -98,6 +134,7 @@ export const quote = defineBlock<QuoteProps, PageContext>({
     category: CONTENT,
     keywords: ["blockquote", "pull quote", "citation"],
   },
+  baseStyles: QUOTE_BASE_STYLES,
   props: {
     text: { type: "textarea", inline: true },
     attribution: { type: "text" },

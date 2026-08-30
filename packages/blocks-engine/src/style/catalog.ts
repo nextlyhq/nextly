@@ -667,6 +667,31 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
     summary: "Upright or slanted text, with an optional oblique angle.",
   },
   {
+    property: "listStyleType",
+    group: "typography",
+    // `revert` earns its place beside the concrete markers. A CSS reset that
+    // sets `list-style: none` on every list — Tailwind's Preflight does, and
+    // this library's own scaffold imports it — leaves an author no keyword that
+    // means "whatever this element would have shown", because the right answer
+    // differs between `ul` and `ol`. `revert` rolls back to the user-agent
+    // value per element, so one declaration restores discs to one and numerals
+    // to the other.
+    shape: keyword("list-style-type", [
+      "none",
+      "revert",
+      "disc",
+      "circle",
+      "square",
+      "decimal",
+      "decimal-leading-zero",
+      "lower-alpha",
+      "upper-alpha",
+      "lower-roman",
+      "upper-roman",
+    ]),
+    summary: "The marker drawn beside each list item.",
+  },
+  {
     property: "textDecoration",
     group: "typography",
     shape: cssValue("text-decoration"),
