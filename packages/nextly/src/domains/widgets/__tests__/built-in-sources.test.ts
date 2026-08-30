@@ -23,6 +23,52 @@ describe("built-in sources", () => {
     expect(source?.supports).toContain("list");
   });
 
+  it("keeps the FIRST declaration when two declared fields share a name", () => {
+    // `readableFields` flattens unnamed presentational groups into the level
+    // they sit in, so a top-level `title` and a `title` inside an unnamed group
+    // arrive as two entries with one name. `validateSourceFields` refuses a
+    // duplicate -- correctly, since a repeated name collapses two fields into
+    // one entry in the query validator's allowlist -- but the refusal aborted
+    // the whole rebuild rather than this one collection. Deduplicated before
+    // the source is built, keeping the first declaration, which is the one an
+    // author reading their config top to bottom means.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "title", type: "number" },
+        ],
+        timestamps: false,
+      },
+    ]);
+
+    const fields = getSource("collection:posts")?.fields ?? [];
+    expect(fields.filter(f => f.name === "title")).toHaveLength(1);
+    // The FIRST declaration: `text` maps to `string`, the later `number` to
+    // `number`, so the surviving type says which one was kept.
+    expect(fields.find(f => f.name === "title")?.type).toBe("string");
+  });
+
+  it("does not let one collection's duplicate name unpublish the others", () => {
+    // The consequence the deduplication exists for. `refreshCollectionSources`
+    // rebuilds every collection source in one pass, so a throw on one member
+    // used to take the whole install's sources with it.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "title", type: "text" },
+        ],
+      },
+      { slug: "pages", fields: [{ name: "heading", type: "text" }] },
+    ]);
+
+    expect(getSource("collection:posts")).toBeDefined();
+    expect(getSource("collection:pages")).toBeDefined();
+  });
+
   it("exposes only the collection's own declared fields", () => {
     // No `timestamps` key: an absent flag defaults to ON, the way
     // `defineCollection` normalizes it and the way the registry stores it.

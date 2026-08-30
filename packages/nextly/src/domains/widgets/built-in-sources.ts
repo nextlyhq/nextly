@@ -80,13 +80,35 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
   }
 }
 
-/** The declared fields a collection exposes to widgets, minus anything unreadable. */
+/**
+ * The declared fields a collection exposes to widgets, minus anything
+ * unreadable and minus any repeat of a name already taken.
+ *
+ * Deduplicated HERE rather than left to `validateSourceFields` to refuse,
+ * because a collection can produce a duplicate without its author writing one:
+ * `readableFields` flattens unnamed presentational groups into the level they
+ * sit in, so a top-level `title` and a `title` inside a layout group arrive as
+ * two entries carrying one name. Refusing that is right for a source declared
+ * by hand and wrong for one DERIVED from a collection -- and the blast radius
+ * is the whole install, since `refreshCollectionSources` rebuilds every
+ * collection source in one pass.
+ *
+ * The FIRST declaration wins, which is the one an author reading their own
+ * config from the top means: a layout group appended below cannot displace the
+ * field it shadows.
+ */
 function exposedFields(
   fields: Array<{ name: string; type: string }>
 ): WidgetSourceField[] {
-  return fields
-    .filter(field => !NEVER_EXPOSED_FIELD_TYPES.has(field.type))
-    .map(field => ({ name: field.name, type: toSourceType(field.type) }));
+  const taken = new Set<string>();
+  const exposed: WidgetSourceField[] = [];
+  for (const field of fields) {
+    if (NEVER_EXPOSED_FIELD_TYPES.has(field.type)) continue;
+    if (taken.has(field.name)) continue;
+    taken.add(field.name);
+    exposed.push({ name: field.name, type: toSourceType(field.type) });
+  }
+  return exposed;
 }
 
 /** One collection, in the shape a widget source is built from. */

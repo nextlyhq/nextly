@@ -288,17 +288,71 @@ function assertGeoOperatorValue(
 }
 
 /**
- * Confirms a single field's condition value cannot smuggle in an operator or
- * a field name the earlier checks never see, and cannot silently compile to
- * no condition at all (see `assertFieldConditionUsable`).
+ * The facts every level of the `where` walk needs, carried once instead of
+ * threaded as four parallel parameters.
+ *
+ * `op` is in here because a geo predicate's legality depends on it: the same
+ * clause is executable under `list` and refused under `count` (see
+ * {@link assertGeoOperatorCountable}), so the walk cannot decide a condition
+ * without knowing which operation it is being validated for.
  */
-function assertFieldConditionShape(field: string, value: unknown): void {
+interface WhereScope {
+  source: WidgetSource;
+  declared: ReadonlySet<string>;
+  op: WidgetOp;
+}
+
+/**
+ * Confirms the requested OPERATION can carry this geo operator at all.
+ *
+ * `countEntries` refuses a geo predicate unconditionally, and correctly:
+ * `extractGeoFilters` lifts `near`/`within` out of the `where` and
+ * `applyGeoFilters` evaluates them in memory over the rows `listEntries`
+ * fetched, of which a count has none -- and `buildWhereClause` emits no SQL for
+ * them, so a total that simply ignored one would describe every candidate the
+ * filter was meant to exclude.
+ *
+ * So a geographic `count` is not a query that runs badly; it is one the
+ * executor rejects. Accepting it here and letting it fail in its batch slot
+ * breaks the promise this validator exists to keep -- that an accepted query is
+ * one the executor will run -- and it breaks it at the least useful moment,
+ * with the reason attached to a widget's result rather than to the query that
+ * asked for it.
+ *
+ * Keyed on `GEO_OPERATORS` rather than on a list of ops that "need rows", so a
+ * geo operator added to that vocabulary is refused here without a second edit.
+ */
+function assertGeoOperatorCountable(
+  op: WidgetOp,
+  field: string,
+  operator: string
+): void {
+  if (op !== "count" || !GEO_OPERATORS.has(operator)) return;
+  fail(
+    `where operator "${operator}" on field "${field}" cannot be counted. ` +
+      `Geo predicates are evaluated over fetched rows, so they apply to a ` +
+      `list but not to a count`
+  );
+}
+
+/**
+ * Confirms a single field's condition value cannot smuggle in an operator or
+ * a field name the earlier checks never see, cannot silently compile to
+ * no condition at all (see `assertFieldConditionUsable`), and names no operator
+ * the requested op cannot execute.
+ */
+function assertFieldConditionShape(
+  field: string,
+  value: unknown,
+  op: WidgetOp
+): void {
   const entries = assertFieldConditionUsable(field, value);
   if (!entries) return;
   for (const [operator, operatorValue] of entries) {
     assertOperatorAllowed(field, operator);
     assertOperatorValueShape(field, operator, operatorValue);
     assertGeoOperatorValue(field, operator, operatorValue);
+    assertGeoOperatorCountable(op, field, operator);
   }
 }
 
@@ -353,8 +407,7 @@ function assertCombinatorBranches(
 function walkWhereClause(
   where: Record<string, unknown>,
   depth: number,
-  source: WidgetSource,
-  declared: ReadonlySet<string>
+  scope: WhereScope
 ): void {
   if (depth > MAX_WHERE_DEPTH) {
     fail(`where clause is nested too deeply (max ${MAX_WHERE_DEPTH})`);
@@ -363,19 +416,16 @@ function walkWhereClause(
     if (key === "and" || key === "or") {
       const branches = assertCombinatorBranches(key, value);
       for (const branch of branches) {
-        walkWhereClause(
-          branch as Record<string, unknown>,
-          depth + 1,
-          source,
-          declared
-        );
+        walkWhereClause(branch as Record<string, unknown>, depth + 1, scope);
       }
       continue;
     }
-    if (!declared.has(key)) {
-      fail(`where references undeclared field "${key}" on "${source.id}"`);
+    if (!scope.declared.has(key)) {
+      fail(
+        `where references undeclared field "${key}" on "${scope.source.id}"`
+      );
     }
-    assertFieldConditionShape(key, value);
+    assertFieldConditionShape(key, value, scope.op);
   }
 }
 
@@ -421,14 +471,16 @@ function cloneWhereOrUndefined(
   }
 }
 
-/** Confirms every field named in `where` was declared, at every nesting depth. */
-function assertWhereFieldsDeclared(
-  source: WidgetSource,
+/**
+ * Confirms every field named in `where` was declared, at every nesting depth,
+ * and that every operator it names is one the requested op can execute.
+ */
+function assertWhereClauseUsable(
   where: Record<string, unknown> | undefined,
-  declared: ReadonlySet<string>
+  scope: WhereScope
 ): void {
   if (where === undefined) return;
-  walkWhereClause(where, 0, source, declared);
+  walkWhereClause(where, 0, scope);
 }
 
 /**
@@ -438,10 +490,27 @@ function assertWhereFieldsDeclared(
  * The same reasoning as `cloneWhereOrUndefined`, one level down: validating
  * the caller's array and then spreading it into the result is two reads of
  * every index, and an index can be an accessor too.
+ *
+ * An EMPTY array is refused, for the reason `where: { and: [] }` and an empty
+ * condition object are refused one field over: it reads as the narrowest
+ * possible request and produces the widest possible answer. "Select nothing"
+ * is not a projection the read path can express -- `listEntries` applies a
+ * selection only when it has keys (`Object.keys(params.select).length > 0`),
+ * so an empty one falls through to an UNSELECTED read and the whole document
+ * reaches a widget that asked for none of it.
+ *
+ * Refused here rather than given a second meaning in the executor. The
+ * keys-required rule is the framework's, shared by every caller of
+ * `nextly.find`, so teaching the widget seam its own reading of `[]` would be
+ * a second implementation of field selection rather than a fix. A widget that
+ * genuinely wants no fields back asks for `op: "count"`.
  */
 function copySelectOrUndefined(select: unknown): string[] | undefined {
   if (select === undefined) return undefined;
   if (!Array.isArray(select)) fail("select must be an array of field names");
+  if (select.length === 0) {
+    fail("select is empty, which reads every field rather than none");
+  }
   return [...(select as unknown[])] as string[];
 }
 
@@ -564,7 +633,7 @@ export function validateReadWidgetQuery(
   const where = cloneWhereOrUndefined(raw.where);
   const select = copySelectOrUndefined(raw.select);
 
-  assertWhereFieldsDeclared(source, where, declared);
+  assertWhereClauseUsable(where, { source, declared, op });
   assertSelectFieldsDeclared(source, select, declared);
   const sort = assertSortFieldDeclared(source, raw.sort, declared);
   const status = assertValidStatus(raw.status);

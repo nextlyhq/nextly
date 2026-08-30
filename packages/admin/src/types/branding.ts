@@ -1,3 +1,4 @@
+import type { PluginAdminWidget } from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -57,29 +58,28 @@ export interface PluginPageMeta {
 /**
  * A plugin dashboard widget, delivered via `/admin-meta`.
  *
+ * DERIVED from the server's declaration rather than restated beside it.
  * `buildPluginAdminMeta` assigns `contributes.admin.widgets` to the meta
- * verbatim, so this and the server's `PluginAdminWidget` are one shape --
- * declared twice, which is why they were free to drift. They had: the server
- * made `component` OPTIONAL while this kept it required, and nothing compared
- * the two, so a plugin adopting the server's shape reached `PluginSlot` with
- * `path === undefined` and rendered an empty grid cell silently.
+ * verbatim, so the two are one shape -- and while they were one shape declared
+ * twice they drifted twice. First `component`: the server made it optional
+ * while this kept it required, so a plugin adopting the server's shape reached
+ * `PluginSlot` with `path === undefined` and rendered an empty grid cell
+ * silently. Then the declarative half -- `title`, `description`, `icon`,
+ * `category`, `archetype`, `defaultSize`, `minSize`, `maxSize`, `query` and
+ * `link` -- which the server serializes on every contributed widget and this
+ * copy never gained, so admin code reading a property that was PRESENT on the
+ * wire got a type error for it.
  *
- * `component` is required on BOTH sides again, and `admin-contributions.test-d.ts`
- * pins it there -- so widening it in core is now a compile error at the
- * declaration rather than an empty cell at runtime. That is a DECLARED
- * dependency rather than a structural one: deriving this from
- * `PluginAdminWidget` would be better and is not reachable today, because this
- * package's tsconfig maps the bare `nextly` specifier to `../nextly/src` and so
- * shadows the package exports, pulling core's whole source tree in with
- * internal path aliases this project does not carry. Whoever changes either
- * declaration must change both.
+ * An alias makes that a compile error at the one declaration instead of a
+ * convention two files have to keep. It is reachable through `nextly/config`
+ * specifically: this package's tsconfig maps the BARE `nextly` specifier to
+ * `../nextly/src`, so importing from `"nextly"` shadows the package exports and
+ * pulls core's whole source tree in behind internal `@nextly/*` aliases this
+ * project does not declare. Subpaths are not covered by that mapping, so
+ * `nextly/config` resolves through the export map to the built declaration
+ * bundle, exactly as a consumer's would.
  */
-export interface PluginWidgetMeta {
-  id: string;
-  component: string;
-  size?: "full" | "half";
-  requiredPermission?: string;
-}
+export type PluginWidgetMeta = PluginAdminWidget;
 
 /**
  * A plugin's public client configuration, served before a session exists.
