@@ -742,6 +742,44 @@ describe("a colour typed one character at a time", () => {
     expect(onSwatchSelect).toHaveBeenCalled();
   });
 
+  it("finishes a deferred draft when the press replaced NOTHING", () => {
+    /*
+     * The other half of the null-destination guard. Skipping that blur hands
+     * the draft to the press's own action — but a swatch with no handler
+     * replaces nothing, and focus has already left the field, so no further
+     * blur is coming. Left there, the draft dies with the picker.
+     *
+     * The control is the case above it, where the swatch DOES have a handler
+     * and this must stay quiet: without that pair, a picker finishing on every
+     * click would satisfy this one.
+     */
+    const onColorChange = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const preset = screen.getByRole("button", { name: "Primary" });
+    preset.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+    preset.dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true })
+    );
+    fireEvent.click(preset);
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
   it("DOES finish on a blur with no destination when no press is in progress", () => {
     // The control for the case above: focus leaving to nowhere — a window
     // losing focus, say — is still a finish.

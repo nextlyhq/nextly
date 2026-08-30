@@ -190,6 +190,12 @@ export function ColorPicker<TValue = string>({
    * blur carrying no destination can be told from focus genuinely leaving.
    */
   const insidePress = React.useRef(false);
+  /**
+   * Whether a finish was DEFERRED rather than declined: a blur carrying no
+   * destination arrived during an inside press, so the press's own action was
+   * given the chance to supersede the draft instead.
+   */
+  const owedFinish = React.useRef(false);
   /** Undoes a touch press that is waiting to see whether it becomes a tap. */
   const pendingTap = React.useRef<(() => void) | null>(null);
   /**
@@ -224,7 +230,13 @@ export function ColorPicker<TValue = string>({
   // colour has several spellings, and `#FFF` arriving back as `#ffffff` would
   // otherwise reset the surface on every change.
   const rendered = toHexString(hsva, showAlpha);
-  React.useEffect(() => {
+  /*
+   * At LAYOUT timing, matching the listener below. A passive effect leaves the
+   * stale draft readable for a moment the native capture listener is already
+   * refreshed for, so an outside press arriving in between publishes the old
+   * text over the colour the host has just supplied.
+   */
+  useIsomorphicLayoutEffect(() => {
     const incoming = parseHex(color);
     if (
       incoming &&
@@ -274,11 +286,13 @@ export function ColorPicker<TValue = string>({
    * blur that has already been queued will read it before React renders.
    */
   const dropDraft = (): void => {
+    owedFinish.current = false;
     draftRef.current = null;
     setDraftHex(null);
   };
 
   const commitDraft = (): void => {
+    owedFinish.current = false;
     const text = draftRef.current;
     // Taken BEFORE anything else, so a second caller in this same dispatch
     // finds nothing to report rather than the value this one is publishing.
@@ -440,13 +454,36 @@ export function ColorPicker<TValue = string>({
     const onPointerUp = (): void => {
       insidePress.current = false;
     };
+    /*
+     * The finish a null-destination blur DEFERRED rather than cancelled.
+     *
+     * On engines that do not focus a button when it is pressed, the field's
+     * blur is skipped so the press's own action can supersede the draft. Where
+     * that action replaces nothing — a swatch with no handler, a cancelled
+     * sample — the draft would otherwise sit pending with focus already outside
+     * the picker, and no further blur is coming to finish it.
+     *
+     * BUBBLE phase, so the action has already run: a swatch that did replace
+     * the value has dropped the draft by now and there is nothing left to
+     * report. Only a draft that survived its own press, with focus outside,
+     * finishes here.
+     */
+    const onClickResolve = (): void => {
+      // Only a finish that was actually deferred. Reading focus alone would
+      // finish on any click that happens to land while focus is elsewhere,
+      // including one this picker had no part in.
+      if (!owedFinish.current) return;
+      latestCommit.current();
+    };
     owner.addEventListener("pointerdown", onPointerDown, true);
     owner.addEventListener("pointercancel", onPointerCancel, true);
     owner.addEventListener("pointerup", onPointerUp, true);
+    owner.addEventListener("click", onClickResolve, false);
     return () => {
       owner.removeEventListener("pointerdown", onPointerDown, true);
       owner.removeEventListener("pointercancel", onPointerCancel, true);
       owner.removeEventListener("pointerup", onPointerUp, true);
+      owner.removeEventListener("click", onClickResolve, false);
     };
   });
 
@@ -568,7 +605,10 @@ export function ColorPicker<TValue = string>({
         // A blur with NO destination during a press that began inside is that
         // press, not a departure: some engines do not focus a button when it is
         // pressed, and finishing here would beat the click that supersedes it.
-        if (next === null && insidePress.current) return;
+        if (next === null && insidePress.current) {
+          owedFinish.current = true;
+          return;
+        }
         commitDraft();
       }}
     >
