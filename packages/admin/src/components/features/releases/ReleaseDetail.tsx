@@ -40,6 +40,7 @@ import type {
   ReleaseState,
 } from "@admin/types/releases";
 
+import { BlockedReleaseNotice } from "./BlockedReleaseNotice";
 import { CancelReleaseButton } from "./CancelReleaseButton";
 import { releaseErrorMessage } from "./release-error";
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
@@ -327,6 +328,12 @@ export function ReleaseDetail({ id }: { id: string }) {
   return (
     <>
       <Header release={release.data} contentsKnown={contentsKnown} />
+
+      {/* Above the contents, because it changes what the contents MEAN: this
+          is not a list of what will ship, it is a list of what did not. */}
+      {release.data.state === "blocked" ? (
+        <BlockedReleaseNotice blockers={release.data.blockedBy ?? []} />
+      ) : null}
 
       <section aria-labelledby="release-contents">
         <div className="mb-3 flex items-baseline justify-between gap-3">

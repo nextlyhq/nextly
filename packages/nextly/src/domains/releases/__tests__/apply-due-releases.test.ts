@@ -961,6 +961,19 @@ describe("a release nothing about retrying could fix is STOPPED", () => {
     expect(result.blocked).toBe(1);
   });
 
+  it("blocks a member whose author has been DEACTIVATED", async () => {
+    // Found by breaking the classifier: with `AUTHOR_UNAVAILABLE` reclassified
+    // as retryable, the whole suite stayed green — so the commonest permanent
+    // failure of the three had no coverage at all. A departed colleague is the
+    // ordinary way a release becomes unrunnable.
+    const d = deps({
+      runAs: { findUser: async id => ({ id, isActive: false }) },
+    });
+    const result = await applyDueReleases(d);
+    expect(blockedBy(d)).toEqual(["r1"]);
+    expect(result.blocked).toBe(1);
+  });
+
   it("blocks a locale-scoped member", async () => {
     const d = deps({ members: [member({ locale: "de" })] });
     await applyDueReleases(d);

@@ -98,6 +98,13 @@ function namespace() {
             ])
           )
       ),
+      // Answers a blocker, so a case can assert the detail read ASKED. A stub
+      // returning nothing looks identical to a route that never asked, which is
+      // the failure worth catching: the state says "blocked" and the screen
+      // then has nothing to tell the operator to fix.
+      blockingReasons: vi.fn(async () => [
+        { memberId: "m1", reason: "AUTHOR_GONE" as const },
+      ]),
       schedule: vi.fn(async () => undefined),
       cancel: vi.fn(async () => undefined),
     },
@@ -639,5 +646,38 @@ describe("filtering the list to the releases holding ONE document", () => {
     const { res, query } = await queryFor(search);
     expect(res.status).toBe(400);
     expect(query).toBeUndefined();
+  });
+});
+
+describe("the detail read explains a BLOCKED release", () => {
+  async function detail(state: string) {
+    const api = namespace();
+    api.releases.findByID = vi.fn(async () => ({ id: "r1", state }));
+    getCachedNextly.mockResolvedValue(api);
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1"),
+      "getRelease",
+      { releaseId: "r1" }
+    );
+    // `respondDoc` sends the document ITSELF — there is no `item` wrapper, and
+    // reading one would make both cases below pass by finding undefined.
+    return { api, body: (await res.json()) as { blockedBy?: unknown } };
+  }
+
+  it("asks WHY, and sends it, when the release is blocked", async () => {
+    // Without this the state is a dead end: it says the launch will not happen
+    // and nothing says which member to fix.
+    const { api, body } = await detail("blocked");
+    expect(api.releases.blockingReasons).toHaveBeenCalled();
+    expect(body.blockedBy).toEqual([{ memberId: "m1", reason: "AUTHOR_GONE" }]);
+  });
+
+  it("does not ask for a release that is fine", async () => {
+    // The control, and a real cost: the question runs an identity lookup over
+    // every member, and asking it on every detail read would pay that to be
+    // told nothing is wrong — which the state already said.
+    const { api, body } = await detail("scheduled");
+    expect(api.releases.blockingReasons).not.toHaveBeenCalled();
+    expect(body.blockedBy).toBeUndefined();
   });
 });

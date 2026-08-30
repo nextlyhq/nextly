@@ -550,7 +550,14 @@ const RELEASE_OPERATIONS: Record<
     // The detail read is exactly where the controls are rendered, so this is
     // the one place the extra permission reads are certainly wanted.
     const [item] = await withCapabilities([release], caller, releases);
-    return respondDoc(item);
+    // Only for a release that is actually stopped. Asking otherwise would put
+    // an identity lookup on every detail read to answer "nothing is wrong",
+    // which the state already said.
+    const blockedBy =
+      release.state === "blocked"
+        ? await releases.blockingReasons({ ...caller, releaseId })
+        : undefined;
+    return respondDoc({ ...item, ...(blockedBy ? { blockedBy } : {}) });
   },
 
   createRelease: async ({ request, caller, releases }) => {

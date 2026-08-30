@@ -96,6 +96,20 @@ export interface Release {
    * calling it a publish.
    */
   memberAction?: ReleaseMemberAction;
+  /**
+   * What stands between this release and its instant, per member.
+   *
+   * Sent only on a detail read of a BLOCKED release, and derived there rather
+   * than recorded when the drain stopped — so it stops naming a cause somebody
+   * has already fixed, instead of telling an operator their repair did nothing.
+   */
+  blockedBy?: ReleaseBlocker[];
+}
+
+/** One member standing between a release and its instant. */
+export interface ReleaseBlocker {
+  memberId: string;
+  reason: "NO_AUTHOR" | "AUTHOR_GONE" | "LOCALE_SCOPED";
 }
 
 export interface ReleaseMember {
