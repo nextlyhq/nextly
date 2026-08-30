@@ -237,6 +237,13 @@ function assertFieldConditionShape(field: string, value: unknown): void {
  * array, is refused outright rather than coerced into "zero branches" or
  * skipped: coercing a malformed shape into an empty, harmless-looking one is
  * exactly how it went unrefused before.
+ *
+ * An EMPTY array is refused for the same reason `null` and `{}` are refused
+ * under a field name (see `assertFieldConditionUsable`): zero branches compile
+ * to no condition at all, so a query its author wrote as filtered returns
+ * every row instead. Accepting `[]` as a harmless no-op while refusing `null`
+ * and `{}` on exactly that argument was the inconsistency -- and `[]` is the
+ * value the coercion this function replaced used to manufacture.
  */
 function assertCombinatorBranches(
   key: "and" | "or",
@@ -244,6 +251,9 @@ function assertCombinatorBranches(
 ): unknown[] {
   if (!Array.isArray(value)) {
     fail(`where "${key}" must be an array of conditions`);
+  }
+  if (value.length === 0) {
+    fail(`where "${key}" is empty, which matches every row`);
   }
   for (const branch of value) {
     if (

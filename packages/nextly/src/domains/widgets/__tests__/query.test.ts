@@ -193,6 +193,42 @@ describe("validateWidgetQuery", () => {
       ).toThrow(/where "and" must be an array/);
     });
 
+    it("refuses an EMPTY `and` array, which matches every row", () => {
+      // The same reason `null` and `{}` are refused under a field name: zero
+      // branches compile to no condition at all, so an accepted query the
+      // author wrote as filtered returns every row instead. Accepting `[]`
+      // while refusing `null` and `{}` for that identical reason was the
+      // inconsistency.
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { and: [] },
+        })
+      ).toThrow(/where "and" is empty, which matches every row/);
+    });
+
+    it("refuses an EMPTY `or` array too", () => {
+      expect(() =>
+        validateWidgetQuery({
+          source: "collection:posts",
+          op: "count",
+          where: { or: [] },
+        })
+      ).toThrow(/where "or" is empty, which matches every row/);
+    });
+
+    it("still accepts a combinator with branches", () => {
+      // The negative control: refusing every combinator would pass both tests
+      // above and break every non-trivial widget.
+      const q = validateWidgetQuery({
+        source: "collection:posts",
+        op: "count",
+        where: { or: [{ status: { equals: "draft" } }] },
+      });
+      expect(q.where).toEqual({ or: [{ status: { equals: "draft" } }] });
+    });
+
     it("refuses a non-object branch inside an `and` array", () => {
       expect(() =>
         validateWidgetQuery({
@@ -333,8 +369,13 @@ describe("validateWidgetQuery", () => {
           reads++;
           // First (and, after the fix, ONLY) read is benign. A getter-based
           // TOCTOU relies on a second read landing after the first read was
-          // approved -- that second read must never happen.
-          return reads === 1 ? [] : [{ secretScore: { equals: 1 } }];
+          // approved -- that second read must never happen. The benign value
+          // carries a real branch because an empty combinator is now refused
+          // in its own right, which would end the test before the property
+          // under test is reached.
+          return reads === 1
+            ? [{ status: { equals: "draft" } }]
+            : [{ secretScore: { equals: 1 } }];
         },
       };
       const q = validateWidgetQuery({
@@ -343,7 +384,7 @@ describe("validateWidgetQuery", () => {
         where,
       });
       expect(reads).toBe(1);
-      expect(q.where).toEqual({ and: [] });
+      expect(q.where).toEqual({ and: [{ status: { equals: "draft" } }] });
     });
 
     it("a getter on a declared field's condition cannot answer differently to the walk than to the returned value", () => {
