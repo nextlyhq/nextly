@@ -11,7 +11,7 @@
  *
  * @module blocks/quote
  */
-import { blockTypeClassName, defineBlock } from "@nextlyhq/blocks-engine";
+import { defineBlock } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
@@ -50,16 +50,19 @@ export function renderQuote({
   const markText = markProp?.("text");
   const markSource = markProp?.("source");
 
-  // The attributed branch wraps this in a `<figure>` that takes the block's
-  // class, so the quotation itself would otherwise carry none — and a
-  // `<blockquote>` a user agent has indented by its own margin needs the class
-  // in order for that margin to be zeroed. Without it the same quote steps
-  // further right for no reason an author gave.
+  // Deliberately UNCLASSED. The attributed branch wraps this in a `<figure>`
+  // that already takes the block's class, and giving the same class to the
+  // quotation inside it applies the whole default twice — the indent as well as
+  // the reset — so an attributed quote steps in further than a bare one and a
+  // node-local override reaches the figure while the nested copy stays put.
+  //
+  // The cost is that this element keeps whatever inline margin a user agent
+  // gives it in a host with no reset. That is one rule short of correct rather
+  // than two applications of it, and closing it needs a way for a block to
+  // state a rule for an element INSIDE itself, which a block-type default is
+  // not.
   const blockquote = (
-    <blockquote
-      className={blockTypeClassName(QUOTE_BLOCK)}
-      {...(citeUrl === undefined ? {} : { cite: citeUrl })}
-    >
+    <blockquote {...(citeUrl === undefined ? {} : { cite: citeUrl })}>
       <p {...markText}>{quoted}</p>
     </blockquote>
   );

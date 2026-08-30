@@ -152,6 +152,13 @@ describe("core/quote", () => {
     // not read as the attribution leaking in.
     const quoted = /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/.exec(out)?.[1];
     expect(quoted).toBe("<p>Words</p>");
+
+    // The quotation carries no block-type class of its own. The figure is the
+    // root and already has it, so repeating it here would apply the whole
+    // default twice — indenting an attributed quote further than a bare one,
+    // and leaving the inner copy standing when a node-local style overrides
+    // the root.
+    expect(out).not.toMatch(/<blockquote[^>]*nx-bt-core--quote/);
     expect(out).toContain("<figcaption>Ada, <cite>A Book</cite></figcaption>");
   });
 
