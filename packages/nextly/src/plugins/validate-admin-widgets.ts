@@ -18,7 +18,7 @@
  */
 
 import type { PluginAdminWidget } from "./admin-contributions";
-import { adminWidgetError } from "./admin-widget-error";
+import { adminWidgetError, adminWidgetShapeError } from "./admin-widget-error";
 import { jsonOnly, unserializableKeys } from "./json-round-trip";
 import type { PluginDefinition } from "./plugin-context";
 
@@ -32,6 +32,52 @@ import type { PluginDefinition } from "./plugin-context";
 function widgetLabel(widget: unknown, index: number): string {
   const id: unknown = (widget as { id?: unknown } | null)?.id;
   return typeof id === "string" && id.trim() !== "" ? id : `#${index}`;
+}
+
+/**
+ * The two fields the admin grid cannot draw a widget without, and what each is
+ * for.
+ *
+ * Checked HERE rather than by borrowing `validateWidgetDefinition`, which
+ * validates a different shape and would reject valid contributions. That
+ * validator requires `title`, `archetype` and `defaultSize` -- all OPTIONAL on
+ * `PluginAdminWidget` -- insists on `namespace/name` for the id, which this
+ * contract puts no shape on at all, and FORBIDS `component` on any archetype
+ * but `custom`, where this contract requires it on every widget. The two
+ * disagree field for field, so the reuse would be a name rather than a shared
+ * decision.
+ *
+ * `id` keys the grid cell, so a blank one collides with every other blank one
+ * and React reconciles two different widgets as one. `component` is the only
+ * thing the grid draws: `PluginWidgetGrid` passes it to `PluginSlot`, and an
+ * empty or absent path renders a blank card.
+ */
+const REQUIRED_WIDGET_TEXT = ["id", "component"] as const;
+
+/**
+ * Whether a decoded property carries real, non-whitespace text.
+ *
+ * Trimmed rather than length-checked: a component path made of spaces resolves
+ * no better than an empty one, which is the same reading
+ * `validateWidgetDefinition` takes of a `custom` widget's component.
+ */
+function isUsableText(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+/**
+ * The name of the first required field this widget cannot supply, or
+ * `undefined` when both are present.
+ *
+ * Reads the DECODED value rather than the caller's object, so a getter that
+ * answered once for this check cannot answer differently for the
+ * serialization -- the same reason `validatedAdminWidgets` publishes the
+ * decoded value.
+ */
+function missingRequiredText(
+  widget: Record<string, unknown>
+): string | undefined {
+  return REQUIRED_WIDGET_TEXT.find(field => !isUsableText(widget[field]));
 }
 
 /**
@@ -62,6 +108,20 @@ export function validatedAdminWidgets(
     const serializable = jsonOnly(widget);
     if (serializable === undefined) {
       throw adminWidgetError(plugin.name, label, unserializableKeys(widget));
+    }
+    // On the DECODED value, and after the round trip, so what is checked is
+    // exactly what ships. Before this, `jsonOnly` was the only gate a
+    // contributed widget passed, and it has nothing to say about a field being
+    // blank or absent: `{ id: "stats", component: "" }` is perfectly good
+    // JSON, so it was cast to `PluginAdminWidget` and published, and the grid
+    // drew an empty card from it.
+    const missing = missingRequiredText(serializable);
+    if (missing !== undefined) {
+      throw adminWidgetShapeError(
+        plugin.name,
+        label,
+        `declares no usable "${missing}"`
+      );
     }
     publishable.push(serializable as unknown as PluginAdminWidget);
   }

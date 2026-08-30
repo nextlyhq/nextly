@@ -95,6 +95,93 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
+  it("refuses a widget whose component is an empty string", () => {
+    // `component` is required by the TYPE, which reaches a TypeScript caller
+    // and nothing else. A plugin authored in JavaScript, or one whose manifest
+    // arrives as parsed JSON, passes the JSON round trip with `component: ""`
+    // and is then CAST to `PluginAdminWidget` and published -- and
+    // `PluginWidgetGrid` hands that empty path straight to `PluginSlot`, which
+    // draws the blank dashboard cell making `component` required was supposed
+    // to prevent.
+    expect(() =>
+      assertAdminWidgets([withWidget({ id: "stats", component: "" })])
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a widget whose component is only whitespace", () => {
+    // A path made of spaces resolves no better than an empty one, which is the
+    // same reading `validateWidgetDefinition` takes of a `custom` widget's
+    // component.
+    expect(() =>
+      assertAdminWidgets([withWidget({ id: "stats", component: "   " })])
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a widget carrying no component at all", () => {
+    expect(() => assertAdminWidgets([withWidget({ id: "stats" })])).toThrow(
+      NextlyError
+    );
+  });
+
+  it("refuses a widget carrying no usable id", () => {
+    // The grid keys each cell on `id`, so a blank one collides with every
+    // other blank one and React reconciles two different widgets as one.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({ id: "  ", component: "@acme/p/admin#Stats" }),
+      ])
+    ).toThrow(NextlyError);
+    expect(() =>
+      assertAdminWidgets([withWidget({ component: "@acme/p/admin#Stats" })])
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a component that is not a string", () => {
+    // JSON carries a number happily, so the round trip has nothing to say
+    // about it.
+    expect(() =>
+      assertAdminWidgets([withWidget({ id: "stats", component: 7 })])
+    ).toThrow(NextlyError);
+  });
+
+  it("names the plugin and the widget in the shape failure too", () => {
+    // The same diagnostic the JSON refusal gives, so an author reading a boot
+    // failure can find the entry whichever way it was malformed.
+    let thrown: unknown;
+    try {
+      assertAdminWidgets([withWidget({ id: "stats", component: "" })]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    expect((thrown as NextlyError).logMessage).toContain("@acme/p");
+    expect((thrown as NextlyError).logMessage).toContain("stats");
+  });
+
+  it("accepts an id that is not in `namespace/name` form", () => {
+    // The control that keeps the check from being widened into
+    // `validateWidgetDefinition`'s. `PluginAdminWidget` puts no shape on `id`
+    // -- a bare `stats` is a legal contribution, and rejecting it would refuse
+    // valid plugins in the name of fixing this.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({ id: "stats", component: "@acme/p/admin#Stats" }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("accepts a widget declaring no title, archetype or defaultSize", () => {
+    // The other half of that control. Those three are REQUIRED on a
+    // `WidgetDefinition` and OPTIONAL on a `PluginAdminWidget`, so borrowing
+    // the definition validator here would reject the shape this file exists to
+    // check.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({ id: "stats", component: "@acme/p/admin#Stats" }),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a plugin contributing no widgets at all", () => {
     expect(() =>
       assertAdminWidgets([
