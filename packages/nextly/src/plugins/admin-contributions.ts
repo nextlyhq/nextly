@@ -144,13 +144,26 @@ export interface PluginAdminPage {
 /**
  * @experimental A plugin-contributed dashboard widget.
  *
- * Rendered on the admin dashboard and gated on `requiredPermission`. Still
- * `@experimental`: the declarative half (`title`, `archetype`, `defaultSize`,
- * `query`) is published so the SERVER can validate and execute a widget's
- * query, but the admin grid currently renders only `component` + `size` --
- * archetype-driven rendering is admin-side work tracked separately. A widget
- * that declares an archetype and no component therefore has nowhere to render
- * yet.
+ * `component` is REQUIRED, and that is the honest shape rather than a
+ * conservative one. `PluginWidgetGrid` -- the only consumer -- renders
+ * `PluginSlot path={widget.component}` and sizes the cell from `widget.size`.
+ * There is no archetype-driven grid yet, so a widget declaring an archetype
+ * and no component reaches `PluginSlot` with `path === undefined` and draws an
+ * empty cell: accepted at every layer, rendering nothing, reporting nothing.
+ * Requiring the one field that can render is what makes that unrepresentable.
+ *
+ * The declarative fields (`title`, `archetype`, `defaultSize`, `query`, the
+ * size bounds) are therefore OPTIONAL. They are published so the SERVER can
+ * describe and execute a widget's query today, and so the archetype grid can
+ * read them when it lands; making them required would break every existing
+ * `{ id, component, size }` declaration at the type level in exchange for
+ * fields nothing renders from yet. When that grid exists and can draw a widget
+ * from its archetype alone, `component` becomes conditional -- and that is a
+ * change with a consumer behind it rather than ahead of it.
+ *
+ * `size` is not deprecated: it is the ONLY sizing the current grid reads.
+ * `defaultSize` is read by nothing yet, and nothing anywhere maps one onto the
+ * other.
  *
  * `requiredPermission` decides whether the CARD renders. It does NOT constrain
  * the rows a widget's query returns -- the query executor enforces that, and
@@ -158,25 +171,23 @@ export interface PluginAdminPage {
  */
 export interface PluginAdminWidget {
   id: string;
-  title: string;
+  /** Component rendered for this widget. The grid draws nothing else. */
+  component: ComponentPath;
+  /** Column span the current grid honours: `half` spans 6 of 12, `full` spans 12. */
+  size?: "full" | "half";
+  requiredPermission?: PermissionSlug;
+  title?: string;
   description?: string;
   icon?: string;
   category?: string;
-  archetype: WidgetArchetype;
-  defaultSize: WidgetSize;
+  archetype?: WidgetArchetype;
+  /** Read by the archetype grid when it exists; the current grid reads `size`. */
+  defaultSize?: WidgetSize;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
-  requiredPermission?: PermissionSlug;
-  /** Required for every data archetype. */
+  /** The widget's data request, validated and executed server-side. */
   query?: WidgetQuery;
-  /** Required for `archetype: "custom"`. */
-  component?: ComponentPath;
   link?: { label: string; href: string };
-  /**
-   * @deprecated Use `defaultSize`. `"half"` maps to `"lg"` and `"full"` to
-   * `"full"`; honoured so existing declarations keep rendering.
-   */
-  size?: "full" | "half";
 }
 
 /**
@@ -204,9 +215,10 @@ export interface PluginCollectionView {
  * by the host without running the plugin.
  *
  * Consumed: `menu`, `pages` + `settings`, `views`, `widgets`.
- * `widgets` is consumed server-side (validation + query execution); the
- * archetype-driven grid that renders the declarative half is admin-side work
- * tracked separately.
+ * `widgets` is consumed twice over: the admin grid renders `component` and
+ * `size`, and the server validates and executes `query`. The archetype-driven
+ * grid that would render the rest is admin-side work tracked separately, which
+ * is why `component` stays required (see `PluginAdminWidget`).
  */
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */

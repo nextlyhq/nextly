@@ -328,7 +328,7 @@ const KEYS_WITHOUT_COMPONENTS = new Set([
 interface ExposedPaths {
   /** Paths the admin resolves through the registry — each needs an import. */
   registered: string[];
-  /** Widget component paths (custom archetype only): deliberately NOT imported. */
+  /** Widget component paths: deliberately NOT imported into the generated map. */
   widgets: string[];
   /** Emitted keys this helper classifies neither way. Must stay empty. */
   unclassified: string[];
@@ -378,12 +378,7 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
 
   return {
     registered,
-    // `component` is optional on a widget (required only for
-    // `archetype: "custom"`, checked at registration rather than by the
-    // type), so a data-archetype widget contributes nothing here.
-    widgets: (meta.widgets ?? [])
-      .map(widget => widget.component)
-      .filter((path): path is string => Boolean(path)),
+    widgets: (meta.widgets ?? []).map(widget => widget.component),
     unclassified: Object.keys(meta).filter(
       key =>
         !readsComponents.has(key) &&
@@ -451,11 +446,20 @@ describe("parity with the admin-meta surface", () => {
       expect(collected.has(path)).toBe(true);
     }
 
-    // Widget components are excluded from the STATIC import map on purpose:
-    // they are `archetype: "custom"` only, resolved through the same
-    // string-path registry pages/settings/fieldTypes use, not pre-bundled
-    // ahead of time. Asserted rather than left to a fixture that happens to
-    // declare none.
+    // Widget components are excluded from the STATIC import map, and this
+    // records the exclusion rather than explaining it away.
+    //
+    // What pages, settings and fieldTypes get is a pre-bundled entry in this
+    // generated map, and that entry is what registers their string path; the
+    // registry `PluginSlot` reads is otherwise empty for that path and it
+    // renders its fallback. So a widget component is not "resolved through the
+    // same registry, just not pre-bundled" -- being pre-bundled is what puts
+    // it in the registry. A widget component reaches `PluginSlot` only if the
+    // plugin registers it ITSELF from its admin entry, the way
+    // `plugin-page-builder` calls `registerComponents` for its own.
+    //
+    // Asserted rather than left to a fixture that happens to declare no
+    // widgets, so whoever wires codegen to emit them sees this go red.
     expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
     expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
 

@@ -130,10 +130,14 @@ describe("executeWidgetQuery", () => {
     // purpose -- naming the source would confirm to a caller which sources
     // exist. The id survives in `logContext`, which is what this asserts, so
     // an executor that refused everything indiscriminately would not pass.
-    const err = await executeWidgetQuery(q, caller).catch(
-      (e: unknown) => e as NextlyError
-    );
-    expect(NextlyError.is(err)).toBe(true);
+    let thrown: unknown;
+    try {
+      await executeWidgetQuery(q, caller);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(NextlyError.is(thrown)).toBe(true);
+    const err = thrown as NextlyError;
     expect(err.publicMessage).toBe(
       "Invalid widget query: unavailable source or unsupported op"
     );
