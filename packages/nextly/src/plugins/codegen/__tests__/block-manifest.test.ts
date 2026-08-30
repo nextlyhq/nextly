@@ -120,6 +120,21 @@ describe("buildBlockManifest", () => {
     expect(manifest.blocks[0]).not.toHaveProperty("island");
   });
 
+  it("refuses an unknown key inside island, as the JSON Schema does", () => {
+    // Zod strips an unknown key by default while `blockManifestJsonSchema()`
+    // declares `additionalProperties: false` and refuses it. Left loose, the
+    // two published validators answer differently about one manifest — and the
+    // object one accepts is not the object the other describes.
+    expect(() =>
+      buildBlockManifest([
+        consumer(),
+        declaring("@acme/a", [
+          block("acme/x", { island: { reason: "r", extra: true } }),
+        ]),
+      ])
+    ).toThrow();
+  });
+
   it("refuses a blank reason here, as registration does at boot", () => {
     // The two gates answering differently is how a manifest generates cleanly
     // for a block the engine then refuses to register — generation succeeding

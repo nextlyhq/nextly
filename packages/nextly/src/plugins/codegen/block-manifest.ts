@@ -233,8 +233,14 @@ export const blockManifestEntrySchema = z
      * cleanly for a block the engine then refuses at boot. `\S` rather than a
      * length check for the same reason the description above uses it: a reason
      * of spaces is a reason nobody can read.
+     *
+     * STRICT, like the entry that contains it. Zod strips an unknown key by
+     * default while the emitted JSON Schema declares `additionalProperties:
+     * false` and refuses it — so the two published validators would hand a
+     * consumer different answers about one manifest, and the object one accepts
+     * is not the object the other describes.
      */
-    island: z.object({ reason: z.string().regex(/\S/) }).optional(),
+    island: z.strictObject({ reason: z.string().regex(/\S/) }).optional(),
     /**
      * Named child regions, for container blocks.
      *

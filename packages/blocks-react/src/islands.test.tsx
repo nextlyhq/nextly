@@ -167,6 +167,104 @@ describe("a block stored under a slot its parent may not draw", () => {
   });
 });
 
+describe("a document whose shape a reader cannot control", () => {
+  const box = {
+    name: "test/box",
+    version: 1,
+    description: "Draws its children always.",
+    example: { props: {} },
+    slots: { children: {} },
+    render: () => null,
+  } as unknown as AnyBlockDefinition;
+
+  const deep = createBlockResolver([box, ticker]);
+
+  it("answers for nesting deeper than the call stack", () => {
+    // A stored document is untrusted input and its depth is bounded by nothing
+    // this function controls. A recursive descent threw `RangeError` before
+    // returning any answer — so asking whether a page needs JavaScript was the
+    // thing that failed, on a document a reader had no chance to reject first.
+    let node: Record<string, unknown> = {
+      id: "leaf",
+      type: "test/ticker",
+      version: 1,
+      props: {},
+    };
+    for (let depth = 0; depth < 15000; depth += 1) {
+      node = {
+        id: `n${depth}`,
+        type: "test/box",
+        version: 1,
+        props: {},
+        slots: { children: [node] },
+      };
+    }
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    } as unknown as BlockDocument;
+
+    // Does not THROW, which is the property. It answers `{}`, and that is the
+    // right answer rather than a shortfall: the read preparation caps document
+    // depth, so the leaf is truncated away and the renderer draws nothing there
+    // either. Asserting the ticker WERE found would demand this disagree with
+    // the page.
+    expect(() => islandsFor(document, deep)).not.toThrow();
+    expect(islandsFor(document, deep)).toEqual({});
+  });
+
+  it("still finds an island at a depth the page actually renders", () => {
+    // The control the assertion above needs, and it is doing real work: `{}` is
+    // also what a walk that read nothing returns, so without this the deep case
+    // would pass against a function that had stopped looking entirely.
+    let node: Record<string, unknown> = {
+      id: "leaf",
+      type: "test/ticker",
+      version: 1,
+      props: {},
+    };
+    for (let depth = 0; depth < 3; depth += 1) {
+      node = {
+        id: `n${depth}`,
+        type: "test/box",
+        version: 1,
+        props: {},
+        slots: { children: [node] },
+      };
+    }
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    } as unknown as BlockDocument;
+
+    expect(Object.keys(islandsFor(document, deep))).toEqual(["test/ticker"]);
+  });
+
+  it("terminates on a node that contains itself", () => {
+    // A cycle is reachable through a hand edit or a bad migration. Termination
+    // comes from the read preparation, which caps depth and so hands this walk
+    // a finite tree — asserted here because that is a property this function
+    // DEPENDS on rather than one it implements, and nothing else would notice
+    // if the cap moved.
+    const cyclic: Record<string, unknown> = {
+      id: "n0",
+      type: "test/box",
+      version: 1,
+      props: {},
+    };
+    cyclic.slots = { children: [cyclic] };
+    const document = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [cyclic],
+    } as unknown as BlockDocument;
+
+    expect(islandsFor(document, deep)).toEqual({});
+  });
+});
+
 describe("the core block library", () => {
   it("declares no islands, so a page of core blocks adds no JavaScript", () => {
     // The nightly Lighthouse budget measures the BYTES on a real page in a

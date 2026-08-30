@@ -21,6 +21,7 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { withTypographyDefaults } from "./blocks/typography-defaults";
+import { prepareDocumentForRead } from "./prepare-document";
 import type { DocumentReadStages } from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import {
@@ -251,18 +252,42 @@ export function islandsFor(
   document: BlockDocument,
   blocks: BlockResolver
 ): Record<string, BlockIsland> {
+  // The RENDER-EQUIVALENT tree, not the stored one. A node can be condition
+  // gated, resolve to a placeholder, or belong to a block whose props draw
+  // nothing — in each case the renderer emits no markup for it, and naming its
+  // island tells a caller the page needs JavaScript that never arrives.
+  //
+  // Reused rather than re-derived: this is the sequence the renderer itself
+  // runs, so the two cannot answer differently. Three passes decided separately
+  // is how a gated node's assets stayed on a page whose markup was withheld.
+  const prepared = prepareDocumentForRead(document, { resolver: blocks });
+  if (prepared === null) return {};
+
   const found: Record<string, BlockIsland> = {};
-  const visit = (nodes: readonly BlockNode[]): void => {
-    for (const node of nodes) {
-      const definition = blocks.get(node.type);
-      const island = definition?.island;
-      if (island !== undefined && found[node.type] === undefined) {
-        found[node.type] = island;
-      }
-      for (const children of drawnSlots(node, definition)) visit(children);
+  // ITERATIVE, and the depth this walks is the PREPARED tree's rather than the
+  // stored one's. Preparation caps document depth, so a chain of any length —
+  // and a node that contains itself — arrives here already finite. The stack is
+  // what keeps that a property of this function rather than a fact borrowed
+  // from another module: a recursive descent threw `RangeError` on a deep
+  // document before returning any answer, and a reader asking whether a page
+  // needs JavaScript should not be the thing that fails.
+  //
+  // No visited set. With the tree already bounded there is nothing for one to
+  // catch, and a guard whose rejection branch cannot run is memory spent to
+  // look careful.
+  const stack: BlockNode[] = [...prepared.nodes];
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) continue;
+
+    const definition = blocks.get(node.type);
+    const island = definition?.island;
+    if (island !== undefined && found[node.type] === undefined) {
+      found[node.type] = island;
     }
-  };
-  visit(document.nodes);
+    stack.push(...drawnSlots(node, definition));
+  }
   return found;
 }
 
@@ -282,14 +307,13 @@ export function islandsFor(
 function drawnSlots(
   node: BlockNode,
   definition: AnyBlockDefinition | undefined
-): BlockNode[][] {
+): BlockNode[] {
   const slots = node.slots;
   if (slots === undefined) return [];
   const conditional = new Set(definition?.conditionalSlots ?? []);
   return Object.keys(definition?.slots ?? {})
     .filter(name => !conditional.has(name))
-    .map(name => slots[name])
-    .filter((children): children is BlockNode[] => children !== undefined);
+    .flatMap(name => slots[name] ?? []);
 }
 
 /**
