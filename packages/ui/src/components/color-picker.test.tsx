@@ -795,6 +795,48 @@ describe("a colour typed one character at a time", () => {
     expect(onColorChange).toHaveBeenCalledWith("#123456");
   });
 
+  it("reports ONLY the sample when the EYEDROPPER succeeds after a null blur", async () => {
+    /*
+     * Sampling resolves later than the click that would otherwise settle the
+     * deferred finish, so the typed colour was reported first and the sampled
+     * one after it — two persisted edits for the one the author made.
+     *
+     * Asserted on the CALL COUNT as well as the value: reporting `#abcdef`
+     * last is true of the broken version too.
+     */
+    const onColorChange = vi.fn();
+    const windowWithEyeDropper = window as unknown as Record<string, unknown>;
+    windowWithEyeDropper.EyeDropper = class {
+      open(): Promise<{ sRGBHex: string }> {
+        return Promise.resolve({ sRGBHex: "#abcdef" });
+      }
+    };
+
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const eyedropper = screen.getByRole("button", {
+      name: "Pick a colour from the screen",
+    });
+    eyedropper.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+    eyedropper.dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true })
+    );
+    fireEvent.click(eyedropper);
+    await act(async () => undefined);
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#abcdef");
+
+    delete windowWithEyeDropper.EyeDropper;
+  });
+
   it("keeps a draft when the EYEDROPPER is cancelled", async () => {
     /*
      * The eyedropper's button is inside the picker, so pressing it is not a

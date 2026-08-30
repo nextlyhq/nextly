@@ -563,10 +563,28 @@ export function ColorPicker<TValue = string>({
       | (new () => EyeDropperLike)
       | undefined;
     if (!ctor) return;
+    /*
+     * This press OWNS whatever finish its own blur deferred. Sampling either
+     * replaces the draft or is cancelled, and both answers arrive later than
+     * the click — so leaving the deferral to be settled on that click reports
+     * the typed colour first and the sampled one after it, two edits for the
+     * one the author made.
+     *
+     * Claimed synchronously, before the first await, because the click that
+     * would otherwise settle it is already on its way.
+     */
+    const owed = owedFinish.current;
+    owedFinish.current = false;
     let sampled: string;
     try {
       sampled = (await new ctor().open()).sRGBHex;
     } catch {
+      /*
+       * Dismissed, so nothing replaces the draft and the finish its own blur
+       * deferred is now due: focus has already left the field, and no further
+       * blur is coming to carry it.
+       */
+      if (owed) commitDraft();
       // The user dismissed the picker. Not an error, and nothing to report.
       // Scoped to `open()` alone: with the commit inside this block, a host
       // whose `onColorChange` throws — a failing save, a rejected validation —
