@@ -27,6 +27,10 @@
 
 import { container } from "../../di/container";
 import { getNextlyLogger } from "../../observability/logger";
+import {
+  addressableFields,
+  type UnvalidatedContainer,
+} from "../../shared/addressable-fields";
 
 import { registerBuiltInSources } from "./built-in-sources";
 
@@ -35,10 +39,9 @@ import { registerBuiltInSources } from "./built-in-sources";
  *
  * Structural rather than the imported `DynamicCollectionRecord`, so the widget
  * domain names what it reads instead of depending on the collections domain's
- * whole record shape. `fields` is the author's own field configs; a `group`
- * field is a layout container over named children and carries no `name` of its
- * own, so entries without one are dropped rather than admitted as a source
- * field no query could ever reference.
+ * whole record shape. `fields` is the author's own field configs, containers
+ * included, so it is walked rather than read one level deep -- see
+ * `readableFields` for which containers are transparent and why.
  */
 interface RegisteredCollection {
   slug?: unknown;
@@ -56,15 +59,48 @@ interface CollectionRegistrySurface {
   getAllCollections(): Promise<RegisteredCollection[]>;
 }
 
-/** Keeps only the field entries that carry both a name and a type. */
+/**
+ * Whether an unnamed container's children are stored at ITS level, and so
+ * belong in this collection's column list.
+ *
+ * An unnamed GROUP is layout: its children are stored at the level the group
+ * sits in, which is exactly what a widget query addresses. An unnamed REPEATER
+ * is not: its children are stored PER ROW, so declaring one would be a promise
+ * the read path cannot keep -- the query passes validation and fails on a
+ * missing column, the same failure declaring `createdAt` on a collection with
+ * `timestamps: false` produces.
+ *
+ * Decided DURING the walk rather than filtered afterwards, because it cannot be
+ * done afterwards: the walk emits the children themselves, so a field reached
+ * through an unnamed repeater is the same object as one reached through an
+ * unnamed group and ancestry is gone by the time a predicate could read it.
+ */
+function storedAtThisLevel(container: UnvalidatedContainer): boolean {
+  return container.type === "group";
+}
+
+/**
+ * The fields stored at this collection's own level, with presentational groups
+ * flattened, keeping only entries that carry both a name and a type.
+ *
+ * Uses the shared `addressableFields` walk rather than a second traversal.
+ * "Which fields are addressable at this level" is one question with one
+ * implementation, and it is the one that already knows a named group stores its
+ * children under itself while an unnamed one does not -- the distinction that,
+ * missing here, made every field inside an unnamed group unreachable to
+ * `select`, `sort` and `where` even though the collection stores it at the top
+ * level. That walk is also iterative and cycle-guarded, so a group that
+ * contains itself terminates instead of overflowing the stack.
+ */
 function readableFields(
   fields: unknown
 ): Array<{ name: string; type: string }> {
-  if (!Array.isArray(fields)) return [];
   const usable: Array<{ name: string; type: string }> = [];
-  for (const raw of fields as unknown[]) {
-    const field = raw as { name?: unknown; type?: unknown } | null;
-    if (typeof field?.name === "string" && typeof field.type === "string") {
+  for (const raw of addressableFields(fields, {
+    descendInto: storedAtThisLevel,
+  })) {
+    const field = raw as { name?: unknown; type?: unknown };
+    if (typeof field.name === "string" && typeof field.type === "string") {
       usable.push({ name: field.name, type: field.type });
     }
   }

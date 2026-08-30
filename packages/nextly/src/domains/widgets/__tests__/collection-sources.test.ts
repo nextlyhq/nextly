@@ -189,3 +189,124 @@ describe("refreshCollectionSources", () => {
     ).toBe(false);
   });
 });
+
+describe("fields inside a presentational group are addressable", () => {
+  // A group with NO name is layout: its children are stored and queried at the
+  // level the group sits in. Dropping the container without traversing it
+  // therefore made every field inside one unreachable -- the source refused a
+  // valid `select`, `sort` or `where` naming a column the collection has.
+  it("declares a field inside an unnamed group", async () => {
+    registryHolds([
+      {
+        slug: "posts",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            type: "group",
+            fields: [{ name: "seoTitle", type: "text" }],
+          },
+        ] as unknown as Row["fields"],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(getSource("collection:posts")?.fields.map(f => f.name)).toContain(
+      "seoTitle"
+    );
+  });
+
+  it("flattens a group nested inside another unnamed group", async () => {
+    registryHolds([
+      {
+        slug: "posts",
+        fields: [
+          {
+            type: "group",
+            fields: [
+              { type: "group", fields: [{ name: "ogImage", type: "text" }] },
+            ],
+          },
+        ] as unknown as Row["fields"],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(getSource("collection:posts")?.fields.map(f => f.name)).toContain(
+      "ogImage"
+    );
+  });
+
+  it("declares a NAMED group under its own name, not its children", async () => {
+    // What the shared walker says, rather than what a widget source might
+    // prefer: a named group stores its children UNDER itself, so the group is
+    // the addressable thing at this level and `seoTitle` is not.
+    registryHolds([
+      {
+        slug: "posts",
+        fields: [
+          {
+            name: "meta",
+            type: "group",
+            fields: [{ name: "seoTitle", type: "text" }],
+          },
+        ] as unknown as Row["fields"],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const names = getSource("collection:posts")?.fields.map(f => f.name);
+    expect(names).toContain("meta");
+    expect(names).not.toContain("seoTitle");
+  });
+
+  it("does NOT declare a field inside an unnamed REPEATER", async () => {
+    // The distinction the shared walker exists to make. A repeater's children
+    // are stored PER ROW, not at this level, so declaring one would be a
+    // promise the read path cannot keep -- the query passes validation and
+    // fails on a missing column, which is the same failure `timestamps: false`
+    // produces and which the source list is built to avoid.
+    registryHolds([
+      {
+        slug: "posts",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            type: "repeater",
+            fields: [{ name: "lineItem", type: "text" }],
+          },
+        ] as unknown as Row["fields"],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const names = getSource("collection:posts")?.fields.map(f => f.name);
+    expect(names).toContain("title");
+    expect(names).not.toContain("lineItem");
+  });
+
+  it("still withholds a password nested inside an unnamed group", async () => {
+    // Traversal must not become a way around the never-exposed types: the
+    // filter runs on what the walk emits, not on the top level only.
+    registryHolds([
+      {
+        slug: "users",
+        fields: [
+          {
+            type: "group",
+            fields: [{ name: "secret", type: "password" }],
+          },
+        ] as unknown as Row["fields"],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(
+      getSource("collection:users")?.fields.map(f => f.name)
+    ).not.toContain("secret");
+  });
+});
