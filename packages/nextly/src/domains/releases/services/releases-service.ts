@@ -180,6 +180,40 @@ export interface ReleasesServiceDeps {
   }) => Promise<boolean>;
 }
 
+/**
+ * The engine's total order over two members, ascending.
+ *
+ * The same three keys `resolveReleaseEffect` decides a winner with — instant,
+ * then the member's creation time, then its id — because a document's releases
+ * are read as a SEQUENCE and the last of them is its final state. Two releases
+ * naming one instant is not an edge case, and any comparator that stops at the
+ * instant leaves those in the order the driver happened to return, which
+ * differs by dialect.
+ */
+function byEngineOrder(
+  a: { scheduledAt: Date; createdAt: Date; memberId: string },
+  b: { scheduledAt: Date; createdAt: Date; memberId: string }
+): number {
+  const byScheduled = a.scheduledAt.getTime() - b.scheduledAt.getTime();
+  if (byScheduled !== 0) return byScheduled;
+  const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
+  if (byCreated !== 0) return byCreated;
+  return a.memberId < b.memberId ? -1 : a.memberId > b.memberId ? 1 : 0;
+}
+
+/** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
+function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
+  if (query.state !== undefined && row.state !== query.state) return false;
+  const at = row.scheduledAt?.getTime();
+  if (query.scheduledAfter !== undefined) {
+    if (at === undefined || at < query.scheduledAfter.getTime()) return false;
+  }
+  if (query.scheduledBefore !== undefined) {
+    if (at === undefined || at > query.scheduledBefore.getTime()) return false;
+  }
+  return true;
+}
+
 export interface FindReleasesQuery {
   /**
    * Restrict to one lifecycle state.
@@ -431,9 +465,10 @@ export class ReleasesService {
    * saying it that way avoids a second implementation of that ordering.
    */
   private async findContaining(
-    ref: DocumentRef,
+    query: FindReleasesQuery & { containing: DocumentRef },
     now: Date
   ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
+    const ref = query.containing;
     const grouped = await this.deps.repository.findDueMembersFor([ref], now);
     const members = grouped.get(documentRefKey(ref)) ?? [];
     if (members.length === 0) return [];
@@ -443,7 +478,7 @@ export class ReleasesService {
     });
     const byId = new Map(releases.map(release => [release.id, release]));
 
-    return members
+    const rows = members
       .flatMap(member => {
         const release = byId.get(member.releaseId);
         // A member whose release vanished between the two reads is dropped
@@ -451,12 +486,27 @@ export class ReleasesService {
         // scheduled, without saying when, is worse than not mentioning it.
         return release === undefined
           ? []
-          : [{ ...release, memberAction: member.action }];
+          : [{ ...release, memberAction: member.action, member }];
       })
-      .sort(
-        (a, b) =>
-          (a.scheduledAt?.getTime() ?? 0) - (b.scheduledAt?.getTime() ?? 0)
-      );
+      // THE ENGINE'S OWN ORDER, not a simpler one that agrees with it most of
+      // the time. `resolveReleaseEffect` breaks a tied instant on the member's
+      // creation time and then on its id, precisely because two releases can
+      // name the same moment and the driver's row order differs by dialect.
+      // Sorting on the instant alone leaves those ties in whatever order the
+      // database returned, so a reader taking the last row as the final state —
+      // which is exactly what this ordering invites — could read the loser.
+      .sort((a, b) => byEngineOrder(a.member, b.member));
+
+    // The document filter NARROWS the list; it does not replace it. A caller
+    // combining it with a window or a limit asked for both, and answering with
+    // releases outside the window is answering a question nobody put.
+    return rows
+      .map(({ member, ...row }) => {
+        void member;
+        return row;
+      })
+      .filter(row => matchesListQuery(row, query))
+      .slice(0, query.limit ?? rows.length);
   }
 
   async find(
@@ -477,7 +527,10 @@ export class ReleasesService {
       });
     }
     if (query.containing !== undefined) {
-      return this.findContaining(query.containing, new Date());
+      return this.findContaining(
+        { ...query, containing: query.containing },
+        new Date()
+      );
     }
     return this.deps.repository.findReleases(query);
   }

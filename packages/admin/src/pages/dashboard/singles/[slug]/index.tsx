@@ -343,6 +343,7 @@ export default function SingleEditPage({
               ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
               : undefined
           }
+          onDefaultLocale={!isNonDefaultLocale}
         />
         {/* A Single is a release member exactly as a collection entry is — the
             engine models both and the release detail page links to both — so

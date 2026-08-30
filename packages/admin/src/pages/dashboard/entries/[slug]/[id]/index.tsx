@@ -475,6 +475,15 @@ export default function EditEntryPage({
             />
           }
         >
+          {/* A custom edit view replaces the FORM, not the facts about the
+              document. Its editor is as able to save changes into a scheduled
+              release as any other, and omitting the banner here would withhold
+              the warning from precisely the documents a project cared enough
+              about to build a bespoke editor for. */}
+          <ScheduledReleaseBanner
+            document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+            onDefaultLocale={!isNonDefaultLocale}
+          />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
               that puts a child in the content column can only place a
@@ -536,6 +545,7 @@ export default function EditEntryPage({
             inside a scheduled release is exactly where an editor needs both. */}
         <ScheduledReleaseBanner
           document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+          onDefaultLocale={!isNonDefaultLocale}
         />
         {/* Above the form, in the same measure as the editor, because the
             question it asks is about this document as a whole rather than about

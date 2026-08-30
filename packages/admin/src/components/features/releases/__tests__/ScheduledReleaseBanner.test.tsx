@@ -26,7 +26,7 @@ vi.mock("@admin/hooks/queries/useReleases", () => ({
   useReleasesContaining: (
     document: unknown,
     enabled: boolean
-  ): { data: { items: Release[] } | undefined } =>
+  ): { data: { items: Release[] } | undefined; isError: boolean } =>
     containing(document, enabled),
 }));
 
@@ -54,13 +54,13 @@ function release(over: Partial<Release> = {}): Release {
 }
 
 const showing = (items: Release[]) =>
-  containing.mockReturnValue({ data: { items } });
+  containing.mockReturnValue({ data: { items }, isError: false });
 
 beforeEach(() => {
   canFor.mockReset();
   canFor.mockImplementation(() => true);
   containing.mockReset();
-  containing.mockReturnValue({ data: undefined });
+  containing.mockReturnValue({ data: undefined, isError: false });
 });
 
 describe("when the document is in a scheduled release", () => {
@@ -70,7 +70,7 @@ describe("when the document is in a scheduled release", () => {
     // materialisation promotes the working draft — a property of the engine,
     // not a claim this component is free to make.
     showing([release()]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     expect(screen.getByRole("status").textContent).toMatch(
       /changes you save now are included/i
     );
@@ -78,7 +78,7 @@ describe("when the document is in a scheduled release", () => {
 
   it("names the consequence, the moment and its zone", () => {
     showing([release()]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     const text = screen.getByRole("status").textContent ?? "";
     expect(text).toMatch(/goes live/i);
     // The AUTHOR's zone, named. "9am Berlin" survives a daylight-saving
@@ -91,7 +91,7 @@ describe("when the document is in a scheduled release", () => {
     // The control on the case above: a banner that always said "goes live"
     // passes it, and would state the exact opposite of the truth here.
     showing([release({ memberAction: "unpublish" })]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     const text = screen.getByRole("status").textContent ?? "";
     expect(text).toMatch(/comes down/i);
     expect(text).not.toMatch(/goes live/i);
@@ -100,7 +100,7 @@ describe("when the document is in a scheduled release", () => {
   it("does not guess at an action it does not recognise", () => {
     // An engine that gained a third action must not be rendered as a publish.
     showing([release({ memberAction: undefined })]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     const text = screen.getByRole("status").textContent ?? "";
     expect(text).toMatch(/this document changes/i);
     expect(text).not.toMatch(/goes live|comes down/i);
@@ -118,7 +118,7 @@ describe("when the document is in a scheduled release", () => {
         scheduledAt: "2026-09-20T07:00:00.000Z",
       }),
     ]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     const text = screen.getByRole("status").textContent ?? "";
     expect(text).toContain("Launch");
     expect(text).toContain("Takedown");
@@ -127,10 +127,71 @@ describe("when the document is in a scheduled release", () => {
 
   it("links each release to its own page", () => {
     showing([release()]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     expect(
       screen.getByRole("link", { name: "Spring launch" }).getAttribute("href")
     ).toBe("/admin/releases/r1");
+  });
+});
+
+describe("the promise about saved edits matches what will happen", () => {
+  it("does not claim a publish when the document is being TAKEN DOWN", () => {
+    // The sentence is stated once for the whole banner, so it has to be true of
+    // every row. "The release publishes this document" above a row reading
+    // "comes down" is the opposite lifecycle effect, and an editor reading it
+    // believes their work is about to go live when it is about to be withdrawn.
+    showing([release({ memberAction: "unpublish" })]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).toMatch(/taken down rather than published/i);
+    expect(text).not.toMatch(/changes you save now are included/i);
+  });
+
+  it("still promises inclusion when a release does publish it", () => {
+    // The control: without it the case above is satisfied by a banner that
+    // never makes the promise at all, which would remove the point of it.
+    showing([release({ memberAction: "publish" })]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    expect(screen.getByRole("status").textContent).toMatch(
+      /changes you save now are included/i
+    );
+  });
+
+  it("qualifies the promise when both a publish and a takedown are listed", () => {
+    showing([
+      release({ id: "a", memberAction: "publish" }),
+      release({ id: "b", memberAction: "unpublish" }),
+    ]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    expect(screen.getByRole("status").textContent).toMatch(
+      /whichever of these publishes it/i
+    );
+  });
+
+  it("does not promise a TRANSLATION will ship", () => {
+    // A member is whole-document and materialisation performs the locale-less
+    // write, so a draft translation saved here need not become public with the
+    // release. Repeating the promise on that screen tells a translator their
+    // work ships when it may not.
+    showing([release()]);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale={false} />);
+    const text = screen.getByRole("status").textContent ?? "";
+    expect(text).toMatch(/editing a translation/i);
+    expect(text).not.toMatch(/changes you save now are included/i);
+  });
+});
+
+describe("when the lookup FAILED", () => {
+  it("says so rather than looking like nothing is scheduled", () => {
+    // The dangerous collapse: `data` is undefined on an error exactly as it is
+    // before the first response, so `?? []` turns a failure into "nothing
+    // scheduled" and the safety signal disappears at the moment the admin
+    // cannot confirm there is nothing to signal.
+    containing.mockReturnValue({ data: undefined, isError: true });
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
+    expect(screen.getByRole("status").textContent).toMatch(
+      /could not be checked/i
+    );
   });
 });
 
@@ -139,7 +200,9 @@ describe("when it should say nothing at all", () => {
     // The common case by far. A bar reading "not in any release" on every
     // document would be noise on precisely the screens where it matters least.
     showing([]);
-    const { container } = render(<ScheduledReleaseBanner document={DOC} />);
+    const { container } = render(
+      <ScheduledReleaseBanner document={DOC} onDefaultLocale />
+    );
     expect(container.textContent).toBe("");
   });
 
@@ -147,8 +210,10 @@ describe("when it should say nothing at all", () => {
     // Absence and "not yet known" are different, and a banner that flashed in
     // after the page settled would read as the document changing under the
     // editor.
-    containing.mockReturnValue({ data: undefined });
-    const { container } = render(<ScheduledReleaseBanner document={DOC} />);
+    containing.mockReturnValue({ data: undefined, isError: false });
+    const { container } = render(
+      <ScheduledReleaseBanner document={DOC} onDefaultLocale />
+    );
     expect(container.textContent).toBe("");
   });
 
@@ -156,7 +221,7 @@ describe("when it should say nothing at all", () => {
     // `/api/releases` is gated, so an unentitled reader would otherwise produce
     // a 403 under every document they open.
     canFor.mockImplementation(slug => slug !== "read-content-releases");
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     expect(containing).toHaveBeenCalledWith(DOC, false);
   });
 
@@ -164,7 +229,7 @@ describe("when it should say nothing at all", () => {
     // The control: without it the case above passes against a component that
     // never enables the query at all.
     showing([]);
-    render(<ScheduledReleaseBanner document={DOC} />);
+    render(<ScheduledReleaseBanner document={DOC} onDefaultLocale />);
     expect(containing).toHaveBeenCalledWith(DOC, true);
   });
 });

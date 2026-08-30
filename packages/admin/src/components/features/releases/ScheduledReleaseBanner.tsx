@@ -78,17 +78,88 @@ function ReleaseLine({ release }: { release: Release }) {
   );
 }
 
+/**
+ * The promise about saved edits, matched to what will actually happen.
+ *
+ * Stated once for the whole banner, so it has to be true of every row. Saying
+ * "the release publishes this document" above a row reading "comes down" is not
+ * merely imprecise — it is the opposite lifecycle effect, and an editor reading
+ * it would believe their work is about to go live when it is about to be
+ * withdrawn.
+ *
+ * `onDefaultLocale` qualifies it further. A release member is whole-document
+ * and materialisation performs the locale-less write, so a draft translation
+ * saved on a non-default locale need not become public with the release. The
+ * banner says what it knows rather than repeating a promise that does not hold
+ * on that screen.
+ */
+function savedEditsSentence(
+  releases: Release[],
+  onDefaultLocale: boolean
+): string {
+  const publishes = releases.some(r => r.memberAction === "publish");
+  const withdraws = releases.some(r => r.memberAction === "unpublish");
+
+  if (!onDefaultLocale) {
+    return publishes
+      ? "You are editing a translation. The release publishes this document as a whole, so changes to this translation are not what it ships."
+      : "You are editing a translation. The release acts on this document as a whole.";
+  }
+  if (publishes && withdraws) {
+    return "Changes you save now are included in whichever of these publishes it — the release ships this document as it stands at that moment.";
+  }
+  if (publishes) {
+    return "Changes you save now are included — the release publishes this document as it stands at that moment.";
+  }
+  if (withdraws) {
+    return "This document is being taken down rather than published, so saving changes now will not put them live.";
+  }
+  // No row said which way it goes, so neither does this.
+  return "What this release does to this document is not something the admin can name here.";
+}
+
 export interface ScheduledReleaseBannerProps {
   document: ReleaseDocumentRef | undefined;
+  /**
+   * Whether the editor is on the document's default locale.
+   *
+   * The promise about saved edits does not hold on a translation view, and a
+   * banner that repeats it there tells a translator their work ships when it
+   * may not.
+   */
+  onDefaultLocale: boolean;
 }
 
 export function ScheduledReleaseBanner({
   document,
+  onDefaultLocale,
 }: ScheduledReleaseBannerProps) {
   // The list endpoint is gated, so a reader without the grant must not issue a
   // request whose only outcome is a 403 under every document they open.
   const canRead = useCan("read-content-releases");
-  const { data } = useReleasesContaining(document, canRead);
+  const { data, isError } = useReleasesContaining(document, canRead);
+
+  // A LOOKUP THAT FAILED IS NOT AN EMPTY SCHEDULE, and collapsing the two hides
+  // a pending automatic change at exactly the moment the admin cannot confirm
+  // there isn't one. React Query captures the error rather than throwing it to
+  // the page's boundary, so nothing else on this screen would say so either.
+  if (isError) {
+    return (
+      <div
+        role="status"
+        className="flex flex-wrap items-center gap-3 border-b border-border bg-muted px-6 py-3"
+      >
+        <CalendarClock
+          className="size-4 shrink-0 text-muted-foreground"
+          aria-hidden
+        />
+        <p className="text-sm text-muted-foreground">
+          Whether this document is in a scheduled release could not be checked.
+          If it is, saving changes here may affect what goes live.
+        </p>
+      </div>
+    );
+  }
 
   const releases = data?.items ?? [];
   // Nothing scheduled is the overwhelmingly common case, and it deserves no
@@ -122,10 +193,9 @@ export function ScheduledReleaseBanner({
           ))}
         </ul>
         {/* The sentence the whole banner exists for. Stated once, below the
-            rows, so it reads as true of all of them. */}
+            rows, and derived from them so it cannot contradict one. */}
         <p className="mt-1.5 text-sm text-muted-foreground">
-          Changes you save now are included — the release publishes this
-          document as it stands at that moment.
+          {savedEditsSentence(releases, onDefaultLocale)}
         </p>
       </div>
     </div>

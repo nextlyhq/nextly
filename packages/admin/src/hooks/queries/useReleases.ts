@@ -72,14 +72,43 @@ export function useReleasesContaining(
   enabled = true
 ) {
   const params: ReleaseListParams = document ? { containing: document } : {};
-  return useQuery({
+  const query = useQuery({
     queryKey: releaseKeys.list(params),
     queryFn: () => fetchReleases(params),
     // Never asked without a complete reference: the route refuses a partial
     // one, and a 404-shaped error in the console under every document editor
     // is a poor way to say "this document has no id yet".
     enabled: enabled && Boolean(document),
+    // Re-asked while a release is still pending, because the thing that
+    // resolves it is the BACKGROUND DRAIN — no admin mutation runs, so nothing
+    // invalidates this query when the instant passes. An editor with the page
+    // open across that moment would otherwise keep reading that a release is
+    // coming, and that saves are still included, after it has already run.
+    //
+    // Only while something is actually pending: polling a document in no
+    // release, which is nearly all of them, would be a request a minute for an
+    // answer that is always the same.
+    refetchInterval: data =>
+      hasPendingRelease(data.state.data) ? PENDING_RELEASE_POLL_MS : false,
   });
+  return query;
+}
+
+/**
+ * How often to re-ask while a release is still ahead of this document.
+ *
+ * A minute. The banner is a safety signal rather than a clock, so the cost of
+ * being a minute late is that an editor briefly reads a promise that has just
+ * become moot; the cost of polling harder is a request per document editor per
+ * few seconds, for a page that mostly sits open.
+ */
+const PENDING_RELEASE_POLL_MS = 60_000;
+
+/** Whether anything in this answer is still waiting to happen. */
+function hasPendingRelease(
+  data: { items: { state: string }[] } | undefined
+): boolean {
+  return (data?.items ?? []).some(release => release.state === "scheduled");
 }
 
 export function useRelease(id: string | undefined) {
