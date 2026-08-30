@@ -17,6 +17,10 @@ export {
 export {
   MAX_WIDGET_LIMIT,
   validateWidgetQuery,
+  readWidgetQuery,
+  resolveWidgetSource,
+  validateReadWidgetQuery,
+  type RawWidgetQuery,
   type WidgetQuery,
 } from "./query";
 export {
@@ -26,6 +30,7 @@ export {
   registerSource,
   replaceSourcesOfKind,
   getSource,
+  sourceTarget,
   listSources,
   clearSources,
   type WidgetSource,

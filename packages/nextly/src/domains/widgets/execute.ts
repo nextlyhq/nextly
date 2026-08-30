@@ -25,17 +25,11 @@ import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { WhereFilter } from "../collections/query/query-operators";
 
 import type { WidgetQuery } from "./query";
-import { failUnavailableSourceOrOp, getSource } from "./sources";
+import { failUnavailableSourceOrOp, getSource, sourceTarget } from "./sources";
 
 export type WidgetResult =
   | { op: "count"; total: number }
   | { op: "list"; items: Record<string, unknown>[] };
-
-/** `collection:posts` -> `posts`. */
-function sourceTarget(sourceId: string): string {
-  const separator = sourceId.indexOf(":");
-  return separator === -1 ? sourceId : sourceId.slice(separator + 1);
-}
 
 /** `["title","status"]` -> `{ title: true, status: true }`. */
 function toSelect(

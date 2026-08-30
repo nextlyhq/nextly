@@ -28,13 +28,26 @@ vi.mock("../domains/widgets/execute", () => ({ executeWidgetQuery }));
 // `readCaller` resolves role slugs from the database. Mocked so this handler
 // test exercises the batching and error isolation, not the auth stack.
 const { readCaller } = vi.hoisted(() => ({ readCaller: vi.fn() }));
-vi.mock("./authenticated-read", () => ({ readCaller }));
+vi.mock("./authenticated-read", () => ({
+  readCaller,
+  readAccessCaller: (caller: { user: { id: string } }) => ({
+    userId: caller.user.id,
+    authMethod: "session" as const,
+    permissions: [],
+    roles: [],
+  }),
+}));
 
 // The collection registry is reached through the DI container, so the
 // container module is the seam -- the same one `dashboard-scope.test.ts` uses
 // for `DashboardService`.
 const { containerGet } = vi.hoisted(() => ({ containerGet: vi.fn() }));
 vi.mock("../di/container", () => ({ container: { get: containerGet } }));
+
+// The entity-level read decision. Mocked so this handler test can put a caller
+// on either side of it without standing up the RBAC stack.
+const { canReadEntity } = vi.hoisted(() => ({ canReadEntity: vi.fn() }));
+vi.mock("../auth/entity-read-access", () => ({ canReadEntity }));
 
 import { requireAuthentication } from "../auth/middleware";
 import { clearSources } from "../domains/widgets/sources";
@@ -84,6 +97,7 @@ beforeEach(() => {
   });
   readCaller.mockResolvedValue({ user: { id: "user-1", roles: ["editor"] } });
   executeWidgetQuery.mockResolvedValue({ op: "count", total: 3 });
+  canReadEntity.mockResolvedValue(true);
   clearSources();
   logged.length = 0;
   setNextlyLogger(testLogger);
@@ -215,6 +229,106 @@ describe("POST /api/dashboard/query", () => {
     const slots = await slotsOf(res);
     expect(slots[0].error).toBeUndefined();
     expect(slots[0].ok).toBe(true);
+  });
+
+  describe("a source the caller may not read is indistinguishable from one that does not exist", () => {
+    // `validateWidgetQuery` used to run in full BEFORE anything authorized the
+    // source, so the two answers diverged on the first field-level check: a
+    // source that EXISTS returned `where references undeclared field "zzz" on
+    // "collection:salaries"`, and one that does not returned the generic
+    // unavailable-source refusal. Diffing the two walks an install's schema
+    // one collection name at a time.
+    const probe = (source: string) => ({
+      queries: [{ source, op: "list", where: { zzz: { equals: 1 } } }],
+    });
+
+    beforeEach(() => {
+      registeredCollections = [
+        {
+          slug: "salaries",
+          fields: [{ name: "amount", type: "number" }],
+          timestamps: true,
+        },
+      ];
+      canReadEntity.mockResolvedValue(false);
+    });
+
+    it("answers the same for a forbidden source and an unknown one", async () => {
+      const forbidden = await postWidgetQuery(
+        makeReq(probe("collection:salaries"))
+      );
+      const unknown = await postWidgetQuery(makeReq(probe("collection:nope")));
+
+      const a = (await slotsOf(forbidden))[0];
+      const b = (await slotsOf(unknown))[0];
+
+      expect(a.ok).toBe(false);
+      expect(b.ok).toBe(false);
+      expect(a.error).toBe(b.error);
+      expect(a.error).not.toContain("salaries");
+      expect(a.error).not.toContain("zzz");
+    });
+
+    it("answers the same for a forbidden source whose op IS supported", async () => {
+      // `count` is supported by every collection source, so a query that is
+      // otherwise well-formed reaches execution -- where a permission error
+      // would name the refusal and confirm the collection is real.
+      const forbidden = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:salaries", op: "count" }] })
+      );
+      const unknown = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:nope", op: "count" }] })
+      );
+
+      const a = (await slotsOf(forbidden))[0];
+      const b = (await slotsOf(unknown))[0];
+      expect(a.error).toBe(b.error);
+      // Nothing ran: the refusal is taken before the query is compiled.
+      expect(executeWidgetQuery).not.toHaveBeenCalled();
+    });
+
+    it("takes ONE read decision per entity for the whole batch", async () => {
+      // The batch runs concurrently and a dashboard asks the same few
+      // collections repeatedly, so a decision per SLOT fans out simultaneous
+      // permission reads from a cold cache -- the pathology
+      // `AUTHORIZATION_CONCURRENCY` exists to bound. Caching the promise, not
+      // its result, is what makes concurrent slots share one decision.
+      canReadEntity.mockResolvedValue(true);
+      await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "collection:salaries", op: "count" },
+            { source: "collection:salaries", op: "count" },
+            { source: "collection:salaries", op: "count" },
+          ],
+        })
+      );
+
+      expect(canReadEntity).toHaveBeenCalledTimes(1);
+      expect(canReadEntity).toHaveBeenCalledWith(
+        "salaries",
+        expect.objectContaining({ userId: "user-1" })
+      );
+    });
+
+    it("keeps the reason in the log", async () => {
+      await postWidgetQuery(makeReq(probe("collection:salaries")));
+      expect(JSON.stringify(logged)).toContain("collection:salaries");
+    });
+
+    it("still gives a caller who MAY read the source the field-level detail", async () => {
+      // The control. Flattening every pre-authorization answer is only correct
+      // because the detail comes back once the caller has been authorized --
+      // otherwise the fix is indistinguishable from deleting the messages, and
+      // a widget author debugging a typo gets nothing to act on.
+      canReadEntity.mockResolvedValue(true);
+
+      const res = await postWidgetQuery(makeReq(probe("collection:salaries")));
+      const slot = (await slotsOf(res))[0];
+
+      expect(slot.ok).toBe(false);
+      expect(slot.error).toContain("zzz");
+    });
   });
 
   describe("a malformed body answers in the canonical error envelope", () => {

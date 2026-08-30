@@ -14,16 +14,27 @@
  * @module api/widget-query
  */
 
+import { canReadEntity } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { refreshCollectionSources } from "../domains/widgets/collection-sources";
 import { executeWidgetQuery } from "../domains/widgets/execute";
-import { validateWidgetQuery } from "../domains/widgets/query";
+import {
+  readWidgetQuery,
+  resolveWidgetSource,
+  validateReadWidgetQuery,
+} from "../domains/widgets/query";
+import {
+  failUnavailableSourceOrOp,
+  sourceTarget,
+  type WidgetSource,
+} from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
+import type { ReadCaller } from "../services/dashboard/readable-resources";
 
-import { readCaller } from "./authenticated-read";
+import { readAccessCaller, readCaller } from "./authenticated-read";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
 
@@ -115,12 +126,93 @@ const GENERIC_SLOT_ERROR = "An unexpected error occurred.";
  * `withErrorHandler` never sees it and neither did the logger. A dashboard
  * whose widgets all fail left no trace anywhere.
  */
+/**
+ * Refuses, indistinguishably, unless this caller may read what the source
+ * addresses.
+ *
+ * Runs BEFORE any field-level validation, and that ordering is the whole
+ * point. Every message below it is specific -- which field was undeclared,
+ * which operator was unknown -- and a specific message about a source is a
+ * statement that the source EXISTS. With the validator running first, a
+ * collection the caller may not read answered with detail while an invented
+ * name answered generically, and diffing the two walked the install's schema
+ * one collection at a time. A supported `count` was worse: it reached
+ * execution, where the permission refusal itself confirmed the collection was
+ * real.
+ *
+ * So both dead ends collapse into `failUnavailableSourceOrOp` -- the same
+ * string an unknown source gets -- and the reason travels in the log. "You may
+ * not use this source" is one answer whether the source is forbidden, not
+ * executable, or not there at all.
+ *
+ * This is the ENDPOINT's gate rather than the domain's, because the decision
+ * needs the request-resolved caller. `executeWidgetQuery`'s
+ * `overrideAccess: false` remains the enforcement that decides which ROWS come
+ * back; this only decides whether the caller is told anything specific.
+ */
+async function assertSourceReadable(
+  source: WidgetSource,
+  mayRead: (slug: string) => Promise<boolean>
+): Promise<void> {
+  if (source.kind !== "collection") {
+    failUnavailableSourceOrOp(
+      `source "${source.id}" has kind "${source.kind}", which is not executable yet; only collections are`
+    );
+  }
+  const slug = sourceTarget(source.id);
+  if (!(await mayRead(slug))) {
+    failUnavailableSourceOrOp(
+      `caller may not read "${slug}" behind source "${source.id}"`
+    );
+  }
+}
+
+/**
+ * One read decision per ENTITY for the whole batch.
+ *
+ * `canReadEntity` is the same decision `api/dashboard` takes for its own
+ * per-entity reads, so a source a widget may name is one that endpoint would
+ * already have listed -- and it is deny-by-default, answering false for an
+ * unresolvable RBAC service and for an empty caller id.
+ *
+ * Memoized because the batch runs its queries concurrently and a dashboard
+ * asks the same few collections repeatedly: 30 slots naming one collection
+ * would otherwise fan out 30 simultaneous permission reads from a cold cache,
+ * which is the pathology `auth/entity-read-access`'s own
+ * `AUTHORIZATION_CONCURRENCY` exists to bound. The PROMISE is cached rather
+ * than its result, so concurrent slots share the one in-flight decision.
+ *
+ * Per request, never across requests: the verdicts belong to this caller.
+ */
+function readDecisionsFor(
+  caller: ReadCaller
+): (slug: string) => Promise<boolean> {
+  const accessCaller = readAccessCaller(caller);
+  const verdicts = new Map<string, Promise<boolean>>();
+  return slug => {
+    const pending = verdicts.get(slug);
+    if (pending) return pending;
+    const verdict = canReadEntity(slug, accessCaller);
+    verdicts.set(slug, verdict);
+    return verdict;
+  };
+}
+
 async function runOne(
   raw: unknown,
-  caller: Awaited<ReturnType<typeof readCaller>>
+  caller: ReadCaller,
+  mayRead: (slug: string) => Promise<boolean>
 ): Promise<QuerySlot> {
   try {
-    const query = validateWidgetQuery(raw);
+    // Every property of the caller's object is read ONCE, here, and the
+    // already-read value is what the authorization gate and the validator both
+    // work from. Re-reading `source` after authorizing it would let an
+    // accessor answer one id to the gate and another to the validator.
+    const parsed = readWidgetQuery(raw);
+    const source = resolveWidgetSource(parsed.source);
+    await assertSourceReadable(source, mayRead);
+
+    const query = validateReadWidgetQuery(parsed, source);
     const result = await executeWidgetQuery(query, caller);
     return { ok: true, result };
   } catch (error) {
@@ -166,8 +258,9 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
   // for it 20 times.
   const caller = await readCaller(auth);
 
+  const mayRead = readDecisionsFor(caller);
   const results: QuerySlot[] = await Promise.all(
-    queries.map(raw => runOne(raw, caller))
+    queries.map(raw => runOne(raw, caller, mayRead))
   );
 
   return respondData({ results }, { headers: PRIVATE_NO_STORE_HEADERS });

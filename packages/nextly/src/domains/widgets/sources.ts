@@ -240,6 +240,19 @@ export function failUnavailableSourceOrOp(detail: string): never {
   });
 }
 
+/**
+ * The thing a source id ADDRESSES: `collection:posts` -> `posts`.
+ *
+ * One implementation, because two callers ask it for decisions that must
+ * agree: the executor turns it into the collection it reads, and the endpoint
+ * turns it into the slug it authorizes. A copy that disagreed would authorize
+ * one entity and read another.
+ */
+export function sourceTarget(sourceId: string): string {
+  const separator = sourceId.indexOf(":");
+  return separator === -1 ? sourceId : sourceId.slice(separator + 1);
+}
+
 export function listSources(): WidgetSource[] {
   return [...store().values()];
 }

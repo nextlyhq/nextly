@@ -71,7 +71,7 @@ function fail(message: string): never {
  * later step can read the caller's object again, because no later step is
  * handed it.
  */
-interface RawWidgetQuery {
+export interface RawWidgetQuery {
   source: unknown;
   op: unknown;
   where: unknown;
@@ -81,8 +81,17 @@ interface RawWidgetQuery {
   limit: unknown;
 }
 
-/** Narrows `unknown` to an object, then takes its one read of each property. */
-function readEachFieldOnce(query: unknown): RawWidgetQuery {
+/**
+ * Narrows `unknown` to an object, then takes its one read of each property.
+ *
+ * Exported so a caller that must AUTHORIZE the source before it is told
+ * anything specific about the query can do so without reading `source` a
+ * second time. That second read is the whole hazard this function exists to
+ * remove: an accessor is free to answer `collection:allowed` to an
+ * authorization gate and `collection:secret` to the validator that follows.
+ * Read once, here, and pass the result down.
+ */
+export function readWidgetQuery(query: unknown): RawWidgetQuery {
   if (typeof query !== "object" || query === null) fail("expected an object");
   const q = query as Record<string, unknown>;
   return {
@@ -97,7 +106,7 @@ function readEachFieldOnce(query: unknown): RawWidgetQuery {
 }
 
 /** Resolves `source` against the registry. A caller-invented id cannot exist here. */
-function resolveSource(source: unknown): WidgetSource {
+export function resolveWidgetSource(source: unknown): WidgetSource {
   if (typeof source !== "string") {
     failUnavailableSourceOrOp("source is required");
   }
@@ -110,8 +119,12 @@ function resolveSource(source: unknown): WidgetSource {
  * Confirms the source declares support for the requested op.
  *
  * Refuses through `failUnavailableSourceOrOp`, the same refusal an unknown
- * source gets, deliberately: "does not support op" would otherwise confirm the
- * source EXISTS and let a caller enumerate the install's collections.
+ * source gets: "does not support op" would otherwise confirm the source
+ * EXISTS. `POST /api/dashboard/query` now authorizes the source before it
+ * reaches this point, so on THAT path the flattening is belt-and-braces rather
+ * than the gate -- but `validateWidgetQuery` is public API and its own
+ * composition runs no authorization, so for a direct caller this is still the
+ * only thing standing between an unsupported op and a source-existence oracle.
  */
 function assertSupportedOp(source: WidgetSource, op: unknown): WidgetOp {
   if (typeof op !== "string" || !source.supports.includes(op as WidgetOp)) {
@@ -458,9 +471,29 @@ function clampLimit(limit: unknown): number {
  * limit is a bounded, finite integer.
  */
 export function validateWidgetQuery(query: unknown): WidgetQuery {
-  const raw = readEachFieldOnce(query);
+  const raw = readWidgetQuery(query);
+  return validateReadWidgetQuery(raw, resolveWidgetSource(raw.source));
+}
 
-  const source = resolveSource(raw.source);
+/**
+ * The rest of the validation, once the source has been resolved.
+ *
+ * Split from {@link validateWidgetQuery} so a caller can AUTHORIZE the source
+ * in between. Everything below this line answers with a specific reason --
+ * which field was undeclared, which operator was unknown -- and a specific
+ * reason about a source is a statement that the source is real. Running the
+ * whole validator before any access decision therefore made the endpoint a
+ * source-enumeration oracle: an existing collection answered with detail and a
+ * nonexistent one answered generically, and diffing the two walked the
+ * install's schema one name at a time.
+ *
+ * It takes the ALREADY-READ `raw` rather than the caller's object, so no
+ * property is read twice across the two halves.
+ */
+export function validateReadWidgetQuery(
+  raw: RawWidgetQuery,
+  source: WidgetSource
+): WidgetQuery {
   const op = assertSupportedOp(source, raw.op);
   const declared = new Set(source.fields.map(f => f.name));
 
