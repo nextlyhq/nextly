@@ -692,6 +692,68 @@ describe("EmailTemplateService", () => {
       expect(preview.html).toBe("<p>Bare</p>");
     });
 
+    /*
+     * The three properties below are what a preview must share with a send.
+     * Each one previously differed: the preview dropped the preheader, left a
+     * layout's own `{{year}}`/`{{appName}}` blank when the caller did not pass
+     * them, and HTML-escaped a subject that is delivered as plain text.
+     */
+    it("carries the hidden preheader the send path prepends", async () => {
+      const template = await service.createTemplate({
+        name: "With Preheader",
+        slug: "with-preheader",
+        subject: "Subject",
+        preheader: "Your account is ready",
+        htmlContent: "<p>Body</p>",
+        useLayout: false,
+      });
+
+      const preview = await service.previewTemplate(template.id, {});
+
+      expect(preview.html).toContain("Your account is ready");
+      expect(preview.html.startsWith('<div style="display:none;')).toBe(true);
+    });
+
+    it("fills a layout's year and appName when the caller omits them", async () => {
+      await service.createTemplate({
+        name: "Default Layout",
+        slug: "default-layout",
+        kind: "layout",
+        subject: "",
+        htmlContent: "{{content}}<footer>{{appName}} {{year}}</footer>",
+        useLayout: false,
+      });
+
+      const template = await service.createTemplate({
+        name: "Needs Layout Defaults",
+        slug: "needs-layout-defaults",
+        subject: "Subject",
+        htmlContent: "<p>Body</p>",
+        useLayout: true,
+      });
+
+      const preview = await service.previewTemplate(template.id, {});
+
+      expect(preview.html).toContain("Nextly");
+      expect(preview.html).toMatch(/\d{4}/);
+    });
+
+    it("does not HTML-escape the subject, which is delivered as plain text", async () => {
+      const template = await service.createTemplate({
+        name: "Ampersand Subject",
+        slug: "ampersand-subject",
+        subject: "{{co}} & you",
+        htmlContent: "<p>Body</p>",
+        useLayout: false,
+      });
+
+      const preview = await service.previewTemplate(template.id, {
+        co: "Ben & Jerry",
+      });
+
+      expect(preview.subject).toBe("Ben & Jerry & you");
+    });
+
     it("throws NOT_FOUND for a nonexistent template ID", async () => {
       await expect(
         service.previewTemplate("nonexistent-id", {})
