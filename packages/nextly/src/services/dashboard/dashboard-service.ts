@@ -125,7 +125,7 @@ export class DashboardService extends BaseService {
     ] = await Promise.all([
       this.getCollectionCounts(collections),
       this.countTable("media"),
-      this.countRecentChanges24h(),
+      this.countRecentChanges24h(scope),
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
@@ -389,7 +389,31 @@ export class DashboardService extends BaseService {
     }
   }
 
-  private async countRecentChanges24h(): Promise<number> {
+  /**
+   * Count the last 24 hours of `activity_log` rows the caller may READ.
+   *
+   * `activity_log` spans every collection, so an unscoped count answers a
+   * different question from the `collectionCounts` beside it in the same
+   * `/stats` response: one honours the caller's scope and the other does not,
+   * and the number itself then discloses that changes exist outside the
+   * caller's reach. `ActivityLogService.getRecentActivity` filters this table
+   * with an `IN` on `collection`; this is the same filter applied to the count.
+   *
+   * The other counters in `getStats` (`media`, `users`, `roles`, `permissions`,
+   * active API keys) stay unscoped. They are uniformly unscoped rather than
+   * newly inconsistent, and what a scoped admin metric should mean is a design
+   * question rather than a defect in this table's filter.
+   *
+   * @param scope - What the caller may read. An empty `some` returns 0 without
+   *   querying: it admits nothing, and an empty `IN ()` is a syntax error on
+   *   some dialects, so the short-circuit has to happen before the query is
+   *   built rather than as a driver rejection swallowed by the catch below.
+   */
+  private async countRecentChanges24h(
+    scope: ReadableResources
+  ): Promise<number> {
+    if (scope.kind === "some" && scope.resources.size === 0) return 0;
+
     try {
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
       // Phase A follow-up: same dialect-aware formatter as above. The
@@ -397,15 +421,34 @@ export class DashboardService extends BaseService {
       // SQLite rejects.
       const cutoffParam = this.dateForRawBind(cutoff);
       const q = this.dialect === "mysql" ? "`" : '"';
-      const ph = this.dialect === "postgresql" ? "$1" : "?";
 
-      const sql =
+      // Placeholder numbering derives from `params.length` at the moment each
+      // value is pushed, never from a fixed index: the `IN` list contributes
+      // as many parameters as the scope has resources, so a hardcoded `$1`/`$2`
+      // -- correct only while the query bound exactly one value -- would bind
+      // the cutoff and the collection names to the wrong positions. Every
+      // value goes through here, so no collection name is ever interpolated
+      // into the SQL text.
+      const params: SqlParam[] = [];
+      const bind = (value: SqlParam): string => {
+        params.push(value);
+        return this.dialect === "postgresql" ? `$${params.length}` : "?";
+      };
+
+      let sql =
         `SELECT COUNT(*) as count FROM ${q}activity_log${q} ` +
-        `WHERE ${q}created_at${q} > ${ph}`;
+        `WHERE ${q}created_at${q} > ${bind(cutoffParam)}`;
+
+      if (scope.kind === "some") {
+        const placeholders = [...scope.resources]
+          .map(resource => bind(resource))
+          .join(", ");
+        sql += ` AND ${q}collection${q} IN (${placeholders})`;
+      }
 
       const result = await this.adapter.executeQuery<{
         count: number | string;
-      }>(sql, [cutoffParam]);
+      }>(sql, params);
 
       return Number(result[0]?.count ?? 0);
     } catch (error) {
