@@ -42,7 +42,19 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     }))
   );
   const liveAuthors = vi.fn(async () => new Set(liveAuthorIds));
-  const scheduleRelease = vi.fn(async () => true);
+  // HONOURS the fence it is standing in for: the repository accepts the write
+  // only when the release's current state is in the list the service passed.
+  // A stub answering `true` unconditionally would let a terminal release — a
+  // published one — appear to reschedule, and the case below could not tell
+  // the fence's refusal from the blocker precondition's.
+  const scheduleRelease = vi.fn(
+    async (
+      _id: string,
+      _at: Date,
+      _tz: string,
+      from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+    ) => from.includes(state as ReleaseState)
+  );
   const deps = {
     repository: {
       listMembers,
@@ -208,6 +220,30 @@ describe("scheduling a blocked release", () => {
     // Refused BEFORE the write, not after it: a precondition that runs late is
     // not a precondition.
     expect(scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("does not offer an impossible recovery for a PUBLISHED release", async () => {
+    // A published release is terminal: the fence refuses it whatever its
+    // members look like, and it is not assemblable, so `removeMember` will not
+    // let anybody act on the advice either. Deriving blockers first would
+    // answer "fix or remove the documents blocking it" — a recovery that does
+    // not exist — instead of saying the release has already happened.
+    //
+    // The author is deleted here, so the blocker precondition WOULD fire if it
+    // ran. That is what makes this case discriminate.
+    const { svc, liveAuthors, scheduleRelease } = service(
+      [{ id: "m1", createdBy: "ghost" }],
+      [],
+      "published"
+    );
+
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    // Refused by the FENCE, which is the honest answer, and reached because no
+    // blocker was derived on the way.
+    expect(scheduleRelease).toHaveBeenCalled();
+    expect(liveAuthors).not.toHaveBeenCalled();
   });
 
   it("still schedules a release whose members are all runnable", async () => {
