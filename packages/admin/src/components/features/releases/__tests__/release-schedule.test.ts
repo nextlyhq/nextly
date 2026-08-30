@@ -65,7 +65,10 @@ describe("formatScheduledAt", () => {
     // the promise an editor in any other zone needs to read — not what the
     // moment happens to be on their own clock.
     const text = formatScheduledAt(release());
-    expect(text).toContain("9:00");
+    // AM, not merely "9:00". The reader's zone renders this instant as 9:00 PM,
+    // so a bare "9:00" is satisfied by the implementation that ignores the
+    // author's zone entirely — the one this case exists to rule out.
+    expect(text).toContain("9:00 AM");
     expect(text).toContain("Europe/Berlin");
   });
 
