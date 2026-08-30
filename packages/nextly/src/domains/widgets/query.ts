@@ -12,6 +12,10 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import {
+  parseNearQuery,
+  parseWithinQuery,
+} from "../collections/query/geo-utils";
+import {
   GEO_OPERATORS,
   isValidOperator,
 } from "../collections/query/query-operators";
@@ -225,6 +229,62 @@ function assertOperatorValueShape(
 }
 
 /**
+ * The canonical parser for each geo operator's value.
+ *
+ * These are the SAME functions `extractGeoFilters` runs downstream, not a
+ * second opinion about coordinate ranges, distance units or argument order. A
+ * hand-written check here would agree with them on the day it was written and
+ * start accepting values the executor then discards, which is precisely the
+ * failure being closed.
+ */
+const GEO_VALUE_PARSERS: ReadonlyMap<string, (value: string) => unknown> =
+  new Map([
+    ["near", parseNearQuery],
+    ["within", parseWithinQuery],
+  ]);
+
+/**
+ * Confirms a geo operator's value is one the executor will actually apply.
+ *
+ * This is the one operator family whose value decides whether the condition
+ * SURVIVES. `extractGeoFilters` lifts `near`/`within` out of the `where` before
+ * the rest is compiled, parses the string, and adds no filter when parsing
+ * fails -- and it removes the operator from `cleanedWhere` either way. So
+ * `{ location: { near: "not-a-location" } }` did not merely lose one condition:
+ * it left NO condition at all, and both `list` and `count` answered over the
+ * whole collection. An accepted query returning more rows than it asked for is
+ * exactly what this validator exists to prevent, so the value is checked here
+ * rather than the operator family being dropped from the contract -- geo
+ * filtering works end to end through `nextly.find`, and refusing to describe it
+ * would remove a capability instead of making acceptance honest.
+ *
+ * A geo operator with no parser registered is REFUSED rather than waved
+ * through. `GEO_OPERATORS` is the vocabulary and this map is what can be
+ * checked against it; a third operator added there and not here must fail
+ * closed, or the gap reopens silently under a new name.
+ */
+function assertGeoOperatorValue(
+  field: string,
+  operator: string,
+  operatorValue: unknown
+): void {
+  if (!GEO_OPERATORS.has(operator)) return;
+  const parse = GEO_VALUE_PARSERS.get(operator);
+  // `extractGeoFilters` only considers a geo operator whose value is a string,
+  // so a non-string is dropped exactly as an unparseable string is.
+  if (
+    !parse ||
+    typeof operatorValue !== "string" ||
+    parse(operatorValue) === null
+  ) {
+    fail(
+      `where operator "${operator}" on field "${field}" is not a valid ` +
+        `${operator} filter`
+    );
+  }
+}
+
+/**
  * Confirms a single field's condition value cannot smuggle in an operator or
  * a field name the earlier checks never see, and cannot silently compile to
  * no condition at all (see `assertFieldConditionUsable`).
@@ -235,6 +295,7 @@ function assertFieldConditionShape(field: string, value: unknown): void {
   for (const [operator, operatorValue] of entries) {
     assertOperatorAllowed(field, operator);
     assertOperatorValueShape(field, operator, operatorValue);
+    assertGeoOperatorValue(field, operator, operatorValue);
   }
 }
 

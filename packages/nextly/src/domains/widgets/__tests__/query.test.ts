@@ -582,3 +582,91 @@ describe("validateWidgetQuery", () => {
     });
   });
 });
+
+describe("a geo filter means what it says or is refused", () => {
+  // `near` and `within` were recognised as operators and their values only
+  // shape-checked, so `"not-a-location"` passed. Downstream `extractGeoFilters`
+  // parses the string, adds NO filter when parsing fails, and leaves nothing in
+  // `cleanedWhere` either -- so an accepted query ran with no condition at all
+  // and both `list` and `count` answered over the WHOLE collection. Validated
+  // here with the canonical parsers the executor itself uses.
+  beforeEach(() => {
+    registerSource({
+      id: "collection:places",
+      label: "Places",
+      kind: "collection",
+      supports: ["count", "list"],
+      fields: [{ name: "location", type: "string" }],
+    });
+  });
+
+  const near = (value: unknown) => () =>
+    validateWidgetQuery({
+      source: "collection:places",
+      op: "list",
+      where: { location: { near: value } },
+    });
+
+  it("accepts a well-formed near value", () => {
+    const query = near("-74.006,40.7128,10000")();
+    expect(query.where).toEqual({
+      location: { near: "-74.006,40.7128,10000" },
+    });
+  });
+
+  it("accepts a well-formed near value carrying a unit", () => {
+    expect(near("-74.006,40.7128,10,km")).not.toThrow();
+  });
+
+  it("accepts a well-formed within value", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:places",
+        op: "list",
+        where: { location: { within: "-74.006,40.7128,5000" } },
+      })
+    ).not.toThrow();
+  });
+
+  it("refuses an unparseable near value", () => {
+    expect(near("not-a-location")).toThrow(
+      /where operator "near" on field "location" is not a valid near filter/
+    );
+  });
+
+  it("refuses coordinates outside the world", () => {
+    // The parser's own bounds, rather than a second opinion about latitude.
+    expect(near("-999,40.7128,10000")).toThrow(/is not a valid near filter/);
+  });
+
+  it("refuses a near value missing its distance", () => {
+    expect(near("-74.006,40.7128")).toThrow(/is not a valid near filter/);
+  });
+
+  it("refuses an unparseable within value", () => {
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:places",
+        op: "list",
+        where: { location: { within: "-74.006,40.7128,0" } },
+      })
+    ).toThrow(/is not a valid within filter/);
+  });
+
+  it("refuses a non-string geo value", () => {
+    // `extractGeoFilters` only looks at a geo operator whose value is a string,
+    // so a number is dropped exactly as an unparseable string is.
+    expect(near(10000)).toThrow(/is not a valid near filter/);
+  });
+
+  it("refuses a geo filter nested inside a combinator", () => {
+    // The walk reaches every depth, so the guard has to as well.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:places",
+        op: "list",
+        where: { and: [{ location: { near: "not-a-location" } }] },
+      })
+    ).toThrow(/is not a valid near filter/);
+  });
+});
