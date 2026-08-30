@@ -106,6 +106,7 @@ the wider declaration, which is a migration rather than a check.
 
 | Property              | Flag | Value                                         | Tokens    | Emits                   |
 | --------------------- | ---- | --------------------------------------------- | --------- | ----------------------- |
+| `boxSizing`           |      | keyword (`content-box`/`border-box`)          |           | `box-sizing`            |
 | `display`             |      | keyword                                       |           | `display`               |
 | `flexDirection`       |      | keyword                                       |           | `flex-direction`        |
 | `flexWrap`            |      | keyword                                       |           | `flex-wrap`             |

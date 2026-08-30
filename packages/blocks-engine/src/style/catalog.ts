@@ -299,6 +299,12 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
 
   // --- layout
   {
+    property: "boxSizing",
+    group: "layout",
+    shape: keyword("box-sizing", ["content-box", "border-box"]),
+    summary: "Whether a stated width includes padding and border.",
+  },
+  {
     property: "display",
     group: "layout",
     shape: keyword("display", [

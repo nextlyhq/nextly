@@ -118,6 +118,12 @@ const BUTTON_BASE_STYLES = {
   base: {
     base: {
       display: "inline-block",
+      // A user agent gives `<button>` a border box and `<a>` a content box, so
+      // an authored width means two different outer sizes depending only on
+      // whether a destination is set. Measured with `width: 200px` and this
+      // set's own inline padding: the anchor came out 232px and the button
+      // 200px. Stated once here, both are the same control.
+      boxSizing: "border-box",
       padding: {
         blockStart: "0.5rem",
         blockEnd: "0.5rem",

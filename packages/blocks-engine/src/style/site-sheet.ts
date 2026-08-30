@@ -18,12 +18,11 @@ import type { ValidationIssue } from "../validation";
 
 import { compilePageCss } from "./compile-page";
 import type { MayFetchUrl } from "./css-value";
-import { tokenCustomProperty } from "./declarations";
+import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
 import { CONTENT_WIDTH_CLASS, hashId, PAGE_ROOT_CLASS } from "./node-class";
 import type { FontFaceDef, SiteToken, SiteTokenSet } from "./site-tokens";
 import {
-  checkTokenKind,
   emitFontFaces,
   emitTokenBlocks,
   resolveTokenPrefix,
@@ -115,9 +114,15 @@ export interface SiteSheetArtifact {
  */
 const TOKEN_SELECTOR = ":root";
 
-/** The token the content-width rule reads, and the kind it must be. */
+/**
+ * The token the content-width rule reads.
+ *
+ * Its KIND is no longer checked here. Asking whether a value is a `max-width`
+ * is the compiler's question, and a token-kind check answered a narrower
+ * version of it — a `dimension` may carry a bare identifier the property
+ * refuses.
+ */
 const CONTENT_WIDTH_TOKEN = "content.width";
-const CONTENT_WIDTH_KIND = "dimension";
 
 /**
  * Values that are legal for `max-width` and bound nothing.
@@ -210,15 +215,35 @@ function documentUsingEveryType(
  */
 function boundsTheContent(token: SiteToken): boolean {
   if (tokenIdentity(token) !== CONTENT_WIDTH_TOKEN) return false;
-  if (token.kind !== CONTENT_WIDTH_KIND) return false;
   const values = Object.values(token.values ?? {});
   if (values.length === 0) return false;
-  return values.every(
-    value =>
-      typeof value === "string" &&
-      checkTokenKind(token.kind, value) === undefined &&
-      !UNBOUNDED_WIDTHS.has(value.trim().toLowerCase())
-  );
+  return values.every(value => typeof value === "string" && boundsWidth(value));
+}
+
+/**
+ * Whether one value would give `max-width` a usable maximum.
+ *
+ * Two questions with two authorities, rather than one weaker check standing in
+ * for both.
+ *
+ * **Is it a `max-width` at all?** Asked of the COMPILER, by compiling the
+ * declaration and seeing whether one came out. A parallel check here would be a
+ * second statement of the property's grammar, and a narrower one — a token
+ * declared `dimension` may carry a bare identifier like `wide`, which the
+ * token-kind check passes because it cannot know what a dimension may say,
+ * while `max-width` rejects it outright.
+ *
+ * **Does it bound anything?** Asked here, because that is not a grammar
+ * question. `none` is a perfectly valid `max-width` and removes the maximum;
+ * the CSS-wide keywords resolve to it or to whatever a cascade decides, which a
+ * site stylesheet cannot promise on behalf of a page. Every one of them leaves
+ * `margin-inline: auto` centring an element with an authored width and no
+ * ceiling.
+ */
+function boundsWidth(value: string): boolean {
+  if (UNBOUNDED_WIDTHS.has(value.trim().toLowerCase())) return false;
+  const { declarations } = compileStyleValues({ maxWidth: value }, "/maxWidth");
+  return declarations.length > 0;
 }
 
 function emitContentWidth(

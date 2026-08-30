@@ -189,6 +189,44 @@ describe("the content-width rule", () => {
     }
   );
 
+  it.each(["wide", "#fff", "12ms"])(
+    "writes nothing when the width %s is not a max-width at all",
+    width => {
+      // A token declared `dimension` may carry a bare identifier: the
+      // token-kind check passes it, because it cannot know what a dimension is
+      // allowed to say, while `max-width` rejects it outright. The compiler is
+      // asked instead of a second statement of the property's grammar.
+      const bogus = {
+        id: "content.width",
+        name: "content.width",
+        kind: "dimension",
+        values: { light: width },
+      } as never;
+      const css = sheet({ tokens: { tokens: [bogus] } }).css;
+      expect(css).not.toContain("nx-pb-contained");
+      expect(css).not.toContain("margin-inline");
+    }
+  );
+
+  it.each(["72rem", "80%", "min(100%,60rem)"])(
+    "still contains when the width %s is a real bound",
+    width => {
+      // The control the rejections need: a gate that refused everything would
+      // pass every case above while breaking the feature entirely. `min()` is
+      // here deliberately — a hand-written check would have had to enumerate
+      // the functions `max-width` accepts, and would have missed this one.
+      const real = {
+        id: "content.width",
+        name: "content.width",
+        kind: "dimension",
+        values: { light: width },
+      } as never;
+      expect(sheet({ tokens: { tokens: [real] } }).css).toContain(
+        "nx-pb-contained"
+      );
+    }
+  );
+
   it("writes nothing when the width token's VALUE does not suit its kind", () => {
     // A token may declare itself a dimension and carry a colour. The emitter
     // writes it as given and says so in a warning — so the property is
