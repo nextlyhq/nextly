@@ -484,9 +484,15 @@ export class ReleasesService {
         // A member whose release vanished between the two reads is dropped
         // rather than rendered without its instant: a row saying a document is
         // scheduled, without saying when, is worse than not mentioning it.
-        return release === undefined
-          ? []
-          : [{ ...release, memberAction: member.action, member }];
+        if (release === undefined) return [];
+        // RE-CHECKED, because these are two reads and the drain runs between
+        // them. `findDueMembersFor` selects members of scheduled releases; by
+        // the time the second read fetches those releases one may already have
+        // been published, and emitting it would report an action that has
+        // ALREADY HAPPENED as still coming. A reader polling until nothing is
+        // pending would then stop on that row and keep the claim forever.
+        if (release.state !== "scheduled") return [];
+        return [{ ...release, memberAction: member.action, member }];
       })
       // THE ENGINE'S OWN ORDER, not a simpler one that agrees with it most of
       // the time. `resolveReleaseEffect` breaks a tied instant on the member's

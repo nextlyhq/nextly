@@ -126,6 +126,36 @@ describe("the order the releases are returned in", () => {
   });
 });
 
+describe("a release the drain settled between the two reads", () => {
+  it("is dropped rather than reported as still coming", async () => {
+    // Two reads, and the drain runs between them: `findDueMembersFor` selects
+    // members of SCHEDULED releases, and by the time the second read fetches
+    // those releases one may already be published. Emitting it reports an
+    // action that has ALREADY HAPPENED as upcoming — and a reader polling until
+    // nothing is pending stops on that row and keeps the claim forever.
+    const svc = service([
+      { id: "still-coming", at: "2026-09-01T00:00:00.000Z" },
+      {
+        id: "already-ran",
+        at: "2026-09-02T00:00:00.000Z",
+        state: "published",
+      },
+    ]);
+    expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual([
+      "still-coming",
+    ]);
+  });
+
+  it("keeps the scheduled ones, so the filter is not simply emptying the list", async () => {
+    // The control. Without it a branch that dropped everything would pass.
+    const svc = service([
+      { id: "a", at: "2026-09-01T00:00:00.000Z" },
+      { id: "b", at: "2026-09-02T00:00:00.000Z" },
+    ]);
+    expect(ids(await svc.find({ containing: REF }, ACTOR))).toEqual(["a", "b"]);
+  });
+});
+
 describe("the document filter NARROWS the list rather than replacing it", () => {
   const WINDOWED = [
     { id: "before", at: "2026-08-01T00:00:00.000Z" },
