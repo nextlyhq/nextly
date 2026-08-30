@@ -27,6 +27,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import { refreshCollectionSources } from "../collection-sources";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
 
@@ -84,6 +85,15 @@ async function boot(readableRows: boolean): Promise<TestNextly> {
     { collectionName: EMPLOYEES, overrideAccess: true },
     { title: "bob", salary: "60000" }
   );
+
+  // What `POST /api/dashboard/query` does before resolving any query: publish
+  // the collection sources from the LIVE collection registry. Boot does not do
+  // it -- the registry is not up that early and it keeps changing afterwards --
+  // so a test that drives the domain directly has to make the same call the
+  // endpoint makes. Against a real instance this also proves the derivation
+  // reaches a genuinely booted `dynamic_collections`, which the unit test's
+  // faked container cannot.
+  await refreshCollectionSources();
   return t;
 }
 
