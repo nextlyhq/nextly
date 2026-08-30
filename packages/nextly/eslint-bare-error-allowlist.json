@@ -18,7 +18,7 @@
   "src/di/register.ts": 7,
   "src/dispatcher/dispatcher.ts": 4,
   "src/dispatcher/handlers/auth-dispatcher.ts": 18,
-  "src/dispatcher/handlers/collection-dispatcher.ts": 28,
+  "src/dispatcher/handlers/collection-dispatcher.ts": 27,
   "src/dispatcher/handlers/component-dispatcher.ts": 13,
   "src/dispatcher/handlers/email-dispatcher.ts": 4,
   "src/dispatcher/handlers/form-dispatcher.ts": 1,
