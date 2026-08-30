@@ -66,6 +66,18 @@ Two behaviour changes are worth planning for:
   `[object Object]`. An empty, boolean or date-valued title field falls through
   to the next candidate field and then to the id, where before it rendered as an
   empty or nonsensical heading.
+- The draft/published breakdown on `/stats` is now read through the same
+  access-enforced count as the per-collection totals beside it, instead of a
+  raw query over the whole table. A collection with an owner-only or custom
+  stored read rule previously reported every author's draft/published split to
+  every reader who could open it at all, and that number disagreed with
+  `content.totalEntries` sitting next to it in the same response; the two now
+  always agree (`totalEntries === status.published + status.draft`). This also
+  fixes the breakdown never actually running for a collection with the
+  Draft/Published lifecycle enabled: it identified such a collection by
+  scanning its fields for one literally named `status`, but a field with that
+  name is REJECTED by config validation while the lifecycle is on, so every
+  lifecycle collection was silently treated as having no status at all.
 
 One failure mode is deliberately visible as an empty dashboard: if the
 permission lookup itself fails transiently, the dashboard answers HTTP 200 with

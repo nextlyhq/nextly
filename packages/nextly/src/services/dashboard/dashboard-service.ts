@@ -129,8 +129,16 @@ export class DashboardService extends BaseService {
     const collections = await this.getRegisteredCollections(scope);
     const singles = await this.getRegisteredSingles(scope);
 
+    // Computed first, rather than folded into the `Promise.all` below: the
+    // status breakdown reuses these numbers for every collection without the
+    // Draft/Published lifecycle (see `getContentStatusBreakdown`), which
+    // needs the totals in hand before it can decide whether to ask for more.
+    const collectionCounts = await this.getCollectionCounts(
+      collections,
+      options.caller
+    );
+
     const [
-      collectionCounts,
       mediaCount,
       recentChanges,
       userCount,
@@ -140,7 +148,6 @@ export class DashboardService extends BaseService {
       apiKeyCount,
       statusBreakdown,
     ] = await Promise.all([
-      this.getCollectionCounts(collections, options.caller),
       this.countTable("media"),
       this.countRecentChanges24h(scope),
       this.countTable("users"),
@@ -148,7 +155,11 @@ export class DashboardService extends BaseService {
       this.countTable("permissions"),
       this.countRegistryItems("fieldGroupRegistryService"),
       this.countActiveApiKeys(),
-      this.getContentStatusBreakdown(collections),
+      this.getContentStatusBreakdown(
+        collections,
+        collectionCounts,
+        options.caller
+      ),
     ]);
 
     const totalEntries = collectionCounts.reduce((sum, c) => sum + c.count, 0);
@@ -275,7 +286,18 @@ export class DashboardService extends BaseService {
             tableName: string;
             labels: { singular: string; plural: string };
             admin?: { useAsTitle?: string; group?: string };
-            fields: Array<{ name: string; type: string }>;
+            /**
+             * The Draft/Published lifecycle toggle. This is a top-level
+             * column on `dynamic_collections`, entirely separate from
+             * `fields` (the author's own field configs) -- and while the
+             * lifecycle is on, a user field literally named `status` is
+             * REJECTED at config validation as a reserved name (it would
+             * collide with the synthesized lifecycle column). So a lifecycle
+             * collection's `fields` array can never contain a `status`
+             * entry: scanning it for one always answers false, for exactly
+             * the collections this flag exists to identify.
+             */
+            status?: boolean;
           }>
         >;
       }>("collectionRegistryService");
@@ -287,9 +309,7 @@ export class DashboardService extends BaseService {
         label: c.labels?.plural ?? c.labels?.singular ?? c.slug,
         group: c.admin?.group ?? null,
         useAsTitle: c.admin?.useAsTitle ?? null,
-        hasStatus:
-          c.fields?.some(f => f.name === "_status" || f.name === "status") ??
-          false,
+        hasStatus: c.status === true,
       }));
       // Derive the readable subset from the shared scope check rather than
       // re-testing membership here -- see `filterByResource`.
@@ -535,17 +555,25 @@ export class DashboardService extends BaseService {
    * is the same WHERE predicate the list read applies. `getRecentEntries` takes
    * the identical path for the same reason.
    *
-   * `status: "all"` is the one WIDENING option, and it keeps the number
-   * MEANING what it meant: an untrusted count that states nothing gets
-   * `resolveStatusFilter`'s `published` default, so without it the dashboard's
-   * per-collection totals would quietly exclude drafts and stop agreeing with
-   * the draft/published breakdown beside them. Under `"all"` no status
-   * condition is built at all, for the main row or a localized collection's
-   * per-locale `_status` companion.
+   * `status` defaults to `"all"`, the one WIDENING option, and it keeps the
+   * number MEANING what it meant: an untrusted count that states nothing gets
+   * `resolveStatusFilter`'s `published` default, so without it the
+   * dashboard's per-collection totals would quietly exclude drafts and stop
+   * agreeing with the draft/published breakdown beside them. Under `"all"` no
+   * status condition is built at all, for the main row or a localized
+   * collection's per-locale `_status` companion.
+   *
+   * `getContentStatusBreakdown` calls this same method with `"published"` and
+   * `"draft"` explicitly, rather than a second implementation of "how many
+   * rows of this collection can this caller read": one question, one
+   * implementation, so the total and the breakdown cannot silently drift
+   * apart the way a raw `SELECT ... GROUP BY` and this access-controlled
+   * count already had.
    */
   private async countReadableEntries(
     coll: CollectionInfo,
-    caller: ReadCaller
+    caller: ReadCaller,
+    status: "all" | "published" | "draft" = "all"
   ): Promise<number> {
     try {
       const result = await getNextly().count({
@@ -563,7 +591,7 @@ export class DashboardService extends BaseService {
               "actor"
             >)
           : {}),
-        status: "all",
+        status,
       });
       return result.total;
     } catch (error) {
@@ -578,27 +606,57 @@ export class DashboardService extends BaseService {
   }
 
   /**
-   * Get draft vs published content breakdown across all collections.
+   * Draft vs published content breakdown, read through the SAME
+   * access-enforced path as the per-collection totals beside it.
    *
-   * Collections without a `_status` or `status` field count all entries
-   * as published.
+   * This used to be a raw `SELECT ... GROUP BY status` over the physical
+   * table -- ignoring both the collection's access rule and its stored
+   * row-level constraint, so a collection with an owner-only read rule
+   * reported every author's rows split by lifecycle to a reader who could see
+   * only a fraction of them. That number both disclosed rows the read access
+   * withholds and disagreed with `content.totalEntries`, computed beside it
+   * from the access-controlled count.
+   *
+   * A collection WITHOUT the Draft/Published lifecycle has no split to make:
+   * every row this caller may read counts as published. That total is
+   * already sitting in `collectionCounts` -- computed one step before this
+   * call, with the identical access rules -- so it is looked up rather than
+   * asked for again.
+   *
+   * A lifecycle collection's total CANNOT be split into `published` and
+   * `draft` by subtracting one from the other. A due RELEASE adjusts the
+   * `"published"` read alone -- revealing a draft whose scheduled publish has
+   * arrived, or hiding a published row whose scheduled unpublish has arrived
+   * (see `collection-query-service.ts`'s `releaseDecisions`, which only fires
+   * for `status: "published"`) -- while `"draft"` and `"all"` apply no such
+   * adjustment. So the three numbers are not guaranteed to sum, and each is
+   * asked for explicitly rather than derived.
    */
   private async getContentStatusBreakdown(
-    collections: CollectionInfo[]
+    collections: CollectionInfo[],
+    collectionCounts: CollectionCount[],
+    caller: ReadCaller
   ): Promise<ContentStatus> {
+    const totalsBySlug = new Map(
+      collectionCounts.map(c => [c.slug, c.count] as const)
+    );
     let published = 0;
     let draft = 0;
 
     const results = await Promise.all(
       collections.map(async coll => {
         if (!coll.hasStatus) {
-          // No status field — all entries count as published
-          const total = await this.countTable(coll.tableName);
-          return { published: total, draft: 0 };
+          // Same access rules, same rows, already counted for the total
+          // above -- asking again would be a second implementation of the
+          // same question.
+          return { published: totalsBySlug.get(coll.slug) ?? 0, draft: 0 };
         }
 
-        const statusField = coll.hasStatus ? "status" : "_status";
-        return this.countByStatus(coll.tableName, statusField);
+        const [publishedCount, draftCount] = await Promise.all([
+          this.countReadableEntries(coll, caller, "published"),
+          this.countReadableEntries(coll, caller, "draft"),
+        ]);
+        return { published: publishedCount, draft: draftCount };
       })
     );
 
@@ -608,45 +666,6 @@ export class DashboardService extends BaseService {
     }
 
     return { published, draft };
-  }
-
-  private async countByStatus(
-    tableName: string,
-    statusColumn: string
-  ): Promise<{ published: number; draft: number }> {
-    try {
-      const q = this.dialect === "mysql" ? "`" : '"';
-      const sql =
-        `SELECT ${q}${statusColumn}${q} as status, COUNT(*) as count ` +
-        `FROM ${q}${tableName}${q} ` +
-        `GROUP BY ${q}${statusColumn}${q}`;
-
-      const rows = await this.adapter.executeQuery<{
-        status: string | null;
-        count: number | string;
-      }>(sql, []);
-
-      let published = 0;
-      let draft = 0;
-
-      for (const row of rows) {
-        const count = Number(row.count ?? 0);
-        const status = String(row.status ?? "").toLowerCase();
-        if (status === "draft") {
-          draft += count;
-        } else {
-          // "published", null, or any other value counts as published
-          published += count;
-        }
-      }
-
-      return { published, draft };
-    } catch (error) {
-      this.logger.error(`Failed to count by status: ${tableName}`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return { published: 0, draft: 0 };
-    }
   }
 
   /**
