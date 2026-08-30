@@ -374,3 +374,9 @@ export {
   nextlyWebhookDeliveries,
 } from "./webhooks/postgres";
 export * from "./security-config"; // Zod — review in Task 19
+
+// Content-release lifecycle vocabulary. Types only: the admin renders a state
+// and must not be able to name one the engine cannot produce, and a second
+// spelling of these unions in a client is how a screen starts describing a
+// state the server has never sent.
+export type { ReleaseState, ReleaseMemberAction } from "./releases/types";

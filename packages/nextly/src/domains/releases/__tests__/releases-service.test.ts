@@ -85,12 +85,22 @@ describe("ReleasesService authorization", () => {
     expect(repo.createRelease).not.toHaveBeenCalled();
   });
 
-  it("refuses to read releases without read authority", async () => {
-    const { svc, repo } = service({ holds: ["create", "publish"] });
+  it("refuses to read releases to a caller holding none of the three", async () => {
+    const { svc, repo } = service({ holds: [] });
     await expect(svc.find({}, ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
     expect(repo.findReleases).not.toHaveBeenCalled();
+  });
+
+  it("lets an assembler read, because creating implies seeing what you made", async () => {
+    // The three grants are seeded independently, so a role holding only
+    // `create` could otherwise create a release through the API and then find
+    // nothing in the admin — not the list, and not the release it just made.
+    // The implication is one-directional; the control for that is below.
+    const { svc, repo } = service({ holds: ["create"] });
+    await expect(svc.find({}, ADMIN)).resolves.toBeDefined();
+    expect(repo.findReleases).toHaveBeenCalled();
   });
 
   it("refuses to schedule with only create authority, because committing is a separate power", async () => {

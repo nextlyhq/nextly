@@ -51,6 +51,10 @@ import {
 } from "../../../auth/authenticated-scope";
 import { NextlyError } from "../../../errors";
 import {
+  RELEASE_ASSEMBLABLE_FROM,
+  RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
+  RELEASE_CANCELLABLE_FROM,
+  RELEASE_SCHEDULABLE_FROM,
   isReleaseMemberAction,
   type ReleaseMemberAction,
   type ReleaseState,
@@ -116,6 +120,26 @@ export interface ReleaseActor {
    * against the real user rather than against an empty list.
    */
   userRoles?: string[];
+}
+
+/**
+ * What a caller may do to one release, as the server sees it.
+ *
+ * Sent WITH the release rather than derived by the reader. Payload computes the
+ * same thing per document for its edit view, and Sanity gates each release
+ * action by its own permission id so scheduling can be granted without
+ * publishing — in both, the answer depends on authority the client does not
+ * hold, so a client that computed it would be guessing.
+ */
+export interface ReleaseCapabilities {
+  /** Set or move this release's instant. */
+  schedule: boolean;
+  /** Call it off — which is also how an unwanted draft is abandoned. */
+  cancel: boolean;
+  /** Put a document in it. Necessary, not sufficient: see `capabilities`. */
+  addMember: boolean;
+  /** Take a document out of it. Necessary, not sufficient. */
+  removeMember: boolean;
 }
 
 export interface ReleasesServiceDeps {
@@ -251,6 +275,23 @@ export class ReleasesService {
       });
     }
     if (await this.deps.canManageReleases(actor.userId, authority)) return;
+    // Assembling or scheduling a release IMPLIES being able to read one.
+    //
+    // The three grants are seeded independently, and without this a role given
+    // only `create` can create a release through the API and then see nothing —
+    // not the list, not the release it just made, not the picker that would put
+    // a document in it. That is a grant promising something the product cannot
+    // deliver, and an administrator has no way to discover the second grant is
+    // needed. Implication rather than a seeder change, because it has to hold
+    // for roles that already exist.
+    //
+    // One direction only: reading does not imply writing.
+    if (
+      authority === "read" &&
+      (await this.holdsEither(actor.userId, ["create", "publish"]))
+    ) {
+      return;
+    }
     // The public message is FIXED by `forbidden`, and deliberately so: a
     // response that named the missing permission would tell an unauthorized
     // caller the shape of the authority model. The detail an operator needs goes
@@ -297,6 +338,64 @@ export class ReleasesService {
     await this.authorize(actor, "read");
     const releases = await this.deps.repository.findReleases({ ids: [id] });
     return releases[0] ?? null;
+  }
+
+  /**
+   * What this caller may do to each of these releases, right now.
+   *
+   * Computed HERE because it is the only place both halves are known. Whether a
+   * move is possible depends on the release's state, which the client has, AND
+   * on the caller's authority, which it does not — a scoped API key is judged by
+   * its own grants, and the refusal a client would otherwise discover is one
+   * fixed sentence that cannot say which half failed. A client that reasoned
+   * about this locally would need the transition rules and the grant model, and
+   * would be a second implementation of both.
+   *
+   * Asked once per AUTHORITY rather than once per release. `holds` consults the
+   * permission store, so a per-row loop would turn a page of fifty releases into
+   * a hundred permission reads; the state is then combined in memory, which is
+   * free.
+   *
+   * `addMember` and `removeMember` are NECESSARY, not sufficient: putting a
+   * particular document into a release also needs that document's own
+   * publish/unpublish authority, which depends on which document it is and is
+   * therefore checked at the write. A client uses these to decide what to OFFER;
+   * the write is still the boundary.
+   */
+  async capabilities(
+    releases: readonly ReleaseRow[],
+    actor: ReleaseActor
+  ): Promise<Map<string, ReleaseCapabilities>> {
+    await this.authorize(actor, "read");
+    if (releases.length === 0) return new Map();
+
+    const mayPublish = await this.holds(actor, "publish");
+    const mayCreate = await this.holds(actor, "create");
+
+    return new Map(
+      releases.map(release => {
+        // Membership is editable freely in some states and only by a publisher
+        // in others, because the drain reads membership AT the instant — so
+        // editing a scheduled release changes what a publisher committed to.
+        const editable =
+          (mayCreate && RELEASE_ASSEMBLABLE_FROM.includes(release.state)) ||
+          (mayCreate &&
+            mayPublish &&
+            RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state));
+
+        return [
+          release.id,
+          {
+            schedule:
+              mayPublish && RELEASE_SCHEDULABLE_FROM.includes(release.state),
+            cancel:
+              mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
+            addMember: editable,
+            removeMember: editable,
+          },
+        ];
+      })
+    );
   }
 
   async find(
@@ -485,10 +584,15 @@ export class ReleasesService {
         logContext: { reason: "release-not-found", releaseId },
       });
     }
-    if (parent.state === "scheduled") {
+    if (RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(parent.state)) {
       // Changing what is in a scheduled release changes what goes live at an
       // instant a publisher committed to. The drain reads membership at the
       // instant, not at scheduling time.
+      //
+      // Read from the declaration rather than compared to a literal, so this
+      // and the `can.addMember` the client renders from cannot come apart: a
+      // state added to that list must authorize the same way here, or the UI
+      // offers an edit the write refuses.
       await this.authorize(actor, "publish");
       return;
     }
@@ -501,6 +605,17 @@ export class ReleasesService {
         state: parent.state,
       },
     });
+  }
+
+  /** Whether this user holds ANY of these authorities. */
+  private async holdsEither(
+    userId: string,
+    authorities: readonly ReleaseAuthority[]
+  ): Promise<boolean> {
+    for (const authority of authorities) {
+      if (await this.deps.canManageReleases(userId, authority)) return true;
+    }
+    return false;
   }
 
   /** Whether the actor holds an authority, without throwing. */

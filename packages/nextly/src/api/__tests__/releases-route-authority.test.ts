@@ -73,6 +73,25 @@ function namespace() {
       addMember: vi.fn(async () => ({ id: "m1" })),
       removeMember: vi.fn(async () => undefined),
       listMembers: vi.fn(async () => []),
+      // The route decorates every release it returns with what this caller may
+      // do to it. Answering with the rows' own ids rather than an empty map,
+      // because an absent entry means "not permitted" — a fake that returned
+      // nothing would make every response say no controls and hide the
+      // difference between a refusal and a fake that did not answer.
+      capabilities: vi.fn(
+        async ({ releases }: { releases: readonly { id: string }[] }) =>
+          new Map(
+            releases.map(release => [
+              release.id,
+              {
+                schedule: true,
+                cancel: true,
+                addMember: true,
+                removeMember: true,
+              },
+            ])
+          )
+      ),
       schedule: vi.fn(async () => undefined),
       cancel: vi.fn(async () => undefined),
     },
