@@ -490,10 +490,27 @@ function assertWhereClauseUsable(
  * The same reasoning as `cloneWhereOrUndefined`, one level down: validating
  * the caller's array and then spreading it into the result is two reads of
  * every index, and an index can be an accessor too.
+ *
+ * An EMPTY array is refused, for the reason `where: { and: [] }` and an empty
+ * condition object are refused one field over: it reads as the narrowest
+ * possible request and produces the widest possible answer. "Select nothing"
+ * is not a projection the read path can express -- `listEntries` applies a
+ * selection only when it has keys (`Object.keys(params.select).length > 0`),
+ * so an empty one falls through to an UNSELECTED read and the whole document
+ * reaches a widget that asked for none of it.
+ *
+ * Refused here rather than given a second meaning in the executor. The
+ * keys-required rule is the framework's, shared by every caller of
+ * `nextly.find`, so teaching the widget seam its own reading of `[]` would be
+ * a second implementation of field selection rather than a fix. A widget that
+ * genuinely wants no fields back asks for `op: "count"`.
  */
 function copySelectOrUndefined(select: unknown): string[] | undefined {
   if (select === undefined) return undefined;
   if (!Array.isArray(select)) fail("select must be an array of field names");
+  if (select.length === 0) {
+    fail("select is empty, which reads every field rather than none");
+  }
   return [...(select as unknown[])] as string[];
 }
 

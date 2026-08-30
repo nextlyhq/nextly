@@ -119,6 +119,35 @@ describe("validateWidgetQuery", () => {
     ).toThrow(/where references undeclared field "secretScore"/);
   });
 
+  it("refuses an explicitly empty select, which reads as the opposite of what it does", () => {
+    // "Select nothing" is not a projection the read path can express: the
+    // Direct API applies a selection only when it has keys, so an empty one
+    // falls through to an UNSELECTED read and the widget receives the whole
+    // document -- the widest possible answer from the narrowest possible
+    // request. Refused for the same reason `where: { and: [] }` and an empty
+    // condition object are refused: an accepted query that silently widens is
+    // exactly what this validator exists to prevent. A widget that wants no
+    // fields asks for `op: "count"`.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        select: [],
+      })
+    ).toThrow(/select is empty/);
+  });
+
+  it("still accepts a select naming one declared field", () => {
+    // The control: without it the refusal above is satisfied by a validator
+    // that refuses every `select`.
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["title"],
+    });
+    expect(q.select).toEqual(["title"]);
+  });
+
   it("refuses a select naming an undeclared field", () => {
     expect(() =>
       validateWidgetQuery({

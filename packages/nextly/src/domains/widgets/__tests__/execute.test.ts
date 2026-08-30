@@ -34,6 +34,38 @@ beforeEach(() => {
 });
 
 describe("executeWidgetQuery", () => {
+  it("cannot be reached with an empty selection, which would read every field", async () => {
+    // The composition is the claim. `toSelect` turns `[]` into `undefined` and
+    // the Direct API applies a selection only when it has keys, so an empty
+    // `select` reaching `find` is a FULL-document read -- the widest answer to
+    // the narrowest request. Asserted through `validateWidgetQuery` rather than
+    // by handing `executeWidgetQuery` a literal, because the gate is what has
+    // to hold: nothing composed this way can produce that read.
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:posts",
+        op: "list",
+        select: [],
+      })
+    ).toThrow(/select is empty/);
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("passes a non-empty selection through as one the read path honours", async () => {
+    // The control for the case above, at the seam: a selection with keys is
+    // what `Object.keys(select).length > 0` requires downstream, so this is the
+    // shape that actually narrows the read.
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["title"],
+    });
+    await executeWidgetQuery(q, caller);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { title: true } })
+    );
+  });
+
   it("counts through the access-controlled path", async () => {
     const q = validateWidgetQuery({
       source: "collection:posts",
