@@ -66,9 +66,27 @@ export interface EntryFieldsPanelProps {
  * Scoped to what actually submits implicitly. A textarea takes Enter as a
  * newline, and a control that has opened a listbox or a menu is using Enter to
  * choose — intercepting either would break the field to protect the form.
+ *
+ * MODIFIERS ARE NOT AN EXEMPTION. An earlier version let Shift+Enter through on
+ * the assumption that a modified Enter means something other than submit; it
+ * does not. Measured in a browser: Shift+Enter in a single-line input submits
+ * the enclosing form exactly as a bare Enter does, so exempting it left the
+ * whole of this hole open through one extra keystroke.
+ *
+ * A COMPOSING keystroke is exempt, and that one is real. An author using an IME
+ * presses Enter to accept the candidate they are part-way through typing, and
+ * that keystroke reaches here with `isComposing` set. Refusing it would not
+ * protect anything — the browser does not submit on it — while making the title
+ * and slug fields unusable in Japanese, Chinese and Korean.
  */
 function blockImplicitSubmit(event: React.KeyboardEvent<HTMLDivElement>): void {
-  if (event.key !== "Enter" || event.shiftKey) return;
+  if (event.key !== "Enter") return;
+  // Read from the native event: React's synthetic keyboard event does not
+  // carry `isComposing`, and `keyCode === 229` is how the same state reaches
+  // engines that report the composition rather than the flag.
+  if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+    return;
+  }
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
   if (target.tagName !== "INPUT") return;

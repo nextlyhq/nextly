@@ -221,6 +221,52 @@ describe("the panel a takeover surface offers back", () => {
     expect(prevented).toBe(true);
   });
 
+  it("refuses a MODIFIED Enter too, which submits exactly as a bare one does", () => {
+    /*
+     * An earlier version exempted Shift+Enter on the assumption that a modifier
+     * means something other than submit. Measured in a browser: Shift+Enter in
+     * a single-line input submits the enclosing form just as a bare Enter does,
+     * so the exemption left the whole hole open through one extra keystroke.
+     */
+    render(<div>{fieldsBesidePanel(minimal, "body")}</div>);
+    const input = screen.getByLabelText("title input");
+
+    for (const modifier of [
+      { shiftKey: true },
+      { ctrlKey: true },
+      { metaKey: true },
+      { altKey: true },
+    ]) {
+      const prevented = !fireEvent.keyDown(input, {
+        key: "Enter",
+        ...modifier,
+      });
+      expect(prevented).toBe(true);
+    }
+  });
+
+  it("lets a COMPOSING Enter through, which an IME uses to accept a candidate", () => {
+    /*
+     * An author typing Japanese, Chinese or Korean presses Enter to accept the
+     * candidate they are part-way through. That keystroke arrives here with
+     * `isComposing` set, and the browser does not submit on it — so refusing it
+     * protects nothing and makes these fields unusable in those languages.
+     */
+    render(<div>{fieldsBesidePanel(minimal, "body")}</div>);
+    const input = screen.getByLabelText("title input");
+
+    const composing = !fireEvent.keyDown(input, {
+      key: "Enter",
+      isComposing: true,
+    });
+    expect(composing).toBe(false);
+
+    // The legacy spelling of the same state, which is how some engines report
+    // a composition instead of setting the flag.
+    const legacy = !fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+    expect(legacy).toBe(false);
+  });
+
   it("leaves Enter alone in a textarea, where it is a newline", () => {
     // The control, and the reason the guard reads the element rather than
     // swallowing every Enter in the panel.

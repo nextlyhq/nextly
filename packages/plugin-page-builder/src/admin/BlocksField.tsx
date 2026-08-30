@@ -1244,10 +1244,19 @@ function shownStyleStateFor(
  * page and touched no block was told the document was saved. Two surfaces now
  * write to one document, and the pill has to answer for both.
  *
- * `dirtyFields` rather than `isDirty`, with this field excluded. The blocks
- * field belongs to the editor and is committed on the way out, so while the
- * editor is open it is either clean or dirty from a previous visit; counting it
- * here would double the undo history or report work that is already saved.
+ * The blocks field is COUNTED here, and an earlier version excluded it. The
+ * reasoning for excluding it was that the editor owns that field and reports
+ * its own history, so counting it would double the undo depth or report saved
+ * work. Both halves were wrong. Double-counting cannot matter to a boolean, and
+ * the form's baseline advances on a successful submit — `useEntryForm` resets
+ * it — so a dirty blocks field means genuinely unsaved blocks.
+ *
+ * Excluding it lost the one case that has no other witness: an author who edits
+ * blocks, leaves the editor, and opens it again before saving. Leaving commits
+ * the document into the form, so the field is dirty; reopening builds a fresh
+ * editor whose `undoDepth` is zero. With the field excluded, nothing was left
+ * to say the document had unsaved work, and the pill read clean over blocks
+ * that had never been saved.
  *
  * The editor's own history is taken as an argument rather than combined at the
  * call site, so "is this document dirty" is answered in one place. It is also
@@ -1256,11 +1265,10 @@ function shownStyleStateFor(
  */
 function useDocumentDirty<TFieldValues extends FieldValues>(
   control: Control<TFieldValues>,
-  ownField: string,
   editorDirty: boolean
 ): boolean {
   const { dirtyFields } = useFormState({ control });
-  return editorDirty || Object.keys(dirtyFields).some(f => f !== ownField);
+  return editorDirty || Object.keys(dirtyFields).length > 0;
 }
 
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
@@ -1416,7 +1424,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const entryFields = useEntryFieldsPanel(name);
 
-  const documentDirty = useDocumentDirty(control, name, editor.undoDepth > 0);
+  const documentDirty = useDocumentDirty(control, editor.undoDepth > 0);
 
   /*
    * The getting-started card, and the host's switch for it.

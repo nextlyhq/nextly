@@ -110,7 +110,7 @@ vi.mock("./DocumentStatusPill", () => ({
 const { BlocksField } = await import("./BlocksField");
 
 function Host(): React.JSX.Element {
-  const { control, register } = useForm({
+  const { control, register, setValue } = useForm({
     defaultValues: { body: undefined, title: "" },
   });
   return (
@@ -119,6 +119,21 @@ function Host(): React.JSX.Element {
           the SAME form, which is what makes it dirty the way that panel's
           fields are. */}
       <input aria-label="title" {...register("title")} />
+      {/* Writes the BLOCKS field the way leaving the editor does: `done`
+          commits the document into the form, which is what makes that field
+          dirty while no editor is mounted. */}
+      <button
+        type="button"
+        onClick={() =>
+          setValue(
+            "body",
+            { formatVersion: 1, kind: "page", nodes: [] } as never,
+            { shouldDirty: true }
+          )
+        }
+      >
+        commit blocks
+      </button>
       <BlocksField name="body" control={control} />
     </>
   );
@@ -233,5 +248,28 @@ describe("offering the Settings panel", () => {
 
     expect(pillDirty.length).toBeGreaterThan(0);
     expect(pillDirty.every(d => d === false)).toBe(true);
+  });
+
+  it("still reports dirty for unsaved BLOCKS after the editor is reopened", () => {
+    /*
+     * The case an earlier version discarded. Leaving the editor commits the
+     * document into the form, so the blocks field is dirty; reopening builds a
+     * fresh editor whose `undoDepth` is zero. Excluding the field from
+     * `dirtyFields` — which that version did, to avoid double-counting the undo
+     * history — removed the only remaining witness, and the pill read clean
+     * over blocks that had never been saved.
+     *
+     * Double-counting cannot matter to a boolean, and the form's baseline is
+     * advanced by the reset on a successful submit, so a dirty blocks field
+     * means genuinely unsaved blocks.
+     */
+    entryFields = <p>fields</p>;
+    render(<Host />);
+
+    // Commit blocks the way leaving the editor does, then open a fresh one.
+    fireEvent.click(screen.getByRole("button", { name: "commit blocks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+
+    expect(pillDirty.at(-1)).toBe(true);
   });
 });
