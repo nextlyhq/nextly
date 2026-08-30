@@ -52,14 +52,20 @@ expectTypeOf<
   afterEdit?: ComponentPath;
 }>();
 
-// Widgets — RESERVED/type-only (rendering deferred).
+// Widgets — rendered by the dashboard grid, permission-gated. `component`
+// is optional (required only for `archetype: "custom"`, enforced at
+// registration rather than by the type); `size` survives as a deprecated
+// alias for `defaultSize`.
 expectTypeOf<
   NonNullable<PluginAdminContributions["widgets"]>[number]
 >().toMatchTypeOf<{
   id: string;
-  component: ComponentPath;
-  size?: "full" | "half";
+  title: string;
+  archetype: string;
+  defaultSize: string;
   requiredPermission?: string;
+  component?: ComponentPath;
+  size?: "full" | "half";
 }>();
 
 // A plugin can declare contributes.admin via definePlugin.

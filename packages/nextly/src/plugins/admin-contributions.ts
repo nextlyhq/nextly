@@ -1,3 +1,9 @@
+import type {
+  WidgetArchetype,
+  WidgetQuery,
+  WidgetSize,
+} from "../domains/widgets";
+
 import type { PermissionSlug } from "./contributions";
 
 /**
@@ -138,20 +144,39 @@ export interface PluginAdminPage {
 /**
  * @experimental A plugin-contributed dashboard widget.
  *
- * Rendered by `PluginWidgetGrid` on the admin dashboard and gated on
- * `requiredPermission`. Still `@experimental`: the shape is expected to grow a
- * title, an archetype, a declarative query and a config schema before it
- * graduates (D55 -- graduation needs a first-party plugin exercising it).
+ * Rendered on the admin dashboard and gated on `requiredPermission`. Still
+ * `@experimental`: the declarative half (`title`, `archetype`, `defaultSize`,
+ * `query`) is published so the SERVER can validate and execute a widget's
+ * query, but the admin grid currently renders only `component` + `size` --
+ * archetype-driven rendering is admin-side work tracked separately. A widget
+ * that declares an archetype and no component therefore has nowhere to render
+ * yet.
  *
- * `requiredPermission` decides whether the CARD renders. It does not constrain
- * the rows a widget's own query returns; a widget is responsible for reading
- * through the access-controlled path.
+ * `requiredPermission` decides whether the CARD renders. It does NOT constrain
+ * the rows a widget's query returns -- the query executor enforces that, and
+ * it is not optional there.
  */
 export interface PluginAdminWidget {
   id: string;
-  component: ComponentPath;
-  size?: "full" | "half";
+  title: string;
+  description?: string;
+  icon?: string;
+  category?: string;
+  archetype: WidgetArchetype;
+  defaultSize: WidgetSize;
+  minSize?: WidgetSize;
+  maxSize?: WidgetSize;
   requiredPermission?: PermissionSlug;
+  /** Required for every data archetype. */
+  query?: WidgetQuery;
+  /** Required for `archetype: "custom"`. */
+  component?: ComponentPath;
+  link?: { label: string; href: string };
+  /**
+   * @deprecated Use `defaultSize`. `"half"` maps to `"lg"` and `"full"` to
+   * `"full"`; honoured so existing declarations keep rendering.
+   */
+  size?: "full" | "half";
 }
 
 /**
@@ -179,6 +204,9 @@ export interface PluginCollectionView {
  * by the host without running the plugin.
  *
  * Consumed: `menu`, `pages` + `settings`, `views`, `widgets`.
+ * `widgets` is consumed server-side (validation + query execution); the
+ * archetype-driven grid that renders the declarative half is admin-side work
+ * tracked separately.
  */
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */

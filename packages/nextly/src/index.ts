@@ -459,6 +459,30 @@ export {
   type PluginNavSection,
 } from "./plugins";
 
+// The widget domain's public surface: the registry every core and
+// plugin-contributed widget shares, the source registry a query names, and
+// the validated query shape itself.
+export {
+  WIDGET_SIZES,
+  WIDGET_ARCHETYPES,
+  registerWidget,
+  overrideWidget,
+  extendWidget,
+  deregisterWidget,
+  getWidget,
+  listWidgets,
+  registerSource,
+  listSources,
+  validateWidgetQuery,
+  MAX_WIDGET_LIMIT,
+  type WidgetDefinition,
+  type WidgetQuery,
+  type WidgetSize,
+  type WidgetArchetype,
+  type WidgetSource,
+  type WidgetPatch,
+} from "./domains/widgets";
+
 // Value exports for the email provider contract. A plugin calls
 // defineEmailProvider so its own config type is checked where the definition is
 // written, and erased only at the boundary the registry stores it behind.
