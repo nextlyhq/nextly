@@ -276,12 +276,14 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
         // and Settings. The alternative flashes the rail — an item appearing a
         // moment after the page settles reads as the UI changing its mind, and
         // the destination refuses on its own anyway.
-        if (
-          item.requiredPermission &&
-          !hasPermissionDataPending &&
-          !hasPermission(item.requiredPermission)
-        ) {
-          return false;
+        if (item.requiredPermission && !hasPermissionDataPending) {
+          // A LIST is any-of, matching the canonical declaration: that is how an
+          // umbrella permission is written, and treating it as all-of would hide
+          // a section from someone holding one of the grants that reaches it.
+          const needed = Array.isArray(item.requiredPermission)
+            ? item.requiredPermission
+            : [item.requiredPermission];
+          if (!needed.some(slug => hasPermission(slug))) return false;
         }
         switch (item.id) {
           case "collections":

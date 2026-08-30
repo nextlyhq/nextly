@@ -71,16 +71,48 @@ function offsetMinutesAt(instant: Date, timeZone: string): number {
 }
 
 /**
+ * How `instant` reads back as a wall-clock string in `timeZone`.
+ *
+ * The same `YYYY-MM-DDTHH:mm` shape a `datetime-local` input produces, so the
+ * answer can be compared to what the editor typed without parsing either side.
+ */
+function wallTimeIn(instant: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(instant);
+  const read = (type: Intl.DateTimeFormatPartTypes): string =>
+    parts.find(part => part.type === type)?.value ?? "";
+  const hour = String(Number(read("hour")) % 24).padStart(2, "0");
+  return `${read("year")}-${read("month")}-${read("day")}T${hour}:${read("minute")}`;
+}
+
+/**
  * The instant at which `wall` occurs in `timeZone`, as an ISO string with `Z`.
  *
  * Solved rather than computed in one step: the offset depends on the instant,
  * and the instant is what is being solved for. A first guess treating the wall
  * time as UTC gives an offset that is right except across a daylight-saving
- * boundary, and one correction lands on the far side of it — after which the
- * offset is stable and a second pass is the fixed point.
+ * boundary, and one correction lands on the far side of it.
  *
- * Returns `null` for a wall time the browser cannot parse, so the caller can
- * refuse rather than send an invalid instant the route would reject anyway.
+ * **The answer is then CHECKED by rendering it back**, because on a spring
+ * forward the requested wall time does not exist and the correction cannot land
+ * on it — no instant reads as 02:30 in Berlin on the day the clocks go from
+ * 02:00 to 03:00. Without the check the solver returns its nearest approach and
+ * the release is scheduled for a different moment than the one that was typed:
+ * measured, `2026-03-29T02:30` in `Europe/Berlin` came back as 03:30 (an hour
+ * late) and `2026-03-08T02:30` in `America/New_York` as 01:30 (an hour early).
+ * Silently moving a launch in either direction is worse than refusing, so this
+ * returns `null` and the caller says so.
+ *
+ * A wall time that occurs TWICE — the autumn fall-back — round-trips correctly
+ * and is accepted at its first occurrence, which is the earlier instant and the
+ * one an editor naming a time on that day means.
  */
 export function instantFor(wall: string, timeZone: string): string | null {
   // `datetime-local` yields `YYYY-MM-DDTHH:mm`, which `Date.parse` reads as
@@ -96,7 +128,10 @@ export function instantFor(wall: string, timeZone: string): string | null {
     if (corrected.getTime() === instant.getTime()) break;
     instant = corrected;
   }
-  return instant.toISOString();
+
+  // The round trip is the whole guarantee. Compared to the minute, because that
+  // is the precision the input offers and the seconds are always zero.
+  return wallTimeIn(instant, timeZone) === wall ? instant.toISOString() : null;
 }
 
 /** The reader's own zone, or UTC where the platform will not name one. */
@@ -126,6 +161,10 @@ export function ScheduleReleaseDialog({
 
   const zoneUsable = isValidTimezone(zone);
   const instant = wall && zoneUsable ? instantFor(wall, zone) : null;
+  // A wall time the zone SKIPS, which is a different failure from an empty box
+  // or an unknown zone: the editor typed something real that this zone does not
+  // have on that date, and needs to be told so rather than given a near miss.
+  const skipped = Boolean(wall) && zoneUsable && instant === null;
   // Scheduling a release for a moment that has passed publishes it on the next
   // tick, which is a surprising way to make something live. Named as a warning
   // rather than a refusal: the drain genuinely does handle it, and an editor
@@ -185,6 +224,13 @@ export function ScheduleReleaseDialog({
                   : "Not a timezone this browser recognises. Use an IANA name such as Europe/Berlin."}
               </p>
             </div>
+
+            {skipped ? (
+              <p role="alert" className="text-sm text-destructive">
+                {zone} has no such time on that date — the clocks go forward and
+                that hour does not exist. Pick a time before or after it.
+              </p>
+            ) : null}
 
             {inThePast ? (
               <p role="status" className="text-sm text-warning-foreground">

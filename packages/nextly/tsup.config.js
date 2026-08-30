@@ -94,6 +94,12 @@ const clientEntries = [
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
   "src/query/index.ts",
+  // The release lifecycle vocabulary: the states, and which of them each move
+  // may start from. A leaf with NO imports of its own, which is what makes it
+  // safe here — the admin decides which release controls to offer from the same
+  // lists the repository fences its UPDATEs with, so a control cannot be offered
+  // for a move the database refuses.
+  "src/schemas/releases/types.ts",
 ];
 
 // Shared config options

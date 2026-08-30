@@ -14,9 +14,12 @@
  * @module domains/releases/releases-repository
  */
 import type { CacheRevalidator } from "../../revalidation/types";
-import type {
-  ReleaseMemberAction,
-  ReleaseState,
+import {
+  RELEASE_ASSEMBLABLE_FROM,
+  RELEASE_CANCELLABLE_FROM,
+  RELEASE_SCHEDULABLE_FROM,
+  type ReleaseMemberAction,
+  type ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import type {
@@ -256,10 +259,13 @@ export class ReleasesRepository {
       {
         and: [
           { column: "id", op: "=", value: id },
+          // The fence IS the declaration, not a copy of it: the admin decides
+          // which controls to offer from the same list, so a change here cannot
+          // leave a button offering a move the database refuses.
           {
             column: "state",
             op: "IN",
-            value: ["draft", "scheduled", "cancelled"],
+            value: [...RELEASE_SCHEDULABLE_FROM],
           },
         ],
       }
@@ -294,7 +300,7 @@ export class ReleasesRepository {
       {
         and: [
           { column: "id", op: "=", value: id },
-          { column: "state", op: "IN", value: ["draft", "scheduled"] },
+          { column: "state", op: "IN", value: [...RELEASE_CANCELLABLE_FROM] },
         ],
       }
     );
@@ -356,7 +362,7 @@ export class ReleasesRepository {
       {
         and: [
           { column: "id", op: "=", value: id },
-          { column: "state", op: "IN", value: ["draft", "cancelled"] },
+          { column: "state", op: "IN", value: [...RELEASE_ASSEMBLABLE_FROM] },
         ],
       }
     );

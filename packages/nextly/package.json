@@ -47,6 +47,10 @@
       "types": "./dist/field-catalog.d.ts",
       "import": "./dist/collections/fields/catalog.mjs"
     },
+    "./releases-lifecycle": {
+      "types": "./dist/releases-lifecycle.d.ts",
+      "import": "./dist/schemas/releases/types.mjs"
+    },
     "./query": {
       "types": "./dist/query/index.d.ts",
       "import": "./dist/query/index.mjs"

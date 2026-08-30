@@ -18,6 +18,7 @@ import {
   Badge,
   Button,
   Card,
+  Input,
   Select,
   SelectContent,
   SelectItem,
@@ -128,16 +129,25 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
     ANY_STATE
   );
   const [limit, setLimit] = useState(PAGE);
+  // The window's own bounds, so a release past the server's 200-row ceiling is
+  // still reachable: moving the range is the only narrowing that partitions a
+  // single state. Both filter the INSTANT, so they cannot reach a draft, which
+  // has none — that limit is stated where the editor can see it rather than
+  // left to be discovered.
+  const [after, setAfter] = useState("");
+  const [before, setBefore] = useState("");
 
   const { data, isPending, isError } = useReleases({
     ...(state === ANY_STATE ? {} : { state }),
+    ...(before ? { scheduledBefore: new Date(before).toISOString() } : {}),
+    ...(after ? { scheduledAfter: new Date(after).toISOString() } : {}),
     limit,
   });
 
-  const filtering = state !== ANY_STATE;
+  const filtering = state !== ANY_STATE || Boolean(after) || Boolean(before);
 
   const filter = (
-    <div className="mb-4 flex items-center gap-2">
+    <div className="mb-4 flex flex-wrap items-center gap-2">
       <label
         htmlFor="release-state-filter"
         className="text-sm text-muted-foreground"
@@ -166,6 +176,33 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
           ))}
         </SelectContent>
       </Select>
+
+      <label htmlFor="release-after" className="text-sm text-muted-foreground">
+        From
+      </label>
+      <Input
+        id="release-after"
+        type="date"
+        className="w-40"
+        value={after}
+        onChange={event => {
+          setAfter(event.target.value);
+          setLimit(PAGE);
+        }}
+      />
+      <label htmlFor="release-before" className="text-sm text-muted-foreground">
+        To
+      </label>
+      <Input
+        id="release-before"
+        type="date"
+        className="w-40"
+        value={before}
+        onChange={event => {
+          setBefore(event.target.value);
+          setLimit(PAGE);
+        }}
+      />
     </div>
   );
 
@@ -261,10 +298,15 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
               Show more
             </Button>
           ) : (
-            // At the ceiling the honest instruction is to ask a narrower
-            // question, because no larger window exists to offer.
+            // At the ceiling there is no larger window to offer, so the only
+            // honest instruction is a narrower QUESTION — and it must not be one
+            // the editor has already asked. Telling someone who has filtered by
+            // state to filter by state reads as the UI not knowing what it is
+            // showing.
             <p className="text-sm text-muted-foreground">
-              Filter by state to narrow the list.
+              {filtering
+                ? "Narrow the dates to see releases before these."
+                : "Filter by state, or narrow the dates, to see more."}
             </p>
           )}
         </div>

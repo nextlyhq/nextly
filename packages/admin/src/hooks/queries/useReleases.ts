@@ -91,9 +91,26 @@ function useRefreshRelease() {
   };
 }
 
+/**
+ * Why every release mutation below sets `retry: false`.
+ *
+ * The app-wide `QueryProvider` retries failed mutations twice, which is right
+ * for an idempotent write and wrong for every write here. None of these
+ * endpoints takes an idempotency key, so a request that COMMITS and then loses
+ * its response is indistinguishable from one that never arrived: `create`
+ * repeated twice makes three releases, and `addMember` three membership rows.
+ *
+ * The state moves are safer but not silent — a retried `schedule` or `cancel`
+ * lands on a release already in the target state and the fence answers with a
+ * conflict, so the editor is told their action failed when it took. Both
+ * failure modes are worse than the one retrying exists to prevent.
+ */
+const NO_RETRY = { retry: false } as const;
+
 export function useCreateRelease() {
   const refresh = useRefreshRelease();
   return useMutation({
+    ...NO_RETRY,
     mutationFn: (payload: CreateReleasePayload) => createRelease(payload),
     onSuccess: result => {
       refresh(result.item.id);
@@ -105,6 +122,7 @@ export function useCreateRelease() {
 export function useScheduleRelease(id: string) {
   const refresh = useRefreshRelease();
   return useMutation({
+    ...NO_RETRY,
     mutationFn: (payload: ScheduleReleasePayload) =>
       scheduleRelease(id, payload),
     onSuccess: () => {
@@ -117,6 +135,7 @@ export function useScheduleRelease(id: string) {
 export function useCancelRelease(id: string) {
   const refresh = useRefreshRelease();
   return useMutation({
+    ...NO_RETRY,
     mutationFn: () => cancelRelease(id),
     onSuccess: () => {
       refresh(id);
@@ -128,6 +147,7 @@ export function useCancelRelease(id: string) {
 export function useAddReleaseMember(releaseId: string) {
   const refresh = useRefreshRelease();
   return useMutation({
+    ...NO_RETRY,
     mutationFn: (payload: AddReleaseMemberPayload) =>
       addReleaseMember(releaseId, payload),
     onSuccess: () => {
@@ -140,6 +160,7 @@ export function useAddReleaseMember(releaseId: string) {
 export function useRemoveReleaseMember(releaseId: string) {
   const refresh = useRefreshRelease();
   return useMutation({
+    ...NO_RETRY,
     // The release id travels with the member id: the server refuses a member
     // belonging to another release, so a stale view cannot edit one the editor
     // never opened.

@@ -49,3 +49,63 @@ export function isReleaseMemberAction(v: unknown): v is ReleaseMemberAction {
     (RELEASE_MEMBER_ACTIONS as readonly string[]).includes(v)
   );
 }
+
+/**
+ * Which states each lifecycle move may START from.
+ *
+ * Declared once, here, because three separate places need the same answer and
+ * they cannot be allowed to disagree: the repository's conditional UPDATEs use
+ * these as their fence, and the admin uses them to decide which controls to
+ * OFFER. A UI matrix written alongside the fence is the failure this prevents —
+ * it silently narrows what the product can do (an editor unable to move a
+ * schedule they already set) while reading as a safety measure, and it can even
+ * state the opposite of the rule in prose the fence never checks.
+ *
+ * They live in this module because it has no imports at all, so a client can
+ * consume them without pulling the schema graph in behind them.
+ */
+
+/**
+ * Scheduling is a MOVE TO an instant, not a one-time commitment.
+ *
+ * `scheduled` is included so an instant can be corrected, and `cancelled` so a
+ * launch called off can be reinstated. `published` is excluded because the drain
+ * would re-apply the members against documents that have changed since.
+ */
+export const RELEASE_SCHEDULABLE_FROM: readonly ReleaseState[] = [
+  "draft",
+  "scheduled",
+  "cancelled",
+];
+
+/**
+ * Cancelling is also how an unwanted DRAFT is abandoned.
+ *
+ * There is no delete route, so excluding `draft` here would leave a release
+ * created by mistake with no way out of the list.
+ */
+export const RELEASE_CANCELLABLE_FROM: readonly ReleaseState[] = [
+  "draft",
+  "scheduled",
+];
+
+/**
+ * Membership changes needing only the assembling authority.
+ *
+ * `scheduled` is deliberately absent: changing what is in a committed launch is
+ * a publisher's decision, and is listed separately below.
+ */
+export const RELEASE_ASSEMBLABLE_FROM: readonly ReleaseState[] = [
+  "draft",
+  "cancelled",
+];
+
+/**
+ * Membership changes that additionally require the publishing authority.
+ *
+ * The drain reads membership AT the instant rather than at scheduling time, so
+ * editing a scheduled release changes what a publisher already committed to.
+ */
+export const RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM: readonly ReleaseState[] = [
+  "scheduled",
+];

@@ -61,25 +61,31 @@ describe("the Releases nav entry", () => {
     expect(NAV_SECTIONS).toContain("releases");
   });
 
-  it("agrees with the declaration the rail reads for active state", () => {
-    // Two declarations of one destination, so they are checked against each
-    // other: a rail entry pointing somewhere the active-state list does not
-    // know renders a link that never highlights.
+  it("takes every field from the canonical declaration", () => {
+    // The rail entry is DERIVED from `SIDEBAR_NAVIGATION`, so this asserts the
+    // derivation happened rather than that two literals agree today. Label and
+    // href carry the discrimination — icon identity would also hold for two
+    // independent imports of the same lucide component — so an entry written
+    // out by hand fails here the moment either changes on one side.
     const declared = SIDEBAR_NAVIGATION.find(
       item => item.href === ROUTES.RELEASES
     );
+    expect(declared).toBeDefined();
+    expect(railReleases?.label).toBe(declared?.title);
+    expect(railReleases?.href).toBe(declared?.href);
+    expect(railReleases?.icon).toBe(declared?.icon);
+    expect(railReleases?.requiredPermission).toBe(declared?.requiredPermission);
     expect(declared?.category).toBe("releases");
-    expect(declared?.requiredPermission).toBe(railReleases?.requiredPermission);
   });
 });
 
 describe("the rail's coverage of the section vocabulary", () => {
   it("gives every declarable section a rail entry", () => {
     // The general form, and the case above is one instance of it. A section can
-    // be added to the vocabulary, given routes and given pages while the rail
-    // is never touched — and every other test still passes, because each one
-    // asks about a section that IS present. Only comparing the two sets can see
-    // an absence.
+    // be added to the vocabulary, given routes and given pages while the rail is
+    // never touched — and every other test still passes, because each one asks
+    // about a section that IS present. Only comparing the two sets can see an
+    // absence.
     //
     // Reported as the missing NAMES rather than as a count, so a failure says
     // which section has no way in.

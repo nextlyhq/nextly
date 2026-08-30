@@ -38,6 +38,12 @@ import { useCan } from "@admin/hooks/useCan";
 import type { Release, ReleaseMember } from "@admin/types/releases";
 
 import { CancelReleaseButton } from "./CancelReleaseButton";
+import {
+  canCancel,
+  canSchedule,
+  membershipEditability,
+  scheduleIntent,
+} from "./release-lifecycle";
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
 import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
 
@@ -156,20 +162,28 @@ function contentsSummary(members: ReleaseMember[]): string {
   return `${parts.join(", ")}.`;
 }
 
+const SCHEDULE_LABEL: Record<ReturnType<typeof scheduleIntent>, string> = {
+  set: "Schedule…",
+  move: "Reschedule…",
+  reinstate: "Reschedule…",
+};
+
 function Header({
   release,
   canPublish,
+  contentsKnown,
 }: {
   release: Release;
   canPublish: boolean;
+  contentsKnown: boolean;
 }) {
   const [scheduling, setScheduling] = useState(false);
 
-  // `draft` is the only state that can be committed, and `scheduled` the only
-  // one that can be called off. Offering either outside its state would put a
-  // button on screen whose only possible outcome is a refusal.
-  const schedulable = release.state === "draft";
-  const cancellable = release.state === "scheduled";
+  // Taken from the engine's own transition rules rather than restated. A
+  // scheduled release can be RE-scheduled and a cancelled one reinstated, and a
+  // draft is abandoned by cancelling it, because no delete route exists.
+  const schedulable = canSchedule(release.state);
+  const cancellable = canCancel(release.state);
 
   return (
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
@@ -199,14 +213,28 @@ function Header({
           fixed sentence that cannot say WHY, so the only place a reason can be
           given is here — and not offering the action is the clearest one. */}
       {canPublish && schedulable ? (
-        <>
-          <Button onClick={() => setScheduling(true)}>Schedule…</Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button
+            onClick={() => setScheduling(true)}
+            // Committing a release whose contents have not arrived defeats the
+            // reason this page exists: the instant is chosen with what ships on
+            // screen. A failed members request is the same situation as a
+            // pending one — the editor cannot see what they are committing.
+            disabled={!contentsKnown}
+          >
+            {SCHEDULE_LABEL[scheduleIntent(release.state)]}
+          </Button>
+          {!contentsKnown ? (
+            <p className="text-xs text-muted-foreground">
+              Available once the contents have loaded.
+            </p>
+          ) : null}
           <ScheduleReleaseDialog
             release={release}
             open={scheduling}
             onOpenChange={setScheduling}
           />
-        </>
+        </div>
       ) : null}
       {canPublish && cancellable ? (
         <CancelReleaseButton release={release} />
@@ -247,18 +275,25 @@ export function ReleaseDetail({ id }: { id: string }) {
   const rows = members.data?.items ?? [];
 
   // What the service enforces, asked here so the control is not offered where
-  // it can only be refused. A draft is changed with `create` alone; a SCHEDULED
-  // release additionally needs `publish`, because its membership is read at the
-  // instant rather than at scheduling time — so editing it changes what a
-  // publisher already committed to. Published and cancelled releases are never
-  // materialised again, so their contents cannot change at all.
-  const state = release.data.state;
+  // it can only be refused — and taken from the engine's rules rather than
+  // restated, because a UI matrix that drifts NARROWER removes product without
+  // anything failing to say so.
+  const editability = membershipEditability(release.data.state);
   const removable =
-    canAssemble && (state === "draft" || (state === "scheduled" && canPublish));
+    canAssemble &&
+    (editability === "free" || (editability === "needs-publish" && canPublish));
+
+  // A members request that has not returned and one that FAILED are the same
+  // fact for scheduling: the editor cannot see what they would be committing.
+  const contentsKnown = !members.isPending && !members.isError;
 
   return (
     <>
-      <Header release={release.data} canPublish={canPublish} />
+      <Header
+        release={release.data}
+        canPublish={canPublish}
+        contentsKnown={contentsKnown}
+      />
 
       <section aria-labelledby="release-contents">
         <div className="mb-3 flex items-baseline justify-between gap-3">

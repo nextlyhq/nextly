@@ -20,6 +20,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { AddToReleaseButton } from "@admin/components/features/releases/AddToReleaseButton";
 import {
   CONTENT_PAGE_MEASURE,
   CONTENT_MEASURE_LENGTH,
@@ -526,6 +527,21 @@ export default function EditEntryPage({
             <PluginSlot path={beforeEditPath} props={editInjectionProps} />
           </div>
         )}
+        {/* Above the form, in the same measure as the editor, because the
+            question it asks is about this document as a whole rather than about
+            any field in it. Bounded here for the reason the injection slots are:
+            under the measured frame a direct child of the grid is placed in the
+            content column only if it generates an element box. */}
+        <div
+          className="mx-auto flex w-full justify-end"
+          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+        >
+          <AddToReleaseButton
+            scopeKind="collection"
+            scopeSlug={slug}
+            entryId={id}
+          />
+        </div>
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
