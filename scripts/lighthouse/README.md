@@ -70,6 +70,26 @@ They sit just above what the page transfers today, so the payload cannot grow
 without the night going red. They are a ratchet rather than a target: the number
 they are set against is the measured present, not a budget anybody chose.
 
+Set against a CI run rather than a laptop, because the runner is what the
+nightly measures on:
+
+|                 | measured | ceiling | headroom                |
+| --------------- | -------- | ------- | ----------------------- |
+| script requests | 5        | 8       | room for a chunk or two |
+| script bytes    | 148,056  | 165,000 | 11%                     |
+| total bytes     | 206,368  | 230,000 | 11%                     |
+
+The byte figures carry about a tenth of headroom because they are deterministic
+per build — the payload does not vary between runs the way a timing does — so a
+tight ceiling costs no flakiness and catches a regression the run it arrives in.
+The request count is looser in proportion because one legitimate new chunk is a
+whole unit rather than a percentage.
+
+**Re-set them whenever the floor moves on purpose.** They were 30 / 1,000,000 /
+1,100,000 while the page still carried the contributor harness's client shell;
+leaving them there after that shell came off would have let the payload grow
+back to six times its size without the night noticing.
+
 ---
 
 ## Baseline
