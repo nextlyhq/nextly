@@ -472,6 +472,40 @@ export function canvasScale(
   return Math.min(1, region / requested);
 }
 
+/** A width the box is given, in whichever of the two forms it is given in. */
+type BoxWidth = { width: string } | { maxWidth: string };
+
+/**
+ * A width, and the centring that travels with it.
+ *
+ * The centring is not a property of any one of the shapes below — it is a
+ * property of HAVING a width. A box told how wide to be is narrower than the
+ * region it sits in, and a narrow box parked against the left edge reads as a
+ * layout that has broken rather than as a viewport being simulated.
+ *
+ * Stated here rather than at each `return` because it was previously stated at
+ * one of them. The other three set a width and omitted the margin, so the
+ * canvas centred while fitting and jumped to the left edge the moment an author
+ * chose a scale — the same tier, the same width, alignment deciding itself on
+ * which branch produced it. Taking a width only through this function is what
+ * makes that disagreement unspellable rather than merely fixed.
+ *
+ * The one branch that sets NO width does not call this, and must not: a box
+ * with no width fills the region, so there is no free space, and an author
+ * reading the canvas root would find a margin that governs nothing.
+ *
+ * `marginInline` rather than a flex or grid alignment on the region, because
+ * the margin resolves against whatever free space exists at the time. Measured
+ * across the range this canvas paints at: at half scale a 912px region gives
+ * 228px each side, and above 1 the box is wider than the region, the free space
+ * is negative, and the margins resolve to zero — so the overflow scrolls from
+ * the left edge with nothing clipped, which is what an author magnifying to
+ * inspect something needs. No branch on the scale is required to get both.
+ */
+function centred(width: BoxWidth): React.CSSProperties {
+  return { ...width, marginInline: "auto" };
+}
+
 /**
  * The canvas root's own style: the container the sheet queries, the width the
  * box is asked to show, and the scale that makes that width fit.
@@ -479,10 +513,8 @@ export function canvasScale(
  * Two shapes, because a request that fits and a request that does not are
  * different situations rather than one with a parameter.
  *
- * WHERE IT FITS, the width is a MAXIMUM with an auto inline margin. Centred
- * rather than left-aligned, which is what every builder surveyed does and is
- * not merely cosmetic: an off-centre narrow box reads as a layout that has
- * broken rather than as a viewport being simulated.
+ * WHERE IT FITS, the width is a MAXIMUM. Every width here is centred — see
+ * `centred` above for why that belongs to the width rather than to the branch.
  *
  * WHERE IT DOES NOT, the width is EXACT and a transform shrinks the box until
  * it does. That is the only way the widest tier stays editable at all: the
@@ -528,7 +560,9 @@ function previewBoxStyle(
    * property of whether a viewport is being simulated.
    */
   if (preview === undefined) {
-    return chosen ? { width: `calc(100% * ${scale})`, zoom: scale } : {};
+    return chosen
+      ? { ...centred({ width: `calc(100% * ${scale})` }), zoom: scale }
+      : {};
   }
   const container = previewContainerStyle(preview.container);
   /*
@@ -564,7 +598,7 @@ function previewBoxStyle(
       // it back restores the width the box had, and the scale then paints it
       // larger without moving what the queries resolve against. No measurement
       // is involved, so there is no observer to disagree with the layout.
-      width: `calc(100% * ${scale})`,
+      ...centred({ width: `calc(100% * ${scale})` }),
       zoom: scale,
     };
   }
@@ -578,13 +612,22 @@ function previewBoxStyle(
    * anything above 1 there is no reading of `maxWidth` that magnifies.
    */
   if (!chosen && scale >= 1) {
-    return {
-      ...container,
-      maxWidth: `${preview.width}px`,
-      marginInline: "auto",
-    };
+    return { ...container, ...centred({ maxWidth: `${preview.width}px` }) };
   }
-  return { ...container, width: `${preview.width}px`, zoom: scale };
+  /*
+   * Reached two ways, and only one of them has slack to centre.
+   *
+   * FITTING, the scale is derived from the region, so the box paints at exactly
+   * the region's width and the margins resolve to zero — measured, 912px into
+   * 912px. CHOSEN, the scale is the author's and owes the region nothing: a
+   * 375px tier at any scale at all paints narrower than the region it sits in,
+   * which is the case that was left against the left edge.
+   */
+  return {
+    ...container,
+    ...centred({ width: `${preview.width}px` }),
+    zoom: scale,
+  };
 }
 
 /**
