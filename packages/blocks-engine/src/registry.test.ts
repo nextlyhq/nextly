@@ -175,6 +175,20 @@ describe("registration rules", () => {
     }
   });
 
+  it("refuses an unknown key inside island, as the manifest schema does", () => {
+    // The two gates disagreeing is the failure either exists to prevent:
+    // accepting it here and refusing it during manifest generation lets a
+    // plugin boot successfully and then break `generate`.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/tick2",
+          island: { reason: "counts down.", budgetBytes: 100 },
+        } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*budgetBytes/s);
+  });
+
   it("refuses an island that is not a record", () => {
     for (const island of [null, [], true, "yes"]) {
       expect(() =>

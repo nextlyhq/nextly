@@ -265,6 +265,93 @@ describe("a document whose shape a reader cannot control", () => {
   });
 });
 
+describe("an island the page draws nothing for", () => {
+  // A block declaring `rendersNothing(props)` emits no markup — an image still
+  // waiting for its picture. The read preparation deliberately does NOT decide
+  // this: it says so where it draws its line, because a node resolving to a
+  // placeholder is an exceptional state while a block drawing nothing is an
+  // ordinary one.
+  const emptyTicker = {
+    name: "test/empty-ticker",
+    version: 1,
+    description: "Counts down, when given a date.",
+    example: { props: {} },
+    island: { reason: "counts down to a date the server cannot know." },
+    rendersNothing: (props: { date?: string }) => props.date === undefined,
+    render: () => null,
+  } as unknown as AnyBlockDefinition;
+
+  const blocksWithEmpty = createBlockResolver([emptyTicker]);
+
+  const pageOf = (props: Record<string, unknown>): BlockDocument =>
+    ({
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "n1", type: "test/empty-ticker", version: 1, props }],
+    }) as unknown as BlockDocument;
+
+  it("is not reported when its props draw nothing", () => {
+    expect(islandsFor(pageOf({}), blocksWithEmpty)).toEqual({});
+  });
+
+  it("IS reported when the same block has something to draw", () => {
+    // The control: a walk that dropped every island would satisfy the case
+    // above while reporting nothing about any page.
+    expect(
+      Object.keys(islandsFor(pageOf({ date: "2026-01-01" }), blocksWithEmpty))
+    ).toEqual(["test/empty-ticker"]);
+  });
+});
+
+describe("the limits a site sets", () => {
+  const box = {
+    name: "test/box2",
+    version: 1,
+    description: "Draws its children always.",
+    example: { props: {} },
+    slots: { children: {} },
+    render: () => null,
+  } as unknown as AnyBlockDefinition;
+  const deep = createBlockResolver([box, ticker]);
+
+  const nested = (depth: number): BlockDocument => {
+    let node: Record<string, unknown> = {
+      id: "leaf",
+      type: "test/ticker",
+      version: 1,
+      props: {},
+    };
+    for (let level = 0; level < depth; level += 1) {
+      node = {
+        id: `n${level}`,
+        type: "test/box2",
+        version: 1,
+        props: {},
+        slots: { children: [node] },
+      };
+    }
+    return {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [node],
+    } as unknown as BlockDocument;
+  };
+
+  it("reads the caps the caller gives, not the defaults", () => {
+    // A site that raised `maxDepth` renders deeper than the default allows. Read
+    // against the defaults, an island the page DOES draw is truncated away and
+    // the caller is told the page needs less JavaScript than it does.
+    const document = nested(14);
+
+    expect(islandsFor(document, deep)).toEqual({});
+    expect(
+      Object.keys(
+        islandsFor(document, deep, { limits: { maxDepth: 40 } as never })
+      )
+    ).toEqual(["test/ticker"]);
+  });
+});
+
 describe("the core block library", () => {
   it("declares no islands, so a page of core blocks adds no JavaScript", () => {
     // The nightly Lighthouse budget measures the BYTES on a real page in a

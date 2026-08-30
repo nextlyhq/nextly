@@ -22,7 +22,10 @@ import {
 
 import { withTypographyDefaults } from "./blocks/typography-defaults";
 import { prepareDocumentForRead } from "./prepare-document";
-import type { DocumentReadStages } from "./prepare-document";
+import type {
+  DocumentReadStages,
+  PrepareDocumentArgs,
+} from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import {
   UNIDENTIFIED_SHARED_INPUTS,
@@ -250,7 +253,13 @@ export function blockPartsFor(
  */
 export function islandsFor(
   document: BlockDocument,
-  blocks: BlockResolver
+  blocks: BlockResolver,
+  // The SAME caps the renderer honours. Defaulted, this reads `DEFAULT_LIMITS`
+  // while a site that raised `maxDepth` renders deeper than this walk sees — so
+  // an island the page draws is truncated away here and the caller is told the
+  // page needs less JavaScript than it does. A reader that answers about a page
+  // has to be given the page's own bounds.
+  options: Omit<PrepareDocumentArgs, "resolver"> = {}
 ): Record<string, BlockIsland> {
   // The RENDER-EQUIVALENT tree, not the stored one. A node can be condition
   // gated, resolve to a placeholder, or belong to a block whose props draw
@@ -260,8 +269,18 @@ export function islandsFor(
   // Reused rather than re-derived: this is the sequence the renderer itself
   // runs, so the two cannot answer differently. Three passes decided separately
   // is how a gated node's assets stayed on a page whose markup was withheld.
-  const prepared = prepareDocumentForRead(document, { resolver: blocks });
+  const prepared = prepareDocumentForRead(document, {
+    ...options,
+    resolver: blocks,
+  });
   if (prepared === null) return {};
+  // The preparation deliberately does NOT decide this one: a block declaring
+  // that its props draw nothing is a separate question from a node resolving to
+  // a placeholder, and `prepare-document` says so where it draws the line. So
+  // the drawless test is asked here, through the same helper the style tiers
+  // use — an image still waiting for its picture emits no markup, and an island
+  // among them would otherwise make a static page ask for JavaScript.
+  const drawsNothing = drawlessTestFor(blocks);
 
   const found: Record<string, BlockIsland> = {};
   // ITERATIVE, and the depth this walks is the PREPARED tree's rather than the
@@ -280,6 +299,11 @@ export function islandsFor(
   while (stack.length > 0) {
     const node = stack.pop();
     if (node === undefined) continue;
+
+    // Its SUBTREE with it, which is what `pruneNodes` does for the same
+    // question: a block that draws nothing never calls `renderSlot`, so nothing
+    // stored beneath it reaches the page either.
+    if (drawsNothing(node)) continue;
 
     const definition = blocks.get(node.type);
     const island = definition?.island;

@@ -245,6 +245,19 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
         `block "${def.name}" island must state a non-empty reason for needing JavaScript.`
       );
     }
+    // Refused HERE as well as by the manifest schema, because the two gates
+    // disagreeing is the failure either one exists to prevent. Accepting an
+    // unknown key at boot and refusing it during generation lets a plugin start
+    // successfully and then break `generate` — the same shape as a manifest
+    // that writes cleanly for a block the engine will not register, arriving
+    // from the other end.
+    const unknown = Object.keys(def.island).filter(key => key !== "reason");
+    if (unknown.length > 0) {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" island has ${unknown.length === 1 ? "an unknown key" : "unknown keys"} ${unknown.map(key => `"${key}"`).join(", ")}; it states a reason and nothing else.`
+      );
+    }
   }
   // Checked here for the reason `slots` below is: the TYPE rejects a bad
   // declaration at the authoring site, and definitions also arrive from
