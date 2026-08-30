@@ -28,12 +28,23 @@ vi.mock("../../../di/container", () => ({
   container: { get: vi.fn() },
 }));
 
+// The per-collection totals are read through the access-controlled Direct API
+// count. These tests are about WHICH collections get counted, so the number
+// itself is pinned at zero; `collection-counts.test.ts` is where the number
+// being the caller's rather than the table's is asserted.
+const { count } = vi.hoisted(() => ({ count: vi.fn() }));
+vi.mock("../../../direct-api/nextly", () => ({ getNextly: () => ({ count }) }));
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../../di/container";
 import type { Logger } from "../../shared";
 import { DashboardService } from "../dashboard-service";
-import { allResources, someResources } from "../readable-resources";
+import {
+  allResources,
+  someResources,
+  type ReadCaller,
+} from "../readable-resources";
 
 /** Three registered collections, standing in for a real registry response. */
 const COLLECTIONS = [
@@ -58,6 +69,9 @@ const COLLECTIONS = [
 ];
 
 const SINGLES = [{ slug: "site-settings" }, { slug: "about" }];
+
+/** Who the counts are read as. Required by `getStats`, so it is stated once. */
+const CALLER: ReadCaller = { user: { id: "user-1", roles: ["editor"] } };
 
 /**
  * Adapter stub for the count fan-out `getStats` performs. Every COUNT(*)
@@ -100,6 +114,7 @@ function makeLogger(): Logger {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  count.mockResolvedValue({ total: 0 });
   (container.get as ReturnType<typeof vi.fn>).mockImplementation(
     (name: string) => {
       if (name === "collectionRegistryService") {
@@ -122,16 +137,22 @@ describe("DashboardService applies the read scope it is given", () => {
   it("admits nothing for an explicit empty scope", async () => {
     const service = new DashboardService(makeAdapter(), makeLogger());
 
-    const stats = await service.getStats({ scope: someResources([]) });
+    const stats = await service.getStats({
+      scope: someResources([]),
+      caller: CALLER,
+    });
 
     expect(stats.collectionCounts).toEqual([]);
     expect(stats.singles).toBe(0);
   });
 
-  it("admits nothing when the options object is omitted entirely -- deny by default", async () => {
+  it("admits nothing when the scope is omitted -- deny by default", async () => {
+    // `caller` is REQUIRED and `scope` is not, so this is the only shape a
+    // caller can still get wrong. It must deny; the old default returned
+    // everything.
     const service = new DashboardService(makeAdapter(), makeLogger());
 
-    const stats = await service.getStats();
+    const stats = await service.getStats({ caller: CALLER });
 
     expect(stats.collectionCounts).toEqual([]);
     expect(stats.singles).toBe(0);
@@ -142,6 +163,7 @@ describe("DashboardService applies the read scope it is given", () => {
 
     const stats = await service.getStats({
       scope: someResources(["posts"]),
+      caller: CALLER,
     });
 
     expect(stats.collectionCounts.map(c => c.slug)).toEqual(["posts"]);
@@ -150,7 +172,10 @@ describe("DashboardService applies the read scope it is given", () => {
   it("admits everything for a super-admin's `all` scope", async () => {
     const service = new DashboardService(makeAdapter(), makeLogger());
 
-    const stats = await service.getStats({ scope: allResources() });
+    const stats = await service.getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
 
     expect(stats.collectionCounts.map(c => c.slug).sort()).toEqual([
       "orders",
@@ -185,7 +210,10 @@ describe("recentChanges24h honours the read scope", () => {
     const adapter = makeAdapter();
     const service = new DashboardService(adapter, makeLogger());
 
-    const stats = await service.getStats({ scope: someResources([]) });
+    const stats = await service.getStats({
+      scope: someResources([]),
+      caller: CALLER,
+    });
 
     expect(stats.content.recentChanges24h).toBe(0);
     // An empty `IN ()` is a syntax error on some dialects, so the
@@ -218,6 +246,7 @@ describe("recentChanges24h honours the read scope", () => {
 
       await service.getStats({
         scope: someResources(["posts", "email-providers"]),
+        caller: CALLER,
       });
 
       const calls = activityLogCalls(adapter);
@@ -239,7 +268,10 @@ describe("recentChanges24h honours the read scope", () => {
     const adapter = makeAdapter();
     const service = new DashboardService(adapter, makeLogger());
 
-    const stats = await service.getStats({ scope: allResources() });
+    const stats = await service.getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
 
     const calls = activityLogCalls(adapter);
     expect(calls).toHaveLength(1);
@@ -254,11 +286,11 @@ describe("recentChanges24h honours the read scope", () => {
     expect(stats.content.recentChanges24h).toBe(7);
   });
 
-  it("denies by default when the options object is omitted entirely", async () => {
+  it("denies by default when the scope is omitted", async () => {
     const adapter = makeAdapter();
     const service = new DashboardService(adapter, makeLogger());
 
-    const stats = await service.getStats();
+    const stats = await service.getStats({ caller: CALLER });
 
     expect(stats.content.recentChanges24h).toBe(0);
     expect(activityLogCalls(adapter)).toEqual([]);

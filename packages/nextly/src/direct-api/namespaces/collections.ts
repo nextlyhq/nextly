@@ -407,6 +407,9 @@ export async function count(
     // From `args`, never `config` -- same reason as `find`: an inheritable
     // exemption would reach nested reads a caller's own `where` travels into.
     frameworkFilter: args.frameworkFilter,
+    // Lifecycle scope, from `args` exactly as `find` takes it, so a count and
+    // the list beside it describe the same rows.
+    status: args.status,
     ...accessOptions(config),
     // i18n M4: parity with find() so locale-scoped counts match.
     locale: config.locale,

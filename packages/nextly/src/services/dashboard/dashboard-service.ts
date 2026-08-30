@@ -15,7 +15,7 @@ import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
 import { getNextly } from "../../direct-api/nextly";
-import type { FindArgs } from "../../direct-api/types";
+import type { CountArgs, FindArgs } from "../../direct-api/types";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
@@ -102,13 +102,22 @@ export class DashboardService extends BaseService {
    * Runs all count queries in parallel for fast response. Uses the database
    * adapter directly for simple COUNT(*) queries.
    */
-  async getStats(options?: {
+  async getStats(options: {
     scope?: ReadableResources;
+    /**
+     * Who is asking. REQUIRED, not defaulted, for the reason
+     * {@link getRecentEntries} states: the per-collection totals are read with
+     * access ENFORCED, so a caller-less call would have to read with
+     * `user: undefined`, and the only safe meaning of that is zero. Making it a
+     * type error forecloses the shape rather than leaving a runtime guard to
+     * catch it.
+     */
+    caller: ReadCaller;
   }): Promise<DashboardStatsResponse> {
     // An omitted scope denies rather than allows. A caller that forgets to
     // pass one gets an empty dashboard, which is visible and reportable; the
     // old default returned everything, which was not.
-    const scope = options?.scope ?? someResources([]);
+    const scope = options.scope ?? someResources([]);
     const collections = await this.getRegisteredCollections(scope);
     const singles = await this.getRegisteredSingles(scope);
 
@@ -123,7 +132,7 @@ export class DashboardService extends BaseService {
       apiKeyCount,
       statusBreakdown,
     ] = await Promise.all([
-      this.getCollectionCounts(collections),
+      this.getCollectionCounts(collections, options.caller),
       this.countTable("media"),
       this.countRecentChanges24h(scope),
       this.countTable("users"),
@@ -211,8 +220,9 @@ export class DashboardService extends BaseService {
    * Returns an array of stat items for display in the 2×4 grid widget.
    * Reuses the same data sources as `getStats()`.
    */
-  async getProjectStats(options?: {
+  async getProjectStats(options: {
     scope?: ReadableResources;
+    caller: ReadCaller;
   }): Promise<ProjectStatsResponse> {
     const dashStats = await this.getStats(options);
 
@@ -488,20 +498,75 @@ export class DashboardService extends BaseService {
   }
 
   private async getCollectionCounts(
-    collections: CollectionInfo[]
+    collections: CollectionInfo[],
+    caller: ReadCaller
   ): Promise<CollectionCount[]> {
     const results = await Promise.all(
-      collections.map(async coll => {
-        const count = await this.countTable(coll.tableName);
-        return {
-          slug: coll.slug,
-          label: coll.label,
-          group: coll.group,
-          count,
-        };
-      })
+      collections.map(async coll => ({
+        slug: coll.slug,
+        label: coll.label,
+        group: coll.group,
+        count: await this.countReadableEntries(coll, caller),
+      }))
     );
     return results;
+  }
+
+  /**
+   * How many entries of ONE collection this caller may read.
+   *
+   * This used to be `countTable`, a bare `SELECT COUNT(*)` over the physical
+   * table. The read SCOPE decides whether a collection appears here at all; it
+   * says nothing about which rows inside it the caller may read, so a
+   * collection with an owner-only or custom stored read rule reported every
+   * author's rows to every reader who could open it -- the count disclosing
+   * exactly what the row read withholds.
+   *
+   * `overrideAccess: false` plus `user` is what closes it: `countEntries` runs
+   * `checkCollectionAccess` and then applies `getAccessQueryConstraint`, which
+   * is the same WHERE predicate the list read applies. `getRecentEntries` takes
+   * the identical path for the same reason.
+   *
+   * `status: "all"` is the one WIDENING option, and it keeps the number
+   * MEANING what it meant: an untrusted count that states nothing gets
+   * `resolveStatusFilter`'s `published` default, so without it the dashboard's
+   * per-collection totals would quietly exclude drafts and stop agreeing with
+   * the draft/published breakdown beside them. Under `"all"` no status
+   * condition is built at all, for the main row or a localized collection's
+   * per-locale `_status` companion.
+   */
+  private async countReadableEntries(
+    coll: CollectionInfo,
+    caller: ReadCaller
+  ): Promise<number> {
+    try {
+      const result = await getNextly().count({
+        collection: coll.slug,
+        overrideAccess: false,
+        user: caller.user,
+        // `satisfies` makes the field name a COMPILE-TIME boundary: a
+        // conditional spread is exempt from excess-property checking, so a
+        // wrong key here would compile clean and be dropped silently, leaving
+        // an API key counted by its minter's roles. Same pattern as
+        // `getRecentFromCollection`'s `find()` call.
+        ...(caller.authenticatedScope
+          ? ({ actor: caller.authenticatedScope } satisfies Pick<
+              CountArgs<string>,
+              "actor"
+            >)
+          : {}),
+        status: "all",
+      });
+      return result.total;
+    } catch (error) {
+      // A collection whose table is not yet created, or whose read the caller
+      // is refused outright, contributes zero rather than failing the whole
+      // dashboard -- the same posture `getRecentFromCollection` takes.
+      this.logger.debug(`Failed to count entries in ${coll.slug}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
   }
 
   /**

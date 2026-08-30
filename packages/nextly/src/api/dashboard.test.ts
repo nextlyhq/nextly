@@ -267,6 +267,7 @@ describe("dashboard read scope", () => {
     // appear: the handler carries the verdict, it does not re-decide it.
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set(["posts"]) },
+      caller: expect.anything(),
     });
   });
 
@@ -283,6 +284,7 @@ describe("dashboard read scope", () => {
     // `some` admits nothing, and that is what must arrive.
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set() },
+      caller: expect.anything(),
     });
   });
 
@@ -298,7 +300,35 @@ describe("dashboard read scope", () => {
 
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set(REGISTERED) },
+      caller: expect.anything(),
     });
+  });
+
+  it("hands the service the SAME resolved caller it decided the scope with", async () => {
+    // The per-collection totals are read as this caller, so the scope and the
+    // counts have to describe one identity. Two resolutions would let the
+    // dashboard list a collection under one identity and count it under
+    // another, and nothing in the response would say so.
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "user-1",
+      authMethod: "session",
+      permissions: [],
+      roles: ["role-7"],
+    });
+    (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "editor",
+    ]);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    serviceStub = { getStats };
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caller: { user: { id: "user-1", roles: ["editor"], role: "editor" } },
+      })
+    );
   });
 
   it("decides under the caller's RESOLVED identity, not the raw auth context", async () => {
@@ -442,6 +472,7 @@ describe("dashboard read scope for an API-KEY caller", () => {
 
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set(["site-settings"]) },
+      caller: expect.anything(),
     });
   });
 

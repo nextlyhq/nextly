@@ -138,10 +138,13 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
 
   const service = await getDashboardService();
   // The caller WHOLE, not an id. `readCaller` resolves session role IDs to the
-  // SLUGS an access rule matches and carries an API key's own stamped scope.
+  // SLUGS an access rule matches and carries an API key's own stamped scope,
+  // and BOTH consumers read it: the scope resolution asks which entities are in
+  // reach, and the per-collection counts are then read AS this caller so the
+  // numbers describe rows it may actually see.
   const caller = await readCaller(auth);
   const scope = await resolveReadableResources(caller);
-  const stats = await service.getStats({ scope });
+  const stats = await service.getStats({ scope, caller });
 
   // Bare-object read: stats is the dashboard summary itself; no envelope.
   // Spread into a fresh literal so respondData's `Record<string, unknown>`
