@@ -30,6 +30,7 @@ function repository() {
     addMember: vi.fn(async () => ({ id: "m1" })),
     removeMember: vi.fn(async () => undefined),
     touchIfAssemblable: vi.fn(async () => true),
+    restoreMember: vi.fn(async () => undefined),
     findMember: vi.fn(
       async (): Promise<{ id: string; releaseId: string } | undefined> => ({
         id: "m1",
@@ -507,5 +508,32 @@ describe("ReleasesService carries the key scope into the DOCUMENT check", () => 
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(repo.addMember).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService closes the window around a REMOVAL too", () => {
+  it("puts the member back when the release is scheduled during the delete", async () => {
+    // Removing an `unpublish` member cancels a committed takedown, so a
+    // publisher scheduling between the claim and the delete would have their
+    // decision undone by a caller who never passed the publish gate.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.touchIfAssemblable
+      .mockResolvedValueOnce(true) // the claim succeeds
+      .mockResolvedValueOnce(false); // scheduled while we were deleting
+    await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    // Restored with the ORIGINAL row, so the undo is invisible to anything
+    // holding that id.
+    expect(repo.restoreMember).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "m1" })
+    );
+  });
+
+  it("does not re-check for a caller who may publish", async () => {
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    await svc.removeMember("m1", ADMIN);
+    expect(repo.touchIfAssemblable).toHaveBeenCalledTimes(1);
+    expect(repo.restoreMember).not.toHaveBeenCalled();
   });
 });

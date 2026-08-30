@@ -2027,6 +2027,147 @@ function parseApiKeyRoutes(
 }
 
 /**
+ * The `/api/releases` route table.
+ *
+ * Declared as data rather than as a branch per route. Eight routes written as
+ * eight `if` blocks is one function with twenty-five paths through it, and the
+ * shape they all match on — id, subresource, sub-id, verb — is identical, so the
+ * branches differ only in their values. Stating the values once means a new
+ * route is a row, and means the depth guard and the verb gate cannot be
+ * forgotten for one of them.
+ *
+ * `operation` is the dispatcher's shared vocabulary — list, single, create,
+ * update, delete — and deliberately does NOT carry the release authority. The
+ * three seeded permissions are read / create / publish, and `publish` has no
+ * member in that union; widening a type every service shares to describe one of
+ * them would be the wrong trade. The authority each method needs is declared in
+ * `api/releases`, beside the handler that enforces it.
+ */
+interface ReleaseRoute {
+  /** Whether the path carries a release id. */
+  id: boolean;
+  /** The segment after the id, or `null` for none. */
+  subresource: string | null;
+  /** Whether the path carries a fourth segment, such as a member id. */
+  subId: boolean;
+  verb: string;
+  operation: OperationType;
+  method: string;
+}
+
+const RELEASE_ROUTES: ReleaseRoute[] = [
+  {
+    id: false,
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleases",
+  },
+  {
+    id: false,
+    subresource: null,
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "createRelease",
+  },
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "single",
+    method: "getRelease",
+  },
+  {
+    id: true,
+    subresource: "members",
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleaseMembers",
+  },
+  {
+    id: true,
+    subresource: "members",
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "addReleaseMember",
+  },
+  {
+    id: true,
+    subresource: "members",
+    subId: true,
+    verb: "DELETE",
+    operation: "delete",
+    method: "removeReleaseMember",
+  },
+  // Scheduling and cancelling are separate routes rather than one `PATCH` with a
+  // state in the body: they are the two directions of the authority the seed
+  // calls "schedule or cancel", and a body field is not something a route table
+  // or an audit log can see.
+  {
+    id: true,
+    subresource: "schedule",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "scheduleRelease",
+  },
+  {
+    id: true,
+    subresource: "cancel",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "cancelRelease",
+  },
+];
+
+/**
+ * `/api/releases` — the content-release surface.
+ *
+ * A release is a first-class object with its own lifecycle rather than a
+ * sub-resource of the documents it batches, so it gets a top-level route. That
+ * is the shape Contentful, Strapi and Sanity all give it, and the only one that
+ * answers "what is going live on Friday?" without starting from a document.
+ */
+function parseReleaseRoutes(
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Nothing deeper than the table exists. Guarded once, so a longer path 404s
+  // instead of matching a shorter route and silently ignoring the tail — which
+  // would make `.../schedule/tomorrow` schedule the release.
+  if (additionalParams.length > 0) return null;
+
+  const route = RELEASE_ROUTES.find(
+    candidate =>
+      candidate.id === Boolean(id) &&
+      candidate.subresource === (subresource ?? null) &&
+      candidate.subId === Boolean(subId) &&
+      candidate.verb === httpMethod
+  );
+  if (!route) return null;
+
+  if (id) routeParams.releaseId = id;
+  if (subId) routeParams.memberId = subId;
+
+  return {
+    service: "releases",
+    operation: route.operation,
+    method: route.method,
+    routeParams,
+  };
+}
+
+/**
  * GET or POST /api/jobs/run → run one background job pass.
  *
  * `run` is the only path under `jobs`, and it is an operation rather than an
@@ -2633,6 +2774,19 @@ export function parseRestRoute(
   // Handle API Keys endpoints
   if (resource === "api-keys") {
     const result = parseApiKeyRoutes(id, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle content releases
+  if (resource === "releases") {
+    const result = parseReleaseRoutes(
+      id,
+      subresource,
+      subId,
+      additionalParams,
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

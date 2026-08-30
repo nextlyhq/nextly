@@ -398,7 +398,12 @@ export class ReleasesService {
     }
   }
 
-  async removeMember(memberId: string, actor: ReleaseActor): Promise<void> {
+  async removeMember(
+    memberId: string,
+    actor: ReleaseActor,
+    /** The release the caller believes this member belongs to, when it knows. */
+    expectedReleaseId?: string
+  ): Promise<void> {
     await this.authorize(actor, "create");
 
     // An earlier version of this method reasoned that removing a member "can
@@ -413,8 +418,46 @@ export class ReleasesService {
     // makes a retry look like a failure.
     if (member === undefined) return;
 
+    // A member id that belongs to a DIFFERENT release than the caller named is
+    // refused, not followed. Nothing joins the two in the path, so a stale
+    // client URL would otherwise edit a release the caller never addressed and
+    // be told it worked.
+    if (
+      expectedReleaseId !== undefined &&
+      member.releaseId !== expectedReleaseId
+    ) {
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "member-belongs-to-another-release",
+          memberId,
+          expectedReleaseId,
+          actualReleaseId: member.releaseId,
+        },
+      });
+    }
+
     await this.claimAssemblable(member.releaseId, actor);
     await this.deps.repository.removeMember(memberId);
+
+    // The same window the member ADD closes, and it matters more here: removing
+    // an `unpublish` member cancels a committed takedown, so a publisher
+    // scheduling between the claim and the delete would have their decision
+    // undone by a caller who never passed the publish gate.
+    //
+    // Compensated by restoring the ORIGINAL row — same id, same author, same
+    // timestamp — so the undo is invisible to anything holding that id.
+    if (!(await this.holds(actor, "publish"))) {
+      if (!(await this.deps.repository.touchIfAssemblable(member.releaseId))) {
+        await this.deps.repository.restoreMember(member);
+        throw NextlyError.conflict({
+          logContext: {
+            reason: "release-scheduled-during-remove",
+            releaseId: member.releaseId,
+            memberId,
+          },
+        });
+      }
+    }
   }
 
   /**
