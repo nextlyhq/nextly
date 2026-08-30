@@ -147,16 +147,23 @@ interface ActivityWriteTables {
  * wants the schema property; the count query writes SQL and wants the physical
  * column. They are carried together so a filter cannot be added in one
  * spelling and used in the other.
+ *
+ * A discriminated union rather than `op: "=" | "IN"` paired with
+ * `value: SqlParam | SqlParam[]`: those two fields varying independently let
+ * `{ op: "=", value: ["a", "b"] }` type-check, a state `filterClause` cannot
+ * handle. Tying `op` to `value`'s shape makes that state unrepresentable and
+ * lets `filterClause` narrow on `op` without a cast.
  */
-interface ActivityFilter {
+interface ActivityFilterBase {
   /** The Drizzle schema property, for `adapter.select`. */
   property: string;
   /** The physical column, for the count query's SQL. */
   column: string;
-  /** `=` for a single value, `IN` for a set. */
-  op: "=" | "IN";
-  value: SqlParam | SqlParam[];
 }
+
+type ActivityFilter =
+  | (ActivityFilterBase & { op: "="; value: SqlParam })
+  | (ActivityFilterBase & { op: "IN"; value: SqlParam[] });
 
 /**
  * Safely convert an unknown driver-returned value to a nullable string.
@@ -412,7 +419,14 @@ export class ActivityLogService extends BaseService {
       }>(sql, params);
 
       return Number(result[0]?.count ?? 0);
-    } catch {
+    } catch (error) {
+      // Matches the sibling catch in `getRecentActivity`: a placeholder/params
+      // mismatch or a dialect failure here would otherwise surface as a silent
+      // 0 with nothing in the logs to explain it -- the `total` field would be
+      // wrong and nothing would say why.
+      this.logger.error("Failed to count activities", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return 0;
     }
   }
@@ -434,8 +448,12 @@ export class ActivityLogService extends BaseService {
         ? `"${filter.column}"`
         : `\`${filter.column}\``;
 
+    // The discriminated union on `filter.op` narrows `filter.value` to
+    // `SqlParam[]` in this branch and `SqlParam` below without a cast --
+    // the type itself rules out an `IN` filter carrying a scalar or a `=`
+    // filter carrying an array.
     if (filter.op === "IN") {
-      const placeholders = (filter.value as SqlParam[])
+      const placeholders = filter.value
         .map(v => {
           params.push(v);
           return this.dialect === "postgresql" ? `$${params.length}` : "?";
@@ -444,7 +462,7 @@ export class ActivityLogService extends BaseService {
       return `${quoted} IN (${placeholders})`;
     }
 
-    params.push(filter.value as SqlParam);
+    params.push(filter.value);
     return this.dialect === "postgresql"
       ? `${quoted} = $${params.length}`
       : `${quoted} = ?`;
