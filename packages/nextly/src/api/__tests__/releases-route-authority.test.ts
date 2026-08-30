@@ -31,6 +31,20 @@ vi.mock("../../auth/middleware/to-nextly-error", () => ({
   toNextlyAuthError: (e: unknown) => e,
 }));
 vi.mock("../../init", () => ({ getCachedNextly }));
+vi.mock("../../di", () => ({
+  container: {
+    has: () => true,
+    // The registry answers what the SCHEMA declared. Default: the lifecycle is
+    // on, because that is the ordinary collection a release targets.
+    get: () => ({
+      getCollectionBySlug: async () => lifecycleRecord,
+      getSingleBySlug: async () => lifecycleRecord,
+    }),
+  },
+}));
+
+/** Swapped per case, so a target without a lifecycle can be expressed. */
+let lifecycleRecord: { status?: boolean } | null = { status: true };
 
 const { handleReleaseRequest } = await import("../releases");
 
@@ -68,6 +82,7 @@ function namespace() {
 let api: ReturnType<typeof namespace>;
 
 beforeEach(() => {
+  lifecycleRecord = { status: true };
   api = namespace();
   getCachedNextly.mockResolvedValue(api);
   requireAnyPermission.mockResolvedValue({ userId: "u1" });
@@ -402,11 +417,13 @@ describe("release member targets", () => {
     );
   });
 
-  it("refuses a target with no draft/published lifecycle", async () => {
-    // Materialisation works by writing the status field. With the lifecycle
-    // disabled the write produces no observable state, the drain records a
-    // failed action, and the release stays scheduled and retries forever.
-    api.findByID.mockResolvedValueOnce({ id: "e1" });
+  it("refuses a target whose SCHEMA declares no lifecycle", async () => {
+    // Read from the schema, not probed on the row. The `status` name is
+    // reserved only when the lifecycle is enabled, so a collection with it
+    // DISABLED may legally define an ordinary field called `status` — and a row
+    // probe would admit it, after which materialisation overwrites that
+    // author's field with "published" and reports the release complete.
+    lifecycleRecord = { status: false };
     const res = await addMember({});
     expect(res.status).toBe(400);
     expect(api.releases.addMember).not.toHaveBeenCalled();
@@ -477,5 +494,66 @@ describe("release list windowing", () => {
       {}
     );
     expect(res.status).toBe(200);
+  });
+});
+
+describe("release route paging and body validation", () => {
+  it("bounds an unlimited list rather than serialising the table", async () => {
+    // `GET /api/releases` with no limit used to select every release. On an
+    // installation with a real history that is an ordinary authenticated
+    // request turned into an unbounded read.
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases"),
+      "listReleases",
+      {}
+    );
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 51 })
+    );
+  });
+
+  it("refuses a page larger than the maximum", async () => {
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases?limit=100000"),
+      "listReleases",
+      {}
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.find).not.toHaveBeenCalled();
+  });
+
+  it("refuses a description that is present but not a string", async () => {
+    // Coercing it to null turns a malformed request into silent data loss,
+    // where every other bad field here answers 400.
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases", {
+        method: "POST",
+        body: JSON.stringify({ title: "Launch", description: 42 }),
+        headers: { "Content-Type": "application/json" },
+      }),
+      "createRelease",
+      {}
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.create).not.toHaveBeenCalled();
+  });
+
+  it("forwards the authenticated roles, which code-defined rules evaluate", async () => {
+    requireAnyPermission.mockResolvedValueOnce({
+      userId: "u1",
+      authMethod: "api-key",
+      permissions: ["read-content-releases"],
+      roles: ["editor"],
+    });
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases"),
+      "listReleases",
+      {}
+    );
+    // With `roles: []` a role-positive rule rejects a valid key, and an
+    // absence-based rule admits one it should refuse.
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({ userRoles: ["editor"] })
+    );
   });
 });

@@ -882,9 +882,13 @@ export interface Nextly {
    *
    * @example
    * ```typescript
+   * // `userId` is REQUIRED for a member even on a trusted call: the drain
+   * // performs each member as its recorded author, and a member with none can
+   * // never be materialised.
    * const release = await nextly.releases.create({ title: "Spring launch" });
    * await nextly.releases.addMember({
    *   releaseId: release.id,
+   *   userId: editor.id,
    *   scopeKind: "collection",
    *   scopeSlug: "posts",
    *   entryId: post.id,

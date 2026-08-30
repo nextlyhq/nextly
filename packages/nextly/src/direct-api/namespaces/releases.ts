@@ -68,6 +68,14 @@ export interface ReleaseCallerArgs {
    * because it is the scope of the request actually being served.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The caller's resolved roles, when the TRANSPORT already has them.
+   *
+   * Travels with `authenticatedScope` and for the same reason: code-defined
+   * publish rules are evaluated against a role set, and an overridden identity
+   * must bring its own rather than inherit the instance's.
+   */
+  userRoles?: string[];
 }
 
 export interface ReleasesNamespace {
@@ -80,6 +88,22 @@ export interface ReleasesNamespace {
     args: { id: string } & ReleaseCallerArgs
   ): Promise<ReleaseRow | null>;
   /** Put a document into a release under a lifecycle action. */
+  /**
+   * Put a document into a release under a lifecycle action.
+   *
+   * An AUTHOR is required, and it may come from either place: `userId` on the
+   * call, or the `user` an instance was configured with. The drain performs
+   * each member as its recorded author, so a member with none returns
+   * `NO_RECORDED_AUTHOR` on every pass and the release can never publish — even
+   * on a trusted call, which is the one case where "trusted" does not mean
+   * "as anybody".
+   *
+   * Not narrowed to a required `userId` in the type, deliberately: that would
+   * refuse the legitimate flow where an instance built with a `user` supplies
+   * the author for every call on it. The refusal is at runtime because only
+   * runtime knows whether either source produced one, and its message names the
+   * field to pass.
+   */
   addMember(
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow>;
@@ -184,7 +208,8 @@ function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
     // Roles describe the instance's user, so they follow the same rule — a rule
     // evaluated against someone else's roles is worse than one evaluated
     // against none.
-    userRoles: overridesIdentity ? undefined : access.user?.roles,
+    userRoles:
+      args.userRoles ?? (overridesIdentity ? undefined : access.user?.roles),
   };
 }
 
@@ -207,10 +232,17 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       // Leaving them in sends `authenticatedScope` to the repository as a filter
       // column, which is a query nobody wrote and a credential in a place it
       // does not belong.
-      const { userId, overrideAccess, authenticatedScope, ...query } = args;
+      const {
+        userId,
+        overrideAccess,
+        authenticatedScope,
+        userRoles,
+        ...query
+      } = args;
       void userId;
       void overrideAccess;
       void authenticatedScope;
+      void userRoles;
       return service().find(query, actorOf(ctx, args));
     },
 
@@ -222,11 +254,13 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
         userId,
         overrideAccess,
         authenticatedScope,
+        userRoles,
         ...member
       } = args;
       void userId;
       void overrideAccess;
       void authenticatedScope;
+      void userRoles;
       return service().addMember(releaseId, member, actorOf(ctx, args));
     },
 

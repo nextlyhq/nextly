@@ -580,6 +580,19 @@ export class ReleasesRepository {
     return row;
   }
 
+  /**
+   * Put a removed member back, exactly as it was.
+   *
+   * The compensating half of a bounded removal. Restoring with the ORIGINAL row
+   * — same id, same `createdAt`, same recorded author — is what makes the undo
+   * invisible: a caller that retries sees the member it expected rather than a
+   * new one, and anything holding the old id still resolves.
+   */
+  async restoreMember(row: ReleaseMemberRow): Promise<void> {
+    await this.db.insert(MEMBERS, { ...row }, { returning: [] });
+    await this.revalidateMembersOf(row.releaseId);
+  }
+
   async removeMember(memberId: string): Promise<void> {
     // The row is read BEFORE the delete: afterwards there is nothing left to
     // say which document's tags to flush, and the projection that release was

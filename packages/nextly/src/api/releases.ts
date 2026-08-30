@@ -24,6 +24,7 @@
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { container } from "../di";
 import { RELEASES_RESOURCE } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
@@ -217,11 +218,27 @@ function releaseStateParam(value: string | null): ReleaseState | undefined {
   return value;
 }
 
-function optionalCount(value: string | null): number | undefined {
-  if (value === null) return undefined;
+/**
+ * The page size, always bounded.
+ *
+ * An omitted limit used to mean "no limit", so `GET /api/releases` selected and
+ * serialised the entire table — an ordinary authenticated request turned into an
+ * unbounded read on any installation with a real release history. A supplied one
+ * was accepted at any size, which is the same read asked for explicitly.
+ */
+const DEFAULT_RELEASE_PAGE = 50;
+const MAX_RELEASE_PAGE = 200;
+
+function pageSize(value: string | null): number {
+  if (value === null) return DEFAULT_RELEASE_PAGE;
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
     throw badRequest("`limit` must be a positive integer.");
+  }
+  if (n > MAX_RELEASE_PAGE) {
+    throw badRequest(`\`limit\` may be at most ${MAX_RELEASE_PAGE}.`, {
+      requested: n,
+    });
   }
   return n;
 }
@@ -236,6 +253,36 @@ function optionalCount(value: string | null): number | undefined {
 function optionalInstant(value: string | null, key: string): Date | undefined {
   if (value === null) return undefined;
   return requireInstant({ [key]: value }, key);
+}
+
+/**
+ * Whether this scope declares a Draft/Published lifecycle.
+ *
+ * Asked of the registry, which holds what the schema declared. Answering `false`
+ * when the registry cannot be reached is deliberate: a member whose lifecycle
+ * support is unknown is one the drain may not be able to perform, and admitting
+ * it on an unavailable answer trades a clear refusal now for a release that
+ * silently never publishes.
+ */
+async function declaresLifecycle(
+  scopeKind: "collection" | "single",
+  scopeSlug: string
+): Promise<boolean> {
+  const key =
+    scopeKind === "single"
+      ? "singleRegistryService"
+      : "collectionRegistryService";
+  if (!container.has(key)) return false;
+  const registry = container.get<{
+    getCollectionBySlug?: (
+      slug: string
+    ) => Promise<{ status?: boolean } | null>;
+    getSingleBySlug?: (slug: string) => Promise<{ status?: boolean } | null>;
+  }>(key);
+  const record = await (scopeKind === "single"
+    ? registry.getSingleBySlug?.(scopeSlug)
+    : registry.getCollectionBySlug?.(scopeSlug));
+  return record?.status === true;
 }
 
 /**
@@ -292,15 +339,17 @@ async function resolveTarget(
   }
 
   // A target with no publish lifecycle can never satisfy the member.
-  // Materialisation works by writing the status field; a collection with the
-  // lifecycle disabled has none, so the write produces no observable published
-  // or draft state, the drain records a failed action, and the release stays
-  // scheduled and retries forever.
+  // Materialisation works by writing the status field, so with the lifecycle
+  // disabled the write produces no observable published or draft state, the
+  // drain records a failed action, and the release stays scheduled forever.
   //
-  // Probed on the ROW rather than read from configuration: the row is what the
-  // write will touch, and a schema that declares a lifecycle its table does not
-  // carry is a state this codebase has met before.
-  if (!("status" in found)) {
+  // Read from the SCHEMA, not probed on the row. An earlier version checked
+  // whether the row carried a `status` property, which is wrong in the
+  // dangerous direction: the name is reserved only when the lifecycle is
+  // enabled, so a collection with it DISABLED may legally define an ordinary
+  // field called `status` — and materialisation would then overwrite that
+  // author's field with "published" and report the release complete.
+  if (!(await declaresLifecycle(scopeKind, scopeSlug))) {
     throw badRequest(
       `\`${scopeSlug}\` has no draft/published lifecycle, so it cannot be scheduled in a release.`,
       { reason: "target-without-lifecycle", scopeKind, scopeSlug }
@@ -346,6 +395,8 @@ interface ReleaseContext {
      * owner lacks it. `auth.permissions` is the stamped scope; it travels.
      */
     authenticatedScope?: AuthenticatedScope;
+    /** The authenticated roles, which code-defined access rules are evaluated against. */
+    userRoles?: string[];
   };
   nextly: Awaited<ReturnType<typeof getCachedNextly>>;
   releases: Awaited<ReturnType<typeof getCachedNextly>>["releases"];
@@ -368,7 +419,7 @@ const RELEASE_OPERATIONS: Record<
 > = {
   listReleases: async ({ request, caller, releases }) => {
     const params = new URL(request.url).searchParams;
-    const limit = optionalCount(params.get("limit"));
+    const limit = pageSize(params.get("limit"));
     // ONE row past the limit, so truncation is observable. Without it a page of
     // five is reported as `total: 5, hasNext: false` whether five releases exist
     // or five hundred do, and a client renders an incomplete schedule as the
@@ -388,10 +439,10 @@ const RELEASE_OPERATIONS: Record<
         params.get("scheduledBefore"),
         "scheduledBefore"
       ),
-      limit: limit === undefined ? undefined : limit + 1,
+      limit: limit + 1,
     });
-    const page = limit === undefined ? found : found.slice(0, limit);
-    const hasNext = limit !== undefined && found.length > limit;
+    const page = found.slice(0, limit);
+    const hasNext = found.length > limit;
     // The canonical list envelope, so shared client tooling reads this like
     // every other list. The meta is synthetic because the query is windowed
     // rather than paged — `total` is what this page holds, and a second query
@@ -403,7 +454,7 @@ const RELEASE_OPERATIONS: Record<
       // matched than were returned.
       total: page.length,
       page: 1,
-      limit: limit ?? page.length,
+      limit,
       totalPages: hasNext ? 2 : 1,
       hasNext,
       hasPrev: false,
@@ -424,13 +475,21 @@ const RELEASE_OPERATIONS: Record<
 
   createRelease: async ({ request, caller, releases }) => {
     const body = await jsonObject(request);
-    const description = body.description;
+    // Present-but-wrong is REFUSED, not nulled. Coercing a client's numeric or
+    // object description to `null` turns a malformed request into silent data
+    // loss, where every other bad field here answers 400.
+    const description = "description" in body ? body.description : null;
+    if (description !== null && typeof description !== "string") {
+      throw badRequest("`description` must be a string or null.", {
+        received: typeof description,
+      });
+    }
     return respondMutation(
       "Release created.",
       await releases.create({
         ...caller,
         title: requireString(body, "title"),
-        description: typeof description === "string" ? description : null,
+        description,
       }),
       { status: 201 }
     );
@@ -561,6 +620,12 @@ export async function handleReleaseRequest(
           auth.authMethod === "api-key"
             ? { actorType: "apiKey", permissions: auth.permissions }
             : undefined,
+        // The authenticated role set. `apiKeyWriteAllowed` evaluates
+        // code-defined publish rules against it, so dropping it makes every
+        // rule see `roles: []` — a role-positive rule then rejects a valid key,
+        // and an absence-based one ("not a contractor") admits one it should
+        // refuse.
+        userRoles: auth.roles,
       },
       nextly,
       releases: nextly.releases,

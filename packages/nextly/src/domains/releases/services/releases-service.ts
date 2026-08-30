@@ -438,6 +438,26 @@ export class ReleasesService {
 
     await this.claimAssemblable(member.releaseId, actor);
     await this.deps.repository.removeMember(memberId);
+
+    // The same window the member ADD closes, and it matters more here: removing
+    // an `unpublish` member cancels a committed takedown, so a publisher
+    // scheduling between the claim and the delete would have their decision
+    // undone by a caller who never passed the publish gate.
+    //
+    // Compensated by restoring the ORIGINAL row — same id, same author, same
+    // timestamp — so the undo is invisible to anything holding that id.
+    if (!(await this.holds(actor, "publish"))) {
+      if (!(await this.deps.repository.touchIfAssemblable(member.releaseId))) {
+        await this.deps.repository.restoreMember(member);
+        throw NextlyError.conflict({
+          logContext: {
+            reason: "release-scheduled-during-remove",
+            releaseId: member.releaseId,
+            memberId,
+          },
+        });
+      }
+    }
   }
 
   /**
