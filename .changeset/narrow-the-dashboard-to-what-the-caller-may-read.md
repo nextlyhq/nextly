@@ -45,7 +45,36 @@ whoever minted them. A deliberately narrowed key issued by a super-admin
 previously inherited that super-admin's reach on the dashboard endpoints; it
 now sees only the collections it was actually granted.
 
+What a caller may read is now decided by the ACCESS LAYER rather than inferred
+from the permission table's rows. A collection whose `access.read` rule refuses
+the caller is excluded even when a permission row would have admitted it — the
+dashboard now agrees with what `GET /api/collections/{slug}` answers. A
+collection authorized entirely in code, with no permission row at all, is
+included for the same reason. Per-collection entry counts are read with access
+enforced, so a collection with an owner-only or custom read rule now reports the
+number of rows the caller may actually see rather than every row in the table.
+
+Two behaviour changes are worth planning for:
+
+- A super-admin's activity feed is now bounded by the collections and settings
+  resources that currently exist. Activity rows naming a collection that has
+  since been removed from the config are no longer listed, and no longer
+  counted in the 24-hour figure.
+- A recently-edited entry whose title field holds a structured value (a `json`,
+  `group`, `repeater`, `component` or `chips` field named by
+  `admin.useAsTitle`) is now labelled with its id instead of rendering as
+  `[object Object]`. An empty, boolean or date-valued title field falls through
+  to the next candidate field and then to the id, where before it rendered as an
+  empty or nonsensical heading.
+
 One failure mode is deliberately visible as an empty dashboard: if the
 permission lookup itself fails transiently, the dashboard answers HTTP 200 with
 nothing in it rather than falling back to showing everything. An empty
 dashboard that should not be empty is worth investigating in the server logs.
+
+For anyone calling the Direct API: `nextly.count()` accepts a `status` option
+(`"published" | "draft" | "all"`), matching `nextly.find()`. Its absence is
+unchanged — an access-enforced count still defaults to published-only on a
+collection with the draft/publish lifecycle — but a caller that wants the same
+rows a `find({ status: "all" })` would return can now ask for them, and the two
+totals agree.
