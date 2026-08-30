@@ -28,6 +28,7 @@ import {
   defineBlock,
   registerBlocks,
   STYLE_GROUP_DEFS,
+  stylePropertiesForSupports,
   type BlockDocument,
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
@@ -145,16 +146,35 @@ describe("a block declared through the public API", () => {
     expect(groups).toEqual(catalogOrder);
   });
 
-  it("fills each section with controls, so the inspector is complete rather than merely present", () => {
+  it("offers every property the engine says those supports allow, not merely some", () => {
     const sections = inspect("acme/callout").sections;
 
-    // Every section carries at least one property, and every property carries
-    // at least one control. A section list with empty sections is the failure
-    // this separates out: it would satisfy the group assertions above while
-    // presenting an author with three empty accordions.
+    // The expectation is the ENGINE's answer rather than a list written here.
+    // Two reasons, and the second is why a count would not do: a list written
+    // here would agree with itself and stop tracking the catalog, and an
+    // inspector that kept only the FIRST property of each group satisfies
+    // "every section is non-empty" while presenting a partial inspector — the
+    // exact failure the phrase "complete inspector" is about.
+    for (const section of sections) {
+      const offered = section.properties.map(property => property.property);
+      const allowed = stylePropertiesForSupports({
+        [section.group]: true,
+      }).map(entry => entry.property);
+
+      // Membership rather than length: a section that dropped one property and
+      // gained another matches any total compared against.
+      expect(offered).toEqual(allowed);
+    }
+  });
+
+  it("gives every offered property at least one control to edit it with", () => {
+    // Separate from the property set above, because they fail differently: a
+    // property present with no control is a labelled row an author cannot
+    // touch, which reads as a bug in the control rather than in the inspector.
+    const sections = inspect("acme/callout").sections;
+
     expect(sections.length).toBeGreaterThan(0);
     for (const section of sections) {
-      expect(section.properties.length).toBeGreaterThan(0);
       for (const property of section.properties) {
         expect(property.controls.length).toBeGreaterThan(0);
       }
