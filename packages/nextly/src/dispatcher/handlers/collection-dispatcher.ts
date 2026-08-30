@@ -1405,6 +1405,54 @@ const COLLECTIONS_METHODS: Record<
       );
     },
   },
+  unpublishAllLocales: {
+    // The takedown twin of `publishAllLocales`. Built through the mutation
+    // service, entry service and handler with the same parameters, and until now
+    // reachable by nothing — an editor who could publish every language at once
+    // had no way to take them back down.
+    execute: async (svc, p) => {
+      // Guarded through `requireParam` rather than an inline throw. A missing
+      // route parameter is caller-fixable, and the shared helper is where this
+      // package states that refusal — a bare `Error` here would surface it as a
+      // 500 and would add an exemption to the bare-Error allowlist for a case
+      // the helper already covers.
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      const result = await svc.unpublishAllLocales({
+        collectionName,
+        entryId,
+        actor: readAuthenticatedActor(p),
+        userId: p._authenticatedUserId
+          ? String(p._authenticatedUserId)
+          : undefined,
+        userName: p._authenticatedUserName
+          ? String(p._authenticatedUserName)
+          : undefined,
+        userEmail: p._authenticatedUserEmail
+          ? String(p._authenticatedUserEmail)
+          : undefined,
+        // Forwarded for the same reason the publish direction forwards them:
+        // role-based access and stored rules must evaluate against the real
+        // user, or a takedown is denied for someone the route authorized.
+        userRoles: readAuthenticatedRoles(p),
+        // Route middleware already ran the RBAC/code-access gate; attesting it
+        // skips only that redundant re-check. Stored rules and field-level write
+        // access still run. Never inferred from userId.
+        routeAuthorized: true,
+        // The route authorized this POST as `update`; the unpublish check judges
+        // a scoped API key's own grant.
+        authenticatedScope: readAuthenticatedScope(p),
+      });
+      const entry = unwrapServiceResult(result, {
+        collectionName,
+        entryId,
+      });
+      return respondMutation(
+        result.message ?? "All languages unpublished.",
+        entry
+      );
+    },
+  },
   deleteEntry: {
     // The deleted record is the `item`.
     execute: async (svc, p) => {

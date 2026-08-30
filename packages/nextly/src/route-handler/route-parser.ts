@@ -763,6 +763,28 @@ function parseCollectionEntryPublishAllRoute(
     };
   }
 
+  // The takedown direction. Its `operation` is `update` for the same reason the
+  // publish above is: the route-level gate authorizes writing the entry, and the
+  // unconditional publish/unpublish authority is judged by the service against a
+  // scoped key's own grant. Registering it as its own operation would invent a
+  // permission name nothing seeds.
+  if (
+    id &&
+    subresource === "entries" &&
+    subId &&
+    additionalParams[0] === "unpublish-all" &&
+    httpMethod === "POST"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "update",
+      method: "unpublishAllLocales",
+      routeParams,
+    };
+  }
+
   return null;
 }
 

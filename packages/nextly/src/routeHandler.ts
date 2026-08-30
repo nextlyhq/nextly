@@ -594,6 +594,7 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "countEntries",
   "duplicateEntry",
   "publishAllLocales",
+  "unpublishAllLocales",
   // Version history is guarded by the same per-collection read permission as
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
