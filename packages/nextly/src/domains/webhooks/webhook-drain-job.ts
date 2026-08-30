@@ -32,7 +32,12 @@
  * @module domains/webhooks/webhook-drain-job
  */
 
-import { defineJob, type JobDefinition } from "../jobs/job-registry";
+import {
+  defineJob,
+  type JobContext,
+  type JobDefinition,
+} from "../jobs/job-registry";
+import { remainingPassMs } from "../jobs/remaining-pass";
 
 import {
   IN_PASS_DRAIN_BOUNDS,
@@ -53,20 +58,23 @@ import type { RunDrainResult } from "./run-drain";
  * drain then means outliving the invocation and being killed before the row is
  * finalized — the sweep retries having done partial work.
  *
- * The deadline the runner supplies is the only value that knows the answer.
- * Reserved against it is one in-flight request: the budget bounds when the drain
- * stops STARTING deliveries, not when the last one returns.
+ * The pass context is the only thing that knows the answer, and it takes BOTH
+ * of the fields the runner derived from its one clock — measuring against
+ * `Date.now()` instead subtracts two different origins whenever a caller
+ * supplies the documented `now` option. Reserved against the remainder is one
+ * in-flight request: the budget bounds when the drain stops STARTING
+ * deliveries, not when the last one returns.
  *
  * A caller's explicit `maxDurationMs` still wins — a trigger that owns its whole
  * invocation, rather than sharing a pass, is entitled to say so.
  */
 function boundsWithin(
-  deadline: Date,
+  context: Pick<JobContext, "now" | "deadline">,
   options?: RunWebhookDrainOptions
 ): Pick<RunWebhookDrainOptions, "maxDurationMs" | "requestTimeoutMs"> {
   if (options?.maxDurationMs !== undefined) return {};
 
-  const remaining = Math.max(0, deadline.getTime() - Date.now());
+  const remaining = remainingPassMs(context);
 
   // The per-request timeout shrinks with the remaining time, and does not simply
   // sit at its default. With little of the pass left, a request allowed the full
@@ -140,7 +148,7 @@ export function createWebhookDrainJob(
     handler: async (_input, context) => {
       const result = await runWebhookDrain(adapter, registry, {
         ...options,
-        ...boundsWithin(context.deadline, options),
+        ...boundsWithin(context, options),
       });
       await onOutcome?.(result);
     },
