@@ -204,6 +204,36 @@ export interface TransactionContext {
   ): Promise<T[]>;
 
   /**
+   * Update records and report how many rows the statement affected.
+   *
+   * @remarks
+   * The transactional half of the adapter's `updateCount`, and the only way to
+   * perform a fenced compare-and-set inside a transaction. `update` cannot
+   * answer this: without `returning` it discards the driver's count, and WITH
+   * `returning` on a dialect that lacks RETURNING it re-SELECTs using the same
+   * WHERE — so a conditional update whose own write falsifies its predicate
+   * reads back zero rows, and a write that landed reports as unmatched.
+   *
+   * 🔴 Inherits the adapter's MySQL caveat: MySQL counts CHANGED rows rather
+   * than matched ones, so a caller using this as a compare-and-set must write
+   * at least one column the update always moves — a state transition, a version
+   * bump, a timestamp of sufficient resolution. Postgres (`rowCount`) and
+   * SQLite (`changes`) count matched rows and do not need the precaution, which
+   * is exactly why it cannot be dropped: the dialect where the distinction
+   * exists is the one with no RETURNING to fall back on.
+   *
+   * @param table - Table name
+   * @param data - Column values to write
+   * @param where - Conditions the update must match
+   * @returns Number of rows the statement affected
+   */
+  updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause
+  ): Promise<number>;
+
+  /**
    * Delete records.
    *
    * @param table - Table name

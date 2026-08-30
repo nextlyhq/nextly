@@ -13,6 +13,7 @@
  *
  * @module domains/releases/releases-repository
  */
+import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
 import {
   RELEASE_ASSEMBLABLE_FROM,
@@ -60,7 +61,35 @@ export type ReleasesDbApi = VersionsDbApi & {
     data: Record<string, unknown>,
     where: VersionsWhere
   ): Promise<number>;
+  /**
+   * Run `work` so that either all of its writes land or none do.
+   *
+   * REQUIRED rather than optional, which is safe for a reason worth stating:
+   * the transaction context cannot satisfy `ReleasesDbApi` in the first place,
+   * because it carries no `updateCount` of the adapter's shape — so the only
+   * thing that ever satisfies this port is the adapter itself, and the adapter
+   * always has a transaction. An optional member would buy nothing and would
+   * hand every caller a silent non-atomic fallback to forget about.
+   */
+  transaction<T>(work: (tx: ReleasesTxApi) => Promise<T>): Promise<T>;
 };
+
+/**
+ * The database surface a release transition needs INSIDE a transaction.
+ *
+ * One method, because the atomic path performs exactly one kind of statement: a
+ * fenced compare-and-set. Kept separate from {@link ReleasesDbApi} rather than
+ * reusing it, because a transaction context genuinely cannot do everything the
+ * adapter can — declaring the wider type here would promise a caller reads and
+ * revalidation that are either unavailable or actively wrong before the commit.
+ */
+export interface ReleasesTxApi {
+  updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: VersionsWhere
+  ): Promise<number>;
+}
 
 const RELEASES = "nextly_releases";
 const MEMBERS = "nextly_release_members";
@@ -71,6 +100,12 @@ const MEMBERS = "nextly_release_members";
  * in `pending-transition-cache` exists to avoid.
  */
 const USERS = "users";
+
+/** One release to stop, with the instant the pass planned against. */
+export interface BlockRequest {
+  id: string;
+  scheduledAt: Date;
+}
 
 /** The document a member points at. */
 export interface DocumentRef {
@@ -286,7 +321,32 @@ export class ReleasesRepository {
   }
 
   /**
-   * Stop a release the drain can never apply, and say whether it moved.
+   * Stop a whole component of releases the drain can never apply, ATOMICALLY.
+   *
+   * Takes a SET rather than one release, because the unit that has to move
+   * together is the set of releases sharing a document. Blocking them one
+   * statement at a time leaves the component split whenever the process dies
+   * partway — and a split component is not a smaller version of the right
+   * answer, it is a different one: the surviving release becomes the winner on
+   * every document it shares, and can apply the OPPOSITE lifecycle action to
+   * the one the whole component would have produced.
+   *
+   * ## Why ordering cannot substitute for a transaction
+   *
+   * The previous version blocked earliest-first, reasoning that any surviving
+   * prefix leaves the later — and therefore winning — release scheduled. That
+   * argument fails for tied instants, and not repairably. `resolveReleaseEffect`
+   * breaks a tie on the MEMBER's creation time and then its id, and it does so
+   * per document; two releases naming one instant can therefore each win on a
+   * different document of the same component. No ordering of RELEASES can
+   * preserve a winner that is chosen per member, so there is no comparator that
+   * fixes this and the guarantee has to come from atomicity.
+   *
+   * Fenced on the state AND on the instant the pass planned against, the same
+   * pair `isStillDueAt` judges by. State alone is not enough: an editor who
+   * postpones a due release between the plan and this write leaves the row in
+   * `scheduled`, so a state-only predicate matches and overwrites the schedule
+   * they just chose.
    *
    * Fenced on the state AND on the instant the pass planned against, the same
    * pair `isStillDueAt` judges by. State alone is not enough: an editor who
@@ -301,27 +361,78 @@ export class ReleasesRepository {
    * instant has passed. So its projection is live, and stopping it removes
    * something a reader can currently see. A scheduled release whose instant has
    * NOT arrived would indeed need no flush; that is a different release.
+   *
+   * @returns the ids actually blocked — every id given, or none at all.
    */
-  async blockRelease(id: string, scheduledAt: Date): Promise<boolean> {
-    const affected = await this.db.updateCount(
-      RELEASES,
-      {
-        state: "blocked" satisfies ReleaseState,
-        updatedAt: new Date(),
-      },
-      {
-        and: [
-          { column: "id", op: "=", value: id },
-          { column: "state", op: "=", value: "scheduled" },
-          { column: "scheduledAt", op: "=", value: scheduledAt },
-        ],
-      }
+  async blockReleases(
+    entries: readonly BlockRequest[]
+  ): Promise<readonly string[]> {
+    if (entries.length === 0) return [];
+
+    // ORDERED BY ID, and the reason is no longer the one the previous version
+    // gave. Correctness under partial failure now belongs to the transaction,
+    // so this order cannot affect the outcome; it exists so two drains racing
+    // on overlapping components take the same row locks in the same sequence
+    // and cannot deadlock against each other.
+    const ordered = [...entries].sort((a, b) =>
+      a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     );
-    if (affected === 0) return false;
-    // Also drops the shared transition memo, which would otherwise keep
-    // answering `mayHaveDue` for a release that has stopped.
-    await this.revalidateMembersOf(id);
-    return true;
+
+    // Distinguishes a fence that legitimately matched nothing from a database
+    // failure. Both leave the transaction rolled back, and only the first is an
+    // ordinary outcome the drain should absorb — so the flag decides, rather
+    // than the shape of the error, which a caught-and-rethrown driver error
+    // could imitate.
+    let fenceMissed = false;
+    try {
+      await this.db.transaction(async tx => {
+        for (const entry of ordered) {
+          const affected = await tx.updateCount(
+            RELEASES,
+            {
+              state: "blocked" satisfies ReleaseState,
+              // Always moves, which MySQL requires of a compare-and-set: it
+              // counts CHANGED rows rather than matched ones. `state` moves
+              // here too, so this is belt and braces rather than the only
+              // thing keeping the fence honest.
+              updatedAt: new Date(),
+            },
+            {
+              and: [
+                { column: "id", op: "=", value: entry.id },
+                { column: "state", op: "=", value: "scheduled" },
+                { column: "scheduledAt", op: "=", value: entry.scheduledAt },
+              ],
+            }
+          );
+          if (affected === 0) {
+            fenceMissed = true;
+            throw NextlyError.conflict({
+              logContext: {
+                reason: "release-component-moved",
+                releaseId: entry.id,
+              },
+            });
+          }
+        }
+      });
+    } catch (error) {
+      // A member of the component moved between the plan and this write, so
+      // the component is no longer the one that was judged. NOTHING is blocked
+      // rather than the remainder: a partial transition is the defect this
+      // method exists to make unrepresentable, and the next pass re-plans
+      // against what is now true — which terminates, because a release that
+      // moved is no longer due and drops out of the next plan.
+      if (fenceMissed) return [];
+      throw error;
+    }
+
+    // AFTER THE COMMIT, never inside it. Revalidation makes a change visible to
+    // readers and drops the shared transition memo, and doing that from inside
+    // the transaction would announce a transition that can still roll back —
+    // the reader would then see a release stopped that is still scheduled.
+    for (const entry of ordered) await this.revalidateMembersOf(entry.id);
+    return ordered.map(entry => entry.id);
   }
 
   /**

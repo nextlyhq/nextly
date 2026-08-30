@@ -961,32 +961,40 @@ export class ReleasesService {
         logContext: { reason: "invalid-timezone", length: timezone.length },
       });
     }
-    // A BLOCKED release is refused while what stopped it is still true.
-    // Scheduling it again would reach the instant, hit the same member, and
-    // stop again — and the operator would learn that only by waiting for a
-    // launch that does not happen. Checked here rather than left to the drain
-    // because this is the moment somebody is asking, and the answer is already
-    // derivable from the members.
+    // A release is refused while anything that would stop it is still true,
+    // WHATEVER state it is scheduled from. Scheduling it would reach the
+    // instant, hit the same member and stop — and the operator would learn
+    // that only by waiting for a launch that does not happen.
     //
-    // Only for a blocked release: every other state pays no extra read.
+    // For EVERY schedulable state, not only `blocked`, and the symmetry is the
+    // point. A release whose author was deleted while it sat `scheduled` is the
+    // same broken release as one the drain has already labelled, and it becomes
+    // the labelled one at its instant; refusing the first while accepting the
+    // second makes the rule depend on whether a background pass happened to
+    // have run yet, which is not something the person scheduling can see. The
+    // ordinary postponement after a colleague leaves is exactly this case.
+    //
+    // The cost is bounded and falls on a human action rather than a read path:
+    // one query for the members, and a second for their authors only when
+    // there are any. Scheduling is not a hot path, and the alternative is
+    // spending it at the instant instead, when nobody is watching.
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
     const wasBlocked = current?.state === "blocked";
-    if (wasBlocked) {
-      // `derivedBlockers`, not `blockingReasons`: `publish` was authorized
-      // above, and going through the public method would demand `read` as
-      // well — a grant a publish-scoped API key need not hold.
-      const blockers = await this.derivedBlockers(id);
-      if (blockers.length > 0) {
-        throw NextlyError.conflict({
-          message:
-            "This release cannot be scheduled until the documents blocking it are fixed or removed.",
-          logContext: {
-            reason: "release-still-blocked",
-            releaseId: id,
-            blockers: blockers.length,
-          },
-        });
-      }
+    // `derivedBlockers`, not `blockingReasons`: `publish` was authorized above,
+    // and going through the public method would demand `read` as well — a grant
+    // a publish-scoped API key need not hold.
+    const blockers = await this.derivedBlockers(id);
+    if (blockers.length > 0) {
+      throw NextlyError.conflict({
+        message:
+          "This release cannot be scheduled until the documents blocking it are fixed or removed.",
+        logContext: {
+          reason: "release-still-blocked",
+          releaseId: id,
+          blockers: blockers.length,
+          state: current?.state,
+        },
+      });
     }
 
     // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what

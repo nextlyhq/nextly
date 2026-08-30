@@ -189,16 +189,36 @@ describe("scheduling a blocked release", () => {
     expect(scheduleRelease).toHaveBeenCalled();
   });
 
-  it("does not pay the extra read for a release that is not blocked", async () => {
-    // A draft has nothing to check, and putting the lookup on every schedule
-    // would charge every caller for a question only one state answers yes to.
-    const { svc, liveAuthors, scheduleRelease } = service(
+  it("is refused from ANY schedulable state, not only from `blocked`", async () => {
+    // Replaces a case that asserted the opposite — that a release which was not
+    // already `blocked` skipped the check to save a read. That made the rule
+    // depend on whether the drain had run yet: the same release with the same
+    // deleted author was refused once labelled and accepted before, which is
+    // not a distinction the person scheduling can see.
+    //
+    // A DRAFT here, the state furthest from `blocked`.
+    const { svc, scheduleRelease } = service(
       [{ id: "m1", createdBy: "ghost" }],
       [],
       "draft"
     );
+    await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    // Refused BEFORE the write, not after it: a precondition that runs late is
+    // not a precondition.
+    expect(scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("still schedules a release whose members are all runnable", async () => {
+    // The control for the case above. Without it, a precondition that refused
+    // every schedule would satisfy it perfectly.
+    const { svc, scheduleRelease } = service(
+      [{ id: "m1", createdBy: "u9" }],
+      ["u9"],
+      "draft"
+    );
     await expect(svc.schedule("r1", AT, "UTC", ACTOR)).resolves.toBeUndefined();
-    expect(liveAuthors).not.toHaveBeenCalled();
     expect(scheduleRelease).toHaveBeenCalled();
   });
 });
@@ -220,7 +240,15 @@ describe("the blocker verdict and the write share a fence", () => {
    * fence at all behaves here exactly as it did before this was fixed — which
    * is what makes the two racing cases below fail on that version.
    */
-  function racing(atRead: string, atWrite: ReleaseState, live: string[] = []) {
+  function racing(
+    atRead: string,
+    atWrite: ReleaseState,
+    // CLEAN by default, so the only thing that can refuse these cases is the
+    // fence. A fixture whose author is missing would be refused by the blocker
+    // precondition instead, and every case below would pass without the fence
+    // existing at all.
+    live: string[] = ["author"]
+  ) {
     const liveAuthors = vi.fn(async () => new Set(live));
     const scheduleRelease = vi.fn(
       async (
@@ -261,13 +289,14 @@ describe("the blocker verdict and the write share a fence", () => {
     // release. A fence spanning every schedulable state accepts `blocked` here
     // and reschedules a release nobody checked — which reaches its new instant
     // and stops again, for the same permanent reason.
-    const { svc, liveAuthors } = racing("scheduled", "blocked");
+    const { svc, scheduleRelease } = racing("scheduled", "blocked");
     await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
       code: "CONFLICT",
     });
-    // And it was refused for the right reason: no blocker was ever derived,
-    // because at the moment of the read there was nothing to derive.
-    expect(liveAuthors).not.toHaveBeenCalled();
+    // And it was refused by the FENCE rather than by the blocker precondition:
+    // this release has a live author, so there is nothing for that precondition
+    // to object to. The write was attempted and the fence turned it away.
+    expect(scheduleRelease).toHaveBeenCalled();
   });
 
   it("REFUSES a blocked release that somebody else moved after it was cleared", async () => {
