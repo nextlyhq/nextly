@@ -286,3 +286,137 @@ describe("dashboard activity scope", () => {
     );
   });
 });
+
+/**
+ * The api-key branch of `resolveReadableResources`.
+ *
+ * `auth.userId` for an API-key request is the key's OWNER, so authorizing by
+ * that id judges the key on the owner's roles rather than on the grant the key
+ * was actually minted with. The whole point of a narrowly scoped key is that it
+ * carries LESS reach than its owner, and a super-admin owner is where that gap
+ * is widest -- so every test here makes the owner a super-admin, because a test
+ * with an ordinary owner passes on the broken implementation too.
+ *
+ * The two permission vocabularies are not interchangeable and this is the seam
+ * where they meet. `listEffectivePermissions` (session RBAC) builds
+ * `${resource}:${action}` -- `posts:read`. An API key's `auth.permissions`
+ * carries the `permissions.slug` column, seeded as `${action}-${resource}` --
+ * `read-posts`. Reading either spelling with the other's parser yields an empty
+ * scope, which fails closed and therefore looks like a working deny rather than
+ * a broken read.
+ */
+describe("dashboard read scope for an API-KEY caller", () => {
+  /** A key whose OWNER is a super-admin, bearing the key's own narrow grant. */
+  function authenticateAsApiKey(permissions: string[]): void {
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "owner-1",
+      authMethod: "api-key",
+      permissions,
+      roles: ["viewer-of-posts"],
+      apiKeyId: "key-1",
+    });
+    // The owner really is a super-admin. If the handler authorizes by owner id
+    // this resolves true and the caller gets `all` -- the defect under test.
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+  }
+
+  it("scopes /stats to the KEY's grant, not the super-admin owner's roles", async () => {
+    authenticateAsApiKey(["read-posts"]);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(["posts"]) },
+    });
+    // The owner's RBAC must not be consulted at all for an API key: the key's
+    // resolved set already reflects any super-admin bypass it was entitled to.
+    expect(listEffectivePermissions).not.toHaveBeenCalled();
+  });
+
+  it("scopes /activity to the KEY's grant, not the super-admin owner's roles", async () => {
+    authenticateAsApiKey(["read-posts"]);
+
+    const getRecentActivity = vi
+      .fn()
+      .mockResolvedValue({ activities: [], total: 0, hasMore: false });
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
+      getRecentActivity,
+    });
+
+    await getDashboardActivity(
+      makeReq("http://localhost/api/dashboard/activity")
+    );
+
+    // Without this the response carries entryTitle, userName, userEmail and
+    // metadata for every collection the key holds no grant on.
+    expect(getRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: { kind: "some", resources: new Set(["posts"]) },
+      })
+    );
+  });
+
+  it("admits only `read-` slugs, so a write grant confers no visibility", async () => {
+    authenticateAsApiKey(["read-posts", "create-pages", "delete-orders"]);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(["posts"]) },
+    });
+  });
+
+  it("keeps a hyphenated resource name whole", async () => {
+    // `read-site-settings` names the resource `site-settings`. A parser that
+    // splits on "-" and takes index 1 yields `site`, which matches no
+    // collection -- a silent empty dashboard that reads as a working deny.
+    authenticateAsApiKey(["read-site-settings"]);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set(["site-settings"]) },
+    });
+  });
+
+  it("admits nothing for a key whose grant is empty", async () => {
+    // A role-based key whose role was deleted resolves to `[]`. That must
+    // stay empty rather than widening to the owner's reach.
+    authenticateAsApiKey([]);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith({
+      scope: { kind: "some", resources: new Set() },
+    });
+  });
+
+  it("still grants everything to a SESSION super-admin -- the branch must not over-restrict", async () => {
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
+      userId: "user-1",
+      authMethod: "session",
+      permissions: [],
+      roles: ["super-admin"],
+    });
+    (isSuperAdmin as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const getStats = vi.fn().mockResolvedValue({});
+    (container.get as ReturnType<typeof vi.fn>).mockReturnValue({ getStats });
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith({ scope: { kind: "all" } });
+  });
+});

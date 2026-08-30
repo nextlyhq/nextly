@@ -18,6 +18,7 @@
  * @since 1.0.0
  */
 
+import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -53,19 +54,55 @@ async function getActivityLogService(): Promise<ActivityLogService> {
   return container.get<ActivityLogService>("activityLogService");
 }
 
+/** The `action-resource` prefix an API key's read grant is spelled with. */
+const API_KEY_READ_PREFIX = "read-";
+
 /**
  * Resolve what this caller may read.
  *
- * A super-admin gets `all`. Everyone else gets exactly the resources they hold
- * a `:read` permission for -- INCLUDING the empty case, which admits nothing.
- * `listEffectivePermissions` fails closed by returning `[]`, and this function
- * preserves that rather than inverting it.
+ * The AUTHENTICATION METHOD decides which grant is authoritative, so this takes
+ * the whole auth context rather than a bare user id. For an API key
+ * `auth.userId` is the key's OWNER, and a key exists precisely to carry less
+ * reach than that owner: a super-admin who mints a role-based key bound to a
+ * narrow role and hands it to an integration has deliberately narrowed it.
+ * Authorizing by owner id resolves `isSuperAdmin` to true and returns `all`,
+ * so the key reads every collection it holds no grant on. `collections-schema`
+ * branches the same way, for the same reason.
+ *
+ * The two paths also speak different permission vocabularies, and neither
+ * parser reads the other's spelling:
+ *
+ * - SESSION -- `listEffectivePermissions` builds `${resource}:${action}` from
+ *   the `permissions` table's own columns, so a read grant is `posts:read`.
+ * - API KEY -- `auth.permissions` carries the `permissions.slug` column, which
+ *   is seeded as `${action}-${resource}`, so the same grant is `read-posts`.
+ *
+ * The api-key branch strips the prefix by LENGTH rather than splitting on `-`,
+ * because a resource name may itself contain one: `read-site-settings` names
+ * `site-settings`, and splitting yields `site`, which matches no collection.
+ * That failure is silent -- it fails closed, so it reads as a working deny
+ * rather than as a parser that cannot see the resource.
+ *
+ * Both branches preserve the EMPTY case rather than inverting it into "no
+ * filter": `listEffectivePermissions` returns `[]` on any thrown error, and a
+ * role-based key whose role was deleted resolves to `[]` too.
  */
 async function resolveReadableResources(
-  userId: string
+  auth: AuthContext
 ): Promise<ReadableResources> {
-  if (await isSuperAdmin(userId)) return allResources();
-  const permissionPairs = await listEffectivePermissions(userId);
+  if (auth.authMethod === "api-key") {
+    // The key's own resolved set is the whole bound -- no super-admin bypass,
+    // because any super-admin reach the key was entitled to is already
+    // reflected in the set `resolveApiKeyPermissions` stamped onto it.
+    return someResources(
+      auth.permissions
+        .filter(slug => slug.startsWith(API_KEY_READ_PREFIX))
+        .map(slug => slug.slice(API_KEY_READ_PREFIX.length))
+    );
+  }
+
+  if (await isSuperAdmin(auth.userId)) return allResources();
+  const permissionPairs = await listEffectivePermissions(auth.userId);
   return someResources(
     permissionPairs
       .filter(pair => pair.endsWith(":read"))
@@ -88,7 +125,7 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const service = await getDashboardService();
-  const scope = await resolveReadableResources(auth.userId);
+  const scope = await resolveReadableResources(auth);
   const stats = await service.getStats({ scope });
 
   // Bare-object read: stats is the dashboard summary itself; no envelope.
@@ -118,7 +155,7 @@ export const getDashboardRecentEntries = withErrorHandler(
       : 5;
 
     const service = await getDashboardService();
-    const scope = await resolveReadableResources(auth.userId);
+    const scope = await resolveReadableResources(auth);
     // The caller WHOLE, not an id: `readCaller` resolves role IDs to the
     // SLUGS a role-based access rule matches, and carries an API key's own
     // stamped scope separately so it is judged on that rather than on
@@ -164,7 +201,7 @@ export const getDashboardActivity = withErrorHandler(async (req: Request) => {
     : 5;
 
   const service = await getActivityLogService();
-  const scope = await resolveReadableResources(auth.userId);
+  const scope = await resolveReadableResources(auth);
   const result = await service.getRecentActivity({ limit, scope });
 
   // Cursor-shaped read: keep `hasMore` adjacent to `activities` and `total`.
