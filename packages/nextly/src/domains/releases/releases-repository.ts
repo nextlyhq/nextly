@@ -19,7 +19,11 @@ import type {
   ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import type { VersionsDbApi, VersionsWhere } from "../versions/db-api";
+import type {
+  VersionsDbApi,
+  VersionsWhere,
+  VersionsWhereCondition,
+} from "../versions/db-api";
 
 import { releaseMemberKey } from "./release-member-key";
 import { releaseRevalidationIntent } from "./release-revalidation";
@@ -270,6 +274,71 @@ export class ReleasesRepository {
    * 09:00 is in effect AT 09:00, not from the first request after it — to be
    * got wrong, and the two would disagree silently.
    */
+  /**
+   * Releases matching a window and a state, newest scheduled instant first.
+   *
+   * The product read, as opposed to {@link findDueReleases}, which answers the
+   * drain's question and nothing else. Two shapes ask this with different
+   * bounds — a release index wants a page of everything, a dashboard widget
+   * wants the next seven days — so the caller supplies the window and the limit
+   * rather than receiving fixed ones. Fixing either here is what forces the
+   * second caller to grow a second query.
+   *
+   * The bounds are pushed to the database rather than filtered in JS. The window
+   * is the whole point of the query, so discarding rows in memory would mean
+   * reading every release on the site to answer "what ships this week".
+   *
+   * Ordered by `scheduledAt` DESCENDING with `createdAt` breaking ties, so the
+   * order is total: several releases scheduled for one instant is the ordinary
+   * case for a coordinated launch, and an unstable order there makes a paged
+   * list skip and repeat rows.
+   */
+  async findReleases(query: {
+    ids?: string[];
+    state?: string;
+    scheduledAfter?: Date;
+    scheduledBefore?: Date;
+    limit?: number;
+  }): Promise<ReleaseRow[]> {
+    const conditions: VersionsWhereCondition[] = [];
+    // An explicitly EMPTY id list means "none of them", which is not the same
+    // question as "no id filter" — answering it with every release would be the
+    // widest possible wrong answer.
+    if (query.ids !== undefined) {
+      if (query.ids.length === 0) return [];
+      conditions.push({
+        column: "id",
+        op: "IN",
+        value: [...new Set(query.ids)],
+      });
+    }
+    if (query.state !== undefined) {
+      conditions.push({ column: "state", op: "=", value: query.state });
+    }
+    if (query.scheduledAfter !== undefined) {
+      conditions.push({
+        column: "scheduledAt",
+        op: ">=",
+        value: query.scheduledAfter,
+      });
+    }
+    if (query.scheduledBefore !== undefined) {
+      conditions.push({
+        column: "scheduledAt",
+        op: "<=",
+        value: query.scheduledBefore,
+      });
+    }
+    return this.db.select<ReleaseRow>(RELEASES, {
+      where: conditions.length > 0 ? { and: conditions } : undefined,
+      orderBy: [
+        { column: "scheduledAt", direction: "desc" },
+        { column: "createdAt", direction: "desc" },
+      ],
+      limit: query.limit,
+    });
+  }
+
   async findDueReleases(now: Date): Promise<ReleaseRow[]> {
     const rows = await this.db.select<ReleaseRow>(RELEASES, {
       where: {

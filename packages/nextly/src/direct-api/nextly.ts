@@ -82,6 +82,7 @@ import {
   createAccessNamespace,
   createApiKeysNamespace,
   createJobsNamespace,
+  createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
   createEmailProvidersNamespace,
@@ -95,6 +96,7 @@ import {
   type AccessNamespace,
   type ApiKeysNamespace,
   type JobsNamespace,
+  type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
   type EmailProvidersNamespace,
@@ -254,6 +256,7 @@ export class Nextly implements NextlyContext {
   public readonly access: AccessNamespace;
   public readonly apiKeys: ApiKeysNamespace;
   public readonly jobs: JobsNamespace;
+  public readonly releases: ReleasesNamespace;
 
   /**
    * Create a new Nextly instance.
@@ -279,6 +282,7 @@ export class Nextly implements NextlyContext {
     this.access = createAccessNamespace(this);
     this.apiKeys = createApiKeysNamespace(this);
     this.jobs = createJobsNamespace();
+    this.releases = createReleasesNamespace();
   }
 
   /**
@@ -788,6 +792,25 @@ export const nextly = {
   jobs: {
     queue: <TTask extends JobSlug>(args: QueueJobArgs<TTask>) =>
       getNextly().jobs.queue(args),
+  },
+
+  releases: {
+    create: (args: Parameters<ReleasesNamespace["create"]>[0]) =>
+      getNextly().releases.create(args),
+    find: (args?: Parameters<ReleasesNamespace["find"]>[0]) =>
+      getNextly().releases.find(args),
+    findByID: (args: Parameters<ReleasesNamespace["findByID"]>[0]) =>
+      getNextly().releases.findByID(args),
+    addMember: (args: Parameters<ReleasesNamespace["addMember"]>[0]) =>
+      getNextly().releases.addMember(args),
+    removeMember: (args: Parameters<ReleasesNamespace["removeMember"]>[0]) =>
+      getNextly().releases.removeMember(args),
+    listMembers: (args: Parameters<ReleasesNamespace["listMembers"]>[0]) =>
+      getNextly().releases.listMembers(args),
+    schedule: (args: Parameters<ReleasesNamespace["schedule"]>[0]) =>
+      getNextly().releases.schedule(args),
+    cancel: (args: Parameters<ReleasesNamespace["cancel"]>[0]) =>
+      getNextly().releases.cancel(args),
   },
 
   users: {
