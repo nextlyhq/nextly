@@ -18,6 +18,8 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import { detachedSnapshot } from "./detached-snapshot";
+
 export const WIDGET_OPS = ["count", "list", "groupBy", "timeseries"] as const;
 export type WidgetOp = (typeof WIDGET_OPS)[number];
 
@@ -93,11 +95,68 @@ function validateSourceLabel(s: Partial<WidgetSource>): void {
   }
 }
 
-/** Confirms `kind` is one of the known values. */
+/**
+ * The namespaces core OWNS, and the kind each one means.
+ *
+ * `plugin` is deliberately absent: it is what an id claiming no reserved
+ * namespace resolves to, including one carrying no prefix at all, so listing it
+ * would make `plugin:` a fourth reserved word for no gain.
+ */
+const RESERVED_NAMESPACE_KINDS: ReadonlyMap<string, WidgetSourceKind> = new Map(
+  [
+    ["collection", "collection"],
+    ["single", "single"],
+    ["system", "system"],
+  ]
+);
+
+/**
+ * The kind an id's namespace DECLARES -- the canonical identity, from which
+ * `kind` is derived rather than stated a second time.
+ *
+ * `collection:posts` is a collection because of what it addresses, not because
+ * something separately said so. Validating the two independently let them
+ * disagree, and the disagreement was not cosmetic: `replaceSourcesOfKind`
+ * preserves by KIND, so a `{ id: "collection:posts", kind: "plugin" }` source
+ * survived a collection rebuild, collided with the real `collection:posts`
+ * `registerSource` was publishing, and threw out of `refreshCollectionSources`
+ * -- which runs once per batch, before any slot. One squatting plugin failed
+ * every dashboard query request in the install.
+ *
+ * Exported so anything else needing this answer takes it from here rather than
+ * re-deriving a prefix rule that would drift.
+ */
+export function sourceKindFromId(id: string): WidgetSourceKind {
+  const separator = id.indexOf(":");
+  if (separator === -1) return "plugin";
+  return RESERVED_NAMESPACE_KINDS.get(id.slice(0, separator)) ?? "plugin";
+}
+
+/**
+ * Confirms `kind` is a known value AND the one the id's namespace derives.
+ *
+ * The derived kind is not silently substituted for the declared one. A plugin
+ * that wrote `kind: "plugin"` under `collection:` believes something false
+ * about its source, and correcting it quietly leaves that belief in place --
+ * this is a boot-time mistake by a plugin author, which is the case this whole
+ * module fails loudly for.
+ */
 function validateSourceKind(s: Partial<WidgetSource>): void {
   if (!WIDGET_SOURCE_KINDS.includes(s.kind as WidgetSourceKind)) {
     fail(`${s.id}: kind must be one of ${WIDGET_SOURCE_KINDS.join(", ")}`);
   }
+  const derived = sourceKindFromId(s.id as string);
+  if (s.kind === derived) return;
+  if (derived !== "plugin") {
+    fail(
+      `${s.id}: namespace "${derived}:" is reserved for kind "${derived}", ` +
+        `not "${s.kind}"`
+    );
+  }
+  fail(
+    `${s.id}: kind "${s.kind}" requires the "${s.kind}:" namespace, ` +
+      `so this id cannot carry it`
+  );
 }
 
 /**
@@ -171,6 +230,29 @@ function store(): Map<string, WidgetSource> {
   return globalForSources.__nextly_widget_sources;
 }
 
+/**
+ * The value the store actually holds: a detached, frozen copy.
+ *
+ * Registration is the ONLY place `validateWidgetSource` runs, so a plugin
+ * keeping the object it passed could edit `fields`, `supports`, `kind` or `id`
+ * afterwards with nothing revalidating them -- and `fields` is the allowlist
+ * `validateWidgetQuery` checks every `select`, `sort` and `where` against.
+ * Appending one entry to it after boot admits a field the endpoint's gate was
+ * never asked about.
+ *
+ * Shares `detachedSnapshot` with the widget REGISTRY rather than repeating its
+ * clone-and-freeze: both stores answer the same question about the same kind of
+ * value, and the reason each refuses is the only part that differs.
+ */
+function snapshot(source: WidgetSource): WidgetSource {
+  return detachedSnapshot(source, () =>
+    fail(
+      `${source.id}: carries a value that cannot be stored. A widget source ` +
+        `is data: functions, symbols and class instances are not part of it.`
+    )
+  );
+}
+
 /** Register a source. Throws if it is malformed, or if the id is already taken. */
 export function registerSource(source: WidgetSource): void {
   validateWidgetSource(source);
@@ -180,7 +262,7 @@ export function registerSource(source: WidgetSource): void {
       message: `Widget source "${source.id}" is already registered.`,
     });
   }
-  store().set(source.id, source);
+  store().set(source.id, snapshot(source));
 }
 
 export function getSource(id: string): WidgetSource | undefined {

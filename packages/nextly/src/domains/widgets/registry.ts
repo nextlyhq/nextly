@@ -17,6 +17,7 @@
 import { NextlyError } from "../../errors/nextly-error";
 
 import { validateWidgetDefinition, type WidgetDefinition } from "./definition";
+import { detachedSnapshot } from "./detached-snapshot";
 
 /** The fields a plugin may patch on someone else's widget. */
 export type WidgetPatch = Partial<
@@ -50,13 +51,6 @@ function store(): Map<string, RegistryEntry> {
   return globalForWidgets.__nextly_widgets;
 }
 
-/** Freezes an object and everything reachable from it. */
-function deepFreeze<T>(value: T): T {
-  if (value === null || typeof value !== "object") return value;
-  for (const nested of Object.values(value)) deepFreeze(nested);
-  return Object.freeze(value);
-}
-
 /**
  * The value the store actually holds: a detached, frozen copy.
  *
@@ -67,34 +61,21 @@ function deepFreeze<T>(value: T): T {
  * nobody has to take. The archetype, the `component` path, or the `query` the
  * host is about to execute all change with nothing revalidating them.
  *
- * DETACHED and FROZEN, because either alone leaves a way in: a copy handed
- * back unfrozen is mutated through the getter, and a frozen original is still
- * the caller's object to keep a reference into. Frozen also means the getters
- * can return the stored value directly rather than copying per read.
- *
- * `structuredClone` is available because a widget definition is DATA by
- * construction -- the module contract is that a host reads it without
- * executing the plugin that declared it -- so there is nothing here it cannot
- * carry. It throws on a function, symbol or class instance, which is a
- * definition that already violated that contract; the refusal is wrapped so it
- * reads like every other one in this module rather than as an unhandled
- * `DOMException`.
- *
- * `blocks-engine`'s registry stores by reference in the same way and is
- * deliberately left alone: a `BlockDefinition` may carry a `markProp` FUNCTION,
- * so it is not structured-cloneable and the same fix does not transfer.
+ * Shares `detachedSnapshot` with the SOURCE store rather than repeating its
+ * clone-and-freeze: both stores answer the same question about the same kind of
+ * value, and the reason each refuses is the only part that differs. That
+ * refusal is wrapped here so it reads like every other one in this module
+ * rather than as an unhandled `DOMException`.
  */
 function snapshot(def: WidgetDefinition): WidgetDefinition {
-  try {
-    return deepFreeze(structuredClone(def));
-  } catch {
+  return detachedSnapshot(def, () => {
     throw NextlyError.invalidInput({
       message:
         `Widget "${def.id}" carries a value that cannot be stored. A widget ` +
         `definition is data: functions, symbols and class instances are not ` +
         `part of it.`,
     });
-  }
+  });
 }
 
 /** Register a widget. Throws if the id is taken or the definition is malformed. */

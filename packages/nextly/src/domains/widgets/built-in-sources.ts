@@ -10,6 +10,7 @@
 
 import {
   replaceSourcesOfKind,
+  sourceKindFromId,
   type WidgetSource,
   type WidgetSourceField,
 } from "./sources";
@@ -91,10 +92,16 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
       ? [IDENTITY_FIELD]
       : [IDENTITY_FIELD, ...TIMESTAMP_FIELDS];
 
+  const id = `collection:${collection.slug}`;
+
   return {
-    id: `collection:${collection.slug}`,
+    id,
     label: collection.slug,
-    kind: "collection",
+    // DERIVED from the id rather than restated beside it. The id's namespace is
+    // the canonical identity -- `registerSource` refuses a source whose two
+    // disagree -- so writing `"collection"` here as well would be the same fact
+    // in two places, which is the arrangement that let them drift apart.
+    kind: sourceKindFromId(id),
     // `read-<slug>`: the spelling the permission table and `canReadEntity`
     // use, so a picker filtering on this asks the same question the read
     // path answers. Advisory only -- see `WidgetSource.requiredPermission`
