@@ -26,6 +26,8 @@ import { NextlyError } from "../../errors";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
+import { someResources, type ReadableResources } from "./readable-resources";
+
 /** The three mutation actions tracked in the activity log. */
 export type ActivityLogAction = "create" | "update" | "delete";
 
@@ -95,6 +97,12 @@ export interface ActivityLogQueryOptions {
   offset?: number;
   collection?: string;
   userId?: string;
+  /**
+   * Which resources the caller may read. An omitted scope denies: this feed
+   * exposes entry titles across every collection, so a caller that forgets to
+   * scope it must get nothing rather than everything.
+   */
+  scope?: ReadableResources;
 }
 
 const TABLE = "activity_log";
@@ -139,14 +147,23 @@ interface ActivityWriteTables {
  * wants the schema property; the count query writes SQL and wants the physical
  * column. They are carried together so a filter cannot be added in one
  * spelling and used in the other.
+ *
+ * A discriminated union rather than `op: "=" | "IN"` paired with
+ * `value: SqlParam | SqlParam[]`: those two fields varying independently let
+ * `{ op: "=", value: ["a", "b"] }` type-check, a state `filterClause` cannot
+ * handle. Tying `op` to `value`'s shape makes that state unrepresentable and
+ * lets `filterClause` narrow on `op` without a cast.
  */
-interface ActivityFilter {
+interface ActivityFilterBase {
   /** The Drizzle schema property, for `adapter.select`. */
   property: string;
   /** The physical column, for the count query's SQL. */
   column: string;
-  value: SqlParam;
 }
+
+type ActivityFilter =
+  | (ActivityFilterBase & { op: "="; value: SqlParam })
+  | (ActivityFilterBase & { op: "IN"; value: SqlParam[] });
 
 /**
  * Safely convert an unknown driver-returned value to a nullable string.
@@ -297,6 +314,11 @@ export class ActivityLogService extends BaseService {
     const limit = Math.min(options?.limit ?? 10, 50);
     const offset = options?.offset ?? 0;
 
+    // Fail-closed default: an omitted scope must deny, not grant. This feed
+    // exposes entry titles across every collection, so a caller that forgets
+    // to pass one gets nothing rather than everything.
+    const scope = options?.scope ?? someResources([]);
+
     try {
       // Each filter carries BOTH spellings because its two consumers disagree
       // by nature: `adapter.select` resolves names against the Drizzle table,
@@ -310,6 +332,7 @@ export class ActivityLogService extends BaseService {
         filters.push({
           property: "collection",
           column: "collection",
+          op: "=",
           value: options.collection,
         });
       }
@@ -317,7 +340,24 @@ export class ActivityLogService extends BaseService {
         filters.push({
           property: "userId",
           column: "user_id",
+          op: "=",
           value: options.userId,
+        });
+      }
+      if (scope.kind === "some") {
+        // An empty scope yields an `IN ()`, which matches nothing -- the
+        // intended answer for a caller who may read nothing. Short-circuit
+        // instead, because an empty IN list is a syntax error on some
+        // dialects, and the short-circuit must happen BEFORE the query is
+        // built rather than let the driver reject it.
+        if (scope.resources.size === 0) {
+          return { activities: [], total: 0, hasMore: false };
+        }
+        filters.push({
+          property: "collection",
+          column: "collection",
+          op: "IN",
+          value: [...scope.resources],
         });
       }
 
@@ -326,7 +366,7 @@ export class ActivityLogService extends BaseService {
           ? {
               and: filters.map(f => ({
                 column: f.property,
-                op: "=" as const,
+                op: f.op,
                 value: f.value,
               })),
             }
@@ -365,13 +405,12 @@ export class ActivityLogService extends BaseService {
       const params: SqlParam[] = [];
 
       if (filters.length > 0) {
-        const clauses = filters.map((c, i) => {
-          params.push(c.value);
-          // Use positional placeholders for PG ($1, $2) and ? for MySQL/SQLite
-          return this.dialect === "postgresql"
-            ? `"${c.column}" = $${i + 1}`
-            : `\`${c.column}\` = ?`;
-        });
+        // Placeholder numbering derives from `params.length` as each value is
+        // pushed, not from the filter's own index: an `IN` filter contributes
+        // several parameters, so `$${i + 1}` -- correct only while every
+        // filter carried exactly one value -- would bind the wrong values
+        // for every filter after the first `IN`.
+        const clauses = filters.map(f => this.filterClause(f, params));
         sql += ` WHERE ${clauses.join(" AND ")}`;
       }
 
@@ -380,9 +419,53 @@ export class ActivityLogService extends BaseService {
       }>(sql, params);
 
       return Number(result[0]?.count ?? 0);
-    } catch {
+    } catch (error) {
+      // Matches the sibling catch in `getRecentActivity`: a placeholder/params
+      // mismatch or a dialect failure here would otherwise surface as a silent
+      // 0 with nothing in the logs to explain it -- the `total` field would be
+      // wrong and nothing would say why.
+      this.logger.error("Failed to count activities", {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return 0;
     }
+  }
+
+  /**
+   * Render one filter as a parameterised SQL clause, pushing its value(s)
+   * onto `params` as it goes.
+   *
+   * Placeholder numbering derives from `params.length` at the moment each
+   * value is pushed, never from the filter's position in the array: an `IN`
+   * filter contributes several parameters, so a caller numbering from the
+   * filter index (`$${i + 1}`) -- correct only while every filter carried
+   * exactly one value -- would bind the wrong values for every filter that
+   * follows the first `IN`.
+   */
+  private filterClause(filter: ActivityFilter, params: SqlParam[]): string {
+    const quoted =
+      this.dialect === "postgresql"
+        ? `"${filter.column}"`
+        : `\`${filter.column}\``;
+
+    // The discriminated union on `filter.op` narrows `filter.value` to
+    // `SqlParam[]` in this branch and `SqlParam` below without a cast --
+    // the type itself rules out an `IN` filter carrying a scalar or a `=`
+    // filter carrying an array.
+    if (filter.op === "IN") {
+      const placeholders = filter.value
+        .map(v => {
+          params.push(v);
+          return this.dialect === "postgresql" ? `$${params.length}` : "?";
+        })
+        .join(", ");
+      return `${quoted} IN (${placeholders})`;
+    }
+
+    params.push(filter.value);
+    return this.dialect === "postgresql"
+      ? `${quoted} = $${params.length}`
+      : `${quoted} = ?`;
   }
 
   private mapRow = (row: Record<string, unknown>): ActivityLogEntry => {

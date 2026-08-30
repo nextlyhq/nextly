@@ -2,9 +2,15 @@
  * Dashboard Service
  *
  * Aggregates content-centric statistics, recent entries across collections,
- * and project-wide metrics for the admin dashboard. Uses the database adapter
- * directly for simple read-only aggregate queries — no hooks, access control,
- * or relationship expansion needed for dashboard stats.
+ * and project-wide metrics for the admin dashboard.
+ *
+ * Anything describing CONTENT goes through the ordinary access-controlled path
+ * — `nextly.find` for the recent-entries feed, `nextly.count` for the
+ * per-collection totals — because a number computed beside the access layer
+ * discloses exactly what the row read withholds. The adapter is used directly
+ * only for the installation-wide admin metrics (`media`, `users`, `roles`,
+ * `permissions`, active API keys), which are uniformly unscoped, and for the
+ * two `activity_log` aggregates, whose scoping is applied to the query itself.
  *
  * @module services/dashboard/dashboard-service
  * @since 1.0.0
@@ -14,8 +20,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 
 import { container } from "../../di/container";
+import { getNextly } from "../../direct-api/nextly";
+import type { CountArgs, FindArgs } from "../../direct-api/types";
+import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
+
+import {
+  filterByResource,
+  someResources,
+  type ReadableResources,
+  type ReadCaller,
+} from "./readable-resources";
 
 /** Content statistics for the hero stats row. */
 export interface ContentStats {
@@ -90,19 +106,39 @@ export class DashboardService extends BaseService {
   /**
    * Get aggregated dashboard statistics.
    *
-   * Runs all count queries in parallel for fast response. Uses the database
-   * adapter directly for simple COUNT(*) queries.
+   * Runs all count queries in parallel for fast response. The per-collection
+   * totals go through the access-controlled count; see
+   * {@link countReadableEntries} for why they cannot be a bare `COUNT(*)`.
    */
-  async getStats(options?: {
-    readableResources?: Set<string>;
+  async getStats(options: {
+    scope?: ReadableResources;
+    /**
+     * Who is asking. REQUIRED, not defaulted, for the reason
+     * {@link getRecentEntries} states: the per-collection totals are read with
+     * access ENFORCED, so a caller-less call would have to read with
+     * `user: undefined`, and the only safe meaning of that is zero. Making it a
+     * type error forecloses the shape rather than leaving a runtime guard to
+     * catch it.
+     */
+    caller: ReadCaller;
   }): Promise<DashboardStatsResponse> {
-    const collections = await this.getRegisteredCollections(
-      options?.readableResources
+    // An omitted scope denies rather than allows. A caller that forgets to
+    // pass one gets an empty dashboard, which is visible and reportable; the
+    // old default returned everything, which was not.
+    const scope = options.scope ?? someResources([]);
+    const collections = await this.getRegisteredCollections(scope);
+    const singles = await this.getRegisteredSingles(scope);
+
+    // Computed first, rather than folded into the `Promise.all` below: the
+    // status breakdown reuses these numbers for every collection without the
+    // Draft/Published lifecycle (see `getContentStatusBreakdown`), which
+    // needs the totals in hand before it can decide whether to ask for more.
+    const collectionCounts = await this.getCollectionCounts(
+      collections,
+      options.caller
     );
-    const singles = await this.getRegisteredSingles(options?.readableResources);
 
     const [
-      collectionCounts,
       mediaCount,
       recentChanges,
       userCount,
@@ -112,15 +148,18 @@ export class DashboardService extends BaseService {
       apiKeyCount,
       statusBreakdown,
     ] = await Promise.all([
-      this.getCollectionCounts(collections),
       this.countTable("media"),
-      this.countRecentChanges24h(),
+      this.countRecentChanges24h(scope),
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
       this.countRegistryItems("fieldGroupRegistryService"),
       this.countActiveApiKeys(),
-      this.getContentStatusBreakdown(collections),
+      this.getContentStatusBreakdown(
+        collections,
+        collectionCounts,
+        options.caller
+      ),
     ]);
 
     const totalEntries = collectionCounts.reduce((sum, c) => sum + c.count, 0);
@@ -151,13 +190,23 @@ export class DashboardService extends BaseService {
    * to prevent excessive DB queries on large installations.
    *
    * @param limit - Maximum number of entries to return (default: 5, max: 20)
+   * @param scope - What the caller may read. Defaults to nothing rather than
+   *   everything -- see {@link getStats}.
+   * @param caller - Who is asking. REQUIRED, not defaulted: there is exactly
+   *   one production caller (the REST handler, via `readCaller`), and a
+   *   future handler that forgets to build one must fail to compile rather
+   *   than silently return HTTP 200 with an empty, unauthenticated-looking
+   *   feed. Reading with `user: undefined` and `overrideAccess: false` is the
+   *   shape most likely to be mishandled downstream, so the type system
+   *   forecloses it instead of a runtime guard trying to catch it.
    */
   async getRecentEntries(
     limit: number = 5,
-    readableResources?: Set<string>
+    scope: ReadableResources = someResources([]),
+    caller: ReadCaller
   ): Promise<RecentEntriesResponse> {
     const clampedLimit = Math.min(Math.max(limit, 1), 20);
-    const collections = await this.getRegisteredCollections(readableResources);
+    const collections = await this.getRegisteredCollections(scope);
 
     let collectionsToQuery = collections;
     if (collections.length > MAX_COLLECTIONS_FOR_RECENT) {
@@ -169,7 +218,7 @@ export class DashboardService extends BaseService {
     }
 
     const entryPromises = collectionsToQuery.map(coll =>
-      this.getRecentFromCollection(coll, clampedLimit)
+      this.getRecentFromCollection(coll, clampedLimit, caller)
     );
     const results = await Promise.all(entryPromises);
 
@@ -190,8 +239,9 @@ export class DashboardService extends BaseService {
    * Returns an array of stat items for display in the 2×4 grid widget.
    * Reuses the same data sources as `getStats()`.
    */
-  async getProjectStats(options?: {
-    readableResources?: Set<string>;
+  async getProjectStats(options: {
+    scope?: ReadableResources;
+    caller: ReadCaller;
   }): Promise<ProjectStatsResponse> {
     const dashStats = await this.getStats(options);
 
@@ -226,7 +276,7 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredCollections(
-    readableResources?: Set<string>
+    scope: ReadableResources
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
@@ -236,7 +286,18 @@ export class DashboardService extends BaseService {
             tableName: string;
             labels: { singular: string; plural: string };
             admin?: { useAsTitle?: string; group?: string };
-            fields: Array<{ name: string; type: string }>;
+            /**
+             * The Draft/Published lifecycle toggle. This is a top-level
+             * column on `dynamic_collections`, entirely separate from
+             * `fields` (the author's own field configs) -- and while the
+             * lifecycle is on, a user field literally named `status` is
+             * REJECTED at config validation as a reserved name (it would
+             * collide with the synthesized lifecycle column). So a lifecycle
+             * collection's `fields` array can never contain a `status`
+             * entry: scanning it for one always answers false, for exactly
+             * the collections this flag exists to identify.
+             */
+            status?: boolean;
           }>
         >;
       }>("collectionRegistryService");
@@ -248,12 +309,11 @@ export class DashboardService extends BaseService {
         label: c.labels?.plural ?? c.labels?.singular ?? c.slug,
         group: c.admin?.group ?? null,
         useAsTitle: c.admin?.useAsTitle ?? null,
-        hasStatus:
-          c.fields?.some(f => f.name === "_status" || f.name === "status") ??
-          false,
+        hasStatus: c.status === true,
       }));
-      if (!readableResources || readableResources.size === 0) return mapped;
-      return mapped.filter(c => readableResources.has(String(c.slug)));
+      // Derive the readable subset from the shared scope check rather than
+      // re-testing membership here -- see `filterByResource`.
+      return filterByResource(scope, mapped, c => String(c.slug));
     } catch (error) {
       this.logger.error("Failed to get registered collections", {
         error: error instanceof Error ? error.message : String(error),
@@ -263,7 +323,7 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredSingles(
-    readableResources?: Set<string>
+    scope: ReadableResources
   ): Promise<Array<{ slug: string }>> {
     try {
       const singleRegistryService = container.get<{
@@ -271,9 +331,7 @@ export class DashboardService extends BaseService {
       }>("singleRegistryService");
 
       const singles = await singleRegistryService.getAllSingles();
-      if (!readableResources || readableResources.size === 0) return singles;
-
-      return singles.filter(s => readableResources.has(String(s.slug)));
+      return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
       this.logger.error("Failed to get registered singles", {
         error: error instanceof Error ? error.message : String(error),
@@ -369,7 +427,31 @@ export class DashboardService extends BaseService {
     }
   }
 
-  private async countRecentChanges24h(): Promise<number> {
+  /**
+   * Count the last 24 hours of `activity_log` rows the caller may READ.
+   *
+   * `activity_log` spans every collection, so an unscoped count answers a
+   * different question from the `collectionCounts` beside it in the same
+   * `/stats` response: one honours the caller's scope and the other does not,
+   * and the number itself then discloses that changes exist outside the
+   * caller's reach. `ActivityLogService.getRecentActivity` filters this table
+   * with an `IN` on `collection`; this is the same filter applied to the count.
+   *
+   * The other counters in `getStats` (`media`, `users`, `roles`, `permissions`,
+   * active API keys) stay unscoped. They are uniformly unscoped rather than
+   * newly inconsistent, and what a scoped admin metric should mean is a design
+   * question rather than a defect in this table's filter.
+   *
+   * @param scope - What the caller may read. An empty `some` returns 0 without
+   *   querying: it admits nothing, and an empty `IN ()` is a syntax error on
+   *   some dialects, so the short-circuit has to happen before the query is
+   *   built rather than as a driver rejection swallowed by the catch below.
+   */
+  private async countRecentChanges24h(
+    scope: ReadableResources
+  ): Promise<number> {
+    if (scope.kind === "some" && scope.resources.size === 0) return 0;
+
     try {
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
       // Phase A follow-up: same dialect-aware formatter as above. The
@@ -377,15 +459,34 @@ export class DashboardService extends BaseService {
       // SQLite rejects.
       const cutoffParam = this.dateForRawBind(cutoff);
       const q = this.dialect === "mysql" ? "`" : '"';
-      const ph = this.dialect === "postgresql" ? "$1" : "?";
 
-      const sql =
+      // Placeholder numbering derives from `params.length` at the moment each
+      // value is pushed, never from a fixed index: the `IN` list contributes
+      // as many parameters as the scope has resources, so a hardcoded `$1`/`$2`
+      // -- correct only while the query bound exactly one value -- would bind
+      // the cutoff and the collection names to the wrong positions. Every
+      // value goes through here, so no collection name is ever interpolated
+      // into the SQL text.
+      const params: SqlParam[] = [];
+      const bind = (value: SqlParam): string => {
+        params.push(value);
+        return this.dialect === "postgresql" ? `$${params.length}` : "?";
+      };
+
+      let sql =
         `SELECT COUNT(*) as count FROM ${q}activity_log${q} ` +
-        `WHERE ${q}created_at${q} > ${ph}`;
+        `WHERE ${q}created_at${q} > ${bind(cutoffParam)}`;
+
+      if (scope.kind === "some") {
+        const placeholders = [...scope.resources]
+          .map(resource => bind(resource))
+          .join(", ");
+        sql += ` AND ${q}collection${q} IN (${placeholders})`;
+      }
 
       const result = await this.adapter.executeQuery<{
         count: number | string;
-      }>(sql, [cutoffParam]);
+      }>(sql, params);
 
       return Number(result[0]?.count ?? 0);
     } catch (error) {
@@ -425,44 +526,137 @@ export class DashboardService extends BaseService {
   }
 
   private async getCollectionCounts(
-    collections: CollectionInfo[]
+    collections: CollectionInfo[],
+    caller: ReadCaller
   ): Promise<CollectionCount[]> {
     const results = await Promise.all(
-      collections.map(async coll => {
-        const count = await this.countTable(coll.tableName);
-        return {
-          slug: coll.slug,
-          label: coll.label,
-          group: coll.group,
-          count,
-        };
-      })
+      collections.map(async coll => ({
+        slug: coll.slug,
+        label: coll.label,
+        group: coll.group,
+        count: await this.countReadableEntries(coll, caller),
+      }))
     );
     return results;
   }
 
   /**
-   * Get draft vs published content breakdown across all collections.
+   * How many entries of ONE collection this caller may read.
    *
-   * Collections without a `_status` or `status` field count all entries
-   * as published.
+   * This used to be `countTable`, a bare `SELECT COUNT(*)` over the physical
+   * table. The read SCOPE decides whether a collection appears here at all; it
+   * says nothing about which rows inside it the caller may read, so a
+   * collection with an owner-only or custom stored read rule reported every
+   * author's rows to every reader who could open it -- the count disclosing
+   * exactly what the row read withholds.
+   *
+   * `overrideAccess: false` plus `user` is what closes it: `countEntries` runs
+   * `checkCollectionAccess` and then applies `getAccessQueryConstraint`, which
+   * is the same WHERE predicate the list read applies. `getRecentEntries` takes
+   * the identical path for the same reason.
+   *
+   * `status` defaults to `"all"`, the one WIDENING option, and it keeps the
+   * number MEANING what it meant: an untrusted count that states nothing gets
+   * `resolveStatusFilter`'s `published` default, so without it the
+   * dashboard's per-collection totals would quietly exclude drafts and stop
+   * agreeing with the draft/published breakdown beside them. Under `"all"` no
+   * status condition is built at all, for the main row or a localized
+   * collection's per-locale `_status` companion.
+   *
+   * `getContentStatusBreakdown` calls this same method with `"published"` and
+   * `"draft"` explicitly, rather than a second implementation of "how many
+   * rows of this collection can this caller read": one question, one
+   * implementation, so the total and the breakdown cannot silently drift
+   * apart the way a raw `SELECT ... GROUP BY` and this access-controlled
+   * count already had.
+   */
+  private async countReadableEntries(
+    coll: CollectionInfo,
+    caller: ReadCaller,
+    status: "all" | "published" | "draft" = "all"
+  ): Promise<number> {
+    try {
+      const result = await getNextly().count({
+        collection: coll.slug,
+        overrideAccess: false,
+        user: caller.user,
+        // `satisfies` makes the field name a COMPILE-TIME boundary: a
+        // conditional spread is exempt from excess-property checking, so a
+        // wrong key here would compile clean and be dropped silently, leaving
+        // an API key counted by its minter's roles. Same pattern as
+        // `getRecentFromCollection`'s `find()` call.
+        ...(caller.authenticatedScope
+          ? ({ actor: caller.authenticatedScope } satisfies Pick<
+              CountArgs<string>,
+              "actor"
+            >)
+          : {}),
+        status,
+      });
+      return result.total;
+    } catch (error) {
+      // A collection whose table is not yet created, or whose read the caller
+      // is refused outright, contributes zero rather than failing the whole
+      // dashboard -- the same posture `getRecentFromCollection` takes.
+      this.logger.debug(`Failed to count entries in ${coll.slug}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
+  }
+
+  /**
+   * Draft vs published content breakdown, read through the SAME
+   * access-enforced path as the per-collection totals beside it.
+   *
+   * This used to be a raw `SELECT ... GROUP BY status` over the physical
+   * table -- ignoring both the collection's access rule and its stored
+   * row-level constraint, so a collection with an owner-only read rule
+   * reported every author's rows split by lifecycle to a reader who could see
+   * only a fraction of them. That number both disclosed rows the read access
+   * withholds and disagreed with `content.totalEntries`, computed beside it
+   * from the access-controlled count.
+   *
+   * A collection WITHOUT the Draft/Published lifecycle has no split to make:
+   * every row this caller may read counts as published. That total is
+   * already sitting in `collectionCounts` -- computed one step before this
+   * call, with the identical access rules -- so it is looked up rather than
+   * asked for again.
+   *
+   * A lifecycle collection's total CANNOT be split into `published` and
+   * `draft` by subtracting one from the other. A due RELEASE adjusts the
+   * `"published"` read alone -- revealing a draft whose scheduled publish has
+   * arrived, or hiding a published row whose scheduled unpublish has arrived
+   * (see `collection-query-service.ts`'s `releaseDecisions`, which only fires
+   * for `status: "published"`) -- while `"draft"` and `"all"` apply no such
+   * adjustment. So the three numbers are not guaranteed to sum, and each is
+   * asked for explicitly rather than derived.
    */
   private async getContentStatusBreakdown(
-    collections: CollectionInfo[]
+    collections: CollectionInfo[],
+    collectionCounts: CollectionCount[],
+    caller: ReadCaller
   ): Promise<ContentStatus> {
+    const totalsBySlug = new Map(
+      collectionCounts.map(c => [c.slug, c.count] as const)
+    );
     let published = 0;
     let draft = 0;
 
     const results = await Promise.all(
       collections.map(async coll => {
         if (!coll.hasStatus) {
-          // No status field — all entries count as published
-          const total = await this.countTable(coll.tableName);
-          return { published: total, draft: 0 };
+          // Same access rules, same rows, already counted for the total
+          // above -- asking again would be a second implementation of the
+          // same question.
+          return { published: totalsBySlug.get(coll.slug) ?? 0, draft: 0 };
         }
 
-        const statusField = coll.hasStatus ? "status" : "_status";
-        return this.countByStatus(coll.tableName, statusField);
+        const [publishedCount, draftCount] = await Promise.all([
+          this.countReadableEntries(coll, caller, "published"),
+          this.countReadableEntries(coll, caller, "draft"),
+        ]);
+        return { published: publishedCount, draft: draftCount };
       })
     );
 
@@ -474,109 +668,122 @@ export class DashboardService extends BaseService {
     return { published, draft };
   }
 
-  private async countByStatus(
-    tableName: string,
-    statusColumn: string
-  ): Promise<{ published: number; draft: number }> {
-    try {
-      const q = this.dialect === "mysql" ? "`" : '"';
-      const sql =
-        `SELECT ${q}${statusColumn}${q} as status, COUNT(*) as count ` +
-        `FROM ${q}${tableName}${q} ` +
-        `GROUP BY ${q}${statusColumn}${q}`;
-
-      const rows = await this.adapter.executeQuery<{
-        status: string | null;
-        count: number | string;
-      }>(sql, []);
-
-      let published = 0;
-      let draft = 0;
-
-      for (const row of rows) {
-        const count = Number(row.count ?? 0);
-        const status = String(row.status ?? "").toLowerCase();
-        if (status === "draft") {
-          draft += count;
-        } else {
-          // "published", null, or any other value counts as published
-          published += count;
-        }
-      }
-
-      return { published, draft };
-    } catch (error) {
-      this.logger.error(`Failed to count by status: ${tableName}`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return { published: 0, draft: 0 };
-    }
-  }
-
+  /**
+   * Recent entries from ONE collection, read through the ordinary
+   * access-controlled path.
+   *
+   * This used to be a hand-built `SELECT ... ORDER BY updated_at DESC
+   * LIMIT n` against the physical table. That skipped field-level access
+   * control, the collection's own access `where` constraints, the
+   * draft/publish lifecycle (it string-matched a `status` column, so a
+   * localized collection's per-locale `_status` companion was invisible),
+   * locale scoping and hooks -- and returned the titles of entries the
+   * caller could not read.
+   *
+   * `overrideAccess: false` plus `user` is what enforces all of it, and is
+   * the same path a REST read takes.
+   */
   private async getRecentFromCollection(
     coll: CollectionInfo,
-    limit: number
+    limit: number,
+    caller: ReadCaller
   ): Promise<RecentEntry[]> {
     try {
-      const q = this.dialect === "mysql" ? "`" : '"';
-      const titleCol = coll.useAsTitle ?? "title";
+      const titleField = coll.useAsTitle ?? "title";
+      const result = await getNextly().find({
+        collection: coll.slug,
+        limit,
+        sort: "-updatedAt",
+        overrideAccess: false,
+        // The caller WHOLE: `user` carries resolved role slugs, and `actor`
+        // (translated internally to `authenticatedScope`) keeps an API key
+        // judged on its own stamped grant rather than its minter's roles.
+        // Reducing either to an id is how a read silently answers as
+        // somebody with different rights.
+        user: caller.user,
+        // `satisfies` makes the field name a COMPILE-TIME boundary rather
+        // than a convention: `find()`'s excess-property check is exempt from
+        // a conditional spread (`...(cond ? {x} : {})`), which is exactly
+        // why a wrong key here -- `authenticatedScope`, the name this value
+        // has on `caller` -- would compile clean and be silently dropped by
+        // `find()` instead of failing loudly. Typing the spread's operand
+        // against the real option name closes that gap: rename `actor`
+        // anywhere in `FindArgs` and this line stops compiling.
+        ...(caller.authenticatedScope
+          ? ({ actor: caller.authenticatedScope } satisfies Pick<
+              FindArgs<string>,
+              "actor"
+            >)
+          : {}),
+        // The dashboard shows what the editor can act on, drafts included.
+        // `status: "all"` is the one WIDENING option in this call -- it also
+        // propagates into relationship expansion (see
+        // `status-filter.ts`'s `expansionStatusScope`) -- and under it
+        // `resolveStatusFilter` returns null: no status condition is built
+        // at all, for the main row or its per-locale `_status` companion.
+        // That is not "the lifecycle filter handles locales correctly"; it
+        // is that NO filter is applied, so none can be wrong for either.
+        status: "all",
+        // `entryHeading`'s fallback chain is
+        // `data[titleField] ?? data.title ?? data.name`, but the Direct
+        // API's `select` is a real projection (`applyFieldSelection` in
+        // `collection-query-service.ts` keeps only `id`, the system
+        // timestamps, and whatever key is named here) -- so `title` and
+        // `name` reach the resolver only when they are asked for by name.
+        // Without them the fallback candidates are simply absent from every
+        // real read, and the chain can never do anything but return the id:
+        // dead code that only "worked" in a test handing the resolver an
+        // unprojected row. Selecting a field twice when `titleField` already
+        // IS `title` or `name` is harmless -- every value here is `true`.
+        select: {
+          id: true,
+          updatedAt: true,
+          [titleField]: true,
+          title: true,
+          name: true,
+          ...(coll.hasStatus ? { status: true } : {}),
+        },
+      });
 
-      const selectCols = [`${q}id${q}`, `${q}updated_at${q}`];
+      const rows = result.items ?? [];
 
-      // Try to select the title column; if it doesn't exist the query
-      // will just return NULL for it — we fall back to the entry ID.
-      selectCols.push(`${q}${titleCol}${q}`);
-
-      if (coll.hasStatus) {
-        selectCols.push(`${q}status${q}`);
-      }
-
-      const sql =
-        `SELECT ${selectCols.join(", ")} ` +
-        `FROM ${q}${coll.tableName}${q} ` +
-        `ORDER BY ${q}updated_at${q} DESC ` +
-        `LIMIT ${limit}`;
-
-      const rows = await this.adapter.executeQuery<Record<string, unknown>>(
-        sql,
-        []
-      );
-
-      /* eslint-disable @typescript-eslint/no-base-to-string */
       return rows.map(row => {
-        const title =
-          row[titleCol] != null
-            ? String(row[titleCol])
-            : row.title != null
-              ? String(row.title)
-              : row.name != null
-                ? String(row.name)
-                : String(row.id);
-
+        // `??` against an `unknown` value narrows the checked side to `{}`,
+        // which still has nothing but `Object.prototype.toString` -- calling
+        // `String()` on that renders `[object Object]` instead of failing
+        // loudly. Narrow by `typeof`/`instanceof` first so every branch that
+        // reaches `String()` (or a bare `.toLowerCase()`) is already known to
+        // be a real primitive. `entryHeading` is that narrowing for the title,
+        // and it is the SAME walk the activity feed records its headings with,
+        // so one entry does not get two different names depending on which
+        // surface names it.
         const updatedAt =
-          row.updated_at instanceof Date
-            ? row.updated_at.toISOString()
-            : String(row.updated_at ?? "");
+          row.updatedAt instanceof Date
+            ? row.updatedAt.toISOString()
+            : typeof row.updatedAt === "string"
+              ? row.updatedAt
+              : "";
 
         let status: "published" | "draft" | "none" = "none";
-        if (coll.hasStatus && row.status != null) {
-          const s = String(row.status).toLowerCase();
-          status = s === "draft" ? "draft" : "published";
+        if (coll.hasStatus && typeof row.status === "string") {
+          status = row.status.toLowerCase() === "draft" ? "draft" : "published";
         }
 
+        const id = String(row.id);
         return {
-          id: String(row.id),
-          title,
+          id,
+          title: entryHeading(row, titleField, id),
           collectionSlug: coll.slug,
           collectionLabel: coll.label,
           status,
           updatedAt,
         };
       });
-      /* eslint-enable @typescript-eslint/no-base-to-string */
     } catch (error) {
-      // Silently skip collections that fail (e.g., table doesn't exist yet)
-      this.logger.debug(`Failed to get recent entries from ${coll.tableName}`, {
+      // A collection whose table is not yet created, or which the caller
+      // may not read at all, contributes nothing rather than failing the
+      // feed.
+      this.logger.debug(`Failed to get recent entries from ${coll.slug}`, {
         error: error instanceof Error ? error.message : String(error),
       });
       return [];

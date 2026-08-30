@@ -503,6 +503,25 @@ describe("Direct API - Collection Operations", () => {
       );
     });
 
+    it("should forward the lifecycle scope to the service", async () => {
+      // The option is only worth having if it ARRIVES: an accepted argument
+      // that is dropped between the namespace and the service leaves an
+      // untrusted count silently answering `published` only, while the call
+      // site reads as though it asked for everything.
+      mocks.collectionsHandler.countEntries.mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        message: "OK",
+        data: { totalDocs: 9 },
+      });
+
+      await nextly.count({ collection: "posts", status: "all" });
+
+      expect(mocks.collectionsHandler.countEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ collectionName: "posts", status: "all" })
+      );
+    });
+
     it("should throw on failure", async () => {
       mocks.collectionsHandler.countEntries.mockResolvedValue({
         success: false,

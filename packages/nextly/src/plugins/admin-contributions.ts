@@ -138,9 +138,14 @@ export interface PluginAdminPage {
 /**
  * @experimental A plugin-contributed dashboard widget.
  *
- * RESERVED — the contract is published for forward-compatibility, but
- * widget rendering / the dashboard grid is **deferred** and is NOT
- * built. Declaring widgets has no effect yet.
+ * Rendered by `PluginWidgetGrid` on the admin dashboard and gated on
+ * `requiredPermission`. Still `@experimental`: the shape is expected to grow a
+ * title, an archetype, a declarative query and a config schema before it
+ * graduates (D55 -- graduation needs a first-party plugin exercising it).
+ *
+ * `requiredPermission` decides whether the CARD renders. It does not constrain
+ * the rows a widget's own query returns; a widget is responsible for reading
+ * through the access-controlled path.
  */
 export interface PluginAdminWidget {
   id: string;
@@ -173,8 +178,7 @@ export interface PluginCollectionView {
  * @public Declarative admin-UI contributions. Introspectable
  * by the host without running the plugin.
  *
- * Consumed: `menu`, `pages` + `settings`, `views`.
- * `widgets` is RESERVED — deferred; not rendered.
+ * Consumed: `menu`, `pages` + `settings`, `views`, `widgets`.
  */
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
