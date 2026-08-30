@@ -144,6 +144,8 @@ export const list = defineBlock<ListProps, PageContext>({
   defaultProps: { kind: "unordered", items: [] },
   example: { props: { kind: "unordered", items: ["First", "Second"] } },
   supports: {
+    // The one block whose rendered element has markers to control.
+    list: true,
     typography: true,
     color: true,
     spacing: true,

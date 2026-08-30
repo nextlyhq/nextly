@@ -189,6 +189,25 @@ describe("the content-width rule", () => {
     }
   );
 
+  it.each(["var(--missing, none)", "var(--x)"])(
+    "writes nothing when the width %s resolves in the browser",
+    width => {
+      // Valid CSS that compiles, and whose meaning is decided at
+      // computed-value time: `var(--x, none)` becomes `none` when the property
+      // is absent, which is the unbounded case arriving through a door no
+      // static check can watch. Refused rather than guessed at.
+      const dynamic = {
+        id: "content.width",
+        name: "content.width",
+        kind: "dimension",
+        values: { light: width },
+      } as never;
+      const css = sheet({ tokens: { tokens: [dynamic] } }).css;
+      expect(css).not.toContain("nx-pb-contained");
+      expect(css).not.toContain("margin-inline");
+    }
+  );
+
   it.each(["wide", "#fff", "12ms"])(
     "writes nothing when the width %s is not a max-width at all",
     width => {

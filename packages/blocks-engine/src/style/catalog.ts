@@ -674,7 +674,11 @@ export const STYLE_CATALOG: readonly StyleProperty[] = [
   },
   {
     property: "listStyleType",
-    group: "typography",
+    // Its OWN group, not typography. Group membership is what decides which
+    // blocks are offered a control, and `typography: true` grants every
+    // property in that group — so a heading and a button would both be offered
+    // a list-marker control that cannot change anything they render.
+    group: "list",
     // `revert` earns its place beside the concrete markers. A CSS reset that
     // sets `list-style: none` on every list — Tailwind's Preflight does, and
     // this library's own scaffold imports it — leaves an author no keyword that

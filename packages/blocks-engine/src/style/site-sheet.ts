@@ -241,7 +241,15 @@ function boundsTheContent(token: SiteToken): boolean {
  * ceiling.
  */
 function boundsWidth(value: string): boolean {
-  if (UNBOUNDED_WIDTHS.has(value.trim().toLowerCase())) return false;
+  const normalised = value.trim().toLowerCase();
+  if (UNBOUNDED_WIDTHS.has(normalised)) return false;
+  // A value that resolves in the browser cannot be judged here at all.
+  // `var(--x, none)` compiles — it is valid CSS — and computes to `none` when
+  // the referenced property is absent, which is the unbounded case arriving
+  // through a door no static check can watch. Refused rather than guessed at,
+  // for the same reason an undefined token is: what the merged style does not
+  // establish is omitted rather than assumed.
+  if (normalised.includes("var(")) return false;
   const { declarations } = compileStyleValues({ maxWidth: value }, "/maxWidth");
   return declarations.length > 0;
 }
