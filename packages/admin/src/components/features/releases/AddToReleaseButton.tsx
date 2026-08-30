@@ -41,10 +41,63 @@ import {
   useReleases,
 } from "@admin/hooks/queries/useReleases";
 import { useCan } from "@admin/hooks/useCan";
-import type { ReleaseMemberAction } from "@admin/types/releases";
+import type { Release, ReleaseMemberAction } from "@admin/types/releases";
 
 import { releaseErrorMessage } from "./release-error";
 import { describeRelease } from "./release-schedule";
+
+/**
+ * Choosing the release, with its schedule shown beneath.
+ *
+ * The schedule is rendered in the same words the release pages use, so an
+ * editor confirms WHEN before they confirm what — the whole risk of this dialog
+ * is adding a document to a launch that fires sooner than they think.
+ */
+function ReleasePicker({
+  releaseId,
+  onChange,
+  isPending,
+  items,
+  truncated,
+}: {
+  releaseId: string;
+  onChange: (next: string) => void;
+  isPending: boolean;
+  items: Release[];
+  truncated: boolean;
+}) {
+  const chosen = items.find(release => release.id === releaseId);
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor="target-release">Release</Label>
+      <Select value={releaseId} onValueChange={onChange}>
+        <SelectTrigger id="target-release">
+          <SelectValue
+            placeholder={isPending ? "Loading releases…" : "Choose a release"}
+          />
+        </SelectTrigger>
+        <SelectContent>
+          {items.map(release => (
+            <SelectItem key={release.id} value={release.id}>
+              {release.title}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {chosen ? (
+        <p className="text-sm text-muted-foreground">
+          {describeRelease(chosen)}
+        </p>
+      ) : null}
+      {truncated ? (
+        <p className="text-sm text-muted-foreground">
+          Only the most recent releases are listed.
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export interface AddToReleaseButtonProps {
   scopeKind: "collection" | "single";
@@ -114,7 +167,6 @@ export function AddToReleaseButton({
     return null;
   }
 
-  const chosen = releases.items.find(release => release.id === releaseId);
   const permitted =
     action === "publish" ? canPublishDocument : canUnpublishDocument;
   const canSubmit = Boolean(releaseId) && permitted && !add.isPending;
@@ -177,39 +229,13 @@ export function AddToReleaseButton({
                   .
                 </p>
               ) : (
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="target-release">Release</Label>
-                  <Select value={releaseId} onValueChange={setReleaseId}>
-                    <SelectTrigger id="target-release">
-                      <SelectValue
-                        placeholder={
-                          releases.isPending
-                            ? "Loading releases…"
-                            : "Choose a release"
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {releases.items.map(release => (
-                        <SelectItem key={release.id} value={release.id}>
-                          {release.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {chosen ? (
-                    // The schedule, in the same words the release pages use, so
-                    // an editor confirms WHEN before they confirm what.
-                    <p className="text-sm text-muted-foreground">
-                      {describeRelease(chosen)}
-                    </p>
-                  ) : null}
-                  {releases.truncated ? (
-                    <p className="text-sm text-muted-foreground">
-                      Only the most recent releases are listed.
-                    </p>
-                  ) : null}
-                </div>
+                <ReleasePicker
+                  releaseId={releaseId}
+                  onChange={setReleaseId}
+                  isPending={releases.isPending}
+                  items={releases.items}
+                  truncated={releases.truncated}
+                />
               )}
 
               <fieldset className="flex flex-col gap-2">

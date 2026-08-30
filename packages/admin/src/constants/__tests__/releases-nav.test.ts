@@ -74,12 +74,26 @@ describe("the Releases nav entry", () => {
     const declared = SIDEBAR_NAVIGATION.find(
       item => item.href === ROUTES.RELEASES
     );
+    // Both sides resolved before anything is compared. Optional chaining in the
+    // assertions would let an ABSENT entry compare `undefined` to `undefined`
+    // and pass — the failure this whole file exists to catch, hidden by the
+    // syntax that reads as defensive.
     expect(declared).toBeDefined();
-    expect(railReleases?.label).toBe(declared?.title);
-    expect(railReleases?.href).toBe(declared?.href);
-    expect(railReleases?.icon).toBe(declared?.icon);
-    expect(railReleases?.requiredPermission).toBe(declared?.requiredPermission);
-    expect(declared?.category).toBe("releases");
+    expect(railReleases).toBeDefined();
+    if (!declared || !railReleases) return;
+
+    expect({
+      label: railReleases.label,
+      href: railReleases.href,
+      icon: railReleases.icon,
+      requiredPermission: railReleases.requiredPermission,
+    }).toEqual({
+      label: declared.title,
+      href: declared.href,
+      icon: declared.icon,
+      requiredPermission: declared.requiredPermission,
+    });
+    expect(declared.category).toBe("releases");
   });
 });
 

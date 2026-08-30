@@ -95,6 +95,78 @@ const PAGE = 50;
 const MAX_PAGE = 200;
 
 /**
+ * The controls that narrow the window.
+ *
+ * Separated from the list because they are a control surface rather than a
+ * view of the data, and because the list already had three states to render
+ * before any of this was added. Every change resets the page size: a narrower
+ * question deserves a fresh window.
+ */
+function ReleaseFilters({
+  state,
+  after,
+  before,
+  onState,
+  onAfter,
+  onBefore,
+}: {
+  state: ReleaseState | typeof ANY_STATE;
+  after: string;
+  before: string;
+  onState: (next: ReleaseState | typeof ANY_STATE) => void;
+  onAfter: (next: string) => void;
+  onBefore: (next: string) => void;
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <label
+        htmlFor="release-state-filter"
+        className="text-sm text-muted-foreground"
+      >
+        State
+      </label>
+      <Select
+        value={state}
+        onValueChange={next => onState(next as ReleaseState | typeof ANY_STATE)}
+      >
+        <SelectTrigger id="release-state-filter" className="w-44">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ANY_STATE}>All releases</SelectItem>
+          {FILTERABLE_STATES.map(value => (
+            <SelectItem key={value} value={value}>
+              {RELEASE_STATE_LABEL[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+
+      <label htmlFor="release-after" className="text-sm text-muted-foreground">
+        From
+      </label>
+      <Input
+        id="release-after"
+        type="date"
+        className="w-40"
+        value={after}
+        onChange={event => onAfter(event.target.value)}
+      />
+      <label htmlFor="release-before" className="text-sm text-muted-foreground">
+        To
+      </label>
+      <Input
+        id="release-before"
+        type="date"
+        className="w-40"
+        value={before}
+        onChange={event => onBefore(event.target.value)}
+      />
+    </div>
+  );
+}
+
+/**
  * What an editor sees before they have ever made a release.
  *
  * Most sites will never schedule anything, so this is the FIRST and often only
@@ -140,6 +212,49 @@ function NoneInThisState({ onClear }: { onClear: () => void }) {
   );
 }
 
+/**
+ * What to say when the window did not hold everything that matched.
+ *
+ * Truncation is stated rather than implied — the server over-fetches one row to
+ * know it, precisely so a partial schedule is never presented as the whole one.
+ * At the ceiling there is no larger window to offer, so the only honest
+ * instruction is a narrower QUESTION, and it must not be one the editor has
+ * already asked: telling someone who has filtered to filter reads as the UI not
+ * knowing what it is showing.
+ */
+function TruncationNotice({
+  truncated,
+  canWiden,
+  filtering,
+  onWiden,
+}: {
+  truncated: boolean;
+  canWiden: boolean;
+  filtering: boolean;
+  onWiden: () => void;
+}) {
+  if (!truncated) return null;
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-3">
+      <p className="text-sm text-muted-foreground">
+        More releases match than are shown here.
+      </p>
+      {canWiden ? (
+        <Button variant="outline" size="sm" onClick={onWiden}>
+          Show more
+        </Button>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {filtering
+            ? "Narrow the dates to see releases before these."
+            : "Filter by state, or narrow the dates, to see more."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export interface ReleaseListProps {
   /** Offered only to a caller who may assemble a release. */
   onCreate?: () => void;
@@ -178,63 +293,26 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
   };
 
   const filter = (
-    <div className="mb-4 flex flex-wrap items-center gap-2">
-      <label
-        htmlFor="release-state-filter"
-        className="text-sm text-muted-foreground"
-      >
-        State
-      </label>
-      <Select
-        value={state}
-        onValueChange={next => {
-          setState(next as ReleaseState | typeof ANY_STATE);
-          // A narrower question deserves a fresh window. Carrying a widened
-          // limit across filters asks the server for 200 rows of a state that
-          // may have three.
-          setLimit(PAGE);
-        }}
-      >
-        <SelectTrigger id="release-state-filter" className="w-44">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ANY_STATE}>All releases</SelectItem>
-          {FILTERABLE_STATES.map(value => (
-            <SelectItem key={value} value={value}>
-              {RELEASE_STATE_LABEL[value]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-
-      <label htmlFor="release-after" className="text-sm text-muted-foreground">
-        From
-      </label>
-      <Input
-        id="release-after"
-        type="date"
-        className="w-40"
-        value={after}
-        onChange={event => {
-          setAfter(event.target.value);
-          setLimit(PAGE);
-        }}
-      />
-      <label htmlFor="release-before" className="text-sm text-muted-foreground">
-        To
-      </label>
-      <Input
-        id="release-before"
-        type="date"
-        className="w-40"
-        value={before}
-        onChange={event => {
-          setBefore(event.target.value);
-          setLimit(PAGE);
-        }}
-      />
-    </div>
+    <ReleaseFilters
+      state={state}
+      after={after}
+      before={before}
+      onState={next => {
+        setState(next);
+        // A narrower question deserves a fresh window. Carrying a widened limit
+        // across filters asks the server for 200 rows of a state that may have
+        // three.
+        setLimit(PAGE);
+      }}
+      onAfter={next => {
+        setAfter(next);
+        setLimit(PAGE);
+      }}
+      onBefore={next => {
+        setBefore(next);
+        setLimit(PAGE);
+      }}
+    />
   );
 
   if (isPending) {
@@ -312,36 +390,12 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
         ))}
       </ul>
 
-      {truncated ? (
-        // Truncation is stated rather than implied. The server over-fetches one
-        // row to know this, precisely so a partial schedule is never presented
-        // as the whole one.
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <p className="text-sm text-muted-foreground">
-            More releases match than are shown here.
-          </p>
-          {canWiden ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setLimit(MAX_PAGE)}
-            >
-              Show more
-            </Button>
-          ) : (
-            // At the ceiling there is no larger window to offer, so the only
-            // honest instruction is a narrower QUESTION — and it must not be one
-            // the editor has already asked. Telling someone who has filtered by
-            // state to filter by state reads as the UI not knowing what it is
-            // showing.
-            <p className="text-sm text-muted-foreground">
-              {filtering
-                ? "Narrow the dates to see releases before these."
-                : "Filter by state, or narrow the dates, to see more."}
-            </p>
-          )}
-        </div>
-      ) : null}
+      <TruncationNotice
+        truncated={truncated}
+        canWiden={canWiden}
+        filtering={filtering}
+        onWiden={() => setLimit(MAX_PAGE)}
+      />
     </>
   );
 }

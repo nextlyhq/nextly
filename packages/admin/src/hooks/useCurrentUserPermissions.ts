@@ -36,40 +36,97 @@ export const SYSTEM_RESOURCES: ReadonlySet<string> = SYSTEM_RESOURCE_SET;
  * produces, and would go on passing after this function stopped setting a flag
  * the test still sets for itself.
  */
+/** The flags derived purely from which permission slugs are held. */
+type SystemCapabilities = Omit<
+  AdminCapabilities,
+  "isSuperAdmin" | "canViewCollections" | "collections"
+>;
+
+/**
+ * Which slugs reveal each system capability, as ANY-OF.
+ *
+ * A table rather than a chain of boolean expressions, because that is what this
+ * actually is: one rule per flag, each a list of slugs. The chain it replaces
+ * made adding a slug to the wrong flag invisible — the diff looked identical
+ * either way — and made the function one of the most branch-heavy in the admin
+ * while expressing nothing more than this.
+ *
+ * `content-releases` needs an entry for the same reason `webhooks` does: both
+ * are SYSTEM resources, so neither appears in the per-collection map, and a
+ * generic `action-resource` lookup finds nothing and answers false for a caller
+ * who holds the grant.
+ */
+const SYSTEM_CAPABILITY_SLUGS: Record<
+  keyof SystemCapabilities,
+  readonly string[]
+> = {
+  canViewUsers: ["read-users"],
+  canViewRoles: ["read-roles"],
+  canViewMedia: ["read-media", "manage-media"],
+  canViewSettings: [
+    "manage-settings",
+    "read-api-keys",
+    "create-api-keys",
+    "update-api-keys",
+    "delete-api-keys",
+    "manage-email-providers",
+    "manage-email-templates",
+  ],
+  canViewWebhooks: ["read-webhooks", "update-webhooks", "create-webhooks"],
+  // Read alone. Unlike webhooks, assembling and publishing releases do not
+  // reveal the section on their own — the list is a read, and a caller who may
+  // create one but not read them would land on a page that shows nothing.
+  canViewReleases: ["read-content-releases"],
+  canManageUsers: ["create-users", "update-users"],
+  canManageRoles: ["create-roles", "update-roles"],
+  canManageMedia: ["manage-media"],
+  canManageSettings: ["manage-settings"],
+  canManageEmailProviders: ["manage-email-providers"],
+  canManageEmailTemplates: ["manage-email-templates"],
+};
+
+/**
+ * Everything, for a super-admin.
+ *
+ * Named rather than returned inline: it is a fifth of `buildCapabilities` and
+ * has nothing to do with the permission parsing that follows it, so keeping it
+ * in the function made the interesting half harder to read. Frozen so a caller
+ * cannot mutate the shared object into a narrower one for everybody.
+ */
+const SUPER_ADMIN_CAPABILITIES: AdminCapabilities = Object.freeze({
+  isSuperAdmin: true,
+  canViewCollections: true,
+  canViewUsers: true,
+  canViewRoles: true,
+  canViewMedia: true,
+  canViewSettings: true,
+  canViewWebhooks: true,
+  canViewReleases: true,
+  collections: new Proxy(
+    {},
+    {
+      get: () => ({
+        canRead: true,
+        canCreate: true,
+        canUpdate: true,
+        canDelete: true,
+      }),
+    }
+  ),
+  canManageUsers: true,
+  canManageRoles: true,
+  canManageMedia: true,
+  canManageSettings: true,
+  canManageEmailProviders: true,
+  canManageEmailTemplates: true,
+});
+
 export function buildCapabilities(
   permissions: string[],
   isSuperAdmin: boolean
 ): AdminCapabilities {
-  // Super-admin gets everything
-  if (isSuperAdmin) {
-    return {
-      isSuperAdmin: true,
-      canViewCollections: true,
-      canViewUsers: true,
-      canViewRoles: true,
-      canViewMedia: true,
-      canViewSettings: true,
-      canViewWebhooks: true,
-      canViewReleases: true,
-      collections: new Proxy(
-        {},
-        {
-          get: () => ({
-            canRead: true,
-            canCreate: true,
-            canUpdate: true,
-            canDelete: true,
-          }),
-        }
-      ),
-      canManageUsers: true,
-      canManageRoles: true,
-      canManageMedia: true,
-      canManageSettings: true,
-      canManageEmailProviders: true,
-      canManageEmailTemplates: true,
-    };
-  }
+  // Super-admin gets everything.
+  if (isSuperAdmin) return SUPER_ADMIN_CAPABILITIES;
 
   const permSet = new Set(permissions);
   const collections: Record<string, CollectionCapabilities> = {};
@@ -105,35 +162,24 @@ export function buildCapabilities(
   // Check if user can view any collection
   const canViewCollections = Object.values(collections).some(c => c.canRead);
 
+  const holdsAny = (slugs: readonly string[]): boolean =>
+    slugs.some(slug => permSet.has(slug));
+
   return {
     isSuperAdmin: false,
     canViewCollections,
-    canViewUsers: permSet.has("read-users"),
-    canViewRoles: permSet.has("read-roles"),
-    canViewMedia: permSet.has("read-media") || permSet.has("manage-media"),
-    canViewSettings:
-      permSet.has("manage-settings") ||
-      permSet.has("read-api-keys") ||
-      permSet.has("create-api-keys") ||
-      permSet.has("update-api-keys") ||
-      permSet.has("delete-api-keys") ||
-      permSet.has("manage-email-providers") ||
-      permSet.has("manage-email-templates"),
-    canViewWebhooks:
-      permSet.has("read-webhooks") ||
-      permSet.has("update-webhooks") ||
-      permSet.has("create-webhooks"),
-    // Read alone. Unlike webhooks, assembling and publishing releases do not
-    // reveal the section on their own — the list is a read, and a caller who
-    // may create one but not read them would land on a page that shows nothing.
-    canViewReleases: permSet.has("read-content-releases"),
     collections,
-    canManageUsers: permSet.has("create-users") || permSet.has("update-users"),
-    canManageRoles: permSet.has("create-roles") || permSet.has("update-roles"),
-    canManageMedia: permSet.has("manage-media"),
-    canManageSettings: permSet.has("manage-settings"),
-    canManageEmailProviders: permSet.has("manage-email-providers"),
-    canManageEmailTemplates: permSet.has("manage-email-templates"),
+    // Every flag below is ANY-OF over the slugs that reveal it, so the table is
+    // the whole rule and this loop is the whole evaluation. Written as twenty
+    // chained `||` expressions it was one function with twenty branches, and a
+    // slug could be added to the wrong flag without the shape of the change
+    // making that visible.
+    ...(Object.fromEntries(
+      Object.entries(SYSTEM_CAPABILITY_SLUGS).map(([flag, slugs]) => [
+        flag,
+        holdsAny(slugs),
+      ])
+    ) as SystemCapabilities),
   };
 }
 
