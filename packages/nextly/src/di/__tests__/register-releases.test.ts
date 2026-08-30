@@ -105,3 +105,86 @@ describe("registerReleaseServices", () => {
     vi.doUnmock("../../services/lib/permissions");
   });
 });
+
+describe("registerReleaseServices document authority", () => {
+  afterEach(() => {
+    vi.doUnmock("../container");
+    vi.doUnmock("../../services/lib/permissions");
+    vi.resetModules();
+  });
+
+  /**
+   * Build the service with a permission store that ALLOWS the owner, so the
+   * only thing that can refuse below is the key's own scope.
+   */
+  async function withOwnerAllowed(scopePermissions: string[]) {
+    const singletons = new Map<string, unknown>();
+    vi.resetModules();
+    vi.doMock("../../services/lib/permissions", () => ({
+      hasPermission: async () => true,
+    }));
+    vi.doMock("../container", () => ({
+      container: {
+        registerSingleton: (name: string, factory: () => unknown) => {
+          singletons.set(name, factory());
+        },
+        has: (name: string) => name === "rbacAccessControlService",
+        get: () => ({
+          // The OWNER is allowed on the document. If the key's own grants were
+          // ignored, this is the answer that would come back.
+          checkAccess: async () => true,
+          getRegisteredAccess: () => undefined,
+        }),
+      },
+    }));
+    const { registerReleaseServices } = await import(
+      "../registrations/register-releases"
+    );
+    registerReleaseServices({ adapter: { select: async () => [] } } as never);
+    return {
+      svc: singletons.get("releasesService") as {
+        addMember: (r: string, m: unknown, a: unknown) => Promise<unknown>;
+      },
+      actor: {
+        userId: "owner",
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey" as const,
+          permissions: scopePermissions,
+        },
+      },
+    };
+  }
+
+  const MEMBER = {
+    scopeKind: "collection",
+    scopeSlug: "posts",
+    entryId: "e1",
+    locale: null,
+    action: "publish",
+  };
+
+  it("refuses a key without the document grant, however privileged its owner", async () => {
+    // THE case the release-resource check alone does not cover: a key holding
+    // create-content-releases but not publish-posts, owned by someone who CAN
+    // publish posts. Resolving the document from the owner inserts the member
+    // and materialises it later as that privileged person.
+    const { svc, actor } = await withOwnerAllowed(["create-content-releases"]);
+    await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("admits a key that holds the document grant", async () => {
+    // The control: the key path must not deny everything, which would make a
+    // properly scoped key unusable and still pass the case above. It gets past
+    // the document check and fails later on the fixture adapter instead.
+    const { svc, actor } = await withOwnerAllowed([
+      "create-content-releases",
+      "publish-posts",
+    ]);
+    await expect(svc.addMember("r1", MEMBER, actor)).rejects.not.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+});

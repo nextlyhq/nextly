@@ -53,7 +53,14 @@ function service(over?: {
     canManageReleases: vi.fn(async (_id: string, a: ReleaseAuthority) =>
       held.has(a)
     ),
-    canActOnDocument: vi.fn(async () => over?.mayActOnDocument !== false),
+    canActOnDocument: vi.fn(
+      async (_params: {
+        userId: string;
+        scopeSlug: string;
+        action: string;
+        authenticatedScope?: unknown;
+      }) => over?.mayActOnDocument !== false
+    ),
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -149,9 +156,11 @@ describe("ReleasesService add-time document check", () => {
     const { svc, deps } = service({ holds: ["create"] });
     await svc.addMember("r1", { ...MEMBER, action: "unpublish" }, ADMIN);
     expect(deps.canActOnDocument).toHaveBeenCalledWith(
-      "u1",
-      "posts",
-      "unpublish"
+      expect.objectContaining({
+        userId: "u1",
+        scopeSlug: "posts",
+        action: "unpublish",
+      })
     );
   });
 
@@ -456,5 +465,47 @@ describe("ReleasesService honours a scoped API key over its owner", () => {
       svc.schedule("r1", new Date(), "UTC", KEY(["read-content-releases"]))
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService carries the key scope into the DOCUMENT check", () => {
+  it("hands the scope to the document check, not just the release check", async () => {
+    // The gap this closes: honouring the key for the release resource and then
+    // resolving the DOCUMENT from the owner admits a key that holds
+    // create-content-releases but not publish-posts, whose owner can publish
+    // posts. The member is inserted and later materialised AS that privileged
+    // owner — a narrow key scheduling a publish it was never granted.
+    const scope = {
+      actorType: "apiKey" as const,
+      permissions: ["create-content-releases"],
+    };
+    const { svc, deps } = service({ holds: [] });
+    await svc.addMember("r1", MEMBER, {
+      userId: "owner",
+      overrideAccess: false,
+      authenticatedScope: scope,
+      userRoles: ["editor"],
+    });
+    expect(deps.canActOnDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authenticatedScope: scope,
+        userRoles: ["editor"],
+      })
+    );
+  });
+
+  it("refuses when the document check denies the key, however privileged the owner", async () => {
+    const { svc, repo } = service({ holds: [], mayActOnDocument: false });
+    await expect(
+      svc.addMember("r1", MEMBER, {
+        userId: "owner",
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["create-content-releases"],
+        },
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.addMember).not.toHaveBeenCalled();
   });
 });

@@ -111,6 +111,11 @@ export interface ReleaseActor {
    * up able to schedule a publish.
    */
   authenticatedScope?: AuthenticatedScope;
+  /**
+   * The caller's role set, forwarded so code-defined access rules evaluate
+   * against the real user rather than against an empty list.
+   */
+  userRoles?: string[];
 }
 
 export interface ReleasesServiceDeps {
@@ -133,11 +138,21 @@ export interface ReleasesServiceDeps {
    * The same question the ordinary write path asks (`publish-<slug>` /
    * `unpublish-<slug>`), asked here at add time. Injected for the same reason.
    */
-  canActOnDocument: (
-    userId: string,
-    scopeSlug: string,
-    action: ReleaseMemberAction
-  ) => Promise<boolean>;
+  canActOnDocument: (params: {
+    userId: string;
+    scopeSlug: string;
+    action: ReleaseMemberAction;
+    /**
+     * The scoped API key's own grants, when the caller is one.
+     *
+     * Passed through rather than resolved here. The document verdict is the
+     * permission slug AND the code-defined access rule, and only the wiring
+     * holds both — checking the slug alone in the domain would be a partial
+     * answer that reads like a complete one.
+     */
+    authenticatedScope?: AuthenticatedScope;
+    userRoles?: string[];
+  }) => Promise<boolean>;
 }
 
 export interface FindReleasesQuery {
@@ -543,7 +558,15 @@ export class ReleasesService {
         logContext: { reason: "anonymous", action, scopeSlug },
       });
     }
-    if (await this.deps.canActOnDocument(actor.userId, scopeSlug, action)) {
+    if (
+      await this.deps.canActOnDocument({
+        userId: actor.userId,
+        scopeSlug,
+        action,
+        authenticatedScope: actor.authenticatedScope,
+        userRoles: actor.userRoles,
+      })
+    ) {
       return;
     }
     // Logged as the DOCUMENT authority, not the release one. The two refusals

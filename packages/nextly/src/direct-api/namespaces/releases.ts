@@ -152,6 +152,10 @@ function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
     // OWNER's grants: a restricted key inherits authority it was never given,
     // and a key granted release authority is denied when its owner lacks it.
     authenticatedScope: access.authenticatedScope,
+    // Forwarded so code-defined access rules evaluate against the real user
+    // rather than an empty role set, which would deny a rule that names a role
+    // the caller actually holds.
+    userRoles: access.user?.roles,
   };
 }
 

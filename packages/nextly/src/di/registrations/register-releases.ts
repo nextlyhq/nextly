@@ -15,6 +15,7 @@
  * @module di/registrations/register-releases
  */
 
+import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
@@ -63,7 +64,13 @@ export function registerReleaseServices({
         // `register-auth`, and resolving at registration time would make this
         // depend on an ordering between two registrations rather than on the
         // container — the first reordering would break it silently.
-        canActOnDocument: async (userId, scopeSlug, action) => {
+        canActOnDocument: async ({
+          userId,
+          scopeSlug,
+          action,
+          authenticatedScope,
+          userRoles,
+        }) => {
           if (!container.has("rbacAccessControlService")) {
             // No permission store means no basis for saying yes. A minimal boot
             // without RBAC can still construct this service; it simply cannot
@@ -73,6 +80,26 @@ export function registerReleaseServices({
           const rbac = container.get<RBACAccessControlService>(
             "rbacAccessControlService"
           );
+
+          // A scoped API key is judged by its OWN grants, and by the full
+          // question the ordinary write path asks: the `{action}-{slug}` grant
+          // AND the code-defined access rule, evaluated against the key rather
+          // than its owner. Checking only the permission slug here would be a
+          // partial answer that reads like a complete one — and resolving from
+          // the owner at all is how a narrow key ends up scheduling a publish
+          // it was never granted, materialised later as a privileged person.
+          //
+          // `null` means the caller is not a key, so the ordinary resolution
+          // below applies.
+          const byKey = await apiKeyWriteAllowed(
+            authenticatedScope,
+            action,
+            scopeSlug,
+            { id: userId, roles: userRoles },
+            rbac
+          );
+          if (byKey !== null) return byKey;
+
           return rbac.checkAccess({
             userId,
             operation: action,
