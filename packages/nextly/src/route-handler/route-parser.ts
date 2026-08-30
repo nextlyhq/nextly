@@ -2441,18 +2441,31 @@ function parseTranslationRoutes(
 /**
  * Parse dashboard-related routes.
  *
- *   GET /api/dashboard/stats          → getDashboardStats
- *   GET /api/dashboard/recent-entries → getDashboardRecentEntries
- *   GET /api/dashboard/activity       → getDashboardActivity
+ *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
+ *   GET  /api/dashboard/activity       → getDashboardActivity
+ *   POST /api/dashboard/query          → postWidgetQuery
  *
- * All dashboard endpoints are GET-only and require authentication
- * (no specific permission). Handlers manage their own auth.
+ * All require authentication (no specific permission). Handlers manage their
+ * own auth.
  */
 function parseDashboardRoutes(
   id: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  if (httpMethod === "POST") {
+    if (id === "query") {
+      return {
+        service: "dashboard",
+        operation: "list",
+        method: "postWidgetQuery",
+        routeParams,
+      };
+    }
+    return null;
+  }
+
   if (httpMethod !== "GET") return null;
 
   if (id === "stats") {
