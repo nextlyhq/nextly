@@ -1,9 +1,11 @@
 /**
  * How a release's schedule is put into words.
  *
- * Kept out of the components because the same sentence appears on the list, on
- * the detail page and — in PR 3b — on the document itself, and three spellings
- * of "goes live Friday at 9am Berlin time" is how they start to disagree.
+ * Kept out of the components because the same sentence belongs on the list, on
+ * the detail page and on a document that is scheduled inside a release. Three
+ * spellings of "goes live Friday at 9am Berlin time" is how they start to
+ * disagree, and a schedule that reads differently in two places is one an
+ * editor cannot trust in either.
  *
  * @module components/features/releases/release-schedule
  */
