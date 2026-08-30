@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { RELEASE_SECTION_PERMISSIONS } from "@admin/constants/navigation";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { resolveRoute } from "@admin/lib/routing";
 
@@ -21,7 +22,7 @@ describe("the release routes", () => {
   it("resolves the list to the releases page", () => {
     const resolved = resolveRoute(ROUTES.RELEASES, "");
     expect(resolved.Component).toBe(ReleasesPage);
-    expect(resolved.requiredPermission).toBe("read-content-releases");
+    expect(resolved.requiredPermission).toEqual(RELEASE_SECTION_PERMISSIONS);
   });
 
   it("resolves a detail link to the detail page, with its id", () => {
@@ -35,7 +36,9 @@ describe("the release routes", () => {
     // test exists to catch.
     expect(resolved.Component).toBe(ReleaseDetailPage);
     expect(resolved.params).toEqual({ id: "rel_01H8" });
-    expect(resolved.requiredPermission).toBe("read-content-releases");
+    // The detail is gated no more loosely than the list it is reached from,
+    // which would otherwise be a way around the list's own gate.
+    expect(resolved.requiredPermission).toEqual(RELEASE_SECTION_PERMISSIONS);
   });
 
   it("does not let the list route swallow the detail one", () => {

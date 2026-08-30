@@ -26,7 +26,7 @@ import { filterNavigationItems } from "@admin/lib/permissions/authorization";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
 import { isNavSection, NAV_SECTIONS } from "../nav-sections";
-import { SIDEBAR_NAVIGATION } from "../navigation";
+import { RELEASE_SECTION_PERMISSIONS, SIDEBAR_NAVIGATION } from "../navigation";
 import { SYSTEM_RESOURCES_IN_DISPLAY_ORDER } from "../permissions";
 import { ROUTES } from "../routes";
 
@@ -47,7 +47,18 @@ describe("the Releases nav entry", () => {
     // `read-content-releases` is seeded; `read-releases` is not, and would hide
     // this from everyone. Checked against the one list the permission screens
     // derive from, so a typo cannot agree with itself.
-    expect(railReleases?.requiredPermission).toBe("read-content-releases");
+    // ANY of the three, matching the server: assembling or scheduling implies
+    // reading, because the grants are seeded independently and a role holding
+    // only `create` would otherwise create releases it could never see.
+    expect(railReleases?.requiredPermission).toEqual(
+      RELEASE_SECTION_PERMISSIONS
+    );
+    // Every one of them names a resource that is actually registered. An
+    // unseeded slug matches nobody, so it hides the item from everyone
+    // including an administrator, with nothing erroring to say so.
+    for (const slug of RELEASE_SECTION_PERMISSIONS) {
+      expect(slug.endsWith("-content-releases"), slug).toBe(true);
+    }
     expect(SYSTEM_RESOURCES_IN_DISPLAY_ORDER).toContain("content-releases");
   });
 

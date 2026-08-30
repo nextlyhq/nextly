@@ -275,6 +275,23 @@ export class ReleasesService {
       });
     }
     if (await this.deps.canManageReleases(actor.userId, authority)) return;
+    // Assembling or scheduling a release IMPLIES being able to read one.
+    //
+    // The three grants are seeded independently, and without this a role given
+    // only `create` can create a release through the API and then see nothing —
+    // not the list, not the release it just made, not the picker that would put
+    // a document in it. That is a grant promising something the product cannot
+    // deliver, and an administrator has no way to discover the second grant is
+    // needed. Implication rather than a seeder change, because it has to hold
+    // for roles that already exist.
+    //
+    // One direction only: reading does not imply writing.
+    if (
+      authority === "read" &&
+      (await this.holdsEither(actor.userId, ["create", "publish"]))
+    ) {
+      return;
+    }
     // The public message is FIXED by `forbidden`, and deliberately so: a
     // response that named the missing permission would tell an unauthorized
     // caller the shape of the authority model. The detail an operator needs goes
@@ -588,6 +605,17 @@ export class ReleasesService {
         state: parent.state,
       },
     });
+  }
+
+  /** Whether this user holds ANY of these authorities. */
+  private async holdsEither(
+    userId: string,
+    authorities: readonly ReleaseAuthority[]
+  ): Promise<boolean> {
+    for (const authority of authorities) {
+      if (await this.deps.canManageReleases(userId, authority)) return true;
+    }
+    return false;
   }
 
   /** Whether the actor holds an authority, without throwing. */

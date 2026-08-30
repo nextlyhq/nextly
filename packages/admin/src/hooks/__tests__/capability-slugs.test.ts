@@ -86,10 +86,23 @@ describe("a grant reveals ONLY its own section", () => {
     expect(Object.values(nobody).some(value => value === true)).toBe(false);
   });
 
-  it("assembling releases does not by itself reveal the section", () => {
-    // Deliberate: the page is a LIST, so a caller who may create a release but
-    // not read one would land somewhere that shows nothing.
-    expect(from("create-content-releases").canViewReleases).toBe(false);
+  it("assembling or scheduling releases reveals the section too", () => {
+    // The three grants are seeded INDEPENDENTLY, and the service applies the
+    // same implication: a role holding only `create` can create a release
+    // through the API, so it must be able to see the one it just made. Without
+    // this the grant promises something no screen delivers, and an
+    // administrator has nothing to tell them a second grant is needed.
+    expect(from("create-content-releases").canViewReleases).toBe(true);
+    expect(from("publish-content-releases").canViewReleases).toBe(true);
+  });
+
+  it("a release grant reveals ONLY the release section", () => {
+    // The control: an implication that widened to other sections would pass the
+    // case above just as well.
+    const assembler = from("create-content-releases");
+    expect(assembler.canViewMedia).toBe(false);
+    expect(assembler.canViewSettings).toBe(false);
+    expect(assembler.canViewCollections).toBe(false);
   });
 });
 

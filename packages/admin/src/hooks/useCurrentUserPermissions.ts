@@ -76,7 +76,14 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
   // Read alone. Unlike webhooks, assembling and publishing releases do not
   // reveal the section on their own — the list is a read, and a caller who may
   // create one but not read them would land on a page that shows nothing.
-  canViewReleases: ["read-content-releases"],
+  // Assembling or scheduling implies reading, matching the server: the three
+  // grants are seeded independently, and a role given only `create` would
+  // otherwise create releases it could never see.
+  canViewReleases: [
+    "read-content-releases",
+    "create-content-releases",
+    "publish-content-releases",
+  ],
   canManageUsers: ["create-users", "update-users"],
   canManageRoles: ["create-roles", "update-roles"],
   canManageMedia: ["manage-media"],

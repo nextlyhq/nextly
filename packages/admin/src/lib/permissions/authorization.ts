@@ -172,6 +172,8 @@ function hasCapabilityForPermission(
     // would look them up in the per-collection map, find nothing, and answer
     // false for a caller who holds the grant.
     case "read-content-releases":
+    case "create-content-releases":
+    case "publish-content-releases":
       return capabilities.canViewReleases;
     default: {
       // For dynamic permissions like "read-posts", parse and check collections

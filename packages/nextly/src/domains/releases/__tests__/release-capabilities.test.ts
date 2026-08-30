@@ -130,12 +130,11 @@ describe("capabilities, and the authority half", () => {
     expect(can.get("r1")?.removeMember).toBe(false);
   });
 
-  it("refuses the whole question to a caller who may not read", async () => {
-    const { svc } = service(["create", "publish"]);
-    await expect(
-      svc.capabilities([release("draft")], ACTOR)
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
-  });
+  // The refusal case that used to sit here asserted that `create` and `publish`
+  // without `read` were refused. That is deliberately no longer true —
+  // assembling or scheduling implies reading — and the refusal is covered by
+  // "still refuses a caller holding none of the three" below, alongside the
+  // control that reading does not imply writing.
 });
 
 describe("capabilities, as an instrument", () => {
@@ -167,5 +166,40 @@ describe("capabilities, as an instrument", () => {
       "published",
       "cancelled",
     ]);
+  });
+});
+
+describe("reading, and what implies it", () => {
+  it("lets an assembler read releases without a read grant of its own", async () => {
+    // The three permissions are seeded independently. A role given only
+    // `create` can create a release through the API, and without this it could
+    // then see nothing — not the list, not the release it just made. That is a
+    // grant promising something the product cannot deliver.
+    const { svc } = service(["create"]);
+    const can = await svc.capabilities([release("draft")], ACTOR);
+    expect(can.get("r1")?.addMember).toBe(true);
+  });
+
+  it("lets a publisher read them too", async () => {
+    const { svc } = service(["publish"]);
+    const can = await svc.capabilities([release("scheduled")], ACTOR);
+    expect(can.get("r1")?.schedule).toBe(true);
+  });
+
+  it("does NOT let reading imply writing", async () => {
+    // One direction only, and this is the control that matters: an implication
+    // written symmetrically would hand every reader the ability to schedule.
+    const { svc } = service(["read"]);
+    const can = await svc.capabilities([release("draft")], ACTOR);
+    expect(can.get("r1")?.schedule).toBe(false);
+    expect(can.get("r1")?.cancel).toBe(false);
+    expect(can.get("r1")?.addMember).toBe(false);
+  });
+
+  it("still refuses a caller holding none of the three", async () => {
+    const { svc } = service([]);
+    await expect(
+      svc.capabilities([release("draft")], ACTOR)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 });

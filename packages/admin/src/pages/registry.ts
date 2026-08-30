@@ -1,5 +1,6 @@
 import { lazy } from "react";
 
+import { RELEASE_SECTION_PERMISSIONS } from "../constants/navigation";
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
   builderSection,
@@ -197,15 +198,15 @@ export const routeConfig: Record<string, RouteConfig> = {
     // use for content. A permission that is not seeded matches nobody, so
     // naming one here would hide the page from every user including an
     // administrator, with nothing erroring to say so.
-    requiredPermission: "read-content-releases",
+    requiredPermission: RELEASE_SECTION_PERMISSIONS,
     section: overridableBy("releases"),
   },
   [ROUTES.RELEASES_DETAIL]: {
     component: ReleaseDetailPage,
     type: "private",
-    // The same slug as the list. A detail route gated more loosely than the
+    // The same grants as the list. A detail route gated more loosely than the
     // list it is reached from would be a way around the list's own gate.
-    requiredPermission: "read-content-releases",
+    requiredPermission: RELEASE_SECTION_PERMISSIONS,
     section: overridableBy("releases"),
   },
   [ROUTES.TRANSLATIONS]: {
