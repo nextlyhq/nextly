@@ -4,8 +4,9 @@
  * Before this registration existed, `clearWidgets()` and `clearSources()` had
  * no caller anywhere in the repo -- the registries were declared, validated,
  * and never populated at runtime. A test asserting `registerBuiltInSources`
- * works in isolation (Task 6's own suite) cannot see that gap: it proves the
- * function is correct, not that boot ever calls it. Only a test that starts
+ * works in isolation (`domains/widgets/__tests__/built-in-sources.test.ts`)
+ * cannot see that gap: it proves the function is correct, not that boot ever
+ * calls it. Only a test that starts
  * from an EMPTY registry and calls the actual boot-wiring entry point can
  * tell the two apart.
  */

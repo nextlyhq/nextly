@@ -7,10 +7,10 @@
  * names; it never names a table or a column, which is what keeps caller input
  * away from the compiler.
  *
- * Validation lives at registration, the same pattern Task 2's widget
- * registry uses for `registerWidget`/`validateWidgetDefinition`: a malformed
- * source fails loudly at boot rather than quietly admitting, say, an empty
- * `fields` list that would make every query against it fail "undeclared
+ * Validation lives at registration, the same pattern `registry.ts` applies to
+ * a widget definition through `registerWidget`/`validateWidgetDefinition`: a
+ * malformed source fails loudly at boot rather than quietly admitting, say, an
+ * empty `fields` list that would make every query against it fail "undeclared
  * field" for every field name a caller could possibly send.
  *
  * @module domains/widgets/sources

@@ -17,11 +17,12 @@
  * same id inside a single `registerBuiltInSources` pass, because nothing
  * clears the store between two collections in that same pass.
  *
- * `clearWidgets()` runs here too even though nothing in this plan calls
- * `registerWidget` yet -- the core widget definitions land in the companion
- * admin-rendering plan. Wiring the clear now means that plan's registrations
- * inherit the same hot-reload safety without anyone having to remember to add
- * it at the one choke point both boot paths already share.
+ * `clearWidgets()` runs here too even though no core widget definition is
+ * registered yet. The widget registry is `globalThis`-pinned exactly as the
+ * source registry is, so it needs the same reset at the same choke point; a
+ * clear wired only once the first definition exists would be a second boot
+ * seam to find, and the reset that keeps a hot reload from colliding would be
+ * missing for however long that took.
  *
  * @module di/registrations/register-widgets
  */
