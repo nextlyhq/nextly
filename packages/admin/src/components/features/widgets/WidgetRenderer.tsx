@@ -100,12 +100,37 @@ export function WidgetRenderer({
   // a database read on every mount and every window focus and then fetch the
   // same data again for itself. `undefined` while the batch is in flight, and
   // the component decides what that looks like.
+  //
+  // And it receives the REFETCH state, in both directions. The card is marked
+  // busy like any other -- a queried custom widget keeps its body through a
+  // window-focus refetch exactly as an archetype does, so a reader on a screen
+  // reader needs the same `aria-busy` telling them the dashboard is reading
+  // again. The component is told too, because `slot` alone cannot say it: the
+  // slot holds the PREVIOUS answer during a refetch and is indistinguishable
+  // from idle. The grid already computes both for this widget and this branch
+  // was the one place that dropped them on the floor.
+  //
+  // Both are still `null`/`false` for a query-less custom widget, because the
+  // grid only reports them for a widget that asked -- so nothing here puts a
+  // freshness line under a card that never made a request.
   if (outcome.state === "self-drawn") {
     return (
-      <WidgetCard {...shared}>
+      <WidgetCard
+        {...shared}
+        // Withheld when the slot is a REFUSAL, for the reason `WidgetCard`
+        // states about its own error branch: the timestamp says when the batch
+        // landed, which is true of the request and not of this card, so
+        // "Updated just now" over a body drawn from a failure tells the reader
+        // the opposite of what happened. The card cannot reach that rule by
+        // itself here -- an error REPLACES a body, and a self-drawn body is
+        // never replaced, so no `error` is passed and the footer's `settled`
+        // gate never sees one.
+        updatedAt={slot?.ok === false ? null : updatedAt}
+        isLoading={isFetching}
+      >
         <PluginSlot
           path={definition.component}
-          props={{ widgetId: definition.id, slot }}
+          props={{ widgetId: definition.id, slot, isFetching }}
         />
       </WidgetCard>
     );

@@ -410,6 +410,45 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    it("isolates a count result carrying no total", async () => {
+      // The crash this closes. `{ op: "count" }` passed an "is it an object"
+      // check, the cast said it was a `WidgetResult`, and `metricBody` read
+      // `result.total.toLocaleString()` on `undefined` -- taking the whole grid
+      // down with it, which is what the per-slot shape exists to prevent.
+      expect(await slotFor({ ok: true, result: { op: "count" } })).toEqual({
+        ok: false,
+        error: expect.stringMatching(/unreadable/i),
+      });
+    });
+
+    it("isolates a count whose total is not a number", async () => {
+      expect(
+        await slotFor({ ok: true, result: { op: "count", total: "12" } })
+      ).toEqual({ ok: false, error: expect.stringMatching(/unreadable/i) });
+    });
+
+    it("isolates a list whose items are not rows", async () => {
+      // The same shape one level down: `[null]` is an array, and the failure
+      // moves to whoever reads a field off the row rather than happening here.
+      expect(
+        await slotFor({ ok: true, result: { op: "list", items: [null] } })
+      ).toEqual({ ok: false, error: expect.stringMatching(/unreadable/i) });
+    });
+
+    it("isolates a result whose op this admin cannot draw", async () => {
+      expect(
+        await slotFor({ ok: true, result: { op: "histogram", buckets: [] } })
+      ).toEqual({ ok: false, error: expect.stringMatching(/unreadable/i) });
+    });
+
+    it("still passes a well-formed LIST through untouched", async () => {
+      // The second positive control, so the arm added beside `count` is known
+      // to accept as well as refuse.
+      expect(
+        await slotFor({ ok: true, result: { op: "list", items: [{ id: 1 }] } })
+      ).toEqual({ ok: true, result: { op: "list", items: [{ id: 1 }] } });
+    });
+
     it("still reads a null member as the server answering short", async () => {
       // The control: `null` was always handled, and must stay handled with its
       // own sentence rather than being folded into the malformed case.

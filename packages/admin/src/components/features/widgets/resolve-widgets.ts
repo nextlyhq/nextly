@@ -18,6 +18,7 @@ import type {
 } from "@admin/types/branding";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
+import { coreDrawsArchetype } from "./outcome";
 import { legacySizeToWidgetSize } from "./sizes";
 
 /**
@@ -31,19 +32,28 @@ import { legacySizeToWidgetSize } from "./sizes";
  * plugin.
  *
  * A declared archetype does NOT automatically win, and that is the case worth
- * reading twice. Every archetype but `custom` is drawn by core FROM A QUERY
- * RESULT, so one declared without a query describes a body core cannot produce
- * -- no request is made for it, no slot ever arrives, and the card reads that
- * absence as "still loading" for the life of the page. `PluginAdminWidget`
- * makes `query` optional and `component` required, so the declaration is legal
- * and the component is always there; drawing it is both the better outcome and
- * the one the author actually shipped.
+ * reading twice. Core draws every archetype but `custom` FROM A QUERY RESULT,
+ * so a declaration describes a body core cannot produce in two ways, and a
+ * component the author shipped beats both.
+ *
+ * It may declare no query: no request is made for it, no slot ever arrives, and
+ * the card reads that absence as "still loading" for the life of the page.
+ * `PluginAdminWidget` makes `query` optional and `component` required, so that
+ * declaration is legal and the component is always there.
+ *
+ * Or it may name an archetype THIS RELEASE DOES NOT DRAW. `list`, `table`,
+ * `text` and `actions` are declarable today and none of them has a renderer, so
+ * a widget naming one had its component discarded in favour of the sentence
+ * "the list widget archetype is not rendered yet" -- an error where a working
+ * card was available. Asked of `coreDrawsArchetype` rather than listed here, so
+ * the fallback stops applying on its own the day core learns to draw one.
  */
 function resolveArchetype(
   meta: PluginWidgetMeta
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
-    if (meta.archetype !== "custom" && !meta.query && meta.component) {
+    const undrawable = !meta.query || !coreDrawsArchetype(meta.archetype);
+    if (meta.archetype !== "custom" && undrawable && meta.component) {
       return "custom";
     }
     return meta.archetype;
@@ -157,8 +167,57 @@ function resolveRegistered(
 }
 
 /**
+ * One widget declared through BOTH channels, as the single declaration it
+ * describes.
+ *
+ * MERGED rather than substituted, and the difference is a regression that
+ * substitution caused. `WidgetDefinition` forbids `component` on every
+ * archetype but `custom`, so a registered `list` widget structurally cannot
+ * carry one -- and replacing the contribution with it discarded the only thing
+ * on either side that could draw the card. What had rendered the plugin's UI
+ * rendered the sentence "the list widget archetype is not rendered yet"
+ * instead. The registry cannot supply that field, so taking it as authoritative
+ * over that field is taking it as authoritative over nothing.
+ *
+ * The REGISTRY decides everything it can actually state: the permission gate,
+ * the query, the archetype, the title, and its declared size. The CONTRIBUTION
+ * supplies what a registration has no way to carry -- the component -- and is
+ * read for the optional trimmings the registration left out. The result goes
+ * through `resolveOne` like any other declaration, so the archetype fallback,
+ * the title fallback, the size fallback and the permission gate are the same
+ * code in both paths rather than a second copy that can drift.
+ */
+function mergeCollision(
+  contribution: PluginWidgetMeta,
+  registration: RegisteredWidgetMeta
+): PluginWidgetMeta {
+  return {
+    id: registration.id,
+    // Named field by field rather than spread. `{ ...contribution,
+    // ...registration }` reads as the same intent and is not: a registration
+    // whose `component` is `undefined` -- which is every non-custom one --
+    // would overwrite the contributed component with that `undefined`, which is
+    // the exact defect this function exists to close.
+    title: registration.title,
+    description: registration.description ?? contribution.description,
+    icon: registration.icon ?? contribution.icon,
+    archetype: registration.archetype,
+    defaultSize: registration.defaultSize,
+    minSize: registration.minSize,
+    maxSize: registration.maxSize,
+    // The contributed size is the FALLBACK, read only when the registration
+    // declares no `defaultSize`. `resolveOne` prefers the enum over this alias.
+    size: contribution.size,
+    requiredPermission: registration.requiredPermission,
+    query: registration.query,
+    link: registration.link ?? contribution.link,
+    component: registration.component ?? contribution.component,
+  };
+}
+
+/**
  * The visible widgets, each id appearing once: contributions in declaration
- * order, then registrations.
+ * order, then the registrations that no contribution already placed.
  *
  * BOTH channels, because they are two ways into the same grid and neither
  * subsumes the other. `contributes.admin.widgets` is declarative and travels
@@ -166,10 +225,24 @@ function resolveRegistered(
  * registry exists for. Reading only the first left an app that used the public
  * registration API invisible to the renderer built around that registry.
  *
- * Contributions FIRST, so an id declared in both keeps the card the dashboard
- * already drew for it. An app that worked around the gap by declaring a
- * registered widget twice therefore sees no change, and the registry only ever
- * ADDS what was previously missing.
+ * An id declared through both is MERGED, with the registry authoritative over
+ * every field it can state -- see `mergeCollision`. The registry is, in
+ * `publishableWidgets`' own words, "the single place that knows which widgets
+ * exist in a running app", and `overrideWidget` and `extendWidget` exist so a
+ * later plugin can correct an earlier widget. Reading the contribution instead
+ * discarded every one of those corrections silently.
+ *
+ * `requiredPermission` is what makes that more than a tidiness argument. The
+ * corrections a registry patch is FOR include tightening one, and a tightened
+ * permission that loses to the contributed copy is a widget the operator
+ * believes they restricted and did not -- a card drawn, and its query put in the
+ * batch, for a user the running configuration says may not see it. A silently
+ * ignored override is the one failure shape a permission must never have.
+ *
+ * ORDER stays with the contribution, so a card does not jump across the grid
+ * the day someone registers an id that was already contributed. Its SIZE does
+ * not: `defaultSize` is a statement the registration made, and the card is as
+ * wide as the authoritative definition says.
  */
 export function resolveDashboardWidgets(
   plugins: PluginMetadata[] | undefined,
@@ -180,8 +253,22 @@ export function resolveDashboardWidgets(
   // registration can collide with a contribution. The id is what keys a batch
   // result back to its card, so a duplicate would hand both widgets the same
   // slot -- one of them showing the other's number, with nothing visibly wrong.
-  // First declaration wins and the rest are dropped.
+  // One cell per id, and the rest are dropped.
   const seen = new Set<string>();
+
+  // The registry indexed by id. First wins: the registry is a map keyed by id
+  // and cannot hold two, but this list arrived over the wire and a malformed
+  // payload is not the place to start trusting that.
+  //
+  // BOTH loops below read the widget through this map rather than through the
+  // array they are iterating, so the first-wins rule applies once. Resolving
+  // the array member directly let a second entry for an id whose first entry
+  // was withheld by permission render in its place -- the deduplication and the
+  // permission gate disagreeing about which of the two the payload meant.
+  const canonical = new Map<string, RegisteredWidgetMeta>();
+  for (const meta of registered ?? []) {
+    if (!canonical.has(meta.id)) canonical.set(meta.id, meta);
+  }
 
   const take = (
     id: string,
@@ -189,17 +276,33 @@ export function resolveDashboardWidgets(
   ): DashboardWidget[] => {
     if (seen.has(id)) return [];
     const widget = resolve();
+    // NOT marked seen when the resolver declines, so a later declaration of the
+    // same id still gets its turn. Whether that is right depends on the two
+    // declarations agreeing about the permission, which nothing here enforces:
+    // a contributed widget carrying no permission still renders behind a
+    // registration that was withheld only if the two are not merged, which is
+    // why the merge above is what closes it rather than this line.
     if (!widget) return [];
     seen.add(id);
     return [widget];
   };
 
-  return [
-    ...declaredWidgets(plugins).flatMap(meta =>
-      take(meta.id, () => resolveOne(meta, hasPermission))
-    ),
-    ...(registered ?? []).flatMap(meta =>
-      take(meta.id, () => resolveRegistered(meta, hasPermission))
-    ),
-  ];
+  const contributed = declaredWidgets(plugins).flatMap(meta => {
+    const registration = canonical.get(meta.id);
+    return take(meta.id, () =>
+      resolveOne(
+        registration ? mergeCollision(meta, registration) : meta,
+        hasPermission
+      )
+    );
+  });
+
+  const registrations = (registered ?? []).flatMap(meta =>
+    take(meta.id, () =>
+      // Through `canonical`, not `meta`: see the map's own comment.
+      resolveRegistered(canonical.get(meta.id) ?? meta, hasPermission)
+    )
+  );
+
+  return [...contributed, ...registrations];
 }

@@ -185,6 +185,100 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("count:7")).toBeInTheDocument();
   });
 
+  it("marks a QUERIED custom card busy during a background refetch", () => {
+    // The card keeps the plugin's body through a window-focus refetch, exactly
+    // as an archetype keeps its number, so the only thing telling a screen
+    // reader the dashboard is reading again is `aria-busy`. This branch drew
+    // the card without it while every other branch reported it.
+    registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={countSlot(7)}
+        isFetching
+      />
+    );
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "true"
+    );
+    // Marked busy, not replaced: the body the plugin drew is still there.
+    expect(screen.getByText("acme body")).toBeInTheDocument();
+  });
+
+  it("tells the plugin component a refetch is in flight", () => {
+    // The slot alone cannot say it. During a refetch the slot still holds the
+    // PREVIOUS answer, which is byte-for-byte what idle looks like, so a
+    // component wanting to dim its own body had nothing to read.
+    registerComponent(
+      "@acme/admin#Panel",
+      ({ isFetching }: { isFetching?: boolean }) => (
+        <div>{isFetching ? "refreshing" : "idle"}</div>
+      )
+    );
+    const definition = {
+      ...custom,
+      query: { source: "collection:posts", op: "count" } as const,
+    };
+
+    const { rerender } = render(
+      <WidgetRenderer definition={definition} slot={countSlot(7)} isFetching />
+    );
+    expect(screen.getByText("refreshing")).toBeInTheDocument();
+
+    rerender(
+      <WidgetRenderer
+        definition={definition}
+        slot={countSlot(7)}
+        isFetching={false}
+      />
+    );
+    // Both directions, so the assertion cannot be satisfied by a component that
+    // simply always renders "refreshing".
+    expect(screen.getByText("idle")).toBeInTheDocument();
+  });
+
+  it("shows a queried custom card when its data landed", () => {
+    registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={countSlot(7)}
+        updatedAt={new Date()}
+      />
+    );
+    expect(screen.getByTestId("widget-card-freshness")).toBeInTheDocument();
+  });
+
+  it("claims no freshness on a custom card whose slot was refused", () => {
+    // A self-drawn body is never REPLACED by an error, so the card's own
+    // `settled` gate -- which withholds the footer when `error` is set -- never
+    // fires for it. Without this the card printed "Updated just now" under a
+    // body the component drew from a failure.
+    registerComponent("@acme/admin#Panel", () => <div>could not load</div>);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={{ ok: false, error: "Source unavailable." }}
+        updatedAt={new Date()}
+      />
+    );
+    expect(
+      screen.queryByTestId("widget-card-freshness")
+    ).not.toBeInTheDocument();
+    // The plugin's own body still stands: a refusal is its to draw, not ours.
+    expect(screen.getByText("could not load")).toBeInTheDocument();
+  });
+
   it("never marks a custom body busy for a batch it did not participate in", () => {
     registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
     render(<WidgetRenderer definition={custom} slot={undefined} />);

@@ -46,6 +46,19 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
 };
 
 /**
+ * Whether core can draw this archetype from a result in this release.
+ *
+ * Exported so `resolve-widgets` can ask the question rather than answer it
+ * again. It decides whether a widget that ALSO shipped a component should be
+ * drawn from that component instead, and the honest input to that decision is
+ * the table above -- not a second list that has to be remembered when an
+ * archetype lands here.
+ */
+export function coreDrawsArchetype(archetype: WidgetArchetype): boolean {
+  return ARCHETYPE_BODIES[archetype] !== undefined;
+}
+
+/**
  * What the card is about to be, as four cases the grid can count and the
  * renderer can draw.
  *
