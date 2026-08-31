@@ -15,6 +15,7 @@
  * @since 1.0.0
  */
 
+import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import {
@@ -136,6 +137,18 @@ export interface EntryFormProps {
    * - Layout is single column
    */
   embedded?: boolean;
+  /**
+   * Document-level actions the PAGE owns, rendered with the form's own actions.
+   *
+   * A release membership is a fact about this document, so its control belongs
+   * beside Save and Publish rather than in a bar of its own. It was in a bar of
+   * its own, spanning the full content measure — which put it underneath the
+   * sticky 320px side panel, where it could not be clicked and took the hover
+   * that should have gone to the panel. A page-owned node rather than a release
+   * import keeps this component unaware of releases, which is the same reason
+   * `toolbarSlot` exists for plugins.
+   */
+  documentActions?: ReactNode;
   /** Additional CSS classes for the form container */
   /**
    * i18n: translation mode — the language being translated FROM, the source
@@ -252,6 +265,7 @@ export function EntryForm({
   translation,
   embedded = false,
   className,
+  documentActions,
 }: EntryFormProps) {
   /*
    * Whether the preview pane is open, and when the document last saved.
@@ -893,10 +907,13 @@ export function EntryForm({
                                   })}
                               isCopyingLink={previewLink.isPending}
                               toolbarSlot={
-                                <EntryFormToolbarSlots
-                                  context="collection"
-                                  controllerField={controllerNames[0]}
-                                />
+                                <>
+                                  {documentActions}
+                                  <EntryFormToolbarSlots
+                                    context="collection"
+                                    controllerField={controllerNames[0]}
+                                  />
+                                </>
                               }
                               onSaveDraft={() => {
                                 void handleSubmit(undefined, "save-draft");
