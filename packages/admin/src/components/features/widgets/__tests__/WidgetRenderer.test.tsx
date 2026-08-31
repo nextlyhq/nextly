@@ -195,6 +195,37 @@ describe("WidgetRenderer — custom", () => {
   });
 });
 
+describe("WidgetRenderer — freshness", () => {
+  it("shows when the data landed on a card that has data", () => {
+    render(
+      <WidgetRenderer
+        definition={metric}
+        slot={countSlot(3)}
+        updatedAt={new Date()}
+      />
+    );
+    expect(screen.getByTestId("widget-card-freshness")).toHaveTextContent(
+      /updated just now/i
+    );
+  });
+
+  it("says nothing about freshness on a slot that failed", () => {
+    render(
+      <WidgetRenderer
+        definition={metric}
+        slot={{ ok: false, error: "Source unavailable." }}
+        updatedAt={new Date()}
+      />
+    );
+    expect(
+      screen.queryByTestId("widget-card-freshness")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      "Source unavailable."
+    );
+  });
+});
+
 describe("WidgetRenderer — a data archetype with nothing to draw from", () => {
   it("says so rather than staying busy for a slot that will never arrive", () => {
     render(

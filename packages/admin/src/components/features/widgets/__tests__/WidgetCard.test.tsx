@@ -104,6 +104,27 @@ describe("WidgetCard", () => {
     );
   });
 
+  it("does not claim fresh content on a card that is showing an error", () => {
+    // The timestamp is when the BATCH landed, which is true of the request and
+    // not of this card: "Updated just now" under "Source unavailable." tells
+    // the reader the opposite of what happened.
+    render(
+      <WidgetCard
+        title="Published posts"
+        error="Source unavailable."
+        updatedAt={new Date()}
+      >
+        <p>42</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.queryByTestId("widget-card-freshness")
+    ).not.toBeInTheDocument();
+    // Nothing else is left behind either: with no link and no freshness there
+    // is no footer to draw.
+    expect(screen.queryByTestId("widget-card-footer")).not.toBeInTheDocument();
+  });
+
   it("renders no footer at all when there is neither freshness nor a link", () => {
     render(
       <WidgetCard title="Published posts">

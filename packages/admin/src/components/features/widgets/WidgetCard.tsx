@@ -30,6 +30,16 @@
  * to be findable afterwards -- which the region landmark and its title already
  * do.
  *
+ * The card is FLAT AND BORDERED, with no internal rules. It sits on a dashboard
+ * beside the Users and Roles stat cards, and a plugin's widget that reads as a
+ * different component is a plugin that looks bolted on. Those neighbours are a
+ * single padded surface: one outer border, the figure large, its label small and
+ * muted, an icon in the top-right corner. So the header divider is off, the
+ * footer is a quiet line inside the card rather than a tinted strip under a
+ * rule, the padding is one step at every level, and the icon moves to the right
+ * where the neighbours put theirs. Two borders and a filled band across the
+ * bottom made a card twice the visual weight of the ones next to it.
+ *
  * Colour comes from the `--nx-*` token scale through its semantic Tailwind
  * classes (`bg-card`, `text-muted-foreground`, `text-destructive`), which are
  * defined for light and dark alike. No hex values.
@@ -82,10 +92,17 @@ export function WidgetCard({
   className,
 }: WidgetCardProps) {
   const titleId = useId();
-  // A broken card offers no "view all": the destination is the thing that just
-  // failed to answer, so the link is an invitation into the same failure.
-  const showLink = link !== undefined && error === null;
-  const showFooter = showLink || updatedAt !== null;
+  // What a card in an error state withholds, decided once.
+  //
+  // It offers no "view all": the destination is the thing that just failed to
+  // answer, so the link is an invitation into the same failure. And it claims
+  // no freshness: the timestamp is when the BATCH landed, which is true of the
+  // request and not of this card -- "Updated just now" printed under "Source
+  // unavailable." tells the reader the opposite of what happened.
+  //
+  // Here rather than at each caller, so an archetype added later inherits both
+  // rather than having to remember them.
+  const settled = error === null;
 
   return (
     <Card
@@ -96,20 +113,12 @@ export function WidgetCard({
       aria-labelledby={titleId}
       className={cn("flex h-full flex-col", className)}
     >
-      <CardHeader className="flex-row items-center gap-2 space-y-0">
-        {icon && (
-          <span className="shrink-0 text-muted-foreground" aria-hidden="true">
-            {icon}
-          </span>
-        )}
-        <CardTitle
-          id={titleId}
-          className="min-w-0 flex-1 truncate text-sm font-semibold"
-        >
-          {title}
-        </CardTitle>
-        {headerAction && <span className="shrink-0">{headerAction}</span>}
-      </CardHeader>
+      <WidgetCardHeader
+        titleId={titleId}
+        title={title}
+        icon={icon}
+        headerAction={headerAction}
+      />
 
       <CardContent
         data-testid="widget-card-body"
@@ -118,7 +127,7 @@ export function WidgetCard({
         // attribute is a weaker signal than one that says "no longer busy".
         aria-busy={isLoading}
         className={cn(
-          "flex flex-1 flex-col justify-center p-4",
+          "flex flex-1 flex-col justify-center px-5 pb-5 pt-2",
           isLoading && "opacity-60 transition-opacity"
         )}
       >
@@ -134,33 +143,107 @@ export function WidgetCard({
         )}
       </CardContent>
 
-      {showFooter && (
-        <CardFooter
-          data-testid="widget-card-footer"
-          className="flex items-center justify-between gap-2 border-t border-border px-4 py-2"
-        >
-          {updatedAt !== null ? (
-            <span
-              data-testid="widget-card-freshness"
-              className="text-xs text-muted-foreground"
-            >
-              Updated {formatRelativeTime(updatedAt.toISOString())}
-            </span>
-          ) : (
-            // Holds the footer's left column so a link-only footer still sits
-            // right, without a second layout branch.
-            <span />
-          )}
-          {showLink && (
-            <Link
-              href={link.href}
-              className="text-xs font-medium text-primary hover:underline focus-visible:underline"
-            >
-              {link.label}
-            </Link>
-          )}
-        </CardFooter>
-      )}
+      <WidgetCardFooter
+        freshness={settled ? updatedAt : null}
+        link={settled ? link : undefined}
+      />
     </Card>
+  );
+}
+
+/**
+ * The card's header, drawn as one row.
+ *
+ * Its own component so `WidgetCard` above stays a description of the card's
+ * STATES rather than of its markup -- which is the part an archetype author
+ * reads.
+ *
+ * The icon sits on the RIGHT, where the Users and Roles stat cards beside this
+ * one put theirs. It is optional and functional rather than decorative: an icon
+ * on every card is noise.
+ */
+function WidgetCardHeader({
+  titleId,
+  title,
+  icon,
+  headerAction,
+}: {
+  titleId: string;
+  title: string;
+  icon?: ReactNode;
+  headerAction?: ReactNode;
+}) {
+  return (
+    <CardHeader
+      // No rule under the header. The stat cards beside this one are a single
+      // padded surface, and a divider is the difference between a card and a
+      // panel.
+      noBorder
+      className="flex-row items-start gap-2 space-y-0 px-5 pb-0 pt-5"
+    >
+      <CardTitle
+        id={titleId}
+        className="min-w-0 flex-1 truncate text-xs font-semibold tracking-tight text-muted-foreground"
+      >
+        {title}
+      </CardTitle>
+      {icon && (
+        <span
+          className="shrink-0 pt-0.5 text-muted-foreground"
+          aria-hidden="true"
+        >
+          {icon}
+        </span>
+      )}
+      {headerAction && <span className="shrink-0">{headerAction}</span>}
+    </CardHeader>
+  );
+}
+
+/**
+ * The freshness line and the single footer link, or nothing at all.
+ *
+ * Both are already resolved by the time they arrive: an error state withholds
+ * each of them, and that decision belongs with the card's other state rules
+ * rather than being taken again here.
+ */
+function WidgetCardFooter({
+  freshness,
+  link,
+}: {
+  freshness: Date | null;
+  link?: { label: string; href: string };
+}) {
+  if (freshness === null && link === undefined) return null;
+
+  return (
+    <CardFooter
+      data-testid="widget-card-footer"
+      // No top rule and no tint. `CardFooter` defaults to both, which draws a
+      // filled strip across the bottom and reads as a separate element attached
+      // to the card rather than as part of it.
+      className="flex items-center justify-between gap-2 border-0 bg-transparent px-5 pb-4 pt-0"
+    >
+      {freshness !== null ? (
+        <span
+          data-testid="widget-card-freshness"
+          className="text-xs text-muted-foreground"
+        >
+          Updated {formatRelativeTime(freshness.toISOString())}
+        </span>
+      ) : (
+        // Holds the footer's left column so a link-only footer still sits
+        // right, without a second layout branch.
+        <span />
+      )}
+      {link !== undefined && (
+        <Link
+          href={link.href}
+          className="text-xs font-medium text-primary hover:underline focus-visible:underline"
+        >
+          {link.label}
+        </Link>
+      )}
+    </CardFooter>
   );
 }

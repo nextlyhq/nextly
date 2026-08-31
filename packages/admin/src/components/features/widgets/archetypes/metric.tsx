@@ -36,7 +36,10 @@ export const metricBody: ArchetypeBody = (result, definition) => {
     node: (
       <p
         data-testid="widget-metric-value"
-        className="text-3xl font-bold leading-none tabular-nums tracking-tight text-foreground"
+        // Sized to the Users and Roles stat cards on the same dashboard rather
+        // than a step above them: a plugin's number that shouts louder than the
+        // core ones reads as a different component, not as a peer.
+        className="text-2xl font-bold leading-none tabular-nums tracking-tight text-foreground"
       >
         {result.total.toLocaleString()}
       </p>
