@@ -1266,12 +1266,12 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries).
     // `overrideAccess` (D35 system elevation) bypasses the check — mirrors the
@@ -1417,12 +1417,12 @@ export class CollectionBulkService extends BaseService {
     entries: Record<string, unknown>[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
@@ -1532,12 +1532,12 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For update, we check access without document since we don't have it yet
@@ -1680,12 +1680,12 @@ export class CollectionBulkService extends BaseService {
     entries: BulkUpdateEntry[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (entries.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
@@ -1793,12 +1793,12 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (ids.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries)
     // Note: For delete, we check access without document since we don't have it yet
@@ -1833,15 +1833,21 @@ export class CollectionBulkService extends BaseService {
     // rewrite below can read the partial accounting a mid-batch abort leaves
     // behind.
     const state = newLegacyBatchState();
+    let callbackThrew = false;
     try {
       await this.adapter.transaction(async tx => {
-        await this.runDeleteBatch(
-          tx,
-          params,
-          ids,
-          { batchSize, stopOnError, skipHooks },
-          state
-        );
+        try {
+          await this.runDeleteBatch(
+            tx,
+            params,
+            ids,
+            { batchSize, stopOnError, skipHooks },
+            state
+          );
+        } catch (innerError) {
+          callbackThrew = true;
+          throw innerError;
+        }
       });
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
@@ -1864,15 +1870,13 @@ export class CollectionBulkService extends BaseService {
       // their intents go with them — an undone delete busts no tags.
       state.eventRecorded = false;
       state.intents.length = 0;
-      // The note names the failing item from the accounting the loop
-      // already recorded — its index and its public per-item message —
-      // rather than introspecting the abort, whose cause may hold
-      // operational detail the result must not widen. Items process in
-      // order, so the ABORTING failure is the highest-index record; an
-      // earlier soft failure the batch continued past must not stand in
-      // for it.
+      // When the transaction callback itself threw (stopOnError or worker throw),
+      // the aborting failure is the highest-index error recorded by the loop.
+      // If the callback completed normally and the transaction failed on COMMIT,
+      // the batch rolled back due to the commit failure rather than a historical
+      // soft failure, so report the caught transaction error instead.
       const firstRecord = state.errors[0];
-      let aborting = firstRecord;
+      let aborting = callbackThrew ? firstRecord : undefined;
       if (aborting !== undefined) {
         for (const e of state.errors) {
           if (e.index > aborting.index) aborting = e;
@@ -1947,12 +1951,12 @@ export class CollectionBulkService extends BaseService {
     ids: string[],
     options?: BulkOperationOptions
   ): Promise<BatchOperationResult> {
-    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
-
-    // Early return for empty input
+    // Early return for empty input before batch options validation
     if (ids.length === 0) {
       return { successful: 0, failed: 0, errors: [], ids: [] };
     }
+
+    const { batchSize, stopOnError, skipHooks } = batchOptions(options);
 
     // 1. Check collection-level access FIRST (once for all entries). This runs
     // inside the caller's transaction, so the RBAC/metadata reads are bound to
@@ -2037,18 +2041,31 @@ export class CollectionBulkService extends BaseService {
       state.failed = items.length;
       const message = "The write could not be completed and was rolled back.";
       state.errors = items.map((_, index) => ({ index, error: message }));
-    } else if (stopOnError && state.successful > 0) {
-      this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
+    } else if (stopOnError) {
+      if (state.successful > 0) {
+        this.logger.warn(`${operationLabel} rolled back due to stopOnError`, {
+          collectionName,
+          successfulBeforeRollback: state.successful,
+          error: errorText,
+        });
+        const rolledBackCount = state.successful;
+        state.successful = 0;
+        state.ids = [];
+        if (state.errors.length > 0) {
+          state.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
+        }
+      }
+    } else {
+      this.logger.warn(`${operationLabel} rolled back`, {
         collectionName,
         successfulBeforeRollback: state.successful,
         error: errorText,
       });
-      const rolledBackCount = state.successful;
       state.successful = 0;
       state.ids = [];
-      if (state.errors.length > 0) {
-        state.errors[0].error += ` (${rolledBackCount} successful entries were rolled back)`;
-      }
+      state.failed = items.length;
+      const message = batchErrorMessage(error);
+      state.errors = items.map((_, index) => ({ index, error: message }));
     }
   }
 

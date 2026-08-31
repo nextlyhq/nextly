@@ -744,6 +744,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         tx: TransactionContext,
         options?: BulkOperationOptions
       ) => Promise<BatchOperationResult>;
+      empty: (options?: BulkOperationOptions) => Promise<BatchOperationResult>;
+      emptyInTx: (
+        tx: TransactionContext,
+        options?: BulkOperationOptions
+      ) => Promise<BatchOperationResult>;
       // Delete reports the requested id; create/update report the written
       // row's id, which the worker mock controls.
       expectedIds: string[];
@@ -765,6 +770,15 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             tx,
             { collectionName: "posts" },
             [{ title: "A" }, { title: "B" }],
+            options
+          ),
+        empty: options =>
+          service.createEntries({ collectionName: "posts" }, [], options),
+        emptyInTx: (tx, options) =>
+          service.createEntriesInTransaction(
+            tx,
+            { collectionName: "posts" },
+            [],
             options
           ),
         expectedIds: ["id-0", "id-1"],
@@ -792,6 +806,15 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             ],
             options
           ),
+        empty: options =>
+          service.updateEntries({ collectionName: "posts" }, [], options),
+        emptyInTx: (tx, options) =>
+          service.updateEntriesInTransaction(
+            tx,
+            { collectionName: "posts" },
+            [],
+            options
+          ),
         expectedIds: ["id-0", "id-1"],
       },
       {
@@ -809,6 +832,15 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             tx,
             { collectionName: "posts" },
             ["e1", "e2"],
+            options
+          ),
+        empty: options =>
+          service.deleteEntries({ collectionName: "posts" }, [], options),
+        emptyInTx: (tx, options) =>
+          service.deleteEntriesInTransaction(
+            tx,
+            { collectionName: "posts" },
+            [],
             options
           ),
         expectedIds: ["e1", "e2"],
@@ -1033,7 +1065,24 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           expect(messages).not.toContain("ECONNREFUSED");
         });
 
-        it("survives a worker error whose cause graph cycles", async () => {
+        it("returns an empty result when input is empty, even with batchSize: 0", async () => {
+          const result = await op.empty({ batchSize: 0 });
+          expect(result).toEqual({
+            successful: 0,
+            failed: 0,
+            errors: [],
+            ids: [],
+          });
+          const txResult = await op.emptyInTx(makeTx(), { batchSize: 0 });
+          expect(txResult).toEqual({
+            successful: 0,
+            failed: 0,
+            errors: [],
+            ids: [],
+          });
+        });
+
+        it("survives a worker error whose cause graph cycles without hanging", async () => {
           const cyclic = new Error("cyclic");
           (cyclic as { cause?: Error }).cause = cyclic;
           scriptWorker(op, [okFor(op, 0), cyclic]);
@@ -1064,6 +1113,34 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
             code: "INVALID_INPUT",
           });
         });
+
+        if (op.name === "deleteEntries") {
+          it("delete rollback on commit failure reports commit error instead of earlier soft failure", async () => {
+            scriptWorker(op, [
+              okFor(op, 0),
+              new Error("non-aborting soft failure"),
+            ]);
+            const origTx = mockAdapter.transaction;
+            mockAdapter.transaction = vi.fn(async (cb: any) => {
+              await cb(makeTx());
+              throw new Error("connection lost during commit");
+            });
+
+            try {
+              const result = await op.self({ stopOnError: false });
+              expect(result.successful).toBe(0);
+              expect(result.failed).toBe(2);
+              expect(result.errors[0].error).toContain(
+                "An unexpected error occurred."
+              );
+              expect(result.errors[0].error).not.toContain(
+                "non-aborting soft failure"
+              );
+            } finally {
+              mockAdapter.transaction = origTx;
+            }
+          });
+        }
 
         if (op.name !== "deleteEntries") {
           it("an integrity-marked failure aborts the batch even without stopOnError", async () => {
