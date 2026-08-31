@@ -362,6 +362,72 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  describe("a member of results that is not a slot", () => {
+    async function slotFor(member: unknown) {
+      vi.mocked(protectedApi.post).mockResolvedValue({ results: [member] });
+      const { result } = renderHook(
+        () =>
+          useWidgetQueries([
+            { widgetId: "core/a", query: countQuery("collection:posts") },
+          ]),
+        { wrapper }
+      );
+      await waitFor(() => expect(result.current.slots["core/a"]).toBeDefined());
+      return result.current.slots["core/a"];
+    }
+
+    it("isolates an ok slot carrying no result", async () => {
+      // `{ ok: true }` is where this actually bites: the renderer hands
+      // `slot.result` to an archetype body, which reads `result.op` and throws
+      // a TypeError into the dashboard's error boundary -- one malformed entry
+      // replacing the whole page.
+      expect(await slotFor({ ok: true })).toEqual({
+        ok: false,
+        error: expect.stringMatching(/unreadable/i),
+      });
+    });
+
+    it("isolates a primitive where a slot belongs", async () => {
+      // Quieter and no better: `ok` is absent, so the card took the failure
+      // branch with `undefined` for its message and drew a blank body.
+      expect(await slotFor(42)).toEqual({
+        ok: false,
+        error: expect.stringMatching(/unreadable/i),
+      });
+    });
+
+    it("isolates an object with no discriminator", async () => {
+      expect(await slotFor({})).toEqual({
+        ok: false,
+        error: expect.stringMatching(/unreadable/i),
+      });
+    });
+
+    it("isolates a failed slot whose message is missing", async () => {
+      expect(await slotFor({ ok: false })).toEqual({
+        ok: false,
+        error: expect.stringMatching(/unreadable/i),
+      });
+    });
+
+    it("still reads a null member as the server answering short", async () => {
+      // The control: `null` was always handled, and must stay handled with its
+      // own sentence rather than being folded into the malformed case.
+      expect(await slotFor(null)).toEqual({
+        ok: false,
+        error: expect.stringMatching(/no result/i),
+      });
+    });
+
+    it("still passes a well-formed slot through untouched", async () => {
+      // The positive control. A validator that refused everything would satisfy
+      // every assertion above.
+      expect(
+        await slotFor({ ok: true, result: { op: "count", total: 8 } })
+      ).toEqual({ ok: true, result: { op: "count", total: 8 } });
+    });
+  });
+
   it("refuses a body the server did not shape as a results array", async () => {
     vi.mocked(protectedApi.post).mockResolvedValue({ nope: true });
 

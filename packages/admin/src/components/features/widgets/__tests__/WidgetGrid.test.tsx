@@ -574,6 +574,42 @@ describe("WidgetGrid — refetching", () => {
   });
 });
 
+describe("WidgetGrid — a malformed response member", () => {
+  it("colours one card and leaves the page and its neighbour standing", async () => {
+    mockBranding = brandingWith([
+      {
+        id: "broken",
+        archetype: "metric",
+        title: "Broken",
+        query: { source: "collection:posts", op: "count" },
+      },
+      {
+        id: "fine",
+        archetype: "metric",
+        title: "Fine",
+        query: { source: "collection:pages", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      // Shaped as a slot, carrying no result: the renderer used to dereference
+      // it and throw into the dashboard's error boundary.
+      results: [{ ok: true }, { ok: true, result: { op: "count", total: 5 } }],
+    });
+
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-fine")).toHaveTextContent("5")
+    );
+    expect(screen.getByTestId("widget-cell-broken")).toHaveTextContent(
+      /unreadable/i
+    );
+    // The grid itself is still on screen, which is the whole point.
+    expect(
+      screen.getByRole("region", { name: /dashboard widgets/i })
+    ).toBeInTheDocument();
+  });
+});
+
 describe("WidgetGrid — accessibility", () => {
   it("keeps ONE live region even when several cards fail at once", async () => {
     // The earlier version of this counted `[aria-live]` only, which the card's

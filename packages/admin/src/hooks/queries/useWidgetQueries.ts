@@ -32,6 +32,7 @@ import { useMemo } from "react";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
   WidgetQueryBatchResponse,
+  WidgetResult,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
@@ -71,6 +72,10 @@ export interface UseWidgetQueriesResult {
 /** What a widget is told when the batch came back shorter than it went out. */
 const MISSING_SLOT_ERROR = "The server returned no result for this widget.";
 
+/** What a widget is told when its entry is not shaped like a slot at all. */
+const MALFORMED_SLOT_ERROR =
+  "The server returned an unreadable result for this widget.";
+
 /**
  * What every widget in a batch is told when the REQUEST itself failed.
  *
@@ -97,6 +102,63 @@ const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
  * with nothing anywhere saying why. Failing the query instead puts the failure
  * where `error` is read.
  */
+/**
+ * One member of `results` as a slot, or a failed slot saying it was not one.
+ *
+ * `Array.isArray` says nothing about the MEMBERS, and every one of them is
+ * dereferenced downstream: `WidgetRenderer` reads `slot.ok` and then hands
+ * `slot.result` to an archetype body, which reads `result.op`. So
+ * `{ "results": [{ "ok": true }] }` threw a `TypeError` out of the renderer and
+ * into the dashboard's error boundary -- one malformed entry replacing the
+ * entire page, which is the exact blast radius the per-slot shape exists to
+ * prevent. `{ "results": [42] }` was quieter and no better: `ok` was absent, so
+ * the card took the failure branch with `undefined` where its message goes and
+ * drew a blank body with nothing wrong on it.
+ *
+ * The DISCRIMINATOR is checked before anything branches on it, because a member
+ * carrying neither `true` nor `false` there is not a slot in either direction.
+ * `result` is checked as an OBJECT and no further: an archetype refuses a
+ * payload of the wrong `op` itself and names the widget when it does, and that
+ * refusal is better than this one. What it cannot survive is not being handed
+ * an object at all.
+ */
+function asSlot(value: unknown): WidgetSlot {
+  if (value === undefined || value === null) {
+    return { ok: false, error: MISSING_SLOT_ERROR };
+  }
+  if (!isObject(value)) return malformed();
+
+  const slot = value as { ok?: unknown; error?: unknown; result?: unknown };
+
+  if (slot.ok === false) return refusal(slot.error);
+  if (slot.ok !== true) return malformed();
+  if (!isObject(slot.result)) return malformed();
+
+  return { ok: true, result: slot.result as WidgetResult };
+}
+
+/** Whether a value can be read as the object a slot or a result must be. */
+function isObject(value: unknown): boolean {
+  return typeof value === "object" && value !== null;
+}
+
+/** The refusal a member gets when it is not a slot at all. */
+function malformed(): WidgetSlot {
+  return { ok: false, error: MALFORMED_SLOT_ERROR };
+}
+
+/**
+ * A declared failure, carrying the server's own message.
+ *
+ * A slot that says `ok: false` and supplies no readable message is still a
+ * failure -- refusing to show it would be a second, silent one -- so it falls
+ * back rather than being discarded.
+ */
+function refusal(error: unknown): WidgetSlot {
+  const usable = typeof error === "string" && error.trim() !== "";
+  return { ok: false, error: usable ? error : MALFORMED_SLOT_ERROR };
+}
+
 function readResults(body: unknown): unknown[] {
   const results = (body as WidgetQueryBatchResponse | null)?.results;
   if (!Array.isArray(results)) {
@@ -174,12 +236,11 @@ export function useWidgetQueries(
     if (answer.data) {
       partition.forEach((entry, position) => {
         // A short response is the server disagreeing with us about how many
-        // questions were asked. Saying so per widget is what stops the trailing
-        // cards spinning silently forever.
-        slots[entry.widgetId] = (answer.data[position] as WidgetSlot) ?? {
-          ok: false,
-          error: MISSING_SLOT_ERROR,
-        };
+        // questions were asked, and a member that is not a slot is it
+        // disagreeing about the shape. Saying so per widget is what stops the
+        // trailing cards spinning silently forever -- and what keeps one bad
+        // entry from throwing out of the renderer and taking the page with it.
+        slots[entry.widgetId] = asSlot(answer.data[position]);
       });
       return;
     }
