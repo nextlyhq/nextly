@@ -84,14 +84,24 @@ export function WidgetRenderer({
     link: definition.link,
   };
 
-  // The escape hatch. A plugin component owns its own loading and empty states
-  // and never took part in the batch, so the card asserts nothing about either.
+  // The escape hatch. A plugin component draws its own body, so the card
+  // asserts nothing about its loading or empty states -- the component knows
+  // what it is showing and the card does not.
+  //
+  // It DOES receive its slot. `custom` is deliberately allowed to carry a
+  // query: core's own validator puts it in neither the data set nor the
+  // query-less set, because a widget that draws itself may still want the host
+  // to run its request. The grid honours that by putting the query in the
+  // batch, so withholding the answer here would make every such widget pay for
+  // a database read on every mount and every window focus and then fetch the
+  // same data again for itself. `undefined` while the batch is in flight, and
+  // the component decides what that looks like.
   if (definition.archetype === "custom") {
     return (
       <WidgetCard {...shared}>
         <PluginSlot
           path={definition.component}
-          props={{ widgetId: definition.id }}
+          props={{ widgetId: definition.id, slot }}
         />
       </WidgetCard>
     );

@@ -76,8 +76,13 @@ export function WidgetGrid() {
     [branding, hasPermission]
   );
 
-  // Only the archetypes that ASK for data. A `custom` widget fetches its own,
-  // and putting it in the batch would send a query nothing reads.
+  // Every widget that DECLARED a query, archetype notwithstanding. `custom` is
+  // included on purpose: core's widget validator puts it in neither the data
+  // set nor the query-less set, because a widget that draws its own body may
+  // still want the host to run its request -- and `WidgetRenderer` hands the
+  // resulting slot to the plugin component. A widget that declares no query
+  // contributes nothing here, which is what keeps a dashboard of plugin
+  // components from issuing a request at all.
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       widgets.flatMap(widget =>

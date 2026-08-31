@@ -131,6 +131,33 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByText("Acme panel")).toBeInTheDocument();
   });
 
+  it("hands the plugin component the slot the batch fetched for it", () => {
+    // A `custom` widget may declare a query -- core's validator allows it
+    // deliberately -- and the grid puts that query in the batch. Withholding
+    // the answer here made the dashboard pay for the read and then throw it
+    // away, on every mount and every window focus.
+    registerComponent(
+      "@acme/admin#Panel",
+      ({ slot }: { slot?: WidgetSlot }) => (
+        <div>
+          {slot?.ok === true && slot.result.op === "count"
+            ? `count:${slot.result.total}`
+            : "no slot"}
+        </div>
+      )
+    );
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={countSlot(7)}
+      />
+    );
+    expect(screen.getByText("count:7")).toBeInTheDocument();
+  });
+
   it("never marks a custom body busy for a batch it did not participate in", () => {
     registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
     render(<WidgetRenderer definition={custom} slot={undefined} />);
