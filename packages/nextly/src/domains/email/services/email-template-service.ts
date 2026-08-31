@@ -39,7 +39,12 @@ import {
 } from "../template-activity";
 import type { EmailAttachmentInput } from "../types";
 
-import { interpolateTemplate } from "./template-engine";
+import {
+  DEFAULT_APP_NAME,
+  renderTemplate,
+  type RenderedTemplate,
+  type TemplateFields,
+} from "./render-template";
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
@@ -98,8 +103,19 @@ type EmailTemplatesTable =
 export class EmailTemplateService extends BaseService {
   private emailTemplates: EmailTemplatesTable;
 
-  constructor(adapter: DrizzleAdapter, logger: Logger) {
+  /**
+   * Product name a layout's `{{appName}}` falls back to.
+   *
+   * Held here because a preview must fill it exactly as a send does; without
+   * it a configured installation previews its own layouts under the wrong
+   * name, which is the defect this service used to have in a worse form.
+   */
+  private readonly appName: string;
+
+  constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
     super(adapter, logger);
+
+    this.appName = appName ?? DEFAULT_APP_NAME;
 
     switch (this.dialect) {
       case "postgresql":
@@ -420,12 +436,13 @@ export class EmailTemplateService extends BaseService {
   // ============================================================
 
   /**
-   * Preview a template with sample data.
+   * Preview a saved template with sample data.
    *
-   * Replaces `{{variable}}` placeholders with values from `sampleData`.
-   * Supports dot-notation nested variables (`{{user.name}}`), HTML-escapes
-   * values by default to prevent XSS, and wraps with shared layout
-   * (header/footer) when `useLayout` is enabled.
+   * Returns the narrower `{ subject, html }` its published callers expect,
+   * DERIVED from the full render rather than composed separately. Composed
+   * separately it silently dropped the preheader, left a layout's own
+   * `{{year}}`/`{{appName}}` blank, and escaped a subject that is delivered as
+   * plain text — so authors were shown something no recipient would receive.
    *
    * @throws NextlyError NOT_FOUND if template doesn't exist
    */
@@ -434,47 +451,27 @@ export class EmailTemplateService extends BaseService {
     sampleData: Record<string, unknown>
   ): Promise<{ subject: string; html: string }> {
     const template = await this.getTemplate(id);
-
-    const subject = interpolateTemplate(template.subject, sampleData);
-    const body = interpolateTemplate(template.htmlContent, sampleData);
-
-    // Layout rows preview as-is; message bodies wrap in their layout.
-    if (template.kind === "layout" || !template.useLayout) {
-      return { subject, html: body };
-    }
-
-    const layout = await this.getLayoutFor(template);
-    if (!layout) return { subject, html: body };
-
-    return { subject, html: this.renderWithLayout(layout, body, sampleData) };
+    const { subject, html } = await this.previewDraft(template, sampleData);
+    return { subject, html };
   }
 
   /**
-   * Inject an already-rendered body into a layout wrapper at its
-   * `{{content}}` placeholder. The layout's own `{{variable}}`
-   * placeholders (e.g. `{{year}}`, `{{appName}}`) are interpolated;
-   * the body is spliced in verbatim (never re-escaped).
+   * Render fields that may never have been saved.
+   *
+   * The authoring surface previews what is being typed, which the id-addressed
+   * preview structurally cannot show: it reads the stored row, and during
+   * creation there is no row at all. Resolving WHICH layout wraps the draft
+   * still needs the database, so that half stays here while the composition is
+   * the shared one — the saved and unsaved paths cannot drift apart.
    */
-  renderWithLayout(
-    layout: EmailTemplateRecord,
-    body: string,
-    variables: Record<string, unknown>
-  ): string {
-    // A well-formed layout has exactly one `{{content}}` marker (enforced on
-    // save). Be defensive for legacy/malformed rows: use the FIRST marker as the
-    // slot and preserve the rest of the wrapper, and if there is no marker at
-    // all, append the body after the wrapper so nothing is silently dropped.
-    const markerIndex = layout.htmlContent.indexOf(LAYOUT_CONTENT_PLACEHOLDER);
-    if (markerIndex === -1) {
-      return interpolateTemplate(layout.htmlContent, variables) + body;
-    }
-    const before = layout.htmlContent.slice(0, markerIndex);
-    const after = layout.htmlContent.slice(
-      markerIndex + LAYOUT_CONTENT_PLACEHOLDER.length
-    );
-    const head = interpolateTemplate(before, variables);
-    const tail = interpolateTemplate(after, variables);
-    return head + body + tail;
+  async previewDraft(
+    draft: TemplateFields & Pick<EmailTemplateRecord, "layoutId">,
+    sampleData: Record<string, unknown>
+  ): Promise<RenderedTemplate> {
+    const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
+    return renderTemplate(draft, layout, sampleData, {
+      appName: this.appName,
+    });
   }
 
   // ============================================================
@@ -627,7 +624,7 @@ export class EmailTemplateService extends BaseService {
    * Returns null when no layout exists at all.
    */
   async getLayoutFor(
-    template: EmailTemplateRecord
+    template: Pick<EmailTemplateRecord, "layoutId">
   ): Promise<EmailTemplateRecord | null> {
     if (template.layoutId) {
       try {
