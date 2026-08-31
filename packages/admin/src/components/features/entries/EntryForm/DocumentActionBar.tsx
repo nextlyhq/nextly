@@ -42,6 +42,17 @@ import { ToolbarLabel } from "./toolbar-density";
 export interface ActionBinding {
   onSelect: () => void;
   /**
+   * Submit this form natively instead of calling back.
+   *
+   * A collection with NO status column saves by submitting the form and letting
+   * it decide, with no intent attached. Routing that through a callback is not
+   * a detail: every save handler the hosts expose carries an intent, and the
+   * one for drafts writes `status: "draft"` — a column such a collection does
+   * not have, so the write fails. The control has always been a submit button
+   * for exactly this reason, and this keeps it one.
+   */
+  submitForm?: string;
+  /**
    * A TRANSIENT reason — mid-submit, invalid, nothing to save.
    *
    * Separate from the model's `disabledReason`, which is about permission and
@@ -60,6 +71,18 @@ export interface DocumentActionBarProps {
   /** Whether a mutation is in flight, which shows on the leading action. */
   pending?: boolean;
   className?: string;
+}
+
+/**
+ * How a refusal is spoken on a menu item.
+ *
+ * Nothing when the action is usable, so a usable row carries no stray
+ * attributes and a test asserting their absence means something.
+ */
+function reasonAttributes(reason: string | undefined): Record<string, string> {
+  return reason === undefined
+    ? {}
+    : { title: reason, "aria-description": reason };
 }
 
 /** Both reasons an action may be unusable, or undefined when it is usable. */
@@ -128,8 +151,10 @@ export function DocumentActionBar({
 
       {primary === undefined ? null : (
         <Button
-          type="button"
           size="sm"
+          {...(primary.binding.submitForm === undefined
+            ? { type: "button" as const, onClick: primary.binding.onSelect }
+            : { type: "submit" as const, form: primary.binding.submitForm })}
           disabled={reasonFor(primary.action, primary.binding) !== undefined}
           /*
             The reason is the title when there is one, so a control an author
@@ -140,7 +165,6 @@ export function DocumentActionBar({
           title={
             reasonFor(primary.action, primary.binding) ?? primary.action.label
           }
-          onClick={primary.binding.onSelect}
           data-action={primary.action.id}
           data-primary="true"
         >
@@ -169,6 +193,15 @@ export function DocumentActionBar({
                 disabled={reasonFor(action, binding) !== undefined}
                 onClick={binding.onSelect}
                 data-action={action.id}
+                /*
+                  The reason travels with the item, not just the buttons. A
+                  permission an author lacks makes this the ONLY place the
+                  refusal is visible, and a menu row that is grey and silent
+                  reads as broken rather than as forbidden. `title` reaches a
+                  pointer and `aria-description` reaches a screen reader; the
+                  label alone reaches neither.
+                */
+                {...reasonAttributes(reasonFor(action, binding))}
               >
                 {action.label}
               </DropdownMenuItem>
@@ -188,6 +221,7 @@ export function DocumentActionBar({
                 onClick={binding.onSelect}
                 data-action={action.id}
                 className="text-destructive focus:text-destructive"
+                {...reasonAttributes(reasonFor(action, binding))}
               >
                 {action.label}
               </DropdownMenuItem>

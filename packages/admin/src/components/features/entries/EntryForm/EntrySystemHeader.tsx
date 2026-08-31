@@ -73,6 +73,14 @@ export interface EntrySystemHeaderProps {
   autosaveLastSavedAt?: Date | null;
   /** Form id for the single submit button when drafts are off. */
   /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
+  /**
+   * The form this header's save submits.
+   *
+   * Load-bearing for a collection with NO status column: that save has always
+   * been a native submit with no intent attached, because every intent-carrying
+   * handler writes a `status` such a collection does not have.
+   */
+  formId?: string;
   entry?: EntryData | null;
   /** Collection slug for the Show JSON dialog. */
   collectionSlug: string;
@@ -227,6 +235,7 @@ export function EntrySystemHeader({
   autosaveEnabled = false,
   autosaveStatus = "idle",
   autosaveLastSavedAt = null,
+  formId = "entry-form",
   entry,
   collectionSlug,
   locale,
@@ -445,10 +454,28 @@ export function EntrySystemHeader({
       ? "Nothing has changed yet."
       : undefined);
 
+  /*
+   * A collection with NO status column saves by SUBMITTING, with no intent.
+   *
+   * Every save handler a host exposes carries one, and the draft handler writes
+   * `status: "draft"` — a column such a collection does not have, so routing
+   * this through a callback turns both Create and Save into a failing write.
+   * The control has always been a submit button here for that reason.
+   */
+  const saveBinding: ActionBinding | undefined = hasStatus
+    ? runSave === undefined
+      ? undefined
+      : { onSelect: runSave, disabledReason: saveReason }
+    : {
+        // Never called: a submit-typed control does not use it. Present because
+        // a binding is what says the action exists at all.
+        onSelect: () => {},
+        submitForm: formId,
+        disabledReason: saveReason,
+      };
+
   const actionBindings: Record<string, ActionBinding | undefined> = {
-    ...(runSave === undefined
-      ? {}
-      : { save: { onSelect: runSave, disabledReason: saveReason } }),
+    ...(saveBinding === undefined ? {} : { save: saveBinding }),
     ...(onPublish === undefined
       ? {}
       : {

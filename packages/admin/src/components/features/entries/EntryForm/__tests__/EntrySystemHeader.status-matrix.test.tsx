@@ -170,6 +170,31 @@ describe("EntrySystemHeader — button matrix", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("!hasStatus → the save SUBMITS, carrying no intent", () => {
+    /*
+     * The regression this pins. A collection with no status column has no
+     * `status` to write, and every save handler a host exposes carries an
+     * intent — the draft one writes `status: "draft"`. Routing this control
+     * through a callback turned both Create and Save into a failing write, so
+     * it stays a native submit exactly as it always was.
+     */
+    render(<Harness mode="create" hasStatus={false} />);
+    const create = screen.getByRole("button", { name: /^create$/i });
+    expect(create.getAttribute("type")).toBe("submit");
+    expect(create.getAttribute("form")).toBe("entry-form");
+  });
+
+  it("a collection WITH a lifecycle does not submit — its saves carry intent", () => {
+    // The control, and it must come out different: those handlers exist
+    // precisely to attach an intent, so a submit there would bypass them.
+    render(
+      <Harness mode="edit" hasStatus entry={{ id: "x", status: "draft" }} />
+    );
+    expect(
+      screen.getByRole("button", { name: /^save draft$/i }).getAttribute("type")
+    ).toBe("button");
+  });
+
   it("!hasStatus → single Save / Create button", () => {
     render(<Harness mode="create" hasStatus={false} />);
     // In create mode the single submit button reads "Create".

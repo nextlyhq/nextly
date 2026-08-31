@@ -215,3 +215,111 @@ describe("running an action", () => {
     expect(publish).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a save that must submit rather than call back", () => {
+  it("renders a submit button bound to the form", () => {
+    /*
+     * A collection with NO status column saves by submitting, with no intent
+     * attached. Every save handler a host exposes carries one, and the draft
+     * handler writes `status: "draft"` — a column such a collection does not
+     * have — so routing it through a callback turns Create and Save into a
+     * failing write. The control has always been a submit for that reason.
+     */
+    render(
+      <DocumentActionBar
+        actions={[{ id: "save", label: "Create", placement: "primary" }]}
+        bindings={{
+          save: { onSelect: vi.fn(), submitForm: "entry-form" },
+        }}
+      />
+    );
+
+    const create = screen.getByRole("button", { name: /^create$/i });
+    expect(create.getAttribute("type")).toBe("submit");
+    expect(create.getAttribute("form")).toBe("entry-form");
+  });
+
+  it("leaves an ordinary action a plain button that calls back", () => {
+    // The control: a bar that submitted everything would satisfy the case
+    // above and would submit the form on Publish, which has its own handler.
+    const onSelect = vi.fn();
+    render(
+      <DocumentActionBar
+        actions={[{ id: "publish", label: "Publish", placement: "primary" }]}
+        bindings={{ publish: { onSelect } }}
+      />
+    );
+
+    const publish = screen.getByRole("button", { name: /^publish$/i });
+    expect(publish.getAttribute("type")).toBe("button");
+    expect(publish.getAttribute("form")).toBeNull();
+    fireEvent.click(publish);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a menu action an author may not use", () => {
+  it("says why, where a pointer and a screen reader can both reach it", async () => {
+    /*
+     * The menu is the ONLY place a permission refusal is visible now that
+     * Unpublish and Delete live there. A row that is grey and silent reads as
+     * broken rather than as forbidden — which is the same complaint the whole
+     * reason-bearing model exists to answer.
+     */
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "unpublish",
+            label: "Unpublish",
+            placement: "menu",
+            group: "danger",
+            destructive: true,
+            disabledReason: "You do not have permission to unpublish.",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          unpublish: { onSelect: vi.fn() },
+        }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /unpublish/i });
+    expect(item.getAttribute("title")).toMatch(/permission/i);
+    expect(item.getAttribute("aria-description")).toMatch(/permission/i);
+  });
+
+  it("leaves a usable menu action carrying no reason at all", async () => {
+    // The control. Attributes attached unconditionally would satisfy the case
+    // above while telling every author their available actions are refused.
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "duplicate",
+            label: "Duplicate",
+            placement: "menu",
+            group: "document",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          duplicate: { onSelect: vi.fn() },
+        }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /duplicate/i });
+    expect(item.getAttribute("title")).toBeNull();
+    expect(item.getAttribute("aria-description")).toBeNull();
+  });
+});
