@@ -91,7 +91,8 @@ export function WidgetGrid() {
     [widgets]
   );
 
-  const { slots, isLoading, error, updatedAt } = useWidgetQueries(requests);
+  const { slots, isLoading, isFetching, error, updatedAt } =
+    useWidgetQueries(requests);
 
   const failed = useMemo(
     () => Object.values(slots).filter(slot => !slot.ok).length,
@@ -139,6 +140,10 @@ export function WidgetGrid() {
             definition={widget}
             slot={slots[widget.id]}
             updatedAt={widget.query ? updatedAt : null}
+            // Only a widget that asked for something can be waiting on an
+            // answer. A card drawn entirely by a plugin component took no part
+            // in the batch, so a refetch says nothing about it.
+            isFetching={widget.query ? isFetching : false}
           />
         </div>
       ))}

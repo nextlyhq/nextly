@@ -88,6 +88,29 @@ describe("WidgetRenderer — metric", () => {
     expect(screen.queryByTestId("widget-metric-value")).not.toBeInTheDocument();
   });
 
+  it("says it is busy during a refetch WITHOUT discarding the number on screen", () => {
+    // The card marks the body rather than swapping in a spinner, so the reader
+    // keeps the value while a screen reader is told the dashboard is reading
+    // again. Reporting only the first load left `aria-busy` false for every
+    // window-focus refresh this grid performs.
+    render(
+      <WidgetRenderer definition={metric} slot={countSlot(21)} isFetching />
+    );
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "true"
+    );
+    expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("21");
+  });
+
+  it("is not busy once a refetch has settled", () => {
+    render(<WidgetRenderer definition={metric} slot={countSlot(21)} />);
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "false"
+    );
+  });
+
   it("renders the definition's single footer link", () => {
     render(
       <WidgetRenderer

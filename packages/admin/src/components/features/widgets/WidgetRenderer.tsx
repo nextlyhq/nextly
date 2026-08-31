@@ -71,12 +71,23 @@ export interface WidgetRendererProps {
   slot: WidgetSlot | undefined;
   /** When the batch this slot came from landed, for the freshness line. */
   updatedAt?: Date | null;
+  /**
+   * Whether a request for this widget is in flight RIGHT NOW, including a
+   * background refetch that is keeping the previous answer on screen.
+   *
+   * Separate from the slot's absence, which is only ever the first load. This
+   * grid refetches on every window focus and the cards deliberately keep their
+   * numbers through it, so without this a reader using a screen reader had no
+   * way to know the dashboard was reading again.
+   */
+  isFetching?: boolean;
 }
 
 export function WidgetRenderer({
   definition,
   slot,
   updatedAt = null,
+  isFetching = false,
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
@@ -143,9 +154,18 @@ export function WidgetRenderer({
     );
   }
 
+  // From here down the card is showing an ANSWER, so `isLoading` reports a
+  // refetch rather than a first load -- it marks the body busy and leaves what
+  // is already there alone, which is the whole reason the card marks rather
+  // than replaces.
   if (!slot.ok) {
     return (
-      <WidgetCard {...shared} error={slot.error} updatedAt={updatedAt}>
+      <WidgetCard
+        {...shared}
+        error={slot.error}
+        updatedAt={updatedAt}
+        isLoading={isFetching}
+      >
         {null}
       </WidgetCard>
     );
@@ -154,14 +174,19 @@ export function WidgetRenderer({
   const outcome = body(slot.result, definition);
   if (!outcome.ok) {
     return (
-      <WidgetCard {...shared} error={outcome.message} updatedAt={updatedAt}>
+      <WidgetCard
+        {...shared}
+        error={outcome.message}
+        updatedAt={updatedAt}
+        isLoading={isFetching}
+      >
         {null}
       </WidgetCard>
     );
   }
 
   return (
-    <WidgetCard {...shared} updatedAt={updatedAt}>
+    <WidgetCard {...shared} updatedAt={updatedAt} isLoading={isFetching}>
       {outcome.node}
     </WidgetCard>
   );

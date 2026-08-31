@@ -44,7 +44,7 @@ function renderGrid() {
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<WidgetGrid />, { wrapper: Wrapper });
+  return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
 }
 
 function brandingWith(widgets: unknown[]): AdminBranding {
@@ -530,6 +530,47 @@ describe("WidgetGrid — a request that fails outright", () => {
     );
     expect(screen.getByText("Posts")).toBeInTheDocument();
     expect(screen.getByText("Pages")).toBeInTheDocument();
+  });
+});
+
+describe("WidgetGrid — refetching", () => {
+  it("marks a data card busy while it refetches, keeping the number visible", async () => {
+    mockBranding = brandingWith([
+      {
+        id: "posts",
+        archetype: "metric",
+        title: "Posts",
+        query: { source: "collection:posts", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValueOnce({
+      results: [{ ok: true, result: { op: "count", total: 12 } }],
+    });
+
+    const { client } = renderGrid();
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-posts")).toHaveTextContent("12")
+    );
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "false"
+    );
+
+    // A refetch that never settles: exactly the state a window-focus refresh is
+    // in while the request is out.
+    vi.mocked(protectedApi.post).mockImplementation(
+      () => new Promise(() => {})
+    );
+    void client.refetchQueries();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+        "aria-busy",
+        "true"
+      )
+    );
+    // And the reader still has the number they were looking at.
+    expect(screen.getByTestId("widget-cell-posts")).toHaveTextContent("12");
   });
 });
 
