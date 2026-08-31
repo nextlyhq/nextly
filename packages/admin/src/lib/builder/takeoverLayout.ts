@@ -72,6 +72,50 @@ function controllerName(f: LayoutField): string | undefined {
 }
 
 /**
+ * Whether a field's own condition currently lets it render.
+ *
+ * `FieldRenderer` returns `null` for a field whose condition is false, so a
+ * caller counting fields without asking this counts rows that will not appear —
+ * which is how a panel comes to be offered with a heading over a blank body.
+ * Only the CONDITION is duplicated here, never the verdict: both sides call
+ * `evaluateCondition`, so the semantics have one implementation and this adds
+ * the lookup the renderer does with `useWatch`.
+ *
+ * A field with no condition is visible, and so is one whose condition names a
+ * field this caller did not watch — an unwatched name reads as `undefined`,
+ * and hiding a field on the strength of a value nobody supplied would withhold
+ * a panel that has content in it.
+ */
+function isConditionallyVisible(
+  f: LayoutField,
+  values: Record<string, unknown>
+): boolean {
+  const condition = f.admin?.condition as FieldCondition | undefined;
+  const watches = condition?.field;
+  if (condition === undefined || watches === undefined) return true;
+  if (!(watches in values)) return true;
+  return evaluateCondition(condition, values[watches]);
+}
+
+/**
+ * Every field name a condition on these fields watches.
+ *
+ * The set a caller must observe for {@link computeFieldsBeside} to answer about
+ * the fields as they currently render rather than as they were declared. Kept
+ * beside the rule that consumes it so the two cannot name different sets.
+ */
+export function conditionFieldNames<T extends LayoutField>(
+  fields: T[]
+): string[] {
+  const names = new Set<string>();
+  for (const f of fields) {
+    const watches = (f.admin?.condition as FieldCondition | undefined)?.field;
+    if (watches !== undefined) names.add(watches);
+  }
+  return [...names];
+}
+
+/**
  * Field types flagged `layout: "takeover"` in the admin branding metadata,
  * paired with their editor component path.
  */
@@ -151,7 +195,23 @@ export function computeMainFields<T extends LayoutField>(
 }
 
 /**
- * The body fields a surface may offer BESIDE the one it was opened for.
+ * What a takeover surface offers back, split the way its panel presents it.
+ *
+ * Two groups rather than one list, because they are answerable to different
+ * things: `page` is what every document has and what a surface covering the
+ * form takes away, while `content` is whatever this collection happens to
+ * declare. A single list would put a page's slug between two of its own
+ * relations, ordered by nothing an author can predict.
+ */
+export interface FieldsBeside<T> {
+  /** The document's identity — title and slug — in the order declared. */
+  page: T[];
+  /** Everything else the form body would show. */
+  content: T[];
+}
+
+/**
+ * The fields a surface may offer BESIDE the one it was opened for.
  *
  * Everything the form body would show, minus the field at `excludePath` — the
  * field whose own surface is asking. A page builder rendering this inside its
@@ -166,13 +226,23 @@ export function computeMainFields<T extends LayoutField>(
  * and while a full-screen surface covers the body, showing them is the only
  * way an author reaches them without leaving it.
  *
- * System fields are already stripped, so the title and slug drawn by the system
- * header are not offered a second, competing editor here.
+ * TITLE AND SLUG ARE OFFERED HERE, which they were not, and the reason they
+ * were withheld is the reason they now belong: they are drawn by the system
+ * header, so offering them again would have been a second, competing editor.
+ * A surface that COVERS the form suppresses that header — the page builder
+ * names it in `useSuppressAdminChrome` — so there is no second editor to
+ * compete with and no first one to fall back on. Withholding them left the
+ * commonest shape a collection takes, a title, a slug and a builder field,
+ * with nothing to put in the panel at all: it was offered and opened blank,
+ * and a document's own name could not be read from inside the editor.
+ *
+ * They stay grouped rather than merged so the panel can say which is which.
  */
 export function computeFieldsBeside<T extends LayoutField>(
   fields: T[],
-  excludePath: string
-): T[] {
+  excludePath: string,
+  values: Record<string, unknown> = {}
+): FieldsBeside<T> {
   /*
    * The field whose value decides whether the asking field is visible at all is
    * withheld too.
@@ -185,13 +255,19 @@ export function computeFieldsBeside<T extends LayoutField>(
    */
   const asking = fields.find(f => (f.name ?? "") === excludePath);
   const controller = asking === undefined ? undefined : controllerName(asking);
-  return fields.filter(
+  const offered = fields.filter(
     f =>
-      !SYSTEM_FIELDS.has(f.name ?? "") &&
       !isHidden(f) &&
+      isConditionallyVisible(f, values) &&
       (f.name ?? "") !== excludePath &&
       (f.name ?? "") !== controller
   );
+  // Partitioned from ONE filtered list rather than filtered twice, so a field
+  // cannot land in both groups or in neither if the two predicates ever drift.
+  return {
+    page: offered.filter(f => SYSTEM_FIELDS.has(f.name ?? "")),
+    content: offered.filter(f => !SYSTEM_FIELDS.has(f.name ?? "")),
+  };
 }
 
 /** Resolve the value a field's condition source currently holds. */

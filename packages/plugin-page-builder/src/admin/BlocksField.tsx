@@ -123,6 +123,7 @@ import {
 } from "react";
 import {
   useController,
+  useFormState,
   useWatch,
   type Control,
   type FieldValues,
@@ -1235,6 +1236,41 @@ function shownStyleStateFor(
   return switcherIsOnScreen ? editing : "base";
 }
 
+/**
+ * Whether this document holds unsaved work, from EITHER surface that writes it.
+ *
+ * The status pill otherwise reads the editor's `undoDepth` alone, which is its
+ * own history and says nothing about the form — so an author who renamed the
+ * page and touched no block was told the document was saved. Two surfaces now
+ * write to one document, and the pill has to answer for both.
+ *
+ * The blocks field is COUNTED here, and an earlier version excluded it. The
+ * reasoning for excluding it was that the editor owns that field and reports
+ * its own history, so counting it would double the undo depth or report saved
+ * work. Both halves were wrong. Double-counting cannot matter to a boolean, and
+ * the form's baseline advances on a successful submit — `useEntryForm` resets
+ * it — so a dirty blocks field means genuinely unsaved blocks.
+ *
+ * Excluding it lost the one case that has no other witness: an author who edits
+ * blocks, leaves the editor, and opens it again before saving. Leaving commits
+ * the document into the form, so the field is dirty; reopening builds a fresh
+ * editor whose `undoDepth` is zero. With the field excluded, nothing was left
+ * to say the document had unsaved work, and the pill read clean over blocks
+ * that had never been saved.
+ *
+ * The editor's own history is taken as an argument rather than combined at the
+ * call site, so "is this document dirty" is answered in one place. It is also
+ * one fewer branch inside the largest component in this package, which the
+ * complexity gate refuses to let grow.
+ */
+function useDocumentDirty<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  editorDirty: boolean
+): boolean {
+  const { dirtyFields } = useFormState({ control });
+  return editorDirty || Object.keys(dirtyFields).length > 0;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -1378,10 +1414,17 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
-   * The entry's other fields, or null when there is no surrounding form. Null
-   * is what withholds the panel rather than opening an empty one.
+   * The entry's other fields, ALREADY DRAWN, or null when there are none.
+   *
+   * One value feeds both the rail's availability and the panel's body below,
+   * so the two cannot disagree about whether there is anything to show. Asking
+   * separately is what put an empty Settings panel on the rail: every entry
+   * form has a renderer, so a gate on the renderer's existence is true even for
+   * a collection whose only fields are its title, its slug and this one.
    */
-  const renderEntryFields = useEntryFieldsPanel();
+  const entryFields = useEntryFieldsPanel(name);
+
+  const documentDirty = useDocumentDirty(control, editor.undoDepth > 0);
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -1974,7 +2017,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         onExit={done}
         availablePanels={
-          renderEntryFields === null
+          entryFields === null
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
@@ -1994,7 +2037,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // editor is open, because the document is committed on the way out.
         topBar={
           <>
-            <DocumentStatusPill isDirty={editor.undoDepth > 0} />
+            <DocumentStatusPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the
@@ -2223,13 +2266,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             ),
             /*
-              The entry's own fields — SEO, relations, whatever this collection
-              declares — which the takeover removed from the page behind this
-              editor. Rendered by the ADMIN's closure, not reconstructed here:
-              how a field is drawn is the entry form's contract, and a second
-              renderer would drift from it.
+              The document's title and slug, and the entry's own fields — SEO,
+              relations, whatever this collection declares — which this editor
+              covered when it took the window. Drawn by the ADMIN, not
+              reconstructed here: how a field is drawn is the entry form's
+              contract, and a second renderer would drift from it.
+
+              The same value the rail was derived from, so a panel is never
+              offered that this returns nothing for.
             */
-            settings: () => renderEntryFields?.(name) ?? null,
+            settings: () => entryFields,
           };
           return panels[panel]?.() ?? null;
         }}

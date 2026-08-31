@@ -414,22 +414,33 @@ export function useDocumentIdentity(): DocumentIdentity | null {
  * ```
  */
 /**
- * A renderer for the entry's other fields, or null outside an entry form.
+ * The entry's other fields, drawn — or null when there are none to draw.
  *
- * Pass the asking field's path; it is excluded from what comes back. Null means
- * there is no surrounding form to draw from — a preview or a standalone
- * harness — and a caller should offer no panel at all rather than an empty one,
- * because reserving width to show nothing reads as a broken control.
+ * Pass the asking field's path; it is excluded from what comes back. Null has
+ * one meaning for a caller, "offer no panel", and it covers both reasons that
+ * can be true: there is no surrounding form to draw from — a preview, a
+ * standalone harness — or there IS one and it has nothing left once this
+ * field and the system's own are set aside.
+ *
+ * Returns the NODE rather than a renderer, which is the whole point of the
+ * shape. A caller offers a region and then fills it, and those are two
+ * decisions that must not disagree; handed a renderer, the only thing a caller
+ * could gate on was whether the renderer EXISTED, which is true for every entry
+ * form whether or not it draws anything. That is how a settings panel came to
+ * be offered, reserved and opened blank. One value answers both questions, so
+ * the rail and the body cannot say different things.
+ *
+ * Cheap to call unconditionally: this builds an element rather than rendering
+ * one, and a caller that never mounts it has paid for a description nobody
+ * read.
  *
  * Optional-context by construction, like {@link useDocumentIdentity}: a field
- * rendered outside an entry form is a legitimate arrangement (a preview, a
- * standalone harness) and gets null rather than a thrown error.
+ * rendered outside an entry form is a legitimate arrangement and gets null
+ * rather than a thrown error.
  */
-export function useEntryFieldsPanel():
-  | ((excludePath: string) => ReactNode)
-  | null {
+export function useEntryFieldsPanel(excludePath: string): ReactNode | null {
   const context = useOptionalEntryFormContext();
-  return context?.renderEntryFields ?? null;
+  return context?.renderEntryFields?.(excludePath) ?? null;
 }
 
 export function useDocumentStatus(): DocumentStatus | null {

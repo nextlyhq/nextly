@@ -42,7 +42,7 @@ import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import {
   computeMainFields,
-  computeFieldsBeside,
+  conditionFieldNames,
 } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
 
@@ -63,6 +63,7 @@ import {
   previewLinkLocale,
   useHasPublicAddress,
 } from "./entry-address";
+import { fieldsBesidePanel } from "./EntryFieldsPanel";
 import { EntryFormActions } from "./EntryFormActions";
 import { EntryFormContent } from "./EntryFormContent";
 import {
@@ -404,17 +405,6 @@ export function EntryForm({
    * form submits are one thing. A second `EntryForm` would fork the state and
    * lose the edit made in whichever copy did not save.
    */
-  const renderEntryFields = useCallback(
-    (excludePath: string) => (
-      <EntryFormContent
-        fields={computeFieldsBeside(allFields, excludePath)}
-        disabled={isSubmitting}
-        mode={mode}
-      />
-    ),
-    [allFields, isSubmitting, mode]
-  );
-
   // Get form errors and submit attempt count. submitCount gates the
   // top-level "Please fix the following errors" toast in FormErrorSummary
   // so it only appears after the user actually clicks Save / Publish, not
@@ -501,6 +491,51 @@ export function EntryForm({
     defaultLocale,
     mutationPending: isSubmitting,
   });
+
+  /*
+   * The values every field CONDITION watches, read through `watch` so the panel
+   * recomputes as an author changes them rather than only when the form
+   * remounts.
+   *
+   * `watch` answers a name list POSITIONALLY, so the result is zipped back onto
+   * the names it was asked for — the same shape `useTakeoverLayout` needs, and
+   * for the same reason: handed the bare array, every condition would be
+   * evaluated against `undefined` and each conditional field would be judged on
+   * a value nobody supplied.
+   */
+  const conditionNames = useMemo(
+    () => conditionFieldNames(allFields),
+    [allFields]
+  );
+  const watchedConditions = form.watch(conditionNames);
+  const conditionValues = useMemo(
+    () =>
+      Object.fromEntries(
+        conditionNames.map((name, i) => [name, watchedConditions[i]])
+      ),
+    [conditionNames, watchedConditions]
+  );
+
+  /*
+   * Delegated whole, including the decision to answer NULL when there is
+   * nothing to draw — which is what withholds the panel rather than opening an
+   * empty one. Kept out of this callback so the rule is reachable by a test
+   * without standing up the entire form.
+   *
+   * Declared here rather than beside the other field derivations because it
+   * needs `hasPublicAddress`: a surface offering the slug has to carry the same
+   * warning the meta strip it covers would have shown.
+   */
+  const renderEntryFields = useCallback(
+    (excludePath: string) =>
+      fieldsBesidePanel(allFields, excludePath, {
+        disabled: isSubmitting,
+        mode,
+        values: conditionValues,
+        hasPublicAddress,
+      }),
+    [allFields, isSubmitting, mode, conditionValues, hasPublicAddress]
+  );
 
   useAutoSlug({
     form,
