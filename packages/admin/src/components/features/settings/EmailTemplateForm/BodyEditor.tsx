@@ -98,7 +98,15 @@ export function BodyEditor({
           only child that can give way, so an unbounded strip takes the pane one
           declared variable at a time — and a template with enough of them
           leaves no editor at all. */}
-      <div className="flex max-h-24 shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b border-border px-3 py-2">
+      {/*
+        Two rows, and the split is the point. The chip strip is bounded and
+        scrolls, because it grows by a row per declared variable and the editor
+        is the only thing able to give way. The refusal must NOT be inside that
+        scroller: submitting does not scroll it, so with enough chips the alert
+        mounts below the visible area and the refused save is silent again —
+        which is the failure this alert exists to end.
+      */}
+      <div className="flex shrink-0 items-center gap-2 px-3 pt-2">
         <Segmented<"html" | "text">
           value={editorTab}
           onChange={onEditorTabChange}
@@ -107,9 +115,18 @@ export function BodyEditor({
             { value: "text", label: "Plain text" },
           ]}
         />
-        {chips}
         <BodyRefusal control={control} editorTab={editorTab} />
       </div>
+      {chips ? (
+        <div
+          data-testid="body-editor-chips"
+          className="flex max-h-16 shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b border-border px-3 pb-2 pt-2"
+        >
+          {chips}
+        </div>
+      ) : (
+        <div className="shrink-0 border-b border-border pb-2" />
+      )}
       {/* Editor body */}
       <div
         ref={editorWrapRef}
