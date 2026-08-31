@@ -23,7 +23,7 @@
  */
 import type { EditorView } from "@codemirror/view";
 import { Suspense, lazy } from "react";
-import type { useForm } from "react-hook-form";
+import { useFormState, type useForm } from "react-hook-form";
 
 import { FormField } from "@admin/components/ui/form";
 
@@ -37,6 +37,42 @@ const CodeMirrorEditor = lazy(() =>
     "@admin/components/features/entries/fields/text/CodeMirrorEditor"
   ).then(m => ({ default: m.CodeMirrorEditor }))
 );
+
+/**
+ * Why a save was refused, for the two body fields.
+ *
+ * Rendered in the toolbar rather than beside the editor because the editor
+ * scrolls: a message under a long template is a message the author has to go
+ * looking for, and the refusal they are trying to understand is the reason they
+ * cannot save.
+ *
+ * It also names the OTHER tab when that is where the problem is. The two bodies
+ * share one toggle, so an author on the plain-text tab can be blocked by the
+ * HTML one with nothing on screen belonging to it.
+ */
+function BodyRefusal({
+  control,
+  editorTab,
+}: {
+  control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
+  editorTab: "html" | "text";
+}) {
+  const { errors } = useFormState({ control });
+  const html = errors.htmlContent?.message;
+  const text = errors.plainTextContent?.message;
+
+  const active = editorTab === "html" ? html : text;
+  const other = editorTab === "html" ? text : html;
+  const otherLabel = editorTab === "html" ? "Plain text" : "HTML";
+
+  if (!active && !other) return null;
+
+  return (
+    <p className="ml-auto text-xs text-destructive" role="alert">
+      {active ?? `${otherLabel}: ${String(other)}`}
+    </p>
+  );
+}
 
 export function BodyEditor({
   control,
@@ -72,6 +108,7 @@ export function BodyEditor({
           ]}
         />
         {chips}
+        <BodyRefusal control={control} editorTab={editorTab} />
       </div>
       {/* Editor body */}
       <div
