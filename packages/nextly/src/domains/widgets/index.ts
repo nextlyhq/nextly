@@ -50,6 +50,7 @@ export {
   clearWidgets,
   type WidgetPatch,
 } from "./registry";
+export { MAX_QUERIES_PER_REQUEST } from "./batch-limit";
 export { executeWidgetQuery, type WidgetResult } from "./execute";
 export {
   registerBuiltInSources,

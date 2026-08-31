@@ -12,7 +12,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 
 import { useWidgetQueries } from "./useWidgetQueries";
 
-import type { WidgetQuery } from "nextly/config";
+import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
 
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
@@ -248,6 +248,118 @@ describe("useWidgetQueries", () => {
 
     await result.current.refetch();
     expect(protectedApi.post).toHaveBeenCalledTimes(2);
+  });
+
+  it("splits a dashboard past the endpoint's cap into requests it will accept", async () => {
+    // The endpoint REFUSES a body above `MAX_QUERIES_PER_REQUEST`, so one
+    // oversized batch is rejected whole -- every widget on the dashboard dark
+    // at once, over a limit none of them individually crossed.
+    const over = MAX_QUERIES_PER_REQUEST + 1;
+    const requests = Array.from({ length: over }, (_, i) => ({
+      widgetId: `core/${i}`,
+      query: countQuery(`collection:c${i}`),
+    }));
+    vi.mocked(protectedApi.post).mockImplementation(
+      async (_path: string, body: unknown) => ({
+        results: (body as { queries: unknown[] }).queries.map((_q, i) => ({
+          ok: true,
+          result: { op: "count", total: i },
+        })),
+      })
+    );
+
+    const { result } = renderHook(() => useWidgetQueries(requests), {
+      wrapper,
+    });
+
+    await waitFor(() =>
+      expect(Object.keys(result.current.slots)).toHaveLength(over)
+    );
+    // Every widget answered, and no request exceeded the cap.
+    for (const call of vi.mocked(protectedApi.post).mock.calls) {
+      expect(
+        (call[1] as { queries: unknown[] }).queries.length
+      ).toBeLessThanOrEqual(MAX_QUERIES_PER_REQUEST);
+    }
+    // The keying survives the split: the last widget belongs to the second
+    // partition and reads position 0 of ITS response, not position 30.
+    expect(result.current.slots[`core/${over - 1}`]).toEqual({
+      ok: true,
+      result: { op: "count", total: 0 },
+    });
+    expect(result.current.slots["core/0"]).toEqual({
+      ok: true,
+      result: { op: "count", total: 0 },
+    });
+    expect(result.current.slots["core/5"]).toEqual({
+      ok: true,
+      result: { op: "count", total: 5 },
+    });
+  });
+
+  it("keeps one request while the dashboard fits in one", async () => {
+    // The control for the split above: partitioning must not turn the common
+    // case into several round trips.
+    const requests = Array.from(
+      { length: MAX_QUERIES_PER_REQUEST },
+      (_, i) => ({
+        widgetId: `core/${i}`,
+        query: countQuery(`collection:c${i}`),
+      })
+    );
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: requests.map(() => ({
+        ok: true,
+        result: { op: "count", total: 1 },
+      })),
+    });
+
+    const { result } = renderHook(() => useWidgetQueries(requests), {
+      wrapper,
+    });
+
+    await waitFor(() =>
+      expect(Object.keys(result.current.slots)).toHaveLength(
+        MAX_QUERIES_PER_REQUEST
+      )
+    );
+    expect(protectedApi.post).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails only the partition that failed, not the widgets beside it", async () => {
+    const over = MAX_QUERIES_PER_REQUEST + 1;
+    const requests = Array.from({ length: over }, (_, i) => ({
+      widgetId: `core/${i}`,
+      query: countQuery(`collection:c${i}`),
+    }));
+    vi.mocked(protectedApi.post).mockImplementation(
+      async (_path: string, body: unknown) => {
+        const sent = (body as { queries: unknown[] }).queries;
+        if (sent.length === 1) throw new Error("second batch down");
+        return {
+          results: sent.map(() => ({
+            ok: true,
+            result: { op: "count", total: 3 },
+          })),
+        };
+      }
+    );
+
+    const { result } = renderHook(() => useWidgetQueries(requests), {
+      wrapper,
+    });
+
+    await waitFor(() =>
+      expect(result.current.slots[`core/${over - 1}`]).toBeDefined()
+    );
+    expect(result.current.slots[`core/${over - 1}`]).toEqual({
+      ok: false,
+      error: expect.stringMatching(/could not be/i),
+    });
+    expect(result.current.slots["core/0"]).toEqual({
+      ok: true,
+      result: { op: "count", total: 3 },
+    });
   });
 
   it("refuses a body the server did not shape as a results array", async () => {

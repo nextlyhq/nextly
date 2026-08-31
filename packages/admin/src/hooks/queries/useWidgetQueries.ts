@@ -1,11 +1,21 @@
 /**
- * Every visible widget's data request, in ONE round trip.
+ * Every visible widget's data request, in as few round trips as the endpoint
+ * allows.
  *
  * `POST /api/dashboard/query` takes `{ queries: WidgetQuery[] }` and answers
  * `{ results }` POSITIONALLY — `results[i]` belongs to `queries[i]` and carries
  * no widget id of its own. Re-keying that back onto widget ids is this hook's
  * whole job, and it is the reason a dashboard of ten cards costs one request
  * rather than ten.
+ *
+ * It also REFUSES a body above `MAX_QUERIES_PER_REQUEST`, so "one request for
+ * everything" stops being correct at the thirty-first widget: a single batch
+ * would be rejected whole and every widget on the dashboard would go dark at
+ * once, over a limit none of them individually crossed. The requests are
+ * therefore partitioned to that size, and the partition is a property of the
+ * TRANSPORT rather than of the dashboard — each partition is its own query, its
+ * own retry and its own failure, and a widget's slot comes back from whichever
+ * one carried it.
  *
  * Refresh follows `useDashboardStats` exactly: `staleTime: 0`, refetch on mount
  * and on window focus, and NO polling interval. The UX evidence is against
@@ -15,8 +25,8 @@
  * @module hooks/queries/useWidgetQueries
  */
 
-import { useQuery } from "@tanstack/react-query";
-import type { WidgetQuery } from "nextly/config";
+import { useQueries } from "@tanstack/react-query";
+import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
 import { useMemo } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -35,14 +45,25 @@ export interface UseWidgetQueriesResult {
   /** Keyed by `widgetId`. A widget with no answer yet is simply absent. */
   slots: Record<string, WidgetSlot>;
   isLoading: boolean;
+  /**
+   * Whether any request is in flight, INCLUDING a background refetch that is
+   * keeping its previous answer on screen.
+   *
+   * Distinct from `isLoading`, which is only ever true before there is anything
+   * to show. On window focus this grid refetches while the cards keep their
+   * numbers, and a reader has no way to know that is happening unless the card
+   * says so — which is what `aria-busy` is for.
+   */
+  isFetching: boolean;
   error: Error | null;
   refetch: () => Promise<unknown>;
   /**
-   * When this batch landed, or `null` before it has.
+   * When the data on screen landed, or `null` before all of it has.
    *
-   * Exposed because the card's freshness line is a property of the BATCH, not
-   * of a widget: every card in one request was answered at the same instant,
-   * and a per-card timestamp would be the same value recomputed n times.
+   * The OLDEST partition's answer, not the newest. Every card reads one
+   * freshness line, so it has to be true of every card: taking the newest would
+   * let a partition that answered ten minutes ago sit under a timestamp from a
+   * partition that answered a second ago.
    */
   updatedAt: Date | null;
 }
@@ -76,7 +97,7 @@ const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
  * with nothing anywhere saying why. Failing the query instead puts the failure
  * where `error` is read.
  */
-function readResults(body: unknown): WidgetSlot[] {
+function readResults(body: unknown): unknown[] {
   const results = (body as WidgetQueryBatchResponse | null)?.results;
   if (!Array.isArray(results)) {
     throw new Error(
@@ -87,78 +108,112 @@ function readResults(body: unknown): WidgetSlot[] {
 }
 
 /**
- * Batches `queries` into one request and hands each widget back its own slot.
+ * The requests split into batches the endpoint will accept.
  *
- * `enabled` is `queries.length > 0`: a dashboard with nothing to ask must issue
- * no request, not an empty one. An empty batch would still cost a round trip,
- * an authentication check and a log line on every mount and every window focus,
- * for an answer that is knowable without asking.
+ * Chunked in ORDER, so a widget's position inside its partition is what the
+ * positional response is keyed back through, and a dashboard that grows past
+ * the limit does not reshuffle which request its existing widgets travel in.
+ *
+ * An empty input produces NO partitions, which is what keeps a dashboard with
+ * nothing to ask from issuing a request: an empty batch would still cost a
+ * round trip, an authentication check and a log line on every mount and every
+ * window focus, for an answer that is knowable without asking.
+ */
+function partitionRequests(
+  queries: WidgetQueryRequest[]
+): WidgetQueryRequest[][] {
+  const partitions: WidgetQueryRequest[][] = [];
+  for (
+    let start = 0;
+    start < queries.length;
+    start += MAX_QUERIES_PER_REQUEST
+  ) {
+    partitions.push(queries.slice(start, start + MAX_QUERIES_PER_REQUEST));
+  }
+  return partitions;
+}
+
+/**
+ * Batches `queries` into as few requests as the endpoint allows and hands each
+ * widget back its own slot.
  */
 export function useWidgetQueries(
   queries: WidgetQueryRequest[]
 ): UseWidgetQueriesResult {
-  const query = useQuery<WidgetSlot[], Error>({
-    // The requests themselves are the key. Two dashboards asking for different
-    // widgets are different questions and must not share one cache entry;
-    // TanStack hashes the array deterministically, so a re-render with an
-    // equal-but-new array does not refetch.
-    queryKey: ["dashboard", "widget-queries", queries],
-    queryFn: async () => {
-      const body = await protectedApi.post<unknown>("/dashboard/query", {
-        queries: queries.map(entry => entry.query),
-      });
-      return readResults(body);
-    },
-    enabled: queries.length > 0,
-    staleTime: 0,
-    gcTime: 5 * 60 * 1000,
-    retry: 2,
-    refetchOnMount: "always",
-    refetchOnWindowFocus: true,
+  const partitions = useMemo(() => partitionRequests(queries), [queries]);
+
+  const results = useQueries({
+    queries: partitions.map(partition => ({
+      // The partition's own requests are its key. Two dashboards asking for
+      // different widgets are different questions and must not share one cache
+      // entry; TanStack hashes the array deterministically, so a re-render with
+      // an equal-but-new array does not refetch.
+      queryKey: ["dashboard", "widget-queries", partition],
+      queryFn: async () => {
+        const body = await protectedApi.post<unknown>("/dashboard/query", {
+          queries: partition.map(entry => entry.query),
+        });
+        return readResults(body);
+      },
+      staleTime: 0,
+      gcTime: 5 * 60 * 1000,
+      retry: 2,
+      refetchOnMount: "always" as const,
+      refetchOnWindowFocus: true,
+    })),
   });
 
-  const results = query.data;
-  // `isError` is settled-and-failed: with `retry: 2` the query stays pending
-  // through its attempts, so this is false while there is still hope.
-  const failed = query.isError;
+  // Not memoized, and deliberately: `useQueries` builds a fresh result array on
+  // every render, so a memo keyed on it would recompute every render anyway
+  // while reading as though it did not. The walk is one pass over the widgets.
+  const slots: Record<string, WidgetSlot> = {};
+  partitions.forEach((partition, index) => {
+    const answer = results[index];
+    if (!answer) return;
 
-  const slots = useMemo<Record<string, WidgetSlot>>(() => {
-    const keyed: Record<string, WidgetSlot> = {};
-
-    if (results) {
-      queries.forEach((entry, index) => {
+    if (answer.data) {
+      partition.forEach((entry, position) => {
         // A short response is the server disagreeing with us about how many
         // questions were asked. Saying so per widget is what stops the trailing
         // cards spinning silently forever.
-        keyed[entry.widgetId] = results[index] ?? {
+        slots[entry.widgetId] = (answer.data[position] as WidgetSlot) ?? {
           ok: false,
           error: MISSING_SLOT_ERROR,
         };
       });
-      return keyed;
+      return;
     }
 
-    // Answered by failing. Every widget gets its own failed slot, because a
-    // card cannot tell an absent slot from a pending one and renders both as
-    // busy. Data it already holds wins over this branch -- a refetch that
-    // fails on window focus keeps the numbers the reader was looking at,
-    // which is the same reason loading marks the body rather than replacing it.
-    if (failed) {
-      queries.forEach(entry => {
-        keyed[entry.widgetId] = { ok: false, error: BATCH_FAILED_ERROR };
+    // Answered by failing. Every widget in THIS partition gets its own failed
+    // slot, because a card cannot tell an absent slot from a pending one and
+    // renders both as busy — and only this partition's widgets are affected,
+    // which is the point of splitting them. Data already held wins over this
+    // branch, so a refetch that fails on window focus keeps the numbers the
+    // reader was looking at.
+    if (answer.isError) {
+      partition.forEach(entry => {
+        slots[entry.widgetId] = { ok: false, error: BATCH_FAILED_ERROR };
       });
     }
+  });
 
-    return keyed;
-  }, [queries, results, failed]);
+  const settledAt = results.map(answer => answer.dataUpdatedAt);
 
   return {
     slots,
-    isLoading: query.isLoading,
-    error: query.error ?? null,
-    refetch: query.refetch,
-    // `dataUpdatedAt` is 0 until the query has resolved once, which is not an
-    // instant in 1970 -- it is the absence of one.
-    updatedAt: query.dataUpdatedAt ? new Date(query.dataUpdatedAt) : null,
+    isLoading: results.some(answer => answer.isLoading),
+    isFetching: results.some(answer => answer.isFetching),
+    // The FIRST failure, which is enough for the grid: what a reader needs per
+    // widget is already in that widget's slot, and this says only that
+    // something in the batch did not answer.
+    error: results.find(answer => answer.error)?.error ?? null,
+    refetch: () => Promise.all(results.map(answer => answer.refetch())),
+    // `dataUpdatedAt` is 0 until a partition has resolved once, which is not an
+    // instant in 1970 -- it is the absence of one. A single unresolved
+    // partition makes the whole line absent rather than wrong.
+    updatedAt:
+      settledAt.length > 0 && settledAt.every(at => at > 0)
+        ? new Date(Math.min(...settledAt))
+        : null,
   };
 }
