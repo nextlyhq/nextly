@@ -166,9 +166,24 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
  * its UTC rendering is irrelevant to what the author wrote.
  */
 function statesTheSameDay(raw: string, at: Date): boolean {
-  const offset = raw.slice(19);
+  // FOUND FROM THE END, never at a fixed index. Seconds and milliseconds are
+  // both optional in the accepted shape, so the offset begins anywhere from
+  // index 16 (`...T09:00Z`) to index 23 (`...T09:00:00.000+02:00`). Reading
+  // from a fixed 19 broke in two different ways at once on the commonest input
+  // there is — `Date.prototype.toISOString()`, which ALWAYS emits milliseconds:
+  //
+  //   "…T09:00:00.000Z"      -> offset ".000Z":      Number("Z")  is NaN, so the
+  //                             shifted date was Invalid and `toISOString` threw
+  //                             a RangeError out of the route as a 500.
+  //   "…T09:00:00.000+02:00" -> offset ".000+02:00": Number("+0") is 0, so a real
+  //                             offset was silently read as UTC and this check
+  //                             then compared against the wrong calendar day.
+  //
+  // The second is the one worth naming: it did not throw. It quietly stopped
+  // validating the thing this function exists to validate.
+  const offset = /(?:Z|[+-]\d{2}:\d{2})$/.exec(raw)?.[0] ?? "Z";
   const minutes =
-    offset === "" || offset === "Z"
+    offset === "Z"
       ? 0
       : (offset.startsWith("-") ? -1 : 1) *
         (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
