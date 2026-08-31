@@ -138,7 +138,8 @@ const PRIMARY_RULES: readonly {
    * where the shorter word reads as a no-op.
    */
   {
-    applies: state => isPublishedEdit(state) && state.hasWorkingDraft,
+    applies: state =>
+      isPublishedEdit(state) && state.hasWorkingDraft && state.canPublish,
     build: () => ({ id: "publish", label: "Publish changes" }),
   },
   /*
@@ -153,6 +154,21 @@ const PRIMARY_RULES: readonly {
       id: "save",
       label: state.draftsEnabled ? "Save" : "Save changes",
     }),
+  },
+  /*
+   * NO PERMISSION TO PUBLISH: saving leads instead, and publishing is not
+   * offered at all rather than offered dead.
+   *
+   * The distinction is between "not now" and "not you". A disabled control
+   * explains a temporary refusal; a permission an author will never hold is
+   * furniture they cannot use, and the header has always hidden it. Leaving it
+   * as the leading action would be worse than untidy — the one control drawn as
+   * the thing to press would be the one thing they cannot do, with their real
+   * action demoted beside it.
+   */
+  {
+    applies: state => !state.canPublish,
+    build: () => ({ id: "save", label: "Save draft" }),
   },
 ];
 
@@ -180,15 +196,13 @@ function primaryAction(state: DocumentActionState): DocumentAction {
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
   return withReason(
     { id, label, placement: "primary" },
-    blocked ?? (id === "publish" ? publishReason(state) : undefined)
+    /*
+     * Only the historical-view rule can refuse the leading action now.
+     * Publishing without permission is not offered at all — see the rule table
+     * — so there is no second reason left for this control to carry.
+     */
+    blocked
   );
-}
-
-/** Why publishing is unavailable, or undefined when it is not. */
-function publishReason(state: DocumentActionState): string | undefined {
-  return state.canPublish
-    ? undefined
-    : "You do not have permission to publish in this collection.";
 }
 
 function withReason(
@@ -271,7 +285,7 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
    */
   {
     id: "save",
-    applies: s => isPublishedEdit(s) && s.hasWorkingDraft,
+    applies: s => isPublishedEdit(s) && s.hasWorkingDraft && s.canPublish,
     label: s => (s.draftsEnabled ? "Save" : "Save changes"),
     placement: "toolbar",
     mutates: true,
@@ -286,7 +300,10 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
    */
   {
     id: "save",
-    applies: s => s.hasStatus && (s.mode === "create" || s.status === "draft"),
+    applies: s =>
+      s.canPublish &&
+      s.hasStatus &&
+      (s.mode === "create" || s.status === "draft"),
     label: () => "Save draft",
     placement: "toolbar",
     mutates: true,
@@ -307,10 +324,14 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
    * changes nothing, and it is most useful precisely when an author is trying
    * to understand a version they are looking at. Blocking it would be the rule
    * applied past its reason.
+   *
+   * It still needs a document to read: while one is being CREATED there is
+   * nothing on the server to fetch, which is why the whole menu stays away in
+   * create mode.
    */
   {
     id: "view-api",
-    applies: () => true,
+    applies: state => state.mode === "edit",
     label: () => "View API response",
     placement: "menu",
     group: "document",
