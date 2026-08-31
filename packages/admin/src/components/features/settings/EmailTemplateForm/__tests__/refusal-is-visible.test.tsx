@@ -100,6 +100,40 @@ describe("a refusal is visible where the field is", () => {
     expect(screen.getByText("HTML: HTML content is required")).toBeDefined();
   });
 
+  it("keeps the alert out of the strip that scrolls", () => {
+    /*
+     * The chip strip is bounded and scrollable, because it grows by a row per
+     * declared variable. An alert laid out inside it mounts below the visible
+     * area once there are enough chips, and submitting does not scroll that
+     * container — so the message exists, is in the DOM, and cannot be seen.
+     *
+     * Containment is the discriminating assertion: "the alert is present"
+     * passes in both arrangements, which is how the first version of this
+     * shipped.
+     */
+    render(
+      <WithError field="htmlContent" message="HTML content is required">
+        {form => (
+          <BodyEditor
+            control={form.control}
+            editorTab="html"
+            onEditorTabChange={() => {}}
+            isPending={false}
+            editorWrapRef={{ current: null }}
+            htmlEditorViewRef={{ current: null }}
+            chips={<span>{"{{appName}}"}</span>}
+          />
+        )}
+      </WithError>
+    );
+
+    const alert = screen.getByRole("alert");
+    const strip = screen.getByTestId("body-editor-chips");
+
+    expect(alert).toBeDefined();
+    expect(strip.contains(alert)).toBe(false);
+  });
+
   it("says nothing when nothing was rejected", () => {
     // The control. Without it, a component that rendered its message
     // unconditionally would pass all three tests above.
