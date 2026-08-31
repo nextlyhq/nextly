@@ -575,6 +575,87 @@ describe("WidgetGrid — refetching", () => {
 });
 
 describe("WidgetGrid — accessibility", () => {
+  it("keeps ONE live region even when several cards fail at once", async () => {
+    // The earlier version of this counted `[aria-live]` only, which the card's
+    // `role="alert"` does not set -- so five assertive card regions satisfied
+    // "exactly one live region" byte for byte.
+    mockBranding = brandingWith([
+      {
+        id: "one",
+        archetype: "metric",
+        title: "One",
+        query: { source: "collection:a", op: "count" },
+      },
+      {
+        id: "two",
+        archetype: "metric",
+        title: "Two",
+        query: { source: "collection:b", op: "count" },
+      },
+      {
+        id: "three",
+        archetype: "metric",
+        title: "Three",
+        query: { source: "collection:c", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: false, error: "Source unavailable." },
+        { ok: false, error: "Source unavailable." },
+        { ok: false, error: "Source unavailable." },
+      ],
+    });
+
+    const { container } = renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-error")).toHaveLength(3)
+    );
+    expect(
+      container.querySelectorAll('[aria-live], [role="status"], [role="alert"]')
+    ).toHaveLength(1);
+  });
+
+  it("counts a card that cannot RENDER as failed, not as updated", async () => {
+    // A slot can be `ok` and still unrenderable: this release draws `metric`
+    // and nothing else, and a metric handed a list payload refuses it. Counting
+    // slots said every widget updated while both cards showed an error.
+    mockBranding = brandingWith([
+      {
+        id: "listy",
+        archetype: "list",
+        title: "Recent",
+        query: { source: "collection:posts", op: "list" },
+      },
+      {
+        id: "mismatched",
+        archetype: "metric",
+        title: "Mismatched",
+        query: { source: "collection:posts", op: "count" },
+      },
+      {
+        id: "fine",
+        archetype: "metric",
+        title: "Fine",
+        query: { source: "collection:pages", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "list", items: [] } },
+        { ok: true, result: { op: "list", items: [] } },
+        { ok: true, result: { op: "count", total: 4 } },
+      ],
+    });
+
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-grid-live")).toHaveTextContent(
+        /1 of 3 widgets updated, 2 failed/i
+      )
+    );
+  });
+
   it("has exactly ONE live region for the whole grid", async () => {
     mockBranding = brandingWith([
       {

@@ -22,6 +22,14 @@
  * dashboard of ten cards does not tell the user which widget broke, which is
  * the only thing they need in order to do anything about it.
  *
+ * And it is ordinary content, NOT a live region. `role="alert"` is assertive by
+ * definition, so a card that used it became its own interrupting announcer:
+ * five widgets failing at once produced five announcements that spoke over each
+ * other and over the grid's single polite one. The grid owns announcing for the
+ * whole batch, following `EntryForm/DocumentStatusLive`, and the card's job is
+ * to be findable afterwards -- which the region landmark and its title already
+ * do.
+ *
  * Colour comes from the `--nx-*` token scale through its semantic Tailwind
  * classes (`bg-card`, `text-muted-foreground`, `text-destructive`), which are
  * defined for light and dark alike. No hex values.
@@ -116,7 +124,6 @@ export function WidgetCard({
       >
         {error !== null ? (
           <p
-            role="alert"
             className="text-sm text-destructive"
             data-testid="widget-card-error"
           >

@@ -57,14 +57,26 @@ describe("WidgetCard", () => {
     expect(screen.queryByText("42")).not.toBeInTheDocument();
   });
 
-  it("names the widget in the error's accessible role", () => {
-    render(
+  it("shows the error as ordinary content, never as its own live region", () => {
+    // `role="alert"` is assertive by definition, so a card that carried one
+    // became its own interrupting announcer -- and a dashboard where five
+    // widgets fail at once then produces five announcements over the top of the
+    // grid's single polite one. The grid owns announcing for the batch.
+    const { container } = render(
       <WidgetCard title="Published posts" error="Source unavailable.">
         <p>42</p>
       </WidgetCard>
     );
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent("Source unavailable.");
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      "Source unavailable."
+    );
+    expect(
+      container.querySelectorAll('[role="alert"], [role="status"], [aria-live]')
+    ).toHaveLength(0);
+    // Still findable, by the landmark the title names.
+    expect(
+      screen.getByRole("region", { name: "Published posts" })
+    ).toBeInTheDocument();
   });
 
   it("renders at most one footer link", () => {

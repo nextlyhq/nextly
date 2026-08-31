@@ -9,6 +9,10 @@
  * of them again. Adding `table`, `list`, `text` and `actions` is one entry in
  * `ARCHETYPE_BODIES` each.
  *
+ * WHICH of those states a widget is in is decided by `resolveWidgetOutcome`
+ * rather than here, because the grid has to count the same answer for its live
+ * region. See `./outcome`.
+ *
  * `custom` is the exception, and it does NOT get a second resolution path: it
  * goes through `PluginSlot`, which already resolves a component path against
  * the registry and already isolates a throw behind `PluginComponentBoundary`.
@@ -18,7 +22,6 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
-import type { WidgetArchetype } from "nextly/config";
 import type { ReactNode } from "react";
 
 import * as Icons from "@admin/components/icons";
@@ -28,20 +31,8 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { metricBody } from "./archetypes/metric";
-import type { ArchetypeBody } from "./archetypes/types";
+import { resolveWidgetOutcome } from "./outcome";
 import { WidgetCard } from "./WidgetCard";
-
-/**
- * The archetypes core draws from a query result.
- *
- * Partial on purpose: an archetype with no entry is one this release does not
- * render, and the card says so by name rather than coming up blank. `custom`
- * is deliberately absent — it is not drawn from a result at all.
- */
-const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
-  metric: metricBody,
-};
 
 /**
  * A Lucide icon component for the definition's icon NAME, or nothing.
@@ -95,6 +86,8 @@ export function WidgetRenderer({
     link: definition.link,
   };
 
+  const outcome = resolveWidgetOutcome(definition, slot);
+
   // The escape hatch. A plugin component draws its own body, so the card
   // asserts nothing about its loading or empty states -- the component knows
   // what it is showing and the card does not.
@@ -107,7 +100,7 @@ export function WidgetRenderer({
   // a database read on every mount and every window focus and then fetch the
   // same data again for itself. `undefined` while the batch is in flight, and
   // the component decides what that looks like.
-  if (definition.archetype === "custom") {
+  if (outcome.state === "self-drawn") {
     return (
       <WidgetCard {...shared}>
         <PluginSlot
@@ -118,35 +111,7 @@ export function WidgetRenderer({
     );
   }
 
-  const body = ARCHETYPE_BODIES[definition.archetype];
-  if (!body) {
-    return (
-      <WidgetCard
-        {...shared}
-        error={`The "${definition.archetype}" widget archetype is not rendered yet.`}
-      >
-        {null}
-      </WidgetCard>
-    );
-  }
-
-  if (!slot) {
-    // Absent means IN FLIGHT, and only a widget that actually asked for
-    // something can have a request in flight. One with no query never will, so
-    // reading its absent slot as busy leaves the card spinning for the life of
-    // the page -- with nothing on screen, in the live region or in the console
-    // saying why. `resolve-widgets` prefers a contributed component over this,
-    // so reaching here means there was none to prefer.
-    if (!definition.query) {
-      return (
-        <WidgetCard
-          {...shared}
-          error={`The "${definition.archetype}" archetype is drawn from a query, and this widget declares none.`}
-        >
-          {null}
-        </WidgetCard>
-      );
-    }
+  if (outcome.state === "loading") {
     return (
       <WidgetCard {...shared} isLoading>
         {null}
@@ -158,21 +123,7 @@ export function WidgetRenderer({
   // refetch rather than a first load -- it marks the body busy and leaves what
   // is already there alone, which is the whole reason the card marks rather
   // than replaces.
-  if (!slot.ok) {
-    return (
-      <WidgetCard
-        {...shared}
-        error={slot.error}
-        updatedAt={updatedAt}
-        isLoading={isFetching}
-      >
-        {null}
-      </WidgetCard>
-    );
-  }
-
-  const outcome = body(slot.result, definition);
-  if (!outcome.ok) {
+  if (outcome.state === "failed") {
     return (
       <WidgetCard
         {...shared}

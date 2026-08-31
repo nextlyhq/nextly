@@ -71,7 +71,9 @@ describe("WidgetRenderer — metric", () => {
     );
     // Not "1" (the item count), and not blank.
     expect(screen.queryByTestId("widget-metric-value")).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(/expected a count/i);
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      /expected a count/i
+    );
     // The title survives, so the user knows which widget is mismatched.
     expect(screen.getByText("Published posts")).toBeInTheDocument();
   });
@@ -83,7 +85,9 @@ describe("WidgetRenderer — metric", () => {
         slot={{ ok: false, error: "Source unavailable." }}
       />
     );
-    expect(screen.getByRole("alert")).toHaveTextContent("Source unavailable.");
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      "Source unavailable."
+    );
     expect(screen.getByText("Published posts")).toBeInTheDocument();
     expect(screen.queryByTestId("widget-metric-value")).not.toBeInTheDocument();
   });
@@ -240,7 +244,7 @@ describe("WidgetRenderer — archetypes not built yet", () => {
         slot={{ ok: true, result: { op: "list", items: [] } }}
       />
     );
-    expect(screen.getByRole("alert")).toHaveTextContent(/list/i);
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(/list/i);
     expect(screen.getByText("Recent entries")).toBeInTheDocument();
   });
 });

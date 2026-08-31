@@ -30,6 +30,7 @@ import {
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
+import { resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
 import { WidgetRenderer } from "./WidgetRenderer";
@@ -42,15 +43,19 @@ import { WidgetRenderer } from "./WidgetRenderer";
  * during a save: this grid refetches on every window focus, and announcing the
  * start of each refresh would speak over the reader every time they came back
  * to the tab. What matters is where it came to rest.
+ *
+ * `failed` counts CARDS THAT SHOW AN ERROR, not slots the server marked bad,
+ * and the two are different numbers. There is no separate "the whole request
+ * failed" sentence either: a rejected request gives every widget in it a failed
+ * slot, so the counts already say so -- and with the requests partitioned, one
+ * batch failing does not mean the dashboard did.
  */
 function settledAnnouncement(
   isLoading: boolean,
-  hasError: boolean,
   total: number,
   failed: number
 ): string | null {
   if (total === 0) return null;
-  if (hasError) return "Dashboard widgets could not be updated.";
   if (isLoading) return null;
   const loaded = total - failed;
   const noun = total === 1 ? "widget" : "widgets";
@@ -91,24 +96,33 @@ export function WidgetGrid() {
     [widgets]
   );
 
-  const { slots, isLoading, isFetching, error, updatedAt } =
-    useWidgetQueries(requests);
+  const { slots, isFetching, updatedAt } = useWidgetQueries(requests);
 
-  const failed = useMemo(
-    () => Object.values(slots).filter(slot => !slot.ok).length,
-    [slots]
+  // The same answer the cards are drawn from, so the announcement cannot
+  // describe a dashboard other than the one on screen. Counting slots instead
+  // said "3 of 3 widgets updated" while a card read "the list archetype is not
+  // rendered yet": the response was fine and the card was not.
+  //
+  // Only widgets that ASKED are counted, and self-drawn ones are dropped even
+  // when they did. A plugin component decides what it shows from the slot it
+  // was handed, so core cannot say whether it worked, and guessing either way
+  // would put a number in the reader's ear that nothing on screen supports.
+  const counted = useMemo(
+    () =>
+      widgets
+        .filter(widget => widget.query)
+        .map(widget => resolveWidgetOutcome(widget, slots[widget.id]))
+        .filter(outcome => outcome.state !== "self-drawn"),
+    [widgets, slots]
   );
+  const failed = counted.filter(outcome => outcome.state === "failed").length;
+  const settling = counted.some(outcome => outcome.state === "loading");
 
   const [announcement, setAnnouncement] = useState("");
   // What was last spoken, so an unchanged outcome does not re-fire. A ref
   // rather than state because it must not itself cause a render.
   const spoken = useRef("");
-  const next = settledAnnouncement(
-    isLoading,
-    error !== null,
-    requests.length,
-    failed
-  );
+  const next = settledAnnouncement(settling, counted.length, failed);
 
   useEffect(() => {
     if (!next || next === spoken.current) return;
