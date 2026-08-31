@@ -39,6 +39,7 @@ import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
+import { EntryTitleInput } from "./EntryTitleInput";
 import { PreviewActions } from "./PreviewActions";
 import { ShowJSONDialog } from "./ShowJSONDialog";
 import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
@@ -365,13 +366,6 @@ export function EntrySystemHeader({
   const titleLabel =
     (titleField as { label?: string } | undefined)?.label ?? "Title";
 
-  const { ref: rhfRef, ...rhfRegister } = form.register(titleName, {
-    required:
-      !lockIdentity && !isReadingHistory && titleRequired
-        ? "Title is required"
-        : false,
-  });
-
   // the title input bypasses FieldWrapper, so apply the same per-field RTL rule here —
   // flip to RTL only when the title is a translatable field AND the active locale is RTL (a
   // shared/LTR title stays LTR). Uses the same classifier as FieldWrapper for consistency.
@@ -450,29 +444,21 @@ export function EntrySystemHeader({
           window widths that was nothing. It now keeps a readable minimum and the
           actions collapse around it (see `toolbar-density`). */}
         <div className="flex-1 min-w-[10rem] @max-lg/toolbar:basis-full">
-          <input
-            {...rhfRegister}
-            ref={el => {
-              rhfRef(el);
+          {/* The title is part of the document, so reading a past version
+            locks it with everything else. Left editable it would mutate the
+            LIVE document while the banner says the page cannot be edited — and
+            go to autosave as unsaved work nobody typed on purpose. */}
+          <EntryTitleInput
+            name={titleName}
+            control={form.control}
+            label={titleLabel}
+            required={titleRequired && !isReadingHistory}
+            locked={lockIdentity || isReadingHistory}
+            submitting={isSubmitting}
+            rtl={titleRtl}
+            inputRef={(el: HTMLInputElement | null) => {
               inputRef.current = el;
             }}
-            type="text"
-            placeholder="Untitled"
-            aria-label={titleLabel}
-            disabled={isSubmitting}
-            // The title is part of the document, so reading a past version locks
-            // it with everything else. Left editable it would mutate the LIVE
-            // document while the banner says the page cannot be edited — and go
-            // to autosave as unsaved work nobody typed on purpose.
-            readOnly={lockIdentity || isReadingHistory}
-            // RTL for a translatable title edited in an RTL language.
-            {...(titleRtl ? { dir: "rtl" as const } : {})}
-            className={cn(
-              "w-full text-xl font-semibold tracking-tight text-foreground",
-              "bg-transparent outline-none placeholder:text-muted-foreground",
-              isSubmitting && "opacity-60 cursor-not-allowed",
-              lockIdentity && "cursor-default text-foreground/80"
-            )}
           />
         </div>
 

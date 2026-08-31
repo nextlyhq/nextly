@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeMainFields,
   computeFieldsBeside,
+  conditionFieldNames,
   takeoverControllerNames,
   takeoverTypesFromBranding,
 } from "./takeoverLayout";
@@ -243,5 +244,85 @@ describe("computeFieldsBeside", () => {
     // This fixture declares no title or slug, so the identity group is empty
     // and the collection's own field is the whole of what is offered.
     expect(offered(codeFirstFields, "content")).toEqual(["summary"]);
+  });
+});
+
+describe("fields nested inside a group", () => {
+  /** A group whose single child renders only in the classic editor. */
+  const grouped = [
+    { name: "title", type: "text" },
+    { name: "slug", type: "text" },
+    { name: "body", type: "blocks" },
+    {
+      name: "seo",
+      type: "group",
+      fields: [
+        {
+          name: "legacy",
+          type: "text",
+          admin: { condition: { field: "mode", equals: "classic" } },
+        },
+      ],
+    },
+  ];
+
+  it("watches the child's condition at its QUALIFIED path, not its bare name", () => {
+    /*
+     * `FieldRenderer` resolves a nested condition against the field's own base,
+     * so this child watches `seo.mode`. Collecting the bare `mode` would
+     * subscribe to a top-level field that does not exist, and every lookup
+     * against it would read `undefined` — which this rule treats as "not
+     * watched" and therefore visible, hiding nothing and fixing nothing.
+     */
+    expect(conditionFieldNames(grouped)).toEqual(["seo.mode"]);
+  });
+
+  it("hides a group whose every child is conditioned away", () => {
+    // The reported case: the group's OWN condition passes — it has none — so
+    // counting it left the panel offered with a `Fields` heading over a group
+    // that draws its label and nothing else.
+    const out = computeFieldsBeside(grouped, "body", { "seo.mode": "builder" });
+    expect(out.content.map(f => f.name)).toEqual([]);
+  });
+
+  it("keeps that group once any child can render", () => {
+    // The control. A rule that dropped every group, or every field carrying
+    // children, would satisfy the case above without being right.
+    const out = computeFieldsBeside(grouped, "body", { "seo.mode": "classic" });
+    expect(out.content.map(f => f.name)).toEqual(["seo"]);
+  });
+
+  it("leaves a group alone when nothing has told it about the value", () => {
+    // An unwatched name reads as `undefined`, and hiding content on the
+    // strength of a value nobody supplied would withhold a panel that has
+    // something in it — the failure in the direction that loses work.
+    const out = computeFieldsBeside(grouped, "body", {});
+    expect(out.content.map(f => f.name)).toEqual(["seo"]);
+  });
+
+  it("does NOT walk into a repeater, whose fields are a row template", () => {
+    /*
+     * A repeater's children describe what each ROW holds; their conditions are
+     * evaluated per row against that row's values, and the repeater renders its
+     * add control whether or not it has any rows. Treating an all-conditional
+     * row template as an empty repeater would hide a control that works.
+     */
+    const withRepeater = [
+      { name: "body", type: "blocks" },
+      {
+        name: "faqs",
+        type: "repeater",
+        fields: [
+          {
+            name: "answer",
+            type: "text",
+            admin: { condition: { field: "kind", equals: "long" } },
+          },
+        ],
+      },
+    ];
+    expect(conditionFieldNames(withRepeater)).toEqual([]);
+    const out = computeFieldsBeside(withRepeater, "body", {});
+    expect(out.content.map(f => f.name)).toEqual(["faqs"]);
   });
 });
