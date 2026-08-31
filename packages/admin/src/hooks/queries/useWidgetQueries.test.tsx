@@ -169,8 +169,35 @@ describe("useWidgetQueries", () => {
     });
   });
 
-  it("surfaces a whole-request failure as error, with no slots", async () => {
+  it("gives every widget a FAILED slot when the whole request fails", async () => {
+    // Not an empty `slots`. A widget with no slot is busy by the renderer's
+    // contract, so a settled failure that produced no slots left every card on
+    // the dashboard spinning forever.
     vi.mocked(protectedApi.post).mockRejectedValue(new Error("network down"));
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { widgetId: "core/a", query: countQuery("collection:posts") },
+          { widgetId: "core/b", query: countQuery("collection:pages") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.error?.message).toBe("network down");
+    expect(result.current.slots).toEqual({
+      "core/a": { ok: false, error: expect.stringMatching(/could not be/i) },
+      "core/b": { ok: false, error: expect.stringMatching(/could not be/i) },
+    });
+  });
+
+  it("says nothing per widget while the request is still being retried", async () => {
+    // Absent, not failed: the batch has not settled, so the cards are busy
+    // rather than broken.
+    vi.mocked(protectedApi.post).mockImplementation(
+      () => new Promise(() => {})
+    );
 
     const { result } = renderHook(
       () =>
@@ -180,8 +207,6 @@ describe("useWidgetQueries", () => {
       { wrapper }
     );
 
-    await waitFor(() => expect(result.current.error).not.toBeNull());
-    expect(result.current.error?.message).toBe("network down");
     expect(result.current.slots).toEqual({});
   });
 
@@ -237,6 +262,11 @@ describe("useWidgetQueries", () => {
     );
 
     await waitFor(() => expect(result.current.error).not.toBeNull());
-    expect(result.current.slots).toEqual({});
+    // Refused, so it settled by failing -- which the widget hears about in its
+    // own slot rather than by waiting forever.
+    expect(result.current.slots["core/a"]).toEqual({
+      ok: false,
+      error: expect.stringMatching(/could not be/i),
+    });
   });
 });

@@ -51,6 +51,24 @@ export interface UseWidgetQueriesResult {
 const MISSING_SLOT_ERROR = "The server returned no result for this widget.";
 
 /**
+ * What every widget in a batch is told when the REQUEST itself failed.
+ *
+ * A settled-and-failed request must produce slots, not an absence. A widget
+ * with no slot is BUSY by the renderer's contract -- which is right while the
+ * batch is in flight and wrong once it has failed, and the difference is
+ * invisible from the card: every data widget on the dashboard sat spinning
+ * forever, with only the grid's live region saying anything had gone wrong.
+ *
+ * A fixed sentence rather than the transport's own message. The per-slot errors
+ * the server sends are written to be read by an admin; a rejected request
+ * carries whatever the network, a proxy or a changed envelope produced, and
+ * putting that on ten cards at once turns the card into a channel for text
+ * nobody wrote for it. What actually failed travels in `error`, where the grid
+ * reads it.
+ */
+const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
+
+/**
  * Narrows the response body before anything is keyed from it.
  *
  * The alternative — trusting `results` and indexing it — turns a proxy error
@@ -100,21 +118,39 @@ export function useWidgetQueries(
   });
 
   const results = query.data;
+  // `isError` is settled-and-failed: with `retry: 2` the query stays pending
+  // through its attempts, so this is false while there is still hope.
+  const failed = query.isError;
 
   const slots = useMemo<Record<string, WidgetSlot>>(() => {
-    if (!results) return {};
     const keyed: Record<string, WidgetSlot> = {};
-    queries.forEach((entry, index) => {
-      // A short response is the server disagreeing with us about how many
-      // questions were asked. Saying so per widget is what stops the trailing
-      // cards spinning silently forever.
-      keyed[entry.widgetId] = results[index] ?? {
-        ok: false,
-        error: MISSING_SLOT_ERROR,
-      };
-    });
+
+    if (results) {
+      queries.forEach((entry, index) => {
+        // A short response is the server disagreeing with us about how many
+        // questions were asked. Saying so per widget is what stops the trailing
+        // cards spinning silently forever.
+        keyed[entry.widgetId] = results[index] ?? {
+          ok: false,
+          error: MISSING_SLOT_ERROR,
+        };
+      });
+      return keyed;
+    }
+
+    // Answered by failing. Every widget gets its own failed slot, because a
+    // card cannot tell an absent slot from a pending one and renders both as
+    // busy. Data it already holds wins over this branch -- a refetch that
+    // fails on window focus keeps the numbers the reader was looking at,
+    // which is the same reason loading marks the body rather than replacing it.
+    if (failed) {
+      queries.forEach(entry => {
+        keyed[entry.widgetId] = { ok: false, error: BATCH_FAILED_ERROR };
+      });
+    }
+
     return keyed;
-  }, [queries, results]);
+  }, [queries, results, failed]);
 
   return {
     slots,

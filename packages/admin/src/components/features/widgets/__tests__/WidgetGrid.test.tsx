@@ -33,7 +33,13 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 
 function renderGrid() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    // `retry` is a DEFAULT and the hook sets `retry: 2` on the query itself,
+    // which wins -- so turning it off here only makes these tests look like it
+    // had. What is disabled is the BACKOFF, where the seconds go: the attempts
+    // still run, in milliseconds, so a rejected batch settles inside the
+    // default `waitFor` window instead of timing out and reading as a card
+    // that never recovered.
+    defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } },
   });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -432,6 +438,59 @@ describe("WidgetGrid — batching", () => {
     expect(screen.getByTestId("widget-cell-broken")).toHaveTextContent(
       "Broken"
     );
+  });
+});
+
+describe("WidgetGrid — a request that fails outright", () => {
+  const twoMetrics = () =>
+    brandingWith([
+      {
+        id: "posts",
+        archetype: "metric",
+        title: "Posts",
+        query: { source: "collection:posts", op: "count" },
+      },
+      {
+        id: "pages",
+        archetype: "metric",
+        title: "Pages",
+        query: { source: "collection:pages", op: "count" },
+      },
+    ]);
+
+  it("shows an error on every card rather than leaving them busy forever", async () => {
+    mockBranding = twoMetrics();
+    vi.mocked(protectedApi.post).mockRejectedValue(new Error("network down"));
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-posts")).toHaveTextContent(
+        /could not be loaded/i
+      )
+    );
+    expect(screen.getByTestId("widget-cell-pages")).toHaveTextContent(
+      /could not be loaded/i
+    );
+    // And no card is still claiming to be working on it.
+    for (const body of screen.getAllByTestId("widget-card-body")) {
+      expect(body).toHaveAttribute("aria-busy", "false");
+    }
+  });
+
+  it("keeps each failed card named, so the reader knows which widgets are dark", async () => {
+    mockBranding = twoMetrics();
+    vi.mocked(protectedApi.post).mockRejectedValue(new Error("network down"));
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-posts")).toHaveTextContent(
+        /could not be loaded/i
+      )
+    );
+    expect(screen.getByText("Posts")).toBeInTheDocument();
+    expect(screen.getByText("Pages")).toBeInTheDocument();
   });
 });
 
