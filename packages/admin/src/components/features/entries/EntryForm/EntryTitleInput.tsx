@@ -66,13 +66,34 @@ export function EntryTitleInput({
   });
 
   /*
-   * A title is text, and anything else is a schema this control cannot draw.
-   * Coerced rather than passed through, so a misconfigured field cannot put
-   * `[object Object]` on screen or hand React a value it refuses — and an
-   * empty string keeps the input controlled and editable, where `undefined`
-   * would silently make it uncontrolled again and reintroduce the private copy.
+   * PRIMITIVES ARE SHOWN, not just strings.
+   *
+   * `title` is an ownable system column and a code-first schema may redefine
+   * it: core covers a required NUMBER title, and a document holding `42` must
+   * read `42` here. Accepting only strings would show such a title as
+   * "Untitled" while the form held its real value — the author would see an
+   * empty box over saved content, which is the reverse of the defect this
+   * control was extracted to fix. The registered input this replaced rendered
+   * primitives natively, so this keeps what it displayed.
+   *
+   * Anything else — an object, an array, null — becomes empty rather than
+   * `[object Object]`, and an empty string keeps the input controlled, where
+   * `undefined` would make it uncontrolled again and reintroduce the private
+   * copy.
+   *
+   * What this does NOT change is the write. A text input yields a string
+   * whatever the column's type, exactly as it did before, so editing a numeric
+   * title still produces a string its schema will refuse. Drawing the title
+   * through its own configured field control is the fix for that, and it is a
+   * different change from this one.
    */
-  const value = typeof field.value === "string" ? field.value : "";
+  const raw: unknown = field.value;
+  const value =
+    typeof raw === "string" ||
+    typeof raw === "number" ||
+    typeof raw === "bigint"
+      ? String(raw)
+      : "";
 
   return (
     <input

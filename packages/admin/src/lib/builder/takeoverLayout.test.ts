@@ -326,3 +326,57 @@ describe("fields nested inside a group", () => {
     expect(out.content.map(f => f.name)).toEqual(["faqs"]);
   });
 });
+
+describe("a group holding a hidden controller", () => {
+  /*
+   * The realistic shape, and the one the first version of this rule counted as
+   * content. A group carries the field its own controls are conditioned on, and
+   * that field is `admin.hidden` because a toolbar drives it rather than the
+   * form. `FieldWrapper` returns null for a hidden field, so it draws nothing —
+   * but it is not conditioned away, so a visibility rule that only asks about
+   * conditions finds it "visible" and keeps the whole group alive.
+   */
+  const withHiddenController = [
+    { name: "body", type: "blocks" },
+    {
+      name: "seo",
+      type: "group",
+      fields: [
+        { name: "mode", type: "select", admin: { hidden: true } },
+        {
+          name: "legacyMeta",
+          type: "text",
+          admin: { condition: { field: "mode", equals: "classic" } },
+        },
+      ],
+    },
+  ];
+
+  it("hides the group when its only DRAWN child is conditioned away", () => {
+    const out = computeFieldsBeside(withHiddenController, "body", {
+      "seo.mode": "builder",
+    });
+    expect(out.content.map(f => f.name)).toEqual([]);
+  });
+
+  it("keeps it when that child can render", () => {
+    // The control: the hidden controller is unchanged between the two, so a
+    // rule that simply dropped every group would pass the case above and fail
+    // here.
+    const out = computeFieldsBeside(withHiddenController, "body", {
+      "seo.mode": "classic",
+    });
+    expect(out.content.map(f => f.name)).toEqual(["seo"]);
+  });
+
+  it("still WATCHES the hidden controller, which is what decides the rest", () => {
+    /*
+     * The two questions are different and it matters that they stay so. A
+     * hidden field draws nothing, so it cannot keep a group alive — but it is
+     * exactly the field whose value the other children read, so it must still
+     * be subscribed to. Filtering hidden fields out of the name walk would
+     * leave the condition above evaluated against a value nobody watched.
+     */
+    expect(conditionFieldNames(withHiddenController)).toEqual(["seo.mode"]);
+  });
+});

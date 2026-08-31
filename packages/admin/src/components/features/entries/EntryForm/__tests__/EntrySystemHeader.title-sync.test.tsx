@@ -100,4 +100,66 @@ describe("the header's title and another surface editing the same field", () => 
 
     expect(headerTitle().value).toBe("");
   });
+
+  it("shows a NUMERIC title, which a code-first schema may legitimately declare", () => {
+    /*
+     * `title` is an ownable system column and core covers a required number
+     * one, so a document may hold `42` here. Accepting only strings showed such
+     * a title as "Untitled" over saved content — an empty box where the form
+     * held a real value, which is the reverse of the defect this control exists
+     * to fix.
+     */
+    function NumericHarness() {
+      const methods = useForm({ defaultValues: { title: 42 } });
+      return (
+        <FormProvider {...methods}>
+          <EntrySystemHeader
+            mode="edit"
+            hasStatus
+            entry={{ id: "n", status: "draft", title: 42 }}
+            collectionSlug="pages"
+            scope="single"
+            onSaveDraft={vi.fn()}
+            onPublish={vi.fn()}
+            onSaveChanges={vi.fn()}
+            onUnpublish={vi.fn()}
+            onCancel={vi.fn()}
+          />
+        </FormProvider>
+      );
+    }
+
+    render(<NumericHarness />);
+    expect(headerTitle().value).toBe("42");
+  });
+
+  it("still shows nothing for a value no text input can draw", () => {
+    // The control for the case above. Widening to "any primitive" must not
+    // widen to "anything": an object would render as `[object Object]`, which
+    // is worse than empty because it looks like content.
+    function ObjectHarness() {
+      const methods = useForm({
+        defaultValues: { title: { nested: "value" } as unknown },
+      });
+      return (
+        <FormProvider {...methods}>
+          <EntrySystemHeader
+            mode="edit"
+            hasStatus
+            entry={{ id: "o", status: "draft" }}
+            collectionSlug="pages"
+            scope="single"
+            onSaveDraft={vi.fn()}
+            onPublish={vi.fn()}
+            onSaveChanges={vi.fn()}
+            onUnpublish={vi.fn()}
+            onCancel={vi.fn()}
+          />
+        </FormProvider>
+      );
+    }
+
+    render(<ObjectHarness />);
+    expect(headerTitle().value).toBe("");
+  });
 });

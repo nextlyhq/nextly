@@ -121,7 +121,21 @@ function isConditionallyVisible(
   if (base === null || f.fields === undefined || f.fields.length === 0) {
     return true;
   }
-  return f.fields.some(child => isConditionallyVisible(child, values, base));
+  /*
+   * A HIDDEN child counts for nothing, the same way a hidden field does at the
+   * top level. `FieldWrapper` returns null for one, so it draws nothing — and a
+   * group's commonest shape is exactly the trap: a hidden controller field
+   * beside the controls whose conditions read it. Counting the controller kept
+   * such a group alive with every visible control conditioned away, which is
+   * the blank panel this rule exists to prevent.
+   *
+   * Filtering here rather than inside the walk above, because the two questions
+   * differ: the walk collects the names a condition WATCHES, and a hidden
+   * controller is precisely the field that must still be watched.
+   */
+  return f.fields.some(
+    child => !isHidden(child) && isConditionallyVisible(child, values, base)
+  );
 }
 
 /**
