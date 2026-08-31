@@ -1,11 +1,11 @@
 /**
  * A refused save must SAY something, wherever the offending field lives.
  *
- * `regionsForRefusal` decides which summoned region to reopen, and a test of
- * that helper alone stays green while a field whose region is already on screen
- * has nowhere to render its message — which is how `htmlContent` and `name`
- * stayed silent after the first fix. These assert the outcome: a message in the
- * DOM, reached through the real component.
+ * `regionsForRefusal` decides which summoned region to reopen. A test of that
+ * helper alone cannot see whether anything then renders the message: a field
+ * whose region is already on screen needs no region opened, and will still be
+ * silent if it has nowhere to put the text. These assert the outcome instead —
+ * the message in the DOM, reached through the real component.
  */
 import { cleanup, render, screen } from "@testing-library/react";
 import { useForm } from "react-hook-form";

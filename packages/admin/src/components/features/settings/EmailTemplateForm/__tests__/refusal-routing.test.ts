@@ -11,7 +11,8 @@ import { regionsForRefusal } from "../refusal-routing";
 
 describe("regionsForRefusal", () => {
   it("opens the inspector for a field whose message only renders there", () => {
-    // The reported case: a declared variable left without a name.
+    // A declared variable left without a name: rejected by the schema, and
+    // its message renders only inside the inspector.
     expect(regionsForRefusal(["variables"]).inspector).toBe(true);
   });
 
