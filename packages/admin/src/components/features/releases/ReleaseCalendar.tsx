@@ -47,6 +47,7 @@ import {
   monthOf,
   monthWindow,
   shiftMonth,
+  type CalendarMonth,
   type DayKey,
 } from "./release-calendar";
 import { RELEASE_STATE_LABEL } from "./release-schedule";
@@ -54,6 +55,16 @@ import { readerZone } from "./release-timezone";
 
 /** Where the reader's chosen zone is remembered between visits. */
 const ZONE_KEY = "nextly.releases.calendar.zone";
+
+/**
+ * How many releases one month may return before the answer is incomplete.
+ *
+ * The route's own ceiling. A month holding more than this is implausible for a
+ * publishing schedule, which is why this is a REPORTED limit rather than a
+ * paging loop: the honest thing at that volume is to say the grid is partial,
+ * not to issue five more requests to fill in a view nobody can read anyway.
+ */
+const CALENDAR_PAGE_LIMIT = 200;
 
 /**
  * The zone to draw in: what the reader last chose, else their own.
@@ -83,22 +94,34 @@ function rememberZone(zone: string): void {
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-/** The zones offered, with the reader's own first however it is spelled. */
-function zoneChoices(current: string): string[] {
-  const common = [
-    "UTC",
-    "America/Los_Angeles",
-    "America/New_York",
-    "Europe/London",
-    "Europe/Berlin",
-    "Asia/Dubai",
-    "Asia/Kolkata",
-    "Asia/Tokyo",
-    "Australia/Sydney",
-  ];
-  return [...new Set([readerZone(), current, ...common])].filter(
-    isValidTimezone
-  );
+/**
+ * Every zone this reader can choose between.
+ *
+ * The platform's own list where it has one, because a short hand-picked set
+ * cannot serve a distributed team: somebody in Los Angeles comparing a launch
+ * an Asia/Riyadh colleague scheduled needs that zone, and a curated nine will
+ * never contain the one a given pair happens to need.
+ *
+ * `Intl.supportedValuesOf` is not on every runtime, so the zones the FETCHED
+ * releases were authored in are always offered — those are the ones this page
+ * has an actual reason to show — along with the reader's own and whatever is
+ * currently selected, which might have come from storage.
+ */
+function zoneChoices(current: string, authored: readonly string[]): string[] {
+  const supported = supportedZones();
+  const always = [readerZone(), current, "UTC", ...authored];
+  return [...new Set([...always, ...supported])].filter(isValidTimezone);
+}
+
+function supportedZones(): string[] {
+  try {
+    const of = (
+      Intl as unknown as { supportedValuesOf?: (k: string) => string[] }
+    ).supportedValuesOf;
+    return typeof of === "function" ? of("timeZone") : [];
+  } catch {
+    return [];
+  }
 }
 
 export function ReleaseCalendar() {
@@ -113,13 +136,34 @@ export function ReleaseCalendar() {
   const { data, isPending, isError } = useReleases({
     scheduledAfter: window_.after,
     scheduledBefore: window_.before,
-    limit: 200,
+    limit: CALENDAR_PAGE_LIMIT,
   });
 
   const releases = useMemo(() => data?.items ?? [], [data]);
+  // The route answers this when the window held more than it returned. Reported
+  // rather than absorbed: the list is ordered by instant DESCENDING, so a
+  // truncated month drops the EARLIEST days — the grid would look empty exactly
+  // where the reader is most likely to be looking, and nothing on screen would
+  // say the month was not fully read.
+  const truncated = data?.meta.hasNext ?? false;
+  const authoredZones = useMemo(
+    () =>
+      releases
+        .map(release => release.timezone)
+        .filter((zone): zone is string => Boolean(zone)),
+    [releases]
+  );
   const byDay = useMemo(() => bucketByDay(releases, zone), [releases, zone]);
   const grid = useMemo(() => monthGrid(month), [month]);
   const today = useMemo(() => monthOf(new Date(), zone), [zone]);
+
+  // A selected day belongs to the month it was chosen in. Paging without
+  // clearing leaves the panel open on a date the new grid does not contain,
+  // where it reports "nothing is scheduled" about a day that is not on screen.
+  const goToMonth = (next: string) => {
+    setMonth(next);
+    setSelected(null);
+  };
 
   const changeZone = (next: string) => {
     setZone(next);
@@ -133,101 +177,130 @@ export function ReleaseCalendar() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="Previous month"
-            onClick={() => setMonth(shiftMonth(month, -1))}
-          >
-            <ChevronLeft className="size-4" aria-hidden />
-          </Button>
-          <span className="min-w-[9rem] text-center text-sm font-medium">
-            {monthLabel(month)}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label="Next month"
-            onClick={() => setMonth(shiftMonth(month, 1))}
-          >
-            <ChevronRight className="size-4" aria-hidden />
-          </Button>
-          {month === today ? null : (
-            <Button variant="ghost" size="sm" onClick={() => setMonth(today)}>
-              Today
-            </Button>
-          )}
-        </div>
+      <CalendarToolbar
+        month={month}
+        today={today}
+        zone={zone}
+        zones={zoneChoices(zone, authoredZones)}
+        onMonth={goToMonth}
+        onZone={changeZone}
+      />
 
-        <label className="flex items-center gap-2 text-sm text-muted-foreground">
-          {/* NAMED on screen, not just applied. Two colleagues comparing this
-              page need to be able to see they are reading the same grid. */}
-          <span>Times shown in</span>
-          <select
-            className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
-            value={zone}
-            onChange={event => changeZone(event.target.value)}
-          >
-            {zoneChoices(zone).map(choice => (
-              <option key={choice} value={choice}>
-                {choice.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      <CalendarBody
+        month={month}
+        zone={zone}
+        grid={grid}
+        byDay={byDay}
+        selected={selected}
+        onSelect={setSelected}
+        isPending={isPending}
+        isError={isError}
+        truncated={truncated}
+      />
+    </div>
+  );
+}
 
-      {isError ? (
-        <Card className="px-6 py-10 text-center">
-          <p className="text-sm text-muted-foreground">
-            This month&rsquo;s schedule could not be loaded.
-          </p>
-        </Card>
-      ) : (
-        <>
-          {/* The grid is hidden on narrow screens rather than squeezed: seven
+/**
+ * Everything that depends on the ANSWER: the grid, the day panel, the agenda.
+ *
+ * Split from the component above so that one holds the query and this one holds
+ * the rendering, rather than a single function nesting a failure branch, a
+ * truncation branch and two device branches inside each other.
+ */
+function CalendarBody({
+  month,
+  zone,
+  grid,
+  byDay,
+  selected,
+  onSelect,
+  isPending,
+  isError,
+  truncated,
+}: {
+  month: string;
+  zone: string;
+  grid: CalendarMonth;
+  byDay: Map<DayKey, Release[]>;
+  selected: DayKey | null;
+  onSelect: (day: DayKey | null) => void;
+  isPending: boolean;
+  isError: boolean;
+  truncated: boolean;
+}) {
+  if (isError) {
+    return (
+      <Card className="px-6 py-10 text-center">
+        <p className="text-sm text-muted-foreground">
+          This month&rsquo;s schedule could not be loaded.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <>
+      {/* The grid is hidden on narrow screens rather than squeezed: seven
               columns at phone width leaves each day too small to carry a count,
               let alone be tapped. The agenda below is the same month, read as a
               sequence. */}
+      {/* Deliberately NOT `role="grid"`. Declaring one promises composite
+              keyboard behaviour — a single tab stop with arrow-key movement —
+              and a grid that announces itself without providing it is worse
+              than plain controls: a keyboard user is told to expect arrows,
+              presses them, and nothing happens. These are ordinary buttons in a
+              labelled group, which is what they behave like. */}
+      <div
+        className="hidden grid-cols-7 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid"
+        role="group"
+        aria-label={`Releases in ${monthLabel(month)}, times in ${zone}`}
+      >
+        {WEEKDAYS.map(day => (
           <div
-            className="hidden grid-cols-7 gap-px overflow-hidden rounded-lg border border-border bg-border sm:grid"
-            role="grid"
-            aria-label={`Releases in ${monthLabel(month)}, times in ${zone}`}
+            key={day}
+            aria-hidden
+            className="bg-muted px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
           >
-            {WEEKDAYS.map(day => (
-              <div
-                key={day}
-                role="columnheader"
-                className="bg-muted px-2 py-1.5 text-center text-xs font-medium text-muted-foreground"
-              >
-                {day}
-              </div>
-            ))}
-            {grid.weeks.flat().map(day => (
-              <DayCell
-                key={day}
-                day={day}
-                month={month}
-                releases={byDay.get(day) ?? []}
-                isSelected={selected === day}
-                isPending={isPending}
-                onSelect={() => setSelected(selected === day ? null : day)}
-              />
-            ))}
+            {day}
           </div>
-
-          <DayDetail
-            day={selected}
-            zone={zone}
-            releases={selected ? (byDay.get(selected) ?? []) : []}
+        ))}
+        {grid.weeks.flat().map((day: DayKey) => (
+          <DayCell
+            key={day}
+            day={day}
+            month={month}
+            releases={byDay.get(day) ?? []}
+            isSelected={selected === day}
+            isPending={isPending}
+            onSelect={() => onSelect(selected === day ? null : day)}
           />
+        ))}
+      </div>
 
-          <Agenda byDay={byDay} grid={grid} month={month} zone={zone} />
-        </>
-      )}
-    </div>
+      {truncated ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          This month holds more than {CALENDAR_PAGE_LIMIT} releases, so the grid
+          is showing the latest {CALENDAR_PAGE_LIMIT} and earlier days may look
+          emptier than they are. Narrow the range from the list view to see
+          them.
+        </p>
+      ) : null}
+
+      <DayDetail
+        day={selected}
+        zone={zone}
+        releases={selected ? (byDay.get(selected) ?? []) : []}
+      />
+
+      <Agenda
+        byDay={byDay}
+        grid={grid}
+        month={month}
+        zone={zone}
+        isPending={isPending}
+      />
+    </>
   );
 }
 
@@ -248,19 +321,22 @@ function monthLabel(month: string): string {
  * the badge cannot drift: a cell that shows a count and announces nothing is
  * the ordinary way this control becomes unusable without looking broken.
  */
-function dayCellLabel(day: DayKey, count: number, stopped: boolean): string {
+function dayCellLabel(day: DayKey, count: number, stopped: number): string {
   if (count === 0) return `${day}, nothing scheduled`;
   const plural = count === 1 ? "release" : "releases";
-  const tail = stopped ? ", one stopped" : "";
+  // COUNTED, not a boolean. Two stopped releases on one day announced as "one
+  // stopped" is a false collision summary to the reader who cannot see the
+  // badge, and the number is already in hand.
+  const tail = stopped === 0 ? "" : `, ${stopped} stopped`;
   return `${day}, ${count} ${plural}${tail}`;
 }
 
-/** The count, and whether any of it needs somebody. */
-function DayCount({ count, stopped }: { count: number; stopped: boolean }) {
+/** The count, and how much of it needs somebody. */
+function DayCount({ count, stopped }: { count: number; stopped: number }) {
   if (count === 0) return null;
   return (
-    <Badge variant={stopped ? "destructive" : "warning"}>
-      {stopped ? `${count} · stopped` : count}
+    <Badge variant={stopped > 0 ? "destructive" : "warning"}>
+      {stopped > 0 ? `${count} · ${stopped} stopped` : count}
     </Badge>
   );
 }
@@ -281,13 +357,14 @@ function DayCell({
   onSelect: () => void;
 }) {
   const inMonth = day.startsWith(month);
-  const stopped = releases.some(release => release.state === "blocked");
+  const stopped = releases.filter(
+    release => release.state === "blocked"
+  ).length;
   const count = releases.length;
 
   return (
     <button
       type="button"
-      role="gridcell"
       onClick={onSelect}
       aria-pressed={isSelected}
       aria-label={dayCellLabel(day, count, stopped)}
@@ -368,16 +445,33 @@ function Agenda({
   grid,
   month,
   zone,
+  isPending,
 }: {
   byDay: Map<DayKey, Release[]>;
   grid: { weeks: DayKey[][] };
   month: string;
   zone: string;
+  isPending: boolean;
 }) {
   const days = grid.weeks
     .flat()
     .filter(day => day.startsWith(month))
     .filter(day => (byDay.get(day)?.length ?? 0) > 0);
+
+  // NOT YET ASKED is not the same as nothing scheduled, and on a narrow screen
+  // this is the only view — so an unanswered query would otherwise render a
+  // confident "nothing scheduled this month" before the request returns, which
+  // is the answer a reader is most likely to act on and leave.
+  if (isPending) {
+    return (
+      <p
+        role="status"
+        className="px-1 py-6 text-sm text-muted-foreground sm:hidden"
+      >
+        Loading this month&rsquo;s schedule&hellip;
+      </p>
+    );
+  }
 
   if (days.length === 0) {
     return (
@@ -439,5 +533,76 @@ function ReleaseRow({ release, zone }: { release: Release; zone: string }) {
         </Badge>
       )}
     </li>
+  );
+}
+
+/**
+ * Month navigation and the zone the grid is drawn in.
+ *
+ * Split out because it is the one part of this screen with no dependency on the
+ * releases themselves — it decides WHICH releases to ask for, and knows nothing
+ * about the answer.
+ */
+function CalendarToolbar({
+  month,
+  today,
+  zone,
+  zones,
+  onMonth,
+  onZone,
+}: {
+  month: string;
+  today: string;
+  zone: string;
+  zones: string[];
+  onMonth: (month: string) => void;
+  onZone: (zone: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Previous month"
+          onClick={() => onMonth(shiftMonth(month, -1))}
+        >
+          <ChevronLeft className="size-4" aria-hidden />
+        </Button>
+        <span className="min-w-[9rem] text-center text-sm font-medium">
+          {monthLabel(month)}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Next month"
+          onClick={() => onMonth(shiftMonth(month, 1))}
+        >
+          <ChevronRight className="size-4" aria-hidden />
+        </Button>
+        {month === today ? null : (
+          <Button variant="ghost" size="sm" onClick={() => onMonth(today)}>
+            Today
+          </Button>
+        )}
+      </div>
+
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        {/* NAMED on screen, not just applied. Two colleagues comparing this
+            page need to be able to see they are reading the same grid. */}
+        <span>Times shown in</span>
+        <select
+          className="rounded-md border border-border bg-background px-2 py-1 text-sm text-foreground"
+          value={zone}
+          onChange={event => onZone(event.target.value)}
+        >
+          {zones.map(choice => (
+            <option key={choice} value={choice}>
+              {choice.replace(/_/g, " ")}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
   );
 }

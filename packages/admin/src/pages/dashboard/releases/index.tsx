@@ -52,12 +52,14 @@ export default function ReleasesPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {/* A radiogroup rather than two buttons: these are mutually
-                exclusive views of one thing, and that is what tells a screen
-                reader the second choice replaces the first rather than doing
-                something additional. */}
+            {/* Toggle BUTTONS, deliberately not a radiogroup. A radiogroup
+                promises composite keyboard behaviour — one tab stop, arrows to
+                move and select — and declaring one without providing it is
+                worse than plain controls: it tells a keyboard user to press
+                arrows that do nothing. `aria-pressed` says the same thing about
+                state and promises only what these actually do. */}
             <div
-              role="radiogroup"
+              role="group"
               aria-label="View releases as"
               className="flex items-center rounded-md border border-border p-0.5"
             >
@@ -65,8 +67,7 @@ export default function ReleasesPage() {
                 <button
                   key={option}
                   type="button"
-                  role="radio"
-                  aria-checked={view === option}
+                  aria-pressed={view === option}
                   onClick={() => setView(option)}
                   className={[
                     "rounded px-3 py-1 text-sm capitalize transition-colors",

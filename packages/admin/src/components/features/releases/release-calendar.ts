@@ -98,8 +98,18 @@ export function monthWindow(
   };
 }
 
-/** The instant a day begins in `timeZone`, as an ISO string. */
-function startOfDayInstant(day: DayKey, timeZone: string): string {
+/**
+ * The instant a day begins in `timeZone`, as an ISO string.
+ *
+ * Exported for its own test. Through {@link monthWindow} the walk below is
+ * DEFENSIVE rather than live: a grid always opens on a Monday and its exclusive
+ * upper bound is a Monday too, while every zone that moves its clock at
+ * midnight does so on a Sunday — so no real zone reaches the fallback by that
+ * route. It is still the right shape, because "midnight" is an assumption this
+ * function would otherwise be making silently, and a caller with a different
+ * boundary would inherit it.
+ */
+export function startOfDayInstant(day: DayKey, timeZone: string): string {
   // Midnight can be SKIPPED — a zone that springs forward at 00:00 has no
   // 00:00 that day — so the first wall time that exists is taken instead of
   // assuming one. Bounded at three hours, which is wider than any transition.
@@ -138,6 +148,12 @@ export function bucketByDay(
   const byDay = new Map<DayKey, Release[]>();
   for (const release of releases) {
     if (!release.scheduledAt) continue;
+    // A CANCELLED release keeps its instant, and nothing happens at it. Counting
+    // it would show a day as occupied — and, on a grid whose whole job is
+    // showing collisions, assert a collision that cannot occur. Dropped rather
+    // than styled differently: the calendar answers what will happen, and a
+    // called-off launch is not an answer to that.
+    if (release.state === "cancelled") continue;
     const at = new Date(release.scheduledAt);
     if (Number.isNaN(at.getTime())) continue;
     const key = dayKeyIn(at, timeZone);

@@ -16,6 +16,7 @@ import {
   monthOf,
   monthWindow,
   shiftMonth,
+  startOfDayInstant,
 } from "../release-calendar";
 
 import type { Release } from "@admin/types/releases";
@@ -55,6 +56,23 @@ describe("which day a release lands on", () => {
       "2026-09-02",
     ]);
     expect([...bucketByDay([early], "UTC").keys()]).toEqual(["2026-09-01"]);
+  });
+
+  it("leaves a CANCELLED release off the grid, instant or not", async () => {
+    // Cancelling keeps `scheduledAt`, so a cancelled launch still has a date —
+    // and counting it would show the day as occupied on a grid whose whole job
+    // is showing collisions, asserting a clash that cannot happen.
+    const cancelled = {
+      ...release("called-off", "2026-09-01T09:00:00.000Z"),
+      state: "cancelled",
+    } as unknown as Release;
+    expect(bucketByDay([cancelled], "UTC").size).toBe(0);
+
+    // The control: the same release, not cancelled, IS counted — so this is a
+    // state filter rather than the bucketing having stopped working.
+    expect(
+      bucketByDay([release("still-on", "2026-09-01T09:00:00.000Z")], "UTC").size
+    ).toBe(1);
   });
 
   it("leaves a release with no instant off the grid entirely", async () => {
@@ -134,14 +152,46 @@ describe("the window the month is fetched with", () => {
     );
   });
 
-  it("survives a zone whose midnight does not exist", async () => {
-    // A zone that springs forward at 00:00 has no midnight that day. The window
-    // must still open — walking forward to the first wall time that exists —
-    // rather than returning something unparseable and emptying the month.
-    const window = monthWindow("2026-10", "America/Santiago");
-    expect(Number.isNaN(new Date(window.after).getTime())).toBe(false);
-    expect(new Date(window.after).getTime()).toBeLessThan(
-      new Date(window.before).getTime()
+  it("opens on a Monday, which is why the skipped-midnight walk is defensive here", async () => {
+    // Worth pinning, because it is the reason the case below tests
+    // `startOfDayInstant` directly instead of through this function. A grid
+    // always opens on a Monday and its exclusive bound is a Monday too, while
+    // every zone that moves its clock at midnight does so on a Sunday — so no
+    // real zone reaches the walk by this route.
+    for (const month of ["2026-09", "2026-10", "2026-11", "2027-01"]) {
+      const opens = new Date(monthWindow(month, "UTC").after);
+      expect(opens.getUTCDay()).toBe(1);
+    }
+  });
+});
+
+describe("a day whose midnight does not exist", () => {
+  it("opens at the first wall time the zone actually has", async () => {
+    // Chile moves its clock AT midnight: on 2026-09-06 Santiago goes straight
+    // from 23:59 on the 5th to 01:00 on the 6th, so `2026-09-06T00:00` is not a
+    // moment. Measured — 03:30Z reads as 23:30 on the 5th there, and 04:00Z as
+    // 01:00 on the 6th.
+    //
+    // The EXACT instant is asserted, because that is the only thing separating
+    // a walk forward from the UTC fallback: both produce a parseable date and
+    // both order correctly, so a test that checked either would stay green on
+    // the broken implementation. An earlier version of this test did exactly
+    // that, on a month whose grid did not even contain the transition.
+    expect(startOfDayInstant("2026-09-06", "America/Santiago")).toBe(
+      "2026-09-06T04:00:00.000Z"
+    );
+    // The control: the same zone on an ordinary day has a real midnight, and
+    // must NOT be walked forward.
+    expect(startOfDayInstant("2026-09-20", "America/Santiago")).toBe(
+      "2026-09-20T03:00:00.000Z"
+    );
+  });
+
+  it("returns the plain midnight instant for a zone with no transition", async () => {
+    // The other control: without it, a function that always walked forward
+    // would satisfy the skipped case above.
+    expect(startOfDayInstant("2026-09-06", "UTC")).toBe(
+      "2026-09-06T00:00:00.000Z"
     );
   });
 });
