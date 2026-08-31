@@ -12,7 +12,12 @@ import { Badge, Button } from "@nextlyhq/ui";
 import type { useForm } from "react-hook-form";
 
 import { Loader2, Send, Settings } from "@admin/components/icons";
-import { FormField } from "@admin/components/ui/form";
+import {
+  FormControl,
+  FormField,
+  FormItem,
+  FormMessage,
+} from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 
@@ -40,20 +45,35 @@ export function EditorBar({
   onOpenSettings: () => void;
 }) {
   return (
-    <div className="flex w-full items-center gap-3">
-      <div className="min-w-0 flex-1">
+    /* Wraps rather than overflowing. Unwrapped, the six controls exceed the
+       space beside the shell's back button on a phone and push Save off-screen,
+       reachable only by horizontal panning nobody discovers. */
+    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="min-w-0 flex-1 basis-full sm:basis-auto">
         <FormField
           control={control}
           name="name"
           render={({ field }) => (
-            <input
-              {...field}
-              onChange={e => onNameChange(e.target.value, field.onChange)}
-              disabled={isPending}
-              placeholder="Untitled template"
-              aria-label="Template name"
-              className="w-full max-w-md truncate bg-transparent text-lg font-semibold text-foreground outline-none placeholder:text-muted-foreground"
-            />
+            /*
+             * The message is not decoration. A refused save reopens whichever
+             * region owns the offending field, and this field's region is
+             * always on screen — so without somewhere to render the message,
+             * a rejection on the name produces no visible reason and Save
+             * reads as a dead control.
+             */
+            <FormItem className="space-y-0.5">
+              <FormControl>
+                <input
+                  {...field}
+                  onChange={e => onNameChange(e.target.value, field.onChange)}
+                  disabled={isPending}
+                  placeholder="Untitled template"
+                  aria-label="Template name"
+                  className="w-full max-w-md truncate bg-transparent text-lg font-semibold text-foreground outline-none placeholder:text-muted-foreground"
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
           )}
         />
         <div className="font-mono text-xs text-muted-foreground">

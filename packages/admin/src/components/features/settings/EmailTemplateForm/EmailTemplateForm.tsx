@@ -18,6 +18,7 @@ import { type EmailTemplateRecord } from "@admin/services/emailTemplateApi";
 import { BodyEditor } from "./BodyEditor";
 import { EditorBar } from "./EditorBar";
 import { EnvelopeBar } from "./EnvelopeBar";
+import { regionsForRefusal } from "./refusal-routing";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
@@ -165,7 +166,17 @@ export function EmailTemplateForm({
       <form
         id={EMAIL_TEMPLATE_FORM_ID}
         onSubmit={e => {
-          void form.handleSubmit(onSubmit)(e);
+          /*
+           * The second argument is what stops a refusal being silent. The
+           * inspector is summoned, so a field it owns can be invalid while the
+           * only message for it is unmounted — `handleSubmit` then declines and
+           * nothing appears, which reads as a Save button that does nothing.
+           */
+          void form.handleSubmit(onSubmit, errors => {
+            if (regionsForRefusal(Object.keys(errors)).inspector) {
+              setInspectorOpen(true);
+            }
+          })(e);
         }}
         className="h-full min-h-0"
         aria-busy={isPending}
