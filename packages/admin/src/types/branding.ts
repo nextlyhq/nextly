@@ -1,4 +1,4 @@
-import type { PluginAdminWidget } from "nextly/config";
+import type { PluginAdminWidget, WidgetDefinition } from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -80,6 +80,23 @@ export interface PluginPageMeta {
  * bundle, exactly as a consumer's would.
  */
 export type PluginWidgetMeta = PluginAdminWidget;
+
+/**
+ * A widget the running app REGISTERED, as `/admin-meta/workspace` serializes it.
+ *
+ * A different channel from `PluginWidgetMeta` above, not a variant of it. That
+ * one is DECLARED in a plugin's `contributes.admin.widgets` and is almost
+ * entirely optional; this one went through `registerWidget`, whose validator
+ * requires `title`, `archetype` and `defaultSize`, requires a `query` for every
+ * data archetype and a `component` for `custom`, and forbids each where it does
+ * not belong. So a registered widget arrives already complete, and the resolver
+ * has nothing to default for it.
+ *
+ * Aliased from core's own declaration for the same reason `PluginWidgetMeta` is:
+ * the server puts that exact object on the wire, so a second spelling here would
+ * be one contract declared twice.
+ */
+export type RegisteredWidgetMeta = WidgetDefinition;
 
 /**
  * A plugin's public client configuration, served before a session exists.
@@ -257,6 +274,20 @@ export interface AdminBranding {
    * unavailable. Only `usePluginClientConfig` reads this.
    */
   pluginClientConfigs?: PluginClientConfigMeta[];
+
+  /**
+   * Widgets the running app registered through `registerWidget`.
+   *
+   * Beside `plugins`, never inside it: a registration is not a plugin
+   * contribution, and the two reach the dashboard grid by different routes. A
+   * widget may legitimately appear in both -- an app that declares it AND
+   * registers it -- which is why the grid dedupes by id rather than assuming
+   * the lists are disjoint.
+   *
+   * Comes from the session-gated half alone, so its absence means the registry
+   * has not arrived rather than that the app registered nothing.
+   */
+  widgets?: RegisteredWidgetMeta[];
 
   /** Custom sidebar groups created by the user for organizing collections/singles. */
   customGroups?: Array<{ slug: string; name: string; icon?: string }>;

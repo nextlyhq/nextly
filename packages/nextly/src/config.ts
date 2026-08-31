@@ -199,12 +199,24 @@ export type {
 // barrel also carries `executeWidgetQuery`, and through it the Direct API, which
 // is exactly the weight this entry point exists to keep out of a
 // `nextly.config.ts`.
+//
+// `WidgetDefinition` is here for the same derivation reason as the contribution
+// shapes above: `/api/admin-meta/workspace` serializes the registry verbatim, so
+// the admin reads exactly this shape off the wire and restating it there would
+// be one contract declared twice.
 export type {
   WidgetArchetype,
+  WidgetDefinition,
   WidgetHeight,
   WidgetSize,
 } from "./domains/widgets/definition";
 export type { WidgetQuery } from "./domains/widgets/query";
+// A VALUE, and the only one in this block. The admin batches a dashboard's
+// widgets into requests `POST /api/dashboard/query` will accept, so it needs the
+// number that endpoint refuses above -- and a second copy of it on the client
+// would send a batch the server rejects the day the two diverged. Its module has
+// no imports, so taking it here costs a `nextly.config.ts` nothing.
+export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
 export type {
   WidgetOp,
   WidgetSourceField,

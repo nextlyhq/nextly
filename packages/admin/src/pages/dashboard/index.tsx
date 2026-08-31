@@ -13,11 +13,11 @@ import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
 import type React from "react";
 
 import { CollectionQuickLinks } from "@admin/components/features/dashboard/CollectionQuickLinks";
-import { PluginWidgetGrid } from "@admin/components/features/dashboard/PluginWidgetGrid";
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
+import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ErrorBoundary } from "@admin/components/shared/error-boundary";
@@ -83,9 +83,16 @@ const DashboardPage: React.FC = () => {
             <TeamSummary />
           </div>
 
-          {/* Plugin-contributed dashboard widgets (D22 / C9). Renders nothing
-              when no plugin contributes a widget the current user may see. */}
-          <PluginWidgetGrid />
+          {/* The widget grid: every contributed widget, permission-gated, in a
+              12-column layout that collapses to one column below `md`, with a
+              single batched request behind all of them. Renders nothing when no
+              plugin contributes a widget the current user may see.
+
+              This replaces `PluginWidgetGrid`, which stays in the tree until the
+              core widget registry lands: it is the only thing that has ever
+              rendered plugin widgets, and removing it before its replacement is
+              wired to the registry would take them off the dashboard. */}
+          <WidgetGrid />
         </div>
       </PageContainer>
     </ErrorBoundary>

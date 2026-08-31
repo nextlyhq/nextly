@@ -17,6 +17,7 @@
 import { authorizationGroups, canReadEntity } from "../auth/entity-read-access";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { MAX_QUERIES_PER_REQUEST } from "../domains/widgets/batch-limit";
 import { refreshCollectionSources } from "../domains/widgets/collection-sources";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import {
@@ -38,9 +39,6 @@ import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
-
-/** No dashboard needs more than this many widgets in one round trip. */
-const MAX_QUERIES_PER_REQUEST = 30;
 
 const PRIVATE_NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store",
