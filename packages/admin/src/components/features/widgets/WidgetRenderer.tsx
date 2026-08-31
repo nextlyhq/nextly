@@ -110,6 +110,22 @@ export function WidgetRenderer({
   }
 
   if (!slot) {
+    // Absent means IN FLIGHT, and only a widget that actually asked for
+    // something can have a request in flight. One with no query never will, so
+    // reading its absent slot as busy leaves the card spinning for the life of
+    // the page -- with nothing on screen, in the live region or in the console
+    // saying why. `resolve-widgets` prefers a contributed component over this,
+    // so reaching here means there was none to prefer.
+    if (!definition.query) {
+      return (
+        <WidgetCard
+          {...shared}
+          error={`The "${definition.archetype}" archetype is drawn from a query, and this widget declares none.`}
+        >
+          {null}
+        </WidgetCard>
+      );
+    }
     return (
       <WidgetCard {...shared} isLoading>
         {null}

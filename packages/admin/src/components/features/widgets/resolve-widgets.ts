@@ -29,12 +29,42 @@ import { legacySizeToWidgetSize } from "./sizes";
  * plugin half has gone missing must never break the grid, and a card with a
  * title and nothing under it reads as a product bug rather than as a missing
  * plugin.
+ *
+ * A declared archetype does NOT automatically win, and that is the case worth
+ * reading twice. Every archetype but `custom` is drawn by core FROM A QUERY
+ * RESULT, so one declared without a query describes a body core cannot produce
+ * -- no request is made for it, no slot ever arrives, and the card reads that
+ * absence as "still loading" for the life of the page. `PluginAdminWidget`
+ * makes `query` optional and `component` required, so the declaration is legal
+ * and the component is always there; drawing it is both the better outcome and
+ * the one the author actually shipped.
  */
 function resolveArchetype(
   meta: PluginWidgetMeta
 ): DashboardWidget["archetype"] | undefined {
-  if (meta.archetype) return meta.archetype;
+  if (meta.archetype) {
+    if (meta.archetype !== "custom" && !meta.query && meta.component) {
+      return "custom";
+    }
+    return meta.archetype;
+  }
   return meta.component ? "custom" : undefined;
+}
+
+/**
+ * A title with visible text, falling back to the widget's id.
+ *
+ * TRIMMED, not merely nullish-checked. `title: ""` and `title: "   "` are legal
+ * for a contributed widget -- boot requires only a usable `id` and `component`
+ * -- and both pass a `??`. The title is the card region's `aria-labelledby`
+ * target, so an empty one makes a landmark with no accessible name, which is
+ * worse for a screen-reader user than having no landmark at all. The id is a
+ * poor title and it NAMES the widget, which is the one thing a card in that
+ * state has to be able to do.
+ */
+function resolveTitle(title: string | undefined, id: string): string {
+  const trimmed = title?.trim();
+  return trimmed ? trimmed : id;
 }
 
 /**
@@ -72,9 +102,7 @@ function resolveOne(
 
   return {
     id: meta.id,
-    // The id is a poor title, but it names the widget, which is the one thing
-    // an error card has to be able to do.
-    title: meta.title ?? meta.id,
+    title: resolveTitle(meta.title, meta.id),
     description: meta.description,
     icon: meta.icon,
     archetype,
@@ -114,7 +142,10 @@ function resolveRegistered(
 
   return {
     id: meta.id,
-    title: meta.title,
+    // Through the same helper as a contribution, though `validateWidgetDefinition`
+    // already rejects a blank title: the card must not have two ideas about what
+    // its region is named depending on which channel declared it.
+    title: resolveTitle(meta.title, meta.id),
     description: meta.description,
     icon: meta.icon,
     archetype: meta.archetype,

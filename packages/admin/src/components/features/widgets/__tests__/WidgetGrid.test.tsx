@@ -271,6 +271,45 @@ describe("WidgetGrid — collection and gating", () => {
     expect(screen.getByText("panel body")).toBeInTheDocument();
   });
 
+  it("draws the contributed component when a data archetype declares no query", () => {
+    // `archetype: "metric"` with no `query` is a legal contribution: the field
+    // is optional and boot requires only `id` and `component`. Core cannot draw
+    // a metric without a result, no request is made for it, and reading the
+    // missing slot as "in flight" left the card busy forever. The component the
+    // author actually shipped is right there.
+    registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
+    mockBranding = brandingWith([
+      {
+        id: "queryless",
+        title: "Queryless",
+        archetype: "metric",
+        component: "@acme/admin#Panel",
+      },
+    ]);
+
+    renderGrid();
+    expect(screen.getByText("panel body")).toBeInTheDocument();
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "false"
+    );
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("names a blank title's widget instead of drawing an unnamed landmark", () => {
+    // `title: "   "` passes a nullish fallback and leaves the card region's
+    // `aria-labelledby` pointing at an empty heading.
+    registerComponents({ "@acme/admin#Blank": () => <div>blank body</div> });
+    mockBranding = brandingWith([
+      { id: "acme/untitled", title: "   ", component: "@acme/admin#Blank" },
+    ]);
+
+    renderGrid();
+    expect(
+      screen.getByRole("region", { name: "acme/untitled" })
+    ).toBeInTheDocument();
+  });
+
   it("shows a widget that declares no permission at all", () => {
     registerComponents({ "@acme/admin#Open": () => <div>open widget</div> });
     mockBranding = brandingWith([

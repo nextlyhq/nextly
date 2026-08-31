@@ -141,6 +141,41 @@ describe("WidgetRenderer — custom", () => {
   });
 });
 
+describe("WidgetRenderer — a data archetype with nothing to draw from", () => {
+  it("says so rather than staying busy for a slot that will never arrive", () => {
+    render(
+      <WidgetRenderer
+        definition={{
+          id: "acme/queryless",
+          title: "Queryless",
+          archetype: "metric",
+          size: "sm",
+        }}
+        slot={undefined}
+      />
+    );
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "false"
+    );
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      /declares none/i
+    );
+    expect(screen.getByText("Queryless")).toBeInTheDocument();
+  });
+
+  it("stays busy for a widget that DID ask and has not been answered", () => {
+    // The control for the case above: absence still means in flight when there
+    // is a request to be in flight.
+    render(<WidgetRenderer definition={metric} slot={undefined} />);
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "true"
+    );
+    expect(screen.queryByTestId("widget-card-error")).not.toBeInTheDocument();
+  });
+});
+
 describe("WidgetRenderer — archetypes not built yet", () => {
   it("says so, by name, instead of rendering an empty card", () => {
     render(
