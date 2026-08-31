@@ -28,6 +28,31 @@ import { useController, type Control } from "react-hook-form";
 
 import { cn } from "@admin/lib/utils";
 
+/**
+ * The value types a text box can show, which is every primitive it can be
+ * handed.
+ *
+ * A SET rather than a chain of `typeof` comparisons, because this list grew by
+ * one TWICE — numbers, then booleans — and each omission read as a deliberate
+ * narrowing rather than a case nobody had listed. The shape was the defect: a
+ * chain invites adding the type in front of you, a set invites asking which
+ * types exist.
+ *
+ * Measured against the registered input this replaced, which is the parity
+ * being kept: handed `true` it displayed `true`, handed `42` it displayed
+ * `42`. Anything refused here shows as "Untitled" over saved content, which
+ * lies about the document — strictly worse than showing an odd value.
+ *
+ * `symbol` and `function` are absent deliberately rather than forgotten:
+ * neither survives the API round trip, and `String(Symbol())` throws.
+ */
+const PRIMITIVE_TITLES: ReadonlySet<string> = new Set([
+  "string",
+  "number",
+  "bigint",
+  "boolean",
+]);
+
 export interface EntryTitleInputProps {
   /** The form field holding the title. */
   name: string;
@@ -69,8 +94,9 @@ export function EntryTitleInput({
    * PRIMITIVES ARE SHOWN, not just strings.
    *
    * `title` is an ownable system column and a code-first schema may redefine
-   * it: core covers a required NUMBER title, and a document holding `42` must
-   * read `42` here. Accepting only strings would show such a title as
+   * it with any field type: core covers a required NUMBER title, and a
+   * `checkbox` owning the column reaches this as a boolean. A document holding
+   * `42` must read `42` here, and one holding `true` must read `true`. Accepting only strings would show such a title as
    * "Untitled" while the form held its real value — the author would see an
    * empty box over saved content, which is the reverse of the defect this
    * control was extracted to fix. The registered input this replaced rendered
@@ -88,12 +114,7 @@ export function EntryTitleInput({
    * different change from this one.
    */
   const raw: unknown = field.value;
-  const value =
-    typeof raw === "string" ||
-    typeof raw === "number" ||
-    typeof raw === "bigint"
-      ? String(raw)
-      : "";
+  const value = PRIMITIVE_TITLES.has(typeof raw) ? String(raw) : "";
 
   return (
     <input

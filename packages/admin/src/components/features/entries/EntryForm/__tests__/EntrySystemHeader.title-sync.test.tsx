@@ -133,6 +133,38 @@ describe("the header's title and another surface editing the same field", () => 
     expect(headerTitle().value).toBe("42");
   });
 
+  it("shows a BOOLEAN title, which a checkbox owning the column produces", () => {
+    /*
+     * The second omission of the same shape, which is why the accepted types
+     * are now a set rather than a chain. A `checkbox` field may own `title`,
+     * and the registered input this replaced displayed `true` — measured, not
+     * assumed. Refusing it shows "Untitled" over a saved value, which lies
+     * about the document.
+     */
+    function BooleanHarness() {
+      const methods = useForm({ defaultValues: { title: true } });
+      return (
+        <FormProvider {...methods}>
+          <EntrySystemHeader
+            mode="edit"
+            hasStatus
+            entry={{ id: "b", status: "draft" }}
+            collectionSlug="pages"
+            scope="single"
+            onSaveDraft={vi.fn()}
+            onPublish={vi.fn()}
+            onSaveChanges={vi.fn()}
+            onUnpublish={vi.fn()}
+            onCancel={vi.fn()}
+          />
+        </FormProvider>
+      );
+    }
+
+    render(<BooleanHarness />);
+    expect(headerTitle().value).toBe("true");
+  });
+
   it("still shows nothing for a value no text input can draw", () => {
     // The control for the case above. Widening to "any primitive" must not
     // widen to "anything": an object would render as `[object Object]`, which
