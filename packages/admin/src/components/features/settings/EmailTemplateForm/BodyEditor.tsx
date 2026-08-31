@@ -58,7 +58,11 @@ export function BodyEditor({
 }) {
   return (
     <>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+      {/* Bounded and scrollable. The strip is `shrink-0` and the editor is the
+          only child that can give way, so an unbounded strip takes the pane one
+          declared variable at a time — and a template with enough of them
+          leaves no editor at all. */}
+      <div className="flex max-h-24 shrink-0 flex-wrap items-center gap-2 overflow-y-auto border-b border-border px-3 py-2">
         <Segmented<"html" | "text">
           value={editorTab}
           onChange={onEditorTabChange}

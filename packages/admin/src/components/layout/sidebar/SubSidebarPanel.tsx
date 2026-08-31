@@ -73,9 +73,19 @@ export function SubSidebarPanel({
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        <SubSidebarContent {...content} />
-      </div>
+      {/*
+        Not rendered while closed, rather than hidden. Zero width, zero opacity
+        and `pointer-events-none` remove a subtree from SIGHT and from the
+        mouse, and leave every link in the tab order — so a keyboard user tabs
+        through an invisible menu and is navigated out of the editor by a link
+        they cannot see. `inert` would express this directly, but it is a
+        boolean prop only from React 19 and this package supports 18 as well.
+      */}
+      {hasSubSidebar ? (
+        <div className="flex-1 overflow-y-auto">
+          <SubSidebarContent {...content} />
+        </div>
+      ) : null}
     </aside>
   );
 }

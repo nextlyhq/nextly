@@ -40,8 +40,11 @@ export function EditorBar({
   onOpenSettings: () => void;
 }) {
   return (
-    <div className="flex w-full items-center gap-3">
-      <div className="min-w-0 flex-1">
+    /* Wraps rather than overflowing. Unwrapped, the six controls exceed the
+       space beside the shell's back button on a phone and push Save off-screen,
+       reachable only by horizontal panning nobody discovers. */
+    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2">
+      <div className="min-w-0 flex-1 basis-full sm:basis-auto">
         <FormField
           control={control}
           name="name"
