@@ -119,14 +119,23 @@ export interface ApplyDueReleasesDeps {
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
     markReleasePublished(id: string, at: Date): Promise<boolean>;
     /**
-     * Stop a release nothing about retrying could fix.
+     * Stop a COMPONENT of releases nothing about retrying could fix, atomically.
      *
-     * Takes the instant the pass planned against, and the repository fences on
-     * it as well as on the state — the same pair `isStillDueAt` judges by. A
-     * release someone postponed between the plan and this call is left alone,
-     * rather than having the schedule they just chose replaced with `blocked`.
+     * Takes the whole set rather than one release, because the set sharing a
+     * document is the unit that has to move together — see the repository's own
+     * note on why no ordering of individual writes can substitute for that.
+     *
+     * Each entry carries the instant the pass planned against, and the
+     * repository fences on it as well as on the state — the same pair
+     * `isStillDueAt` judges by. A release someone postponed between the plan
+     * and this call fails its fence, and the whole component is then left
+     * alone rather than half-transitioned.
+     *
+     * @returns the ids actually blocked: every entry, or none.
      */
-    blockRelease(id: string, scheduledAt: Date): Promise<boolean>;
+    blockReleases(
+      entries: readonly { id: string; scheduledAt: Date }[]
+    ): Promise<readonly string[]>;
   };
   mutations: ReleaseMutations;
   /** The identity reads, so a member's author can be resolved. */
@@ -240,6 +249,13 @@ const RETRY_COULD_HELP: Record<MaterialisationFailure, boolean> = {
  * either, because the pair is only ever discharged together. Blocking one and
  * not the other would leave the second retrying forever, which is the condition
  * this exists to end.
+ *
+ * Each component is handed over WHOLE, so the transition is all-or-nothing. An
+ * earlier version issued one write per release and ordered them earliest-first
+ * so that any surviving prefix was safe; that argument does not survive two
+ * releases sharing an instant, because the engine breaks such a tie per
+ * document on the member's creation time, and each release can therefore win a
+ * different document of the same component.
  */
 async function stopHopelessReleases(
   deps: ApplyDueReleasesDeps,
@@ -250,35 +266,34 @@ async function stopHopelessReleases(
   const permanent = permanentlyBrokenReleases(outcomes);
   if (permanent.size === 0) return 0;
 
-  const toBlock = new Set<string>();
-  for (const group of plan.overlappingReleases) {
-    if (group.some(id => permanent.has(id))) {
-      for (const id of group) toBlock.add(id);
-    }
-  }
-
-  // EARLIEST FIRST, and this ordering is load-bearing rather than tidy. The
-  // component is blocked with one write per release and the port has no
-  // transaction, so a crash or an error partway through leaves it split — and
-  // which half survives decides what the document looks like. Blocking the
-  // earliest first means any prefix that succeeds leaves the LATER releases
-  // still scheduled, and the later one is the winner under the engine's total
-  // order: the document ends in the state the whole component would have left
-  // it in. Blocking the latest first inverts that — the earlier release becomes
-  // the winner and applies the opposite lifecycle action.
-  const ordered = [...toBlock].sort((a, b) => {
-    const at = plannedInstants.get(a)?.getTime() ?? 0;
-    const bt = plannedInstants.get(b)?.getTime() ?? 0;
-    return at - bt;
-  });
-
+  // ONE CALL PER COMPONENT, and the component is the unit of atomicity. The
+  // groups are a partition — union-find over shared documents — so no release
+  // is offered twice and a release sharing nothing appears in a set of one.
+  //
+  // Per component rather than one transaction over all of them: components are
+  // independent by construction, so a single wide transaction would hold locks
+  // across releases that have nothing to do with each other, and one bad
+  // component would roll back every good one beside it.
   let blocked = 0;
-  for (const id of ordered) {
-    const at = plannedInstants.get(id);
-    // A release with no planned instant was not part of this pass's plan, so
-    // there is nothing to fence against and nothing to stop.
-    if (at === undefined) continue;
-    if (await deps.repository.blockRelease(id, at)) blocked += 1;
+  for (const group of plan.overlappingReleases) {
+    if (!group.some(id => permanent.has(id))) continue;
+
+    const entries: { id: string; scheduledAt: Date }[] = [];
+    for (const id of group) {
+      const at = plannedInstants.get(id);
+      // A release with no planned instant was not part of this pass's plan, so
+      // there is nothing to fence against. The WHOLE component is then skipped
+      // rather than the one release: blocking the rest is precisely the split
+      // this pass exists to avoid, and the next pass re-plans against a set it
+      // can fence completely.
+      if (at === undefined) {
+        entries.length = 0;
+        break;
+      }
+      entries.push({ id, scheduledAt: at });
+    }
+
+    blocked += (await deps.repository.blockReleases(entries)).length;
   }
   return blocked;
 }

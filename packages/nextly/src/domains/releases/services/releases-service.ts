@@ -207,6 +207,30 @@ function byEngineOrder(
 }
 
 /**
+ * Refuse a schedule the driver could not store, before it reaches the driver.
+ *
+ * A NaN date reaches timestamp encoding and fails differently per dialect, so
+ * the caller's mistake would arrive as an opaque database error instead of the
+ * sentence naming it. The timezone limit is the narrowest dialect's, for the
+ * same reason the title has one: otherwise the call succeeds on two engines
+ * and truncates on the third.
+ */
+function assertUsableSchedule(id: string, at: Date, timezone: string): void {
+  if (Number.isNaN(at.getTime())) {
+    throw NextlyError.invalidInput({
+      message: "`at` is not a valid instant.",
+      logContext: { reason: "invalid-schedule-instant", releaseId: id },
+    });
+  }
+  if (timezone.length === 0 || timezone.length > MAX_RELEASE_TIMEZONE_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `\`timezone\` must be between 1 and ${MAX_RELEASE_TIMEZONE_LENGTH} characters.`,
+      logContext: { reason: "invalid-timezone", length: timezone.length },
+    });
+  }
+}
+
+/**
  * Why this member cannot be applied, or `null` if it can.
  *
  * The order matters and is the drain's: a member that is BOTH locale-scoped and
@@ -940,54 +964,27 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<void> {
     await this.authorize(actor, "publish");
-    // An unusable instant is refused HERE rather than at the driver. A NaN date
-    // reaches timestamp encoding and fails differently per dialect, so the
-    // caller's mistake arrives as an opaque database error instead of the
-    // sentence naming it.
-    if (Number.isNaN(at.getTime())) {
-      throw NextlyError.invalidInput({
-        message: "`at` is not a valid instant.",
-        logContext: { reason: "invalid-schedule-instant", releaseId: id },
-      });
-    }
-    // Same reason the title has a limit: the narrowest dialect defines the
-    // contract, or the call succeeds on two engines and truncates on the third.
-    if (
-      timezone.length === 0 ||
-      timezone.length > MAX_RELEASE_TIMEZONE_LENGTH
-    ) {
-      throw NextlyError.invalidInput({
-        message: `\`timezone\` must be between 1 and ${MAX_RELEASE_TIMEZONE_LENGTH} characters.`,
-        logContext: { reason: "invalid-timezone", length: timezone.length },
-      });
-    }
-    // A BLOCKED release is refused while what stopped it is still true.
-    // Scheduling it again would reach the instant, hit the same member, and
-    // stop again — and the operator would learn that only by waiting for a
-    // launch that does not happen. Checked here rather than left to the drain
-    // because this is the moment somebody is asking, and the answer is already
-    // derivable from the members.
+    assertUsableSchedule(id, at, timezone);
+    // A release is refused while anything that would stop it is still true,
+    // WHATEVER state it is scheduled from. Scheduling it would reach the
+    // instant, hit the same member and stop — and the operator would learn
+    // that only by waiting for a launch that does not happen.
     //
-    // Only for a blocked release: every other state pays no extra read.
+    // For EVERY schedulable state, not only `blocked`, and the symmetry is the
+    // point. A release whose author was deleted while it sat `scheduled` is the
+    // same broken release as one the drain has already labelled, and it becomes
+    // the labelled one at its instant; refusing the first while accepting the
+    // second makes the rule depend on whether a background pass happened to
+    // have run yet, which is not something the person scheduling can see. The
+    // ordinary postponement after a colleague leaves is exactly this case.
+    //
+    // The cost is bounded and falls on a human action rather than a read path:
+    // one query for the members, and a second for their authors only when
+    // there are any. Scheduling is not a hot path, and the alternative is
+    // spending it at the instant instead, when nobody is watching.
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
     const wasBlocked = current?.state === "blocked";
-    if (wasBlocked) {
-      // `derivedBlockers`, not `blockingReasons`: `publish` was authorized
-      // above, and going through the public method would demand `read` as
-      // well — a grant a publish-scoped API key need not hold.
-      const blockers = await this.derivedBlockers(id);
-      if (blockers.length > 0) {
-        throw NextlyError.conflict({
-          message:
-            "This release cannot be scheduled until the documents blocking it are fixed or removed.",
-          logContext: {
-            reason: "release-still-blocked",
-            releaseId: id,
-            blockers: blockers.length,
-          },
-        });
-      }
-    }
+    await this.assertNothingBlocks(id, current?.state);
 
     // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what
     // makes the check and the write one decision rather than two.
@@ -1006,9 +1003,16 @@ export class ReleasesService {
     //     a decision made after the verdict.
     //
     // Either way the caller is told, and a retry re-derives against what is
-    // now true. The alternative — a transaction — is not available: the port
-    // exposes no transaction, which is the same constraint the drain's
-    // blocking pass works within.
+    // now true.
+    //
+    // A compare-and-set rather than a transaction, and that is now a choice
+    // rather than a constraint — the port gained one for the drain's blocking
+    // pass. It is the right choice here: a transaction would have to span the
+    // read, an identity lookup for the blockers and the write, holding row
+    // locks across a query that touches another table entirely, to buy a
+    // guarantee this single fenced UPDATE already provides. The blocking pass
+    // needs a transaction because it writes to SEVERAL rows that must move
+    // together; this writes to one.
     const from = wasBlocked
       ? RELEASE_SCHEDULABLE_FROM_BLOCKED
       : RELEASE_SCHEDULABLE_FROM_UNBLOCKED;
@@ -1023,6 +1027,46 @@ export class ReleasesService {
         logContext: { reason: "release-not-schedulable", releaseId: id },
       });
     }
+  }
+
+  /**
+   * Refuse a release whose members carry something nothing can run.
+   *
+   * Only for a state the fence could actually accept. A terminal state —
+   * `published` above all — is refused by the fence whatever its members look
+   * like, and deriving blockers first would answer with the wrong sentence:
+   * "fix or remove the documents blocking it" describes a recovery that does
+   * not exist there, because `RELEASE_ASSEMBLABLE_FROM` excludes `published`
+   * and `removeMember` refuses. An operator would be sent to do something the
+   * product will not let them do, instead of being told the release has
+   * already happened.
+   *
+   * A release that is not there at all takes the same path: there is nothing
+   * to derive blockers from, and the fence reports it as unschedulable.
+   *
+   * `derivedBlockers`, not `blockingReasons`: the caller has authorized
+   * `publish` already, and the public method would demand `read` as well — a
+   * grant a publish-scoped API key need not hold.
+   */
+  private async assertNothingBlocks(
+    id: string,
+    state: ReleaseState | undefined
+  ): Promise<void> {
+    if (state === undefined || !RELEASE_SCHEDULABLE_FROM.includes(state)) {
+      return;
+    }
+    const blockers = await this.derivedBlockers(id);
+    if (blockers.length === 0) return;
+    throw NextlyError.conflict({
+      message:
+        "This release cannot be scheduled until the documents blocking it are fixed or removed.",
+      logContext: {
+        reason: "release-still-blocked",
+        releaseId: id,
+        blockers: blockers.length,
+        state,
+      },
+    });
   }
 
   async cancel(id: string, actor: ReleaseActor): Promise<void> {

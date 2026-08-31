@@ -221,7 +221,9 @@ describe.each(getConfiguredTestDialects())(
         action: "publish",
       });
       await repo.scheduleRelease(release.id, PAST, "UTC");
-      expect(await repo.blockRelease(release.id, PAST)).toBe(true);
+      expect(
+        await repo.blockReleases([{ id: release.id, scheduledAt: PAST }])
+      ).toEqual([release.id]);
 
       const found = await repo.findDueMembersFor([ref("e1")], new Date());
       expect(found.get(documentRefKey(ref("e1"))) ?? []).toEqual([]);
@@ -242,7 +244,9 @@ describe.each(getConfiguredTestDialects())(
         action: "publish",
       });
       await repo.scheduleRelease(release.id, PAST, "UTC");
-      expect(await repo.blockRelease(release.id, PAST)).toBe(true);
+      expect(
+        await repo.blockReleases([{ id: release.id, scheduledAt: PAST }])
+      ).toEqual([release.id]);
 
       // The list the document's banner actually passes, imported rather than
       // spelled again: a test naming its own states would keep passing after
@@ -257,6 +261,76 @@ describe.each(getConfiguredTestDialects())(
       // Still carrying the instant it was going to run at, which is what the
       // banner orders and dates the row by.
       expect(members[0]?.scheduledAt.getTime()).toBe(PAST.getTime());
+    });
+
+    it("blocks a whole component ATOMICALLY, or not at all", async () => {
+      // The property no ordering of separate writes can give. Two releases
+      // sharing a document must move together: if one is blocked and the other
+      // is not, the survivor becomes the winner on that document and can apply
+      // the OPPOSITE lifecycle action to the one the component would have
+      // produced.
+      //
+      // The second entry's fence is made to miss, exactly as it would for a
+      // release someone postponed between the plan and this write. The first
+      // entry's UPDATE has already run by then, so the assertion below is a
+      // real test of the rollback rather than of a statement never issued.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+
+      const first = await repo.createRelease({ title: "Launch" });
+      const second = await repo.createRelease({ title: "Takedown" });
+      for (const release of [first, second]) {
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+      }
+
+      // The repository writes in id order, so the id that sorts LATER is the
+      // one to fail — otherwise the failing statement runs first, nothing has
+      // been written yet, and a rollback that does nothing would pass.
+      const [early, late] = [first.id, second.id].sort();
+      const rows = await repo.blockReleases([
+        { id: early as string, scheduledAt: PAST },
+        // Not the instant this release carries, so its fence matches nothing.
+        { id: late as string, scheduledAt: FUTURE },
+      ]);
+
+      expect(rows).toEqual([]);
+      const after = await repo.findReleases({ ids: [first.id, second.id] });
+      expect(after.map(r => r.state).sort()).toEqual([
+        "scheduled",
+        "scheduled",
+      ]);
+    });
+
+    it("blocks every release in the component when each fence matches", async () => {
+      // The control. Without it, a `blockReleases` that refused everything
+      // would satisfy the case above perfectly.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+
+      const first = await repo.createRelease({ title: "Launch" });
+      const second = await repo.createRelease({ title: "Takedown" });
+      for (const release of [first, second]) {
+        await repo.addMember({
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        });
+        await repo.scheduleRelease(release.id, PAST, "UTC");
+      }
+
+      const rows = await repo.blockReleases([
+        { id: first.id, scheduledAt: PAST },
+        { id: second.id, scheduledAt: PAST },
+      ]);
+
+      expect([...rows].sort()).toEqual([first.id, second.id].sort());
+      const after = await repo.findReleases({ ids: [first.id, second.id] });
+      expect(after.map(r => r.state)).toEqual(["blocked", "blocked"]);
     });
 
     it("keeps each document's members apart", async () => {

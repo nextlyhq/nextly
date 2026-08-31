@@ -67,7 +67,13 @@ function deps(over: {
 }): ApplyDueReleasesDeps {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
-  const blocked = vi.fn(async (_id: string, _at: Date) => true);
+  // Answers with the ids it was given, which is what the repository does on a
+  // component that transitioned whole. A stub returning a constant would let a
+  // pass that blocked a DIFFERENT set look identical to a correct one.
+  const blocked = vi.fn(
+    async (entries: readonly { id: string; scheduledAt: Date }[]) =>
+      entries.map(entry => entry.id)
+  );
   return {
     // Pinned, so every case below observes a STABLE component order and asserts
     // about the mechanism it names rather than about which rotation came up.
@@ -79,7 +85,7 @@ function deps(over: {
       // WHICH releases the pass stopped. A stub returning true would let a pass
       // that blocked the wrong ones — or every one — look identical to a pass
       // that blocked exactly the hopeless.
-      blockRelease: blocked,
+      blockReleases: blocked,
       listMembersOf: async ids =>
         members.filter(m => ids.includes(m.releaseId)),
       isStillDueAt: async (id: string, scheduledAt: Date) =>
@@ -948,7 +954,9 @@ describe("applyDueReleases", () => {
 describe("a release nothing about retrying could fix is STOPPED", () => {
   /** The releases this pass moved to `blocked`. */
   function blockedBy(d: ReturnType<typeof deps>): string[] {
-    return vi.mocked(d.repository.blockRelease).mock.calls.map(call => call[0]);
+    return vi
+      .mocked(d.repository.blockReleases)
+      .mock.calls.flatMap(call => call[0].map(entry => entry.id));
   }
 
   it("blocks a member whose author was never recorded", async () => {
@@ -1002,9 +1010,61 @@ describe("a release nothing about retrying could fix is STOPPED", () => {
     // then never run at the replacement instant, and nothing would say why.
     const d = deps({ members: [member({ createdBy: null })] });
     await applyDueReleases(d);
-    const call = vi.mocked(d.repository.blockRelease).mock.calls[0];
-    expect(call?.[1]).toBeInstanceOf(Date);
-    expect(call?.[1]?.getTime()).toBe(release().scheduledAt?.getTime());
+    const entry = vi.mocked(d.repository.blockReleases).mock.calls[0]?.[0]?.[0];
+    expect(entry?.scheduledAt).toBeInstanceOf(Date);
+    expect(entry?.scheduledAt.getTime()).toBe(release().scheduledAt?.getTime());
+  });
+
+  it("hands a whole overlapping COMPONENT over in ONE call", async () => {
+    // The structural property atomicity rests on. Two releases sharing a
+    // document are discharged together or not at all, so the repository has to
+    // receive them as one set — issued as two calls there is no transaction
+    // that could cover both, whatever the repository does internally.
+    //
+    // TIED INSTANTS deliberately, because that is the case no ordering can
+    // rescue: the engine breaks a tie on the MEMBER's creation time, per
+    // document, so each of these releases can win a different document and
+    // blocking either one first corrupts the other.
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        // Both name the SAME document, so only the winner acts — and on a tied
+        // instant and a tied creation time the winner is the higher member id,
+        // which is the one constructed second. So the broken member has to be
+        // that one, or the pass never reaches a permanent failure at all.
+        member({ releaseId: "r1", entryId: "e1" }),
+        member({ releaseId: "r2", entryId: "e1", createdBy: null }),
+      ],
+    });
+    await applyDueReleases(d);
+
+    const calls = vi.mocked(d.repository.blockReleases).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0].map(entry => entry.id).sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("skips a component it cannot fence COMPLETELY", async () => {
+    // A release with no planned instant cannot be fenced, so it cannot be
+    // blocked — and blocking the rest of its component is exactly the split
+    // this pass exists to prevent. Nothing moves, and the next pass re-plans
+    // against a set it can fence whole.
+    //
+    // `scheduledAt: null` is how a release reaches the pass without one.
+    const d = deps({
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "r2", scheduledAt: null }),
+      ],
+      members: [
+        member({ releaseId: "r1", entryId: "e1" }),
+        // The winner, and unrunnable — see the note in the case above.
+        member({ releaseId: "r2", entryId: "e1", createdBy: null }),
+      ],
+    });
+    const result = await applyDueReleases(d);
+
+    expect(blockedBy(d)).toEqual([]);
+    expect(result.blocked).toBe(0);
   });
 
   it("blocks nothing when every member applies", async () => {

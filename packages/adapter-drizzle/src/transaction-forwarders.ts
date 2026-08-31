@@ -39,6 +39,12 @@ export interface TransactionCrudDelegator {
     options?: UpdateOptions,
     executor?: unknown
   ): Promise<T[]>;
+  updateCount(
+    table: string,
+    data: Record<string, unknown>,
+    where: WhereClause,
+    executor?: unknown
+  ): Promise<number>;
   delete(
     table: string,
     where: WhereClause,
@@ -58,7 +64,17 @@ export interface TransactionCrudDelegator {
  */
 export type TransactionCrudForwarders = Pick<
   TransactionContext,
-  "select" | "selectOne" | "update" | "delete" | "upsert" | "getDrizzle"
+  | "select"
+  | "selectOne"
+  | "update"
+  // The fenced compare-and-set. Listed explicitly like every other key here:
+  // the type is DERIVED from `TransactionContext` in the sense that its
+  // signatures come from there, but the key set is enumerated, so a method
+  // added to the context is not forwarded until it is named here too.
+  | "updateCount"
+  | "delete"
+  | "upsert"
+  | "getDrizzle"
 >;
 
 /**
@@ -99,6 +115,14 @@ export function createTransactionForwarders(
       options?: UpdateOptions
     ): Promise<T[]> => {
       return delegator.update<T>(table, data, where, options, txDb());
+    },
+
+    updateCount: async (
+      table: string,
+      data: Record<string, unknown>,
+      where: WhereClause
+    ): Promise<number> => {
+      return delegator.updateCount(table, data, where, txDb());
     },
 
     delete: async (
