@@ -384,12 +384,6 @@ export function ReleaseDetail({ id }: { id: string }) {
           </p>
         </div>
 
-        {members.isError ? (
-          <p role="alert" className="text-sm text-destructive">
-            The contents of this release could not be loaded.
-          </p>
-        ) : null}
-
         {!members.isPending && !members.isError && rows.length === 0 ? (
           <Card className="px-6 py-10 text-center">
             <p className="text-sm text-muted-foreground">
@@ -402,6 +396,20 @@ export function ReleaseDetail({ id }: { id: string }) {
           <DataTableView<ReleaseMember>
             columns={memberColumns(id, removable)}
             rows={rows}
+            // BOTH forwarded, because an unanswered query and an empty release
+            // are not the same thing. Without them the table renders "nothing
+            // has been added" while the query is still running or has failed,
+            // presenting unavailable data as a confident and wrong answer.
+            //
+            // The failure is said HERE rather than in a paragraph above, so
+            // there is one message rather than an error notice sitting over a
+            // table that also claims the release is empty.
+            loading={members.isPending}
+            error={
+              members.isError
+                ? "The contents of this release could not be loaded."
+                : null
+            }
             getRowId={member => member.id}
             primaryColumn="document"
             registryKey="release-members"

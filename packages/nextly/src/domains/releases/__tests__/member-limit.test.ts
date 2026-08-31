@@ -43,20 +43,20 @@ function service(held: number) {
       createdAt: new Date(),
     }))
   );
+  const touchIfAssemblable = vi.fn(async () => true);
   const deps = {
     repository: {
       listMembers,
       addMember,
+      touchIfAssemblable,
       liveAuthors: vi.fn(async () => new Set(["u1"])),
-      claimAssemblable: vi.fn(async () => true),
-      touchIfAssemblable: vi.fn(async () => true),
       removeMember: vi.fn(async () => true),
       findReleases: vi.fn(async () => [{ id: "r1", state: "draft" }]),
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
   };
-  return { svc: new ReleasesService(deps), addMember };
+  return { svc: new ReleasesService(deps), addMember, touchIfAssemblable };
 }
 
 describe("a release has a size bound", () => {
@@ -64,14 +64,17 @@ describe("a release has a size bound", () => {
     // The case this exists for is not a person: it is a script adding in a
     // loop, which otherwise builds a release the detail page cannot render and
     // no single drain pass can settle.
-    const { svc, addMember } = service(MAX_RELEASE_MEMBERS);
+    const { svc, addMember, touchIfAssemblable } = service(MAX_RELEASE_MEMBERS);
     await expect(svc.addMember("r1", INPUT, ACTOR)).rejects.toMatchObject({
       code: "CONFLICT",
     });
-    // Refused BEFORE the write. A limit enforced after the insert would need
-    // compensating, and a compensation that fails leaves the release over its
-    // own bound.
+    // Refused before the MEMBER write...
     expect(addMember).not.toHaveBeenCalled();
+    // ...and before the RELEASE write, which is the half the first assertion
+    // cannot see. `touchIfAssemblable` updates the release's `updatedAt`, so a
+    // check ordered after it leaves a refused add having changed the row — and
+    // a test that watches only the insert reports that as clean.
+    expect(touchIfAssemblable).not.toHaveBeenCalled();
   });
 
   it("accepts the LAST document that fits", async () => {

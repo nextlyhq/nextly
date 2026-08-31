@@ -29,7 +29,6 @@ import { DataTableView } from "@admin/components/ui/table/data-table";
 import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleases } from "@admin/hooks/queries/useReleases";
-import { navigateTo } from "@admin/lib/navigation";
 import type { Release, ReleaseState } from "@admin/types/releases";
 
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
@@ -106,6 +105,16 @@ const MAX_PAGE = 200;
  * State first, because it is what decides whether the rest of the row matters:
  * a cancelled launch and a scheduled one are different KINDS of thing, and
  * putting the title first makes them look like the same thing with a label.
+ */
+/**
+ * NOT sortable, and that is a property of the route rather than a gap here.
+ *
+ * `DataTableView` sorts SERVER-SIDE — it reports a header click and expects the
+ * caller to re-query — and `/api/releases` accepts a state and a window and no
+ * ordering. Marking these headers sortable would offer a control that reorders
+ * nothing, which is worse than the plain headers webhooks, media and api keys
+ * also render. The list's own order is `scheduledAt` descending, chosen so the
+ * next thing to happen is the first thing read.
  */
 function releaseColumns(): NextlyColumn<Release>[] {
   return [
@@ -416,8 +425,13 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
         rows={releases}
         loading={isPending}
         getRowId={release => release.id}
-        onRowClick={release =>
-          navigateTo(buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id }))
+        // An HREF, not a click handler. The hand-built rows were deliberately
+        // links — "the whole row is the link… it cannot be middle-clicked or
+        // opened in a new tab, which is how anyone compares two releases" — and
+        // navigating as a side effect of a click throws that away while looking
+        // identical. `rowHref` also makes the primary column a real anchor.
+        rowHref={release =>
+          buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })
         }
         primaryColumn="title"
         registryKey="releases"

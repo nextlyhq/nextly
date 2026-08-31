@@ -767,10 +767,15 @@ export class ReleasesService {
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
 
-    // Claimed ATOMICALLY, and the author checked, before anything is written.
+    // BEFORE the claim, which is itself a write: `touchIfAssemblable` updates
+    // the release's `updatedAt`, so a refusal ordered after it would still have
+    // changed the row — and "refused before the write" would be false for the
+    // one path that says it loudest.
+    await this.assertRoomForOneMore(releaseId);
+
+    // Claimed ATOMICALLY, and the author checked, before the member is written.
     await this.claimAssemblable(releaseId, actor);
     await this.requireLiveAuthor(actor.userId);
-    await this.assertRoomForOneMore(releaseId);
 
     try {
       const member = await this.deps.repository.addMember({

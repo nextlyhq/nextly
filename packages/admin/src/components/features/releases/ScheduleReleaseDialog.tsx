@@ -35,21 +35,8 @@ import {
 import { isValidTimezone } from "@admin/lib/dates/format";
 import type { Release, ReleaseBlocker } from "@admin/types/releases";
 
+import { blockerSummary } from "./release-blockers";
 import { instantFor, readerZone } from "./release-timezone";
-
-/**
- * Why a document would stop the release, in one clause.
- *
- * Shorter than the sentences on the stopped-release notice, because this list
- * is read while choosing a date rather than while repairing a failure — the
- * question here is "which documents", not "what do I do about each".
- */
-const BLOCKER_SUMMARY: Record<ReleaseBlocker["reason"], string> = {
-  AUTHOR_GONE: "the person who added it has been deleted or deactivated",
-  NO_AUTHOR: "no author was recorded for it",
-  LOCALE_SCOPED: "it names a single language, which a release cannot act on",
-};
-
 
 /**
  * Whether the write may be attempted at all.
@@ -96,7 +83,7 @@ function WouldStopThis({ blocking }: { blocking: ReleaseBlocker[] }) {
                 ? blocker.scopeSlug
                 : `${blocker.scopeSlug} / ${blocker.entryId}`}
             </span>{" "}
-            — {BLOCKER_SUMMARY[blocker.reason]}
+            — {blockerSummary(blocker.reason)}
           </li>
         ))}
       </ul>
@@ -142,7 +129,13 @@ export function ScheduleReleaseDialog({
   const canSubmit = readyToSchedule({
     instant,
     scheduling: schedule.isPending,
-    checking: blockers.isPending,
+    // `isFetching`, NOT `isPending`. React Query reports pending only while
+    // there is no data at all — so a dialog reopened over a cached clean answer
+    // reports "not pending" through the whole refetch, and a release whose
+    // author disappeared in between would be submittable against the stale
+    // result. The reader would then meet the server's generic refusal instead
+    // of the named blocker this preflight exists to show.
+    checking: blockers.isFetching,
     checkFailed: blockers.isError,
     blocking: blocking.length,
   });

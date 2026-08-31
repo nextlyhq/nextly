@@ -50,7 +50,13 @@ const BLOCKER = {
 };
 
 function answer(over: Record<string, unknown> = {}) {
-  return { data: { items: [] }, isPending: false, isError: false, ...over };
+  return {
+    data: { items: [] },
+    isPending: false,
+    isFetching: false,
+    isError: false,
+    ...over,
+  };
 }
 
 const submit = () =>
@@ -116,10 +122,31 @@ describe("the schedule preflight", () => {
     expect(submit().disabled).toBe(true);
   });
 
+  it("refuses while a REFETCH is running over a cached clean answer", async () => {
+    // The state React Query reports as `isFetching` and not `isPending`: the
+    // dialog was opened before, so the previous answer is still in cache while
+    // the new request runs. Reading only `isPending` calls that clean, and a
+    // release whose author disappeared in between becomes submittable.
+    blockersMock.mockReturnValue(
+      answer({ isFetching: true, data: { items: [] } })
+    );
+    render(
+      <ScheduleReleaseDialog release={RELEASE} open onOpenChange={() => {}} />
+    );
+    withAnInstant();
+    expect(submit().disabled).toBe(true);
+  });
+
   it("refuses while the check is still running", async () => {
     // The third state. Pending is neither clean nor blocked, and folding it
     // into clean is how a release with a dead author gets scheduled anyway.
-    blockersMock.mockReturnValue(answer({ isPending: true, data: undefined }));
+    // A first load is BOTH: React Query reports `isPending` while there is no
+    // data and `isFetching` while a request is in flight, and a first load is
+    // both at once. The mock says so rather than modelling a state the library
+    // never produces.
+    blockersMock.mockReturnValue(
+      answer({ isPending: true, isFetching: true, data: undefined })
+    );
     render(
       <ScheduleReleaseDialog release={RELEASE} open onOpenChange={() => {}} />
     );
