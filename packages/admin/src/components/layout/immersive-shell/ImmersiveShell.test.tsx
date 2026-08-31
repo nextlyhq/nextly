@@ -11,10 +11,10 @@
  * deliberately NOT converted here: migrating every caller in the change that
  * extracts a primitive is how a reviewable diff stops being reviewable.
  */
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ChromeSuppressionProvider,
@@ -118,14 +118,76 @@ describe("ImmersiveShell", () => {
     expect(screen.getByText("the body being authored")).toBeDefined();
   });
 
-  it("positions the inspector out of the flow, so it cannot displace the panes", () => {
+  it("scopes the inspector to the secondary pane, not the whole shell", () => {
+    /*
+     * Containment is the discriminating assertion. `absolute` alone passes
+     * whether the overlay is positioned against the secondary pane or against
+     * the shell's outer box — and against the outer box it spans the bar and
+     * the drawer too, so a right-hand inspector covers the save and exit
+     * controls. Being a DESCENDANT of the secondary region is true of exactly
+     * one of those, and the nearest positioned ancestor is what decides it.
+     */
     renderShell({ inspector: <div>settings</div> });
 
-    // Asserted on the class contract rather than on geometry: jsdom computes no
-    // layout, so a test that read positions would pass whatever the value was.
-    expect(screen.getByTestId("shell-inspector").className).toContain(
-      "absolute"
+    const secondary = screen.getByTestId("shell-secondary");
+    const inspector = screen.getByTestId("shell-inspector");
+
+    expect(secondary.contains(inspector)).toBe(true);
+    expect(screen.getByTestId("shell-bar").contains(inspector)).toBe(false);
+    // The containing block itself: without `relative` here the overlay resolves
+    // against some ancestor further out while still being a descendant, so
+    // containment alone is necessary and not sufficient.
+    expect(secondary.className).toContain("relative");
+    expect(inspector.className).toContain("absolute");
+  });
+
+  it("refuses the primary rail to a surface with no way back", () => {
+    /*
+     * The rail is the admin's entire navigation. `bar` is a ReactNode and may
+     * carry no exit at all, so the presence of the slot proves nothing; the
+     * resolver withholds `primaryRail` from a request whose `canExit` is false,
+     * and this asserts the shell answers that question from the affordance.
+     */
+    renderShell({ suppress: ["primaryRail", "pageFrame"] });
+
+    expect(screen.getByTestId("hidden").textContent).toBe("pageFrame");
+  });
+
+  it("grants the primary rail once it renders an exit", () => {
+    // The positive control for the test above: without it, a shell that
+    // withheld the rail unconditionally would pass just as well.
+    renderShell({ suppress: ["primaryRail", "pageFrame"], onExit: () => {} });
+
+    expect(screen.getByTestId("hidden").textContent).toBe(
+      "pageFrame,primaryRail"
     );
+  });
+
+  it("renders the exit control it derives that grant from", () => {
+    const onExit = vi.fn();
+    renderShell({ onExit, exitLabel: "Back to templates" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to templates" }));
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no exit control when it was given no way back", () => {
+    renderShell();
+
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("stacks the panes when asked to, for a viewport too narrow to split", () => {
+    renderShell({ orientation: "vertical" });
+
+    // The separator carries the orientation the library derived, and it is what
+    // a screen reader announces. A stacked group separates along the horizontal.
+    expect(
+      screen
+        .getByRole("separator", { name: "Editor and preview" })
+        .getAttribute("aria-orientation")
+    ).toBe("horizontal");
   });
 
   it("renders the drawer when given one", () => {
