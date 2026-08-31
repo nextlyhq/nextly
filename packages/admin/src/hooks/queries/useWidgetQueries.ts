@@ -117,10 +117,22 @@ const BATCH_FAILED_ERROR = "Dashboard data could not be loaded.";
  *
  * The DISCRIMINATOR is checked before anything branches on it, because a member
  * carrying neither `true` nor `false` there is not a slot in either direction.
- * `result` is checked as an OBJECT and no further: an archetype refuses a
- * payload of the wrong `op` itself and names the widget when it does, and that
- * refusal is better than this one. What it cannot survive is not being handed
- * an object at all.
+ *
+ * `result` is then checked AGAINST ITS OWN `op`, and this is the part that was
+ * too shallow. Checking it was an object earned nothing: `WidgetResult` is a
+ * discriminated union whose arms carry a `total: number` and an
+ * `items: Record<string, unknown>[]`, and `{ "op": "count" }` satisfies
+ * "is an object" while satisfying neither arm. The cast then said it was a
+ * `WidgetResult`, `metricBody` read `result.total.toLocaleString()` on
+ * `undefined`, and the `TypeError` left the whole grid replaced by an error
+ * page -- the exact blast radius the per-slot shape exists to prevent.
+ *
+ * A payload of the WRONG op is a different thing and is deliberately still let
+ * through: a `list` handed to a metric widget is a well-formed result that the
+ * archetype refuses by name, and its sentence -- naming the widget and both
+ * ops -- is a better one than anything this function could write. What is
+ * refused here is a result that is not a `WidgetResult` at all, because no
+ * archetype can be handed one safely.
  */
 function asSlot(value: unknown): WidgetSlot {
   if (value === undefined || value === null) {
@@ -132,9 +144,49 @@ function asSlot(value: unknown): WidgetSlot {
 
   if (slot.ok === false) return refusal(slot.error);
   if (slot.ok !== true) return malformed();
-  if (!isObject(slot.result)) return malformed();
 
-  return { ok: true, result: slot.result as WidgetResult };
+  const result = asResult(slot.result);
+  if (result === undefined) return malformed();
+
+  return { ok: true, result };
+}
+
+/**
+ * One `result` payload as the union it claims to be, or `undefined`.
+ *
+ * Narrowed by construction rather than asserted: each arm returns a fresh
+ * object built from the fields it just checked, so what the caller receives is
+ * a `WidgetResult` because it was assembled as one -- not because a cast said
+ * so over a value nobody looked at.
+ *
+ * `NaN` and `Infinity` are deliberately NOT guarded against: both would survive
+ * the `typeof` check, but the response is `res.json()` and JSON has no literal
+ * for either, so a guard here could only ever be exercised by a test double.
+ *
+ * An `op` this admin does not know is refused. There is no arm to build and
+ * no archetype that could draw it, so the honest answer is the malformed one.
+ */
+function asResult(value: unknown): WidgetResult | undefined {
+  if (!isObject(value)) return undefined;
+
+  const result = value as { op?: unknown; total?: unknown; items?: unknown };
+
+  if (result.op === "count") {
+    return typeof result.total === "number"
+      ? { op: "count", total: result.total }
+      : undefined;
+  }
+
+  if (result.op === "list") {
+    // The MEMBERS as well as the array, because a row is dereferenced per field
+    // by whatever draws it, and `[null]` is an array that fails there rather
+    // than here -- the same shape as the `total` above, one level down.
+    return Array.isArray(result.items) && result.items.every(isObject)
+      ? { op: "list", items: result.items as Record<string, unknown>[] }
+      : undefined;
+  }
+
+  return undefined;
 }
 
 /** Whether a value can be read as the object a slot or a result must be. */

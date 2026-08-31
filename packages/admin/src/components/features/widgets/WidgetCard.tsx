@@ -57,7 +57,8 @@ import {
 import { useId, type ReactNode } from "react";
 
 import { Link } from "@admin/components/ui/link";
-import { formatRelativeTime } from "@admin/lib/dashboard";
+import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { useRelativeTime } from "@admin/hooks/useRelativeTime";
 import { cn } from "@admin/lib/utils";
 
 export interface WidgetCardProps {
@@ -218,6 +219,10 @@ function WidgetCardFooter({
   freshness: Date | null;
   link?: { label: string; href: string };
 }) {
+  // Before the early return, so the hook runs on every render of this
+  // component whichever branch it takes.
+  const relative = useRelativeTime(freshness);
+
   if (freshness === null && link === undefined) return null;
 
   return (
@@ -229,12 +234,24 @@ function WidgetCardFooter({
       className="flex items-center justify-between gap-2 border-0 bg-transparent px-5 pb-4 pt-0"
     >
       {freshness !== null ? (
-        <span
+        // A `<time>` carrying the machine-readable instant, with the exact one
+        // on hover. The relative label is the scannable form and is deliberately
+        // imprecise; a reader who needs to know whether "5m ago" means before or
+        // after something else they were watching has nowhere else to find out,
+        // and `dateTime` is what lets anything reading the page recover the
+        // instant the prose rounded off.
+        <time
+          dateTime={freshness.toISOString()}
+          title={formatDateWithAdminTimezone(
+            freshness,
+            { dateStyle: "medium", timeStyle: "medium" },
+            ""
+          )}
           data-testid="widget-card-freshness"
           className="text-xs text-muted-foreground"
         >
-          Updated {formatRelativeTime(freshness.toISOString())}
-        </span>
+          Updated {relative}
+        </time>
       ) : (
         // Holds the footer's left column so a link-only footer still sits
         // right, without a second layout branch.

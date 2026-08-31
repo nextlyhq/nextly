@@ -245,7 +245,7 @@ describe("WidgetGrid — collection and gating", () => {
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
-  it("keeps one cell when a widget is both contributed and registered", () => {
+  it("draws the REGISTERED definition when a widget is both contributed and registered", () => {
     registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
     mockBranding = {
       plugins: [
@@ -267,8 +267,17 @@ describe("WidgetGrid — collection and gating", () => {
     } as unknown as AdminBranding;
     renderGrid();
     expect(screen.getAllByTestId("widget-cell-shared")).toHaveLength(1);
-    // The contribution is what the dashboard already drew, so it keeps winning.
-    expect(screen.getByText("panel body")).toBeInTheDocument();
+    // The registry is the single place that knows which widgets exist in a
+    // running app, and `overrideWidget`/`extendWidget` exist so a later plugin
+    // can correct an earlier one. Letting the contribution win discarded every
+    // such correction -- a tightened `requiredPermission` among them -- so the
+    // registered definition is what the card is drawn from.
+    expect(screen.getByText("Shared")).toBeInTheDocument();
+    expect(screen.queryByText("panel body")).not.toBeInTheDocument();
+    // And its query is what reaches the batch.
+    expect(protectedApi.post).toHaveBeenCalledWith("/dashboard/query", {
+      queries: [{ source: "collection:posts", op: "count" }],
+    });
   });
 
   it("draws the contributed component when a data archetype declares no query", () => {

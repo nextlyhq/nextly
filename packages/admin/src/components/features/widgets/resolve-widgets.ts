@@ -158,7 +158,7 @@ function resolveRegistered(
 
 /**
  * The visible widgets, each id appearing once: contributions in declaration
- * order, then registrations.
+ * order, then the registrations that no contribution already placed.
  *
  * BOTH channels, because they are two ways into the same grid and neither
  * subsumes the other. `contributes.admin.widgets` is declarative and travels
@@ -166,10 +166,22 @@ function resolveRegistered(
  * registry exists for. Reading only the first left an app that used the public
  * registration API invisible to the renderer built around that registry.
  *
- * Contributions FIRST, so an id declared in both keeps the card the dashboard
- * already drew for it. An app that worked around the gap by declaring a
- * registered widget twice therefore sees no change, and the registry only ever
- * ADDS what was previously missing.
+ * ORDER comes from the contribution; the DEFINITION comes from the registry.
+ * Those are two different questions and the answer differs for each. Position
+ * is a display decision, and taking it from the declaration keeps a card from
+ * jumping across the grid the day someone registers an id that was already
+ * contributed. Which definition is authoritative is not a display decision: the
+ * registry is, in `publishableWidgets`' own words, "the single place that knows
+ * which widgets exist in a running app", and `overrideWidget` and `extendWidget`
+ * exist so a later plugin can correct an earlier widget. Letting the
+ * contribution win discarded every one of those corrections silently.
+ *
+ * `requiredPermission` is what makes that more than a tidiness argument. The
+ * corrections a registry patch is FOR include tightening one, and a tightened
+ * permission that loses to the contributed copy is a widget the operator
+ * believes they restricted and did not -- a card drawn, and its query put in the
+ * batch, for a user the running configuration says may not see it. A silently
+ * ignored override is the one failure shape a permission must never have.
  */
 export function resolveDashboardWidgets(
   plugins: PluginMetadata[] | undefined,
@@ -180,8 +192,18 @@ export function resolveDashboardWidgets(
   // registration can collide with a contribution. The id is what keys a batch
   // result back to its card, so a duplicate would hand both widgets the same
   // slot -- one of them showing the other's number, with nothing visibly wrong.
-  // First declaration wins and the rest are dropped.
+  // One cell per id, and the rest are dropped.
   const seen = new Set<string>();
+
+  // The registry indexed by id, so a contribution can be answered with the
+  // registered definition of the same widget. First wins among registrations
+  // themselves: the registry is a map keyed by id and cannot hold two, but this
+  // list arrived over the wire and a malformed payload is not the place to
+  // start trusting that.
+  const canonical = new Map<string, RegisteredWidgetMeta>();
+  for (const meta of registered ?? []) {
+    if (!canonical.has(meta.id)) canonical.set(meta.id, meta);
+  }
 
   const take = (
     id: string,
@@ -189,17 +211,30 @@ export function resolveDashboardWidgets(
   ): DashboardWidget[] => {
     if (seen.has(id)) return [];
     const widget = resolve();
+    // NOT marked seen when the resolver declines. A widget withheld by
+    // permission has not claimed its id -- but nothing else can claim it
+    // either, because the only other channel resolves the same definition
+    // through the same gate and declines it identically. Marking it here would
+    // read as "this id is taken", which is a different fact than the one
+    // established.
     if (!widget) return [];
     seen.add(id);
     return [widget];
   };
 
-  return [
-    ...declaredWidgets(plugins).flatMap(meta =>
-      take(meta.id, () => resolveOne(meta, hasPermission))
-    ),
-    ...(registered ?? []).flatMap(meta =>
-      take(meta.id, () => resolveRegistered(meta, hasPermission))
-    ),
-  ];
+  const contributed = declaredWidgets(plugins).flatMap(meta => {
+    const registration = canonical.get(meta.id);
+    // Resolved through `resolveRegistered` when the registry knows this id, so
+    // the card is drawn from the authoritative definition while keeping the
+    // position the contribution asked for.
+    return registration
+      ? take(meta.id, () => resolveRegistered(registration, hasPermission))
+      : take(meta.id, () => resolveOne(meta, hasPermission));
+  });
+
+  const registrations = (registered ?? []).flatMap(meta =>
+    take(meta.id, () => resolveRegistered(meta, hasPermission))
+  );
+
+  return [...contributed, ...registrations];
 }
