@@ -256,6 +256,29 @@ describe("WidgetRenderer — custom", () => {
     expect(screen.getByTestId("widget-card-freshness")).toBeInTheDocument();
   });
 
+  it("claims no freshness on a custom card whose slot was refused", () => {
+    // A self-drawn body is never REPLACED by an error, so the card's own
+    // `settled` gate -- which withholds the footer when `error` is set -- never
+    // fires for it. Without this the card printed "Updated just now" under a
+    // body the component drew from a failure.
+    registerComponent("@acme/admin#Panel", () => <div>could not load</div>);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...custom,
+          query: { source: "collection:posts", op: "count" },
+        }}
+        slot={{ ok: false, error: "Source unavailable." }}
+        updatedAt={new Date()}
+      />
+    );
+    expect(
+      screen.queryByTestId("widget-card-freshness")
+    ).not.toBeInTheDocument();
+    // The plugin's own body still stands: a refusal is its to draw, not ours.
+    expect(screen.getByText("could not load")).toBeInTheDocument();
+  });
+
   it("never marks a custom body busy for a batch it did not participate in", () => {
     registerComponent("@acme/admin#Panel", () => <div>acme body</div>);
     render(<WidgetRenderer definition={custom} slot={undefined} />);

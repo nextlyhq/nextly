@@ -22,6 +22,11 @@
  * deciding whether to draw the line at all reads one value for "no timestamp"
  * instead of two.
  *
+ * The label is DERIVED during render and state holds only a tick count. The
+ * obvious shape -- the formatted string in state, updated from the effect --
+ * is a frame behind on the render where a timestamp first arrives and on every
+ * refetch that lands a new one, because a passive effect flushes after paint.
+ *
  * @module hooks/useRelativeTime
  */
 
@@ -52,29 +57,27 @@ export function useRelativeTime(date: Date | null | undefined): string | null {
   // rebuilds an equal `new Date(...)` each render produces a new object
   // identity every time, which would tear down and rebuild the timer on every
   // render and -- because each new timer starts its full interval over -- could
-  // stop the label advancing at all.
+  // stop the label advancing at all. `WidgetGrid` re-renders on every query
+  // state change, so this is a live hazard rather than a defensive one.
   const iso = date ? date.toISOString() : null;
 
-  const [label, setLabel] = useState<string | null>(() =>
-    iso === null ? null : formatRelativeTime(iso)
-  );
+  // A TICK COUNTER, not the label. Holding the formatted string in state made
+  // the label one paint stale at the two moments that matter: the render where
+  // a timestamp first arrives, and each refetch that lands a new one. State is
+  // seeded during the first render and updated in an effect, which flushes
+  // after paint -- so the card committed the previous label (or none) and
+  // corrected it a frame later. Deriving it during render cannot be stale,
+  // because there is nothing to keep in step.
+  const [, tick] = useState(0);
 
   useEffect(() => {
-    if (iso === null) {
-      setLabel(null);
-      return;
-    }
-
-    // Recomputed on entry as well as on each tick, because the timestamp itself
-    // may have changed since the last render -- a refetch lands a new one -- and
-    // the value carried in state describes the previous one.
-    setLabel(formatRelativeTime(iso));
+    if (iso === null) return;
 
     let timer: ReturnType<typeof setTimeout>;
     const schedule = () => {
       timer = setTimeout(
         () => {
-          setLabel(formatRelativeTime(iso));
+          tick(n => n + 1);
           schedule();
         },
         tickInterval(Date.now() - new Date(iso).getTime())
@@ -82,8 +85,11 @@ export function useRelativeTime(date: Date | null | undefined): string | null {
     };
     schedule();
 
+    // Reads `timer` at call time rather than closing over one value, so it
+    // always clears the currently-armed timeout -- including one armed by a
+    // tick that has already fired.
     return () => clearTimeout(timer);
   }, [iso]);
 
-  return label;
+  return iso === null ? null : formatRelativeTime(iso);
 }

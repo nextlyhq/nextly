@@ -115,7 +115,19 @@ export function WidgetRenderer({
   // freshness line under a card that never made a request.
   if (outcome.state === "self-drawn") {
     return (
-      <WidgetCard {...shared} updatedAt={updatedAt} isLoading={isFetching}>
+      <WidgetCard
+        {...shared}
+        // Withheld when the slot is a REFUSAL, for the reason `WidgetCard`
+        // states about its own error branch: the timestamp says when the batch
+        // landed, which is true of the request and not of this card, so
+        // "Updated just now" over a body drawn from a failure tells the reader
+        // the opposite of what happened. The card cannot reach that rule by
+        // itself here -- an error REPLACES a body, and a self-drawn body is
+        // never replaced, so no `error` is passed and the footer's `settled`
+        // gate never sees one.
+        updatedAt={slot?.ok === false ? null : updatedAt}
+        isLoading={isFetching}
+      >
         <PluginSlot
           path={definition.component}
           props={{ widgetId: definition.id, slot, isFetching }}

@@ -90,6 +90,83 @@ describe("resolveDashboardWidgets", () => {
     expect(widgets).toEqual([]);
   });
 
+  it("keeps the contributed component when the registry names an archetype core cannot draw", () => {
+    // The population this resolver reads both channels FOR: an app that
+    // registered a widget and also contributed it, which is how it got a card
+    // before the registry was published at all. `WidgetDefinition` forbids
+    // `component` on any archetype but `custom`, so the registration
+    // structurally cannot carry one -- and substituting it discarded the only
+    // thing on either side that could draw the card, turning a working plugin
+    // body into "the list widget archetype is not rendered yet".
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        { id: "acme/recent", component: "@acme/admin#RecentList" },
+      ]),
+      [
+        {
+          id: "acme/recent",
+          title: "Recent posts",
+          archetype: "list",
+          defaultSize: "md",
+          query: { source: "collection:posts", op: "list", limit: 5 },
+        } as unknown as RegisteredWidgetMeta,
+      ],
+      allow
+    );
+
+    expect(widgets).toHaveLength(1);
+    // Drawn by the plugin, because core has no `list` renderer in this release.
+    expect(widgets[0].archetype).toBe("custom");
+    expect(widgets[0].component).toBe("@acme/admin#RecentList");
+    // And still carrying what only the registry knew.
+    expect(widgets[0].title).toBe("Recent posts");
+    expect(widgets[0].query).toEqual({
+      source: "collection:posts",
+      op: "list",
+      limit: 5,
+    });
+  });
+
+  it("still honours a tightened permission on an archetype core cannot draw", () => {
+    // The merge must not buy the component back at the cost of the gate: this
+    // is the same input as above with the registry restricting it.
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        { id: "acme/recent", component: "@acme/admin#RecentList" },
+      ]),
+      [
+        {
+          id: "acme/recent",
+          title: "Recent posts",
+          archetype: "list",
+          defaultSize: "md",
+          requiredPermission: "read-secrets",
+          query: { source: "collection:posts", op: "list", limit: 5 },
+        } as unknown as RegisteredWidgetMeta,
+      ],
+      deny
+    );
+
+    expect(widgets).toEqual([]);
+  });
+
+  it("drops a duplicate registration whose FIRST entry was withheld", () => {
+    // Deduplication and the permission gate must agree about which of the two
+    // the payload meant. Resolving the array member rather than the canonical
+    // one let the second entry -- carrying no permission -- render in place of
+    // the restricted first, and put its query in the batch.
+    const widgets = resolveDashboardWidgets(
+      undefined,
+      [
+        { ...REGISTERED_SHARED, requiredPermission: "read-secrets" },
+        { ...REGISTERED_SHARED, title: "Second copy" },
+      ] as unknown as RegisteredWidgetMeta[],
+      deny
+    );
+
+    expect(widgets).toEqual([]);
+  });
+
   it("still renders a contribution the registry knows nothing about", () => {
     const widgets = resolveDashboardWidgets(
       contributing([
