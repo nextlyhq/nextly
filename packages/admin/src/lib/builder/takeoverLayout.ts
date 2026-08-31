@@ -31,6 +31,13 @@ export interface TakeoverType {
 export interface LayoutField {
   name?: string;
   type?: string;
+  /**
+   * A structured field's children, when it has any.
+   *
+   * Loose for the same reason `admin` is: every field-config shape must stay
+   * assignable to this, and only the traversal below reads it.
+   */
+  fields?: readonly LayoutField[];
   // Loose on purpose: any field config (FieldConfig, ManifestField, …) must be
   // assignable to LayoutField so the generic `T` binds to the caller's type. The
   // condition is cast to FieldCondition where it's actually evaluated.
@@ -88,13 +95,47 @@ function controllerName(f: LayoutField): string | undefined {
  */
 function isConditionallyVisible(
   f: LayoutField,
-  values: Record<string, unknown>
+  values: Record<string, unknown>,
+  basePath = ""
 ): boolean {
   const condition = f.admin?.condition as FieldCondition | undefined;
-  const watches = condition?.field;
-  if (condition === undefined || watches === undefined) return true;
-  if (!(watches in values)) return true;
-  return evaluateCondition(condition, values[watches]);
+  const watches = watchedName(f, basePath);
+  if (condition !== undefined && watches !== undefined) {
+    if (watches in values && !evaluateCondition(condition, values[watches])) {
+      return false;
+    }
+  }
+  /*
+   * A GROUP is only as visible as its contents. Its own condition passing says
+   * the group may render; it does not say anything will be inside it, and
+   * `GroupInput` sends each child through `FieldRenderer`, which answers null
+   * for a condition that is false. A group whose every child is hidden draws
+   * its label and its gutter over nothing — which, counted as content, offers
+   * a panel with a heading and no control in it.
+   *
+   * An EMPTY `fields` list is left visible rather than hidden: a group that
+   * declares no children is a schema the author wrote on purpose, and this is
+   * not the place to decide it was a mistake.
+   */
+  const base = childBase(f, basePath);
+  if (base === null || f.fields === undefined || f.fields.length === 0) {
+    return true;
+  }
+  /*
+   * A HIDDEN child counts for nothing, the same way a hidden field does at the
+   * top level. `FieldWrapper` returns null for one, so it draws nothing — and a
+   * group's commonest shape is exactly the trap: a hidden controller field
+   * beside the controls whose conditions read it. Counting the controller kept
+   * such a group alive with every visible control conditioned away, which is
+   * the blank panel this rule exists to prevent.
+   *
+   * Filtering here rather than inside the walk above, because the two questions
+   * differ: the walk collects the names a condition WATCHES, and a hidden
+   * controller is precisely the field that must still be watched.
+   */
+  return f.fields.some(
+    child => !isHidden(child) && isConditionallyVisible(child, values, base)
+  );
 }
 
 /**
@@ -105,14 +146,60 @@ function isConditionallyVisible(
  * beside the rule that consumes it so the two cannot name different sets.
  */
 export function conditionFieldNames<T extends LayoutField>(
-  fields: T[]
+  fields: readonly T[]
 ): string[] {
   const names = new Set<string>();
-  for (const f of fields) {
-    const watches = (f.admin?.condition as FieldCondition | undefined)?.field;
-    if (watches !== undefined) names.add(watches);
-  }
+  collectConditionNames(fields, "", names);
   return [...names];
+}
+
+/**
+ * The qualified name a field's condition watches, or undefined for no condition.
+ *
+ * QUALIFIED BY THE PATH, because `FieldRenderer` resolves a nested condition
+ * against the field's own base — a child of the `seo` group watching `mode`
+ * watches `seo.mode`. Collecting the bare name would subscribe to a top-level
+ * field that usually does not exist, and judging visibility against it would
+ * read `undefined` for a condition that is really satisfied.
+ */
+function watchedName(f: LayoutField, basePath: string): string | undefined {
+  const watches = (f.admin?.condition as FieldCondition | undefined)?.field;
+  if (watches === undefined) return undefined;
+  return basePath === "" ? watches : `${basePath}.${watches}`;
+}
+
+/**
+ * The path a structured field's children are addressed under, or null when this
+ * field's children are not addressed from the form root at all.
+ *
+ * A GROUP's children render directly and their values live at
+ * `group.child`, so the walk continues into them. A REPEATER's `fields` are a
+ * ROW TEMPLATE — they describe what each row contains, their conditions are
+ * evaluated per row against that row's values, and the repeater itself renders
+ * its add control whether or not it holds any. Walking into one would collect
+ * names that address nothing and could hide a repeater that draws perfectly
+ * well, so it deliberately stops here.
+ */
+function childBase(f: LayoutField, basePath: string): string | null {
+  if (f.type !== "group" || f.fields === undefined) return null;
+  const own = f.name ?? "";
+  if (own === "") return basePath;
+  return basePath === "" ? own : `${basePath}.${own}`;
+}
+
+function collectConditionNames(
+  fields: readonly LayoutField[],
+  basePath: string,
+  into: Set<string>
+): void {
+  for (const f of fields) {
+    const watches = watchedName(f, basePath);
+    if (watches !== undefined) into.add(watches);
+    const base = childBase(f, basePath);
+    if (base !== null && f.fields !== undefined) {
+      collectConditionNames(f.fields, base, into);
+    }
+  }
 }
 
 /**
