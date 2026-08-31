@@ -14,6 +14,7 @@
 import { useState } from "react";
 
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
+import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCalendar";
 import { ReleaseList } from "@admin/components/features/releases/ReleaseList";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -31,6 +32,11 @@ export default function ReleasesPage() {
   // given, and "do not offer it" the clearest reason there is.
   const canAssemble = useCan("create-content-releases");
   const [creating, setCreating] = useState(false);
+  // TWO VIEWS OF ONE SET, not two pages. A list answers "what launches exist"
+  // and a calendar answers "what is coming, and is anything colliding" — the
+  // same releases, read for different questions, which is how every product
+  // that ships this surface arranges it rather than as a separate feature.
+  const [view, setView] = useState<"list" | "calendar">("list");
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
@@ -45,14 +51,48 @@ export default function ReleasesPage() {
               Documents that go live together, at one moment.
             </p>
           </div>
-          {canAssemble ? (
-            <Button onClick={() => setCreating(true)}>New release</Button>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {/* Toggle BUTTONS, deliberately not a radiogroup. A radiogroup
+                promises composite keyboard behaviour — one tab stop, arrows to
+                move and select — and declaring one without providing it is
+                worse than plain controls: it tells a keyboard user to press
+                arrows that do nothing. `aria-pressed` says the same thing about
+                state and promises only what these actually do. */}
+            <div
+              role="group"
+              aria-label="View releases as"
+              className="flex items-center rounded-md border border-border p-0.5"
+            >
+              {(["list", "calendar"] as const).map(option => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={view === option}
+                  onClick={() => setView(option)}
+                  className={[
+                    "rounded px-3 py-1 text-sm capitalize transition-colors",
+                    view === option
+                      ? "bg-accent text-accent-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  ].join(" ")}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+            {canAssemble ? (
+              <Button onClick={() => setCreating(true)}>New release</Button>
+            ) : null}
+          </div>
         </div>
 
-        <ReleaseList
-          onCreate={canAssemble ? () => setCreating(true) : undefined}
-        />
+        {view === "calendar" ? (
+          <ReleaseCalendar />
+        ) : (
+          <ReleaseList
+            onCreate={canAssemble ? () => setCreating(true) : undefined}
+          />
+        )}
 
         {canAssemble ? (
           <CreateReleaseDialog

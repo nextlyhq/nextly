@@ -18,21 +18,7 @@
 import { Card } from "@admin/components/ui";
 import type { ReleaseBlocker } from "@admin/types/releases";
 
-/**
- * What each reason means, and what resolves it.
- *
- * Written as a consequence and a remedy rather than a code, because the reader
- * is someone who did not schedule this release and is finding out now why a
- * launch did not happen.
- */
-const REASON: Record<ReleaseBlocker["reason"], string> = {
-  AUTHOR_GONE:
-    "the person who added it has been deleted or deactivated. A release acts on each document as its author, so there is nobody left to act as. Restore that user, or remove the document and add it again.",
-  NO_AUTHOR:
-    "no author was recorded for it, so there is nobody to act as. Remove the document and add it again.",
-  LOCALE_SCOPED:
-    "it names a single language, which releases cannot act on by themselves. Remove it and add the document without a language.",
-};
+import { blockerExplanation } from "./release-blockers";
 
 /**
  * What the member was going to do, said neutrally enough to be true either way.
@@ -81,7 +67,8 @@ export function BlockedReleaseNotice({
                 ? blocker.scopeSlug
                 : `${blocker.scopeSlug} / ${blocker.entryId}`}
             </span>{" "}
-            {ACTION_PHRASE[blocker.action]}: {REASON[blocker.reason]}
+            {ACTION_PHRASE[blocker.action]}:{" "}
+            {blockerExplanation(blocker.reason)}
           </li>
         ))}
       </ul>

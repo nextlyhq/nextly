@@ -551,6 +551,12 @@ export default function EditEntryPage({
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
           mode="edit"
+          /* The same destination the entry list already sends people to, and
+             the replacement the header's menu now names where `Show JSON` used
+             to be. The route knows how to navigate; the form does not. */
+          onViewApi={() =>
+            navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
+          }
           /* WITH the form's own actions, not in a bar above it. Adding a
              document to a release is the same kind of act as publishing it, so
              it belongs in the same cluster — and a full-width bar here ran

@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { instantFor } from "../ScheduleReleaseDialog";
+import { instantFor } from "../release-timezone";
 
 /** How an instant reads in a zone, as the oracle rather than as the subject. */
 function wallClockIn(iso: string, timeZone: string): string {

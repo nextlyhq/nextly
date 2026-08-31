@@ -28,6 +28,7 @@ import {
   cancelRelease,
   createRelease,
   fetchRelease,
+  fetchReleaseBlockers,
   fetchReleaseMembers,
   fetchReleases,
   removeReleaseMember,
@@ -46,6 +47,7 @@ export const releaseKeys = {
   list: (params: ReleaseListParams) => ["releases", "list", params] as const,
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
+  blockers: (id: string) => ["releases", "blockers", id] as const,
 };
 
 export function useReleases(params: ReleaseListParams = {}, enabled = true) {
@@ -57,6 +59,21 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
     // because the surface is closed — would otherwise issue a request whose
     // only outcome is a 403 in everyone's network log.
     enabled,
+    // Re-asked on the SAME two schedules as the banner and the detail row, and
+    // for the same reason: a scheduled release settles by itself, and nothing
+    // about that reaches this browser. A list or a calendar left open across an
+    // instant would otherwise go on showing a release as upcoming after the
+    // drain published or stopped it — and on the calendar that means a day
+    // keeps a count for a launch that has already happened.
+    //
+    // Two SPEEDS rather than an interval and a stop: a condition that halts
+    // polling can be satisfied by a wrong answer, and a stale row read once as
+    // settled would then never be corrected.
+    refetchInterval: data =>
+      hasPendingRelease(data.state.data)
+        ? PENDING_RELEASE_POLL_MS
+        : NO_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -173,6 +190,28 @@ export function useRelease(id: string | undefined) {
         : NO_RELEASE_POLL_MS,
     // And on return to the tab, which is when somebody actually looks.
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * What stands between a release and its instant — the preflight.
+ *
+ * Asked only when somebody is about to commit to one, which is why it is
+ * `enabled`-gated rather than fetched with the detail: the answer costs an
+ * identity lookup over every member, and the overwhelming majority of reads do
+ * not need it to be told that nothing is wrong.
+ *
+ * NOT cached across the dialog closing. A blocker is fixed by editing a
+ * document or removing a member, both of which happen elsewhere — so a stale
+ * "nothing is blocking this" is exactly the answer that would let somebody
+ * schedule a launch that cannot run.
+ */
+export function useReleaseBlockers(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: releaseKeys.blockers(id ?? ""),
+    queryFn: () => fetchReleaseBlockers(id as string),
+    enabled: enabled && Boolean(id),
+    staleTime: 0,
   });
 }
 

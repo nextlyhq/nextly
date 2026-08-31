@@ -28,128 +28,67 @@ import {
   Input,
   Label,
 } from "@admin/components/ui";
-import { useScheduleRelease } from "@admin/hooks/queries/useReleases";
+import {
+  useReleaseBlockers,
+  useScheduleRelease,
+} from "@admin/hooks/queries/useReleases";
 import { isValidTimezone } from "@admin/lib/dates/format";
-import type { Release } from "@admin/types/releases";
+import type { Release, ReleaseBlocker } from "@admin/types/releases";
+
+import { blockerSummary } from "./release-blockers";
+import { instantFor, readerZone } from "./release-timezone";
 
 /**
- * The offset a zone is at for a given instant, as minutes east of UTC.
+ * Whether the write may be attempted at all.
  *
- * Derived by asking the platform to format the instant in that zone and reading
- * the parts back, which is the only way to get it: `Intl` exposes zones through
- * formatting and offers no arithmetic. Doing it per instant rather than per zone
- * is what makes daylight saving come out right — the same zone is a different
- * offset in January and July.
+ * Three of these five are the same judgement: the preflight has to have
+ * ANSWERED, and the answer has to be empty. Withheld while it is unknown as
+ * well as while it is bad — a preflight that lets the write through on a failed
+ * lookup is not a preflight, and the server refuses anyway, so nothing is lost
+ * but a confusing round trip.
  */
-function offsetMinutesAt(instant: Date, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).formatToParts(instant);
+function readyToSchedule(state: {
+  instant: string | null;
+  scheduling: boolean;
+  checking: boolean;
+  checkFailed: boolean;
+  blocking: number;
+}): boolean {
+  if (state.instant === null || state.scheduling) return false;
+  if (state.checking || state.checkFailed) return false;
+  return state.blocking === 0;
+}
 
-  const read = (type: Intl.DateTimeFormatPartTypes): number =>
-    Number(parts.find(part => part.type === type)?.value ?? "0");
-
-  // `hour` formats midnight as 24 under `hour12: false` in some engines, which
-  // would place the reading a day late if carried through unchanged.
-  const hour = read("hour") % 24;
-  const asUtc = Date.UTC(
-    read("year"),
-    read("month") - 1,
-    read("day"),
-    hour,
-    read("minute"),
-    read("second")
+/**
+ * The documents that would stop this release, named.
+ *
+ * NAMED rather than counted, which is the entire reason this is asked before
+ * scheduling instead of being left to the server's refusal: that refusal cannot
+ * say which documents, and nobody can act on a number.
+ */
+function WouldStopThis({ blocking }: { blocking: ReleaseBlocker[] }) {
+  if (blocking.length === 0) return null;
+  return (
+    <div role="alert" className="flex flex-col gap-1">
+      <p className="text-sm font-medium text-destructive">
+        {blocking.length === 1
+          ? "One document would stop this release."
+          : `${blocking.length} documents would stop this release.`}
+      </p>
+      <ul className="flex list-disc flex-col gap-0.5 pl-5">
+        {blocking.map(blocker => (
+          <li key={blocker.memberId} className="text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">
+              {blocker.scopeKind === "single"
+                ? blocker.scopeSlug
+                : `${blocker.scopeSlug} / ${blocker.entryId}`}
+            </span>{" "}
+            — {blockerSummary(blocker.reason)}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
-  return (asUtc - instant.getTime()) / 60_000;
-}
-
-/**
- * How `instant` reads back as a wall-clock string in `timeZone`.
- *
- * The same `YYYY-MM-DDTHH:mm` shape a `datetime-local` input produces, so the
- * answer can be compared to what the editor typed without parsing either side.
- */
-function wallTimeIn(instant: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    hour12: false,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).formatToParts(instant);
-  const read = (type: Intl.DateTimeFormatPartTypes): string =>
-    parts.find(part => part.type === type)?.value ?? "";
-  const hour = String(Number(read("hour")) % 24).padStart(2, "0");
-  return `${read("year")}-${read("month")}-${read("day")}T${hour}:${read("minute")}`;
-}
-
-/**
- * The instant at which `wall` occurs in `timeZone`, as an ISO string with `Z`.
- *
- * Both DST edges are answered here, and they need opposite treatment.
- *
- * A SPRING FORWARD deletes an hour, so the requested wall time may not exist at
- * all. Returning the solver's nearest approach schedules a different moment
- * while every screen reads as though it took: measured, `2026-03-29T02:30` in
- * `Europe/Berlin` came back as 03:30 and `2026-03-08T02:30` in
- * `America/New_York` as 01:30 — an hour late and an hour early from ONE
- * implementation. So a candidate is accepted only if it renders back as exactly
- * what was typed, and `null` otherwise.
- *
- * A FALL BACK repeats an hour, so TWO real instants render as the requested
- * time — in Berlin on 2026-10-25, `00:30Z` and `01:30Z` both read as 02:30. A
- * single-candidate solver silently returns whichever its arithmetic lands on,
- * which is the later one; "02:30 that day" means the first, and an editor who
- * meant the second would have to be able to say so, which this input cannot
- * express. So both offsets in play around the instant are tried and the EARLIER
- * surviving candidate wins.
- *
- * Offsets are read at a full day either side rather than derived from one
- * guess, because that is what makes both members of the ambiguous pair
- * reachable — a transition is at most a couple of hours wide and always falls
- * inside that window.
- */
-export function instantFor(wall: string, timeZone: string): string | null {
-  // `datetime-local` yields `YYYY-MM-DDTHH:mm`, which `Date.parse` reads as
-  // LOCAL time. Appending `Z` reads the same digits as UTC, which is the anchor
-  // every candidate below is measured from.
-  const asUtc = new Date(`${wall}:00.000Z`);
-  if (Number.isNaN(asUtc.getTime())) return null;
-
-  const DAY = 86_400_000;
-  const offsets = new Set([
-    offsetMinutesAt(new Date(asUtc.getTime() - DAY), timeZone),
-    offsetMinutesAt(asUtc, timeZone),
-    offsetMinutesAt(new Date(asUtc.getTime() + DAY), timeZone),
-  ]);
-
-  const candidates = [...offsets]
-    .map(offset => new Date(asUtc.getTime() - offset * 60_000))
-    // The round trip is the whole guarantee: an offset that does not reproduce
-    // the typed wall time is not this zone's offset at that moment.
-    .filter(candidate => wallTimeIn(candidate, timeZone) === wall)
-    .sort((a, b) => a.getTime() - b.getTime());
-
-  return candidates[0]?.toISOString() ?? null;
-}
-
-/** The reader's own zone, or UTC where the platform will not name one. */
-function readerZone(): string {
-  try {
-    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return isValidTimezone(zone) ? zone : "UTC";
-  } catch {
-    return "UTC";
-  }
 }
 
 export interface ScheduleReleaseDialogProps {
@@ -179,7 +118,27 @@ export function ScheduleReleaseDialog({
   // correcting a missed launch window is doing it on purpose.
   const inThePast =
     instant !== null && new Date(instant).getTime() < Date.now();
-  const canSubmit = instant !== null && !schedule.isPending;
+  // ASKED WHILE THE DIALOG IS OPEN, which is the moment somebody is choosing
+  // an instant. The server refuses a release with an unrunnable member anyway;
+  // what it cannot do in that refusal is say WHICH documents, and "fix the
+  // documents blocking it" is not an instruction anybody can follow without
+  // that list.
+  const blockers = useReleaseBlockers(release.id, open);
+  const blocking = blockers.data?.items ?? [];
+
+  const canSubmit = readyToSchedule({
+    instant,
+    scheduling: schedule.isPending,
+    // `isFetching`, NOT `isPending`. React Query reports pending only while
+    // there is no data at all — so a dialog reopened over a cached clean answer
+    // reports "not pending" through the whole refetch, and a release whose
+    // author disappeared in between would be submittable against the stale
+    // result. The reader would then meet the server's generic refusal instead
+    // of the named blocker this preflight exists to show.
+    checking: blockers.isFetching,
+    checkFailed: blockers.isError,
+    blocking: blocking.length,
+  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -187,7 +146,11 @@ export function ScheduleReleaseDialog({
         <form
           onSubmit={event => {
             event.preventDefault();
-            if (!canSubmit) return;
+            // `instant` re-checked rather than asserted. `canSubmit` is
+            // computed elsewhere now, so the compiler cannot narrow through it
+            // — and a non-null assertion here would be a claim the type system
+            // is being told to stop checking.
+            if (!canSubmit || instant === null) return;
             schedule.mutate(
               { at: instant, timezone: zone },
               { onSuccess: () => onOpenChange(false) }
@@ -233,25 +196,15 @@ export function ScheduleReleaseDialog({
               </p>
             </div>
 
-            {skipped ? (
-              <p role="alert" className="text-sm text-destructive">
-                {zone} has no such time on that date — the clocks go forward and
-                that hour does not exist. Pick a time before or after it.
-              </p>
-            ) : null}
+            <ScheduleNotices
+              zone={zone}
+              skipped={skipped}
+              inThePast={inThePast}
+              checkFailed={blockers.isError}
+              scheduleFailed={schedule.isError}
+            />
 
-            {inThePast ? (
-              <p role="status" className="text-sm text-warning-foreground">
-                That moment has already passed — this release will go live at
-                the next check rather than waiting.
-              </p>
-            ) : null}
-
-            {schedule.isError ? (
-              <p role="alert" className="text-sm text-destructive">
-                The release could not be scheduled.
-              </p>
-            ) : null}
+            <WouldStopThis blocking={blocking} />
           </div>
 
           <DialogFooter>
@@ -269,5 +222,51 @@ export function ScheduleReleaseDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Everything the dialog needs to say before it will accept a submission. */
+function ScheduleNotices({
+  zone,
+  skipped,
+  inThePast,
+  checkFailed,
+  scheduleFailed,
+}: {
+  zone: string;
+  skipped: boolean;
+  inThePast: boolean;
+  checkFailed: boolean;
+  scheduleFailed: boolean;
+}) {
+  return (
+    <>
+      {skipped ? (
+        <p role="alert" className="text-sm text-destructive">
+          {zone} has no such time on that date — the clocks go forward and that
+          hour does not exist. Pick a time before or after it.
+        </p>
+      ) : null}
+
+      {inThePast ? (
+        <p role="status" className="text-sm text-warning-foreground">
+          That moment has already passed — this release will go live at the next
+          check rather than waiting.
+        </p>
+      ) : null}
+
+      {checkFailed ? (
+        <p role="alert" className="text-sm text-destructive">
+          Whether this release can run could not be checked, so it has not been
+          scheduled.
+        </p>
+      ) : null}
+
+      {scheduleFailed ? (
+        <p role="alert" className="text-sm text-destructive">
+          The release could not be scheduled.
+        </p>
+      ) : null}
+    </>
   );
 }

@@ -16,6 +16,7 @@ import type {
   AddReleaseMemberPayload,
   CreateReleasePayload,
   Release,
+  ReleaseBlocker,
   ReleaseListParams,
   ReleaseMember,
   ScheduleReleasePayload,
@@ -29,6 +30,12 @@ export interface ReleaseListResponse {
 
 export interface MemberListResponse {
   items: ReleaseMember[];
+  meta: { total: number; hasNext: boolean };
+}
+
+/** The blockers standing between one release and its instant. */
+export interface BlockerListResponse {
+  items: ReleaseBlocker[];
   meta: { total: number; hasNext: boolean };
 }
 
@@ -79,6 +86,18 @@ export const fetchReleaseMembers = (
   releaseId: string
 ): Promise<MemberListResponse> =>
   fetcher<MemberListResponse>(`/releases/${releaseId}/members`, {}, true);
+
+/**
+ * What stands between a release and its instant, asked before committing.
+ *
+ * Its own request rather than a field on the detail read: answering it costs an
+ * identity lookup over every member, which the detail must not pay to tell the
+ * overwhelming majority of callers that nothing is wrong.
+ */
+export const fetchReleaseBlockers = (
+  releaseId: string
+): Promise<BlockerListResponse> =>
+  fetcher<BlockerListResponse>(`/releases/${releaseId}/blockers`, {}, true);
 
 export const createRelease = (
   payload: CreateReleasePayload

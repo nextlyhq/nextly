@@ -67,6 +67,7 @@ const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   listReleases: "read",
   getRelease: "read",
   listReleaseMembers: "read",
+  listReleaseBlockers: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
@@ -664,6 +665,34 @@ const RELEASE_OPERATIONS: Record<
       }),
       { status: 201 }
     );
+  },
+
+  /**
+   * What stands between this release and its instant, asked before committing.
+   *
+   * The same derivation the drain would reach at the instant, offered at the
+   * moment somebody is choosing one — so a launch that cannot run is refused
+   * while the operator is still looking at it, rather than at three in the
+   * morning when nobody is.
+   *
+   * Answers for ANY state, not only a stopped release. A draft with a departed
+   * author is exactly as unrunnable as one the drain has already labelled; the
+   * only difference is whether a background pass has happened yet, which is not
+   * something the person scheduling can see.
+   */
+  listReleaseBlockers: async ({ caller, releases, releaseId }) => {
+    const blockers = await releases.blockingReasons({ ...caller, releaseId });
+    // Unpaged, like the member list it derives from: the set is bounded by
+    // the release's own member cap, and a blocker you cannot see is a blocker
+    // you cannot fix.
+    return respondList(blockers, {
+      total: blockers.length,
+      page: 1,
+      limit: blockers.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
   },
 
   removeReleaseMember: async ({ caller, releases, releaseId, memberId }) => {

@@ -41,6 +41,38 @@ function VariableChip({
   );
 }
 
+/**
+ * The insertable variables, as a strip for the editor's toolbar.
+ *
+ * Beside the caret rather than a column away: inserting a variable is something
+ * done WHILE typing, and the previous placement made it a trip to a rail and
+ * back. Declaring and describing variables is a different act and stays in the
+ * inspector.
+ */
+export function VariableChips({
+  declared,
+  onInsert,
+}: {
+  declared: TemplateFormVariable[];
+  onInsert: (name: string) => void;
+}) {
+  const builtInNames = new Set(BUILT_IN_VARIABLES.map(v => v.name));
+  const declaredNames = declared
+    .map(v => v.name)
+    .filter(n => n && !builtInNames.has(n));
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {BUILT_IN_VARIABLES.map(v => (
+        <VariableChip key={v.name} name={v.name} onInsert={onInsert} />
+      ))}
+      {declaredNames.map(n => (
+        <VariableChip key={n} name={n} onInsert={onInsert} />
+      ))}
+    </div>
+  );
+}
+
 export function VariablesRail({
   control,
   declared,
@@ -54,11 +86,6 @@ export function VariablesRail({
     control,
     name: "variables",
   });
-  const builtInNames = new Set(BUILT_IN_VARIABLES.map(v => v.name));
-  const declaredNames = declared
-    .map(v => v.name)
-    .filter(n => n && !builtInNames.has(n));
-
   return (
     <div className="space-y-5">
       <div>
@@ -69,14 +96,7 @@ export function VariablesRail({
           Click to insert at the cursor. Built-in variables are always
           available.
         </p>
-        <div className="flex flex-wrap gap-1.5">
-          {BUILT_IN_VARIABLES.map(v => (
-            <VariableChip key={v.name} name={v.name} onInsert={onInsert} />
-          ))}
-          {declaredNames.map(n => (
-            <VariableChip key={n} name={n} onInsert={onInsert} />
-          ))}
-        </div>
+        <VariableChips declared={declared} onInsert={onInsert} />
       </div>
 
       <div>
