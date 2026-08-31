@@ -29,13 +29,12 @@ import type { ApiCollection } from "@admin/types/entities";
 import { useSuppressedChrome } from "../ChromeSuppression";
 
 import { hasPluginsSection } from "./lib/has-plugins-section";
-import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
+import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
-import { subSidebarBorderClass } from "./lib/sub-sidebar-classes";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
-import { SubSidebarContent } from "./SubSidebarContent";
+import { SubSidebarPanel } from "./SubSidebarPanel";
 
 interface DualSidebarProps {
   isMobile?: boolean;
@@ -359,16 +358,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     return filterCollectionItems(visible, capabilities);
   }, [collectionsData, capabilities]);
 
+  const suppressedChrome = useSuppressedChrome();
+
   const hasSubSidebarCategory = (id: string) =>
     isSubSidebarCategory(id, isFolderTreeVisible);
-
-  const suppressed = useSuppressedChrome();
-  const hasSubSidebar = isSubSidebarOpen(
-    selectedMain,
-    visibleMenuItems.map(item => item.id),
-    isFolderTreeVisible,
-    suppressed
-  );
 
   // The Settings icon lands on the first subpage the user can actually OPEN —
   // gated on each route's own guard, not the broader "can see the link" flag, so
@@ -455,7 +448,16 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
             const Icon = item.icon;
             const isSelected = selectedMain === item.id;
             const href = resolveItemHref(item);
-            const stayOnPageMobile = isMobile && hasSubSidebarCategory(item.id);
+            /*
+             * On mobile a category normally stays put and opens the panel
+             * instead of navigating. With the panel SUPPRESSED there is no
+             * panel to open, so staying put does nothing at all and the drawer
+             * stops navigating — the tap only moves a selection nobody can see.
+             */
+            const stayOnPageMobile =
+              isMobile &&
+              hasSubSidebarCategory(item.id) &&
+              !suppressedChrome.has("subSidebar");
             const renderAsLink = href !== "#" && !stayOnPageMobile;
 
             // Unselected items use muted foreground so the resting icon meets contrast; a faint primary alpha did not.
@@ -514,52 +516,29 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       </aside>
 
       {/* 2. Sub Sidebar (Detail Menu) */}
-      <aside
-        className={cn(
-          "flex flex-col bg-background overflow-hidden shrink-0",
-          isMobile
-            ? "relative flex"
-            : "fixed inset-y-0 left-[72px] z-45 lg:static lg:flex", // Absolute on tablet, static on desktop
-          subSidebarBorderClass({ isMobile, hasSubSidebar }),
-          hasSubSidebar
-            ? "w-64 opacity-100 translate-x-0"
-            : "w-0 opacity-0 -translate-x-full pointer-events-none lg:w-0 lg:-translate-x-0",
-          !isMobile && "lg:translate-x-0 lg:opacity-100" // Reset for desktop
-        )}
-      >
-        {/* Sub Sidebar Header */}
-        <div className="h-16 px-6 flex items-center  border-b border-border">
-          <span className="font-bold text-base tracking-tight capitalize text-foreground">
-            {selectedMain.startsWith("standalone-")
-              ? standaloneLabel
-              : selectedMain === "media"
-                ? "Media Library"
-                : selectedMain === "builders"
-                  ? "Builders"
-                  : selectedMain}
-          </span>
-        </div>
-
-        {/* Sub Sidebar Content */}
-        <div className="flex-1 overflow-y-auto">
-          <SubSidebarContent
-            selectedMain={selectedMain}
-            standaloneLabel={standaloneLabel}
-            collectionSearch={collectionSearch}
-            onCollectionSearchChange={setCollectionSearch}
-            singleSearch={singleSearch}
-            onSingleSearchChange={setSingleSearch}
-            pluginSearch={pluginSearch}
-            onPluginSearchChange={setPluginSearch}
-            isActive={isActive}
-            hasPermission={hasPermission}
-            canAccessApiKeys={canAccessApiKeys}
-            canAccessWebhooks={canAccessWebhooks}
-            pluginCollectionsForSection={pluginCollectionsForSection}
-            showBuilder={showBuilder}
-          />
-        </div>
-      </aside>
+      <SubSidebarPanel
+        isMobile={Boolean(isMobile)}
+        selectedMain={selectedMain}
+        visibleMenuItemIds={visibleMenuItems.map(item => item.id)}
+        isFolderTreeVisible={isFolderTreeVisible}
+        standaloneLabel={standaloneLabel}
+        content={{
+          selectedMain,
+          standaloneLabel,
+          collectionSearch,
+          onCollectionSearchChange: setCollectionSearch,
+          singleSearch,
+          onSingleSearchChange: setSingleSearch,
+          pluginSearch,
+          onPluginSearchChange: setPluginSearch,
+          isActive,
+          hasPermission,
+          canAccessApiKeys,
+          canAccessWebhooks,
+          pluginCollectionsForSection,
+          showBuilder,
+        }}
+      />
     </div>
   );
 }

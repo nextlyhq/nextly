@@ -3,6 +3,14 @@
 /**
  * Region 03 — the body being authored.
  *
+ * The editor FILLS its pane and scrolls inside it, with no minimum height. It
+ * previously carried a 380px floor, which the old layout paired with an outer
+ * `overflow-y-auto` so a short viewport scrolled the whole page. The shell gives
+ * each pane a definite height and clips it, so a floor taller than the pane
+ * makes the editor overflow a box that hides the overflow — and CodeMirror then
+ * measures a viewport larger than anything on screen, and will put the caret in
+ * the clipped part. Stacked on a laptop, that is the common case, not the edge.
+ *
  * Two editors behind one toggle, and the pair carries two invariants that are
  * easy to lose and have no visible symptom when lost:
  *
@@ -64,7 +72,7 @@ export function BodyEditor({
       {/* Editor body */}
       <div
         ref={editorWrapRef}
-        className="html-code-editor min-h-[380px] flex-1 overflow-auto bg-background xl:min-h-0"
+        className="html-code-editor min-h-0 flex-1 overflow-auto bg-background"
       >
         {editorTab === "html" ? (
           <FormField
@@ -78,7 +86,7 @@ export function BodyEditor({
             render={({ field }) => (
               <Suspense
                 fallback={
-                  <div className="min-h-[380px] w-full animate-pulse bg-muted/30" />
+                  <div className="h-full w-full animate-pulse bg-muted/30" />
                 }
               >
                 <CodeMirrorEditor
@@ -112,7 +120,7 @@ export function BodyEditor({
                 value={field.value ?? ""}
                 disabled={isPending}
                 placeholder="Plain-text fallback sent alongside the HTML…"
-                className="h-full min-h-[380px] w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground xl:min-h-full"
+                className="h-full w-full resize-none bg-background p-3.5 font-mono text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground"
               />
             )}
           />

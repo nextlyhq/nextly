@@ -37,7 +37,10 @@ export function TemplateInspector({
   onClose: () => void;
 }) {
   return (
-    <div className="flex h-full w-[360px] max-w-[85vw] flex-col">
+    // Bounded by the PANE, not by the viewport: the splitter allows the preview
+    // down to 25% — around 300px at 1280 — and the shell clips the pane, so a
+    // viewport-relative maximum lets the inspector's left edge disappear.
+    <div className="flex h-full w-[360px] max-w-full flex-col">
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <h2 className="text-sm font-semibold text-foreground">Settings</h2>
         <Button

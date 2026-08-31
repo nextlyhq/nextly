@@ -21,7 +21,7 @@ import { EnvelopeBar } from "./EnvelopeBar";
 import {
   DEFAULT_VALUES,
   EMAIL_TEMPLATE_FORM_ID,
-  templateSchema,
+  templateSchemaFor,
   templateToFormValues,
   type TemplateFormValues,
 } from "./schema";
@@ -70,9 +70,13 @@ export function EmailTemplateForm({
   const [sampleOverride, setSampleOverride] = useState<string | null>(null);
   const [sendTestOpen, setSendTestOpen] = useState(false);
 
+  // The row being edited keeps its kind; layouts are wrappers, not bodies.
+  const currentKind = template?.kind ?? "template";
+  const isLayoutRow = currentKind === "layout";
+
   const form = useForm<TemplateFormValues>({
     resolver: zodResolver(
-      templateSchema
+      templateSchemaFor(isLayoutRow)
     ) as unknown as Resolver<TemplateFormValues>,
     defaultValues:
       initialValues ??
@@ -84,10 +88,6 @@ export function EmailTemplateForm({
     { staleTime: 60_000 }
   );
   const providers = providersData?.data ?? [];
-
-  // The row being edited keeps its kind; layouts are wrappers, not bodies.
-  const currentKind = template?.kind ?? "template";
-  const isLayoutRow = currentKind === "layout";
 
   const { data: allTemplates } = useEmailTemplates();
   const layouts = useMemo(
@@ -172,12 +172,12 @@ export function EmailTemplateForm({
       >
         <ImmersiveShell
           /*
-           * `subSidebar` is the settings navigation, which is 256px of
-           * destinations an author mid-template is not going to. `pageFrame` is
-           * the container's padding, which a full-bleed editor reads as a
-           * mistake rather than as a margin. The primary rail STAYS: hiding the
-           * whole of the admin's navigation is a bigger claim than this screen
-           * needs, and the founder asked for the settings sidebar specifically.
+           * `subSidebar` is the settings navigation — 256px of destinations
+           * nobody editing a template is heading to. `pageFrame` is the
+           * container's padding, which a full-bleed surface reads as a mistake
+           * rather than as a margin. The primary rail STAYS: it is the whole of
+           * the admin's navigation, and taking it is a larger claim than a
+           * width problem justifies.
            */
           suppress={["subSidebar", "pageFrame"]}
           onExit={() => navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES)}
