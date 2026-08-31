@@ -79,6 +79,14 @@ export function monthGrid(month: string): CalendarMonth {
  * trailing day is fetched and shown rather than appearing only once the reader
  * pages to the month it belongs to.
  *
+ * BOTH BOUNDS ARE INCLUSIVE, because that is the contract the service offers:
+ * `matchesListQuery` rejects on `at > scheduledBefore`, so a release exactly at
+ * the upper bound is returned. `before` is therefore the last instant of the
+ * last grid day rather than midnight of the day after it — that midnight
+ * belongs to a day the grid does not show, and at the page ceiling one release
+ * sitting there would evict a visible one AND raise a truncation warning for a
+ * month that actually fits.
+ *
  * Resolved through `instantFor`, which is the same solver the schedule input
  * uses. A month boundary is a wall time like any other and can land on a
  * daylight transition — Brazil has abolished DST at midnight, so `00:00` on the
@@ -92,9 +100,13 @@ export function monthWindow(
   const { weeks } = monthGrid(month);
   const firstDay = weeks[0]?.[0] ?? `${month}-01`;
   const lastDay = weeks[5]?.[6] ?? `${month}-28`;
+  // One millisecond before the next day begins. Derived from that boundary
+  // rather than written as a local "23:59:59.999", because the last grid day
+  // can be one the zone lengthens or shortens and only the boundary knows.
+  const dayAfterGrid = new Date(startOfDayInstant(nextDay(lastDay), timeZone));
   return {
     after: startOfDayInstant(firstDay, timeZone),
-    before: startOfDayInstant(nextDay(lastDay), timeZone),
+    before: new Date(dayAfterGrid.getTime() - 1).toISOString(),
   };
 }
 

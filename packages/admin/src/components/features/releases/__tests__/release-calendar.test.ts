@@ -137,8 +137,18 @@ describe("the window the month is fetched with", () => {
     // to the month it belongs to, which is exactly when they stop looking.
     const window = monthWindow("2026-09", "UTC");
     expect(window.after).toBe("2026-08-31T00:00:00.000Z");
-    // Exclusive upper bound: the start of the day AFTER the last grid day.
-    expect(window.before).toBe("2026-10-12T00:00:00.000Z");
+    // The LAST INSTANT of the last grid day (2026-10-11), not midnight of the
+    // day after it. The service's upper bound is inclusive — it rejects on
+    // `at > scheduledBefore` — so midnight would also fetch the 12th, a day the
+    // grid does not show. At the page ceiling one release sitting there would
+    // evict a visible one and raise a truncation warning for a month that fits.
+    expect(window.before).toBe("2026-10-11T23:59:59.999Z");
+    // And it is strictly before the next day begins, which is the property that
+    // separates an inclusive bound from an exclusive one. Asserting only the
+    // timestamp above could not tell them apart.
+    expect(new Date(window.before).getTime()).toBeLessThan(
+      new Date("2026-10-12T00:00:00.000Z").getTime()
+    );
   });
 
   it("opens the window at midnight IN THE CHOSEN ZONE", async () => {
@@ -147,6 +157,8 @@ describe("the window the month is fetched with", () => {
     // would miss at the start of every month.
     const berlin = monthWindow("2026-09", "Europe/Berlin");
     expect(berlin.after).toBe("2026-08-30T22:00:00.000Z");
+    // The upper bound moves with the zone too, for the same reason.
+    expect(berlin.before).toBe("2026-10-11T21:59:59.999Z");
     expect(new Date(berlin.after).getTime()).toBeLessThan(
       new Date(monthWindow("2026-09", "UTC").after).getTime()
     );

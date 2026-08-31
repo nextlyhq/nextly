@@ -9,7 +9,7 @@
  *
  * @module components/features/releases/__tests__/ReleaseCalendar.test
  */
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
@@ -20,6 +20,17 @@ vi.mock("@admin/hooks/queries/useReleases", () => ({
 }));
 
 import { ReleaseCalendar } from "../ReleaseCalendar";
+
+/**
+ * The clock this suite runs on.
+ *
+ * FROZEN, because the calendar opens on the CURRENT month while the fixture
+ * below is a fixed date. Left on the real clock these agree only while today
+ * falls in a grid containing 1 September 2026 — so the suite would begin
+ * failing in October purely because time passed, on a component nobody had
+ * touched. Mid-September puts the fixture safely inside the opening grid.
+ */
+const FROZEN_NOW = new Date("2026-09-15T12:00:00.000Z");
 
 /** A release on 1 September 2026, 09:00 UTC. */
 const SEPTEMBER = {
@@ -42,9 +53,15 @@ function answer(over: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(FROZEN_NOW);
   useReleasesMock.mockReset();
   useReleasesMock.mockReturnValue(answer());
   window.localStorage.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("the calendar screen", () => {

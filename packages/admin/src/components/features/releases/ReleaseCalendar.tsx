@@ -108,20 +108,38 @@ const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
  * currently selected, which might have come from storage.
  */
 function zoneChoices(current: string, authored: readonly string[]): string[] {
+  // Only the ADDITIONS are validated. The platform's own list is valid by
+  // construction, and running it through `isValidTimezone` builds a formatter
+  // per entry to re-learn what the platform just told us.
   const supported = supportedZones();
-  const always = [readerZone(), current, "UTC", ...authored];
-  return [...new Set([...always, ...supported])].filter(isValidTimezone);
+  const extras = [readerZone(), current, "UTC", ...authored].filter(
+    zone => !supported.includes(zone) && isValidTimezone(zone)
+  );
+  return [...new Set([...extras, ...supported])];
 }
 
+/**
+ * The platform's zone list, read ONCE.
+ *
+ * Roughly four hundred entries, and constant for the life of the runtime. It
+ * was previously re-read and re-validated on every render — including every
+ * poll and every day selection — which meant constructing four hundred
+ * `Intl.DateTimeFormat` instances to answer a question whose answer cannot
+ * change.
+ */
+let supportedZonesCache: string[] | null = null;
+
 function supportedZones(): string[] {
+  if (supportedZonesCache !== null) return supportedZonesCache;
   try {
     const of = (
       Intl as unknown as { supportedValuesOf?: (k: string) => string[] }
     ).supportedValuesOf;
-    return typeof of === "function" ? of("timeZone") : [];
+    supportedZonesCache = typeof of === "function" ? of("timeZone") : [];
   } catch {
-    return [];
+    supportedZonesCache = [];
   }
+  return supportedZonesCache;
 }
 
 export function ReleaseCalendar() {
@@ -154,8 +172,17 @@ export function ReleaseCalendar() {
     [releases]
   );
   const byDay = useMemo(() => bucketByDay(releases, zone), [releases, zone]);
+  const zones = useMemo(
+    () => zoneChoices(zone, authoredZones),
+    [zone, authoredZones]
+  );
   const grid = useMemo(() => monthGrid(month), [month]);
-  const today = useMemo(() => monthOf(new Date(), zone), [zone]);
+  // NOT memoized on `zone` alone. `new Date()` would then be read once at
+  // mount and never again, so a page left open across a month boundary keeps
+  // naming the previous month as today — and, while sitting on it, hides the
+  // Today button because `month === today`, leaving no way back. One `Intl`
+  // format per render is cheaper than the state that would fix it.
+  const today = monthOf(new Date(), zone);
 
   // A selected day belongs to the month it was chosen in. Paging without
   // clearing leaves the panel open on a date the new grid does not contain,
@@ -181,7 +208,7 @@ export function ReleaseCalendar() {
         month={month}
         today={today}
         zone={zone}
-        zones={zoneChoices(zone, authoredZones)}
+        zones={zones}
         onMonth={goToMonth}
         onZone={changeZone}
       />
