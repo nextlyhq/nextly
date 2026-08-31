@@ -30,7 +30,6 @@
   "src/domains/auth/services/expression-validator.ts": 12,
   "src/domains/auth/services/role-inheritance-service.ts": 2,
   "src/domains/auth/services/role/utils.ts": 2,
-  "src/domains/collections/services/collection-bulk-service.ts": 6,
   "src/domains/collections/services/collection-relationship-service.ts": 1,
   "src/domains/dynamic-collections/services/dynamic-collection-registry-service.ts": 4,
   "src/domains/dynamic-collections/services/dynamic-collection-service.ts": 1,
