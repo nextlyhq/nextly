@@ -127,7 +127,11 @@ export function WidgetCard({
         // attribute is a weaker signal than one that says "no longer busy".
         aria-busy={isLoading}
         className={cn(
-          "flex flex-1 flex-col justify-center px-5 pb-5 pt-2",
+          // Top-aligned, not centred. Cards in a grid row stretch to the
+          // tallest of them, so centring floats a one-line figure in the middle
+          // of whatever the tallest card in that row happens to be -- while the
+          // stat cards beside it keep their number directly under its label.
+          "flex flex-1 flex-col justify-start px-5 pb-5 pt-2",
           isLoading && "opacity-60 transition-opacity"
         )}
       >
