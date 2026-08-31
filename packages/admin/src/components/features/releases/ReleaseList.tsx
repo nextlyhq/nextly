@@ -11,7 +11,7 @@
  * @module components/features/releases/ReleaseList
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { CalendarClock } from "@admin/components/icons";
 import {
@@ -25,10 +25,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@admin/components/ui";
-import { Link } from "@admin/components/ui/link";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useReleases } from "@admin/hooks/queries/useReleases";
-import type { ReleaseState } from "@admin/types/releases";
+import { navigateTo } from "@admin/lib/navigation";
+import type { Release, ReleaseState } from "@admin/types/releases";
 
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
 
@@ -97,6 +99,44 @@ const ANY_STATE = "all";
  */
 const PAGE = 50;
 const MAX_PAGE = 200;
+
+/**
+ * What a release row shows, in the order it is read.
+ *
+ * State first, because it is what decides whether the rest of the row matters:
+ * a cancelled launch and a scheduled one are different KINDS of thing, and
+ * putting the title first makes them look like the same thing with a label.
+ */
+function releaseColumns(): NextlyColumn<Release>[] {
+  return [
+    {
+      name: "state",
+      header: "State",
+      cell: ({ row }) => (
+        <Badge variant={STATE_VARIANT[row.state]}>
+          {RELEASE_STATE_LABEL[row.state]}
+        </Badge>
+      ),
+    },
+    {
+      name: "title",
+      header: "Release",
+      cell: ({ row }) => (
+        <span className="font-medium text-foreground">{row.title}</span>
+      ),
+    },
+    {
+      name: "when",
+      header: "When",
+      // The same sentence the row carried before, which says what will happen
+      // and when rather than printing a bare timestamp the reader has to
+      // interpret against the state beside it.
+      cell: ({ row }) => (
+        <span className="text-muted-foreground">{describeRelease(row)}</span>
+      ),
+    },
+  ];
+}
 
 /**
  * The controls that narrow the window.
@@ -287,6 +327,7 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
   });
 
   const filtering = state !== ANY_STATE || Boolean(after) || Boolean(before);
+  const columns = useMemo(() => releaseColumns(), []);
 
   // ALL of them. Clearing only the state leaves a date window narrowing the
   // list, so "Show all releases" can render the same empty result it was
@@ -365,36 +406,24 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
   return (
     <>
       {filter}
-      <ul className="flex flex-col gap-2">
-        {releases.map(release => (
-          <li key={release.id}>
-            <Card className="p-0">
-              {/* The whole row is the link. A separate "Open" button beside a
-                  title reads as two destinations, and it cannot be
-                  middle-clicked or opened in a new tab — which is how anyone
-                  compares two releases. */}
-              <Link
-                href={buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-[inherit] px-4 py-3 no-underline outline-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Badge variant={STATE_VARIANT[release.state]}>
-                      {RELEASE_STATE_LABEL[release.state]}
-                    </Badge>
-                    <span className="truncate font-medium text-foreground">
-                      {release.title}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {describeRelease(release)}
-                  </p>
-                </div>
-              </Link>
-            </Card>
-          </li>
-        ))}
-      </ul>
+      {/* The SAME table every other list surface uses — entries, media, api
+          keys, webhooks, deliveries. Releases was the last one hand-built from
+          cards, which cost it column alignment, the shared empty and loading
+          states, and the row semantics a reader has already learned everywhere
+          else in the admin. */}
+      <DataTableView<Release>
+        columns={columns}
+        rows={releases}
+        loading={isPending}
+        getRowId={release => release.id}
+        onRowClick={release =>
+          navigateTo(buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id }))
+        }
+        primaryColumn="title"
+        registryKey="releases"
+        ariaLabel="Releases"
+        emptyMessage="No releases match these filters yet."
+      />
 
       <TruncationNotice
         truncated={truncated}

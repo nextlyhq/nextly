@@ -2124,6 +2124,19 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "update",
     method: "cancelRelease",
   },
+  // A READ, and deliberately its own route rather than a field on the detail.
+  // Answering it costs an identity lookup over every member, which the detail
+  // read must not pay to tell the overwhelming majority of callers that nothing
+  // is wrong — the state already said that. Asked instead at the moment
+  // somebody is about to commit to an instant.
+  {
+    id: true,
+    subresource: "blockers",
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleaseBlockers",
+  },
 ];
 
 /**

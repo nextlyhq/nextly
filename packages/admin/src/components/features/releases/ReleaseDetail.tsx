@@ -28,6 +28,8 @@ import {
   Card,
 } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
+import { DataTableView } from "@admin/components/ui/table/data-table";
+import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   useRelease,
@@ -59,6 +61,69 @@ const ACTION_LABEL: Record<ReleaseMember["action"], string> = {
  * identifiers; being one click from the thing itself is most of the value of
  * having the page at all.
  */
+/**
+ * What a member row shows: the effect, the document, and the way out.
+ *
+ * The ACTION leads, for the same reason state leads the release list — publish
+ * and unpublish are opposite outcomes, and a row that opened with the document
+ * would present them as the same thing with a label attached.
+ */
+function memberColumns(
+  releaseId: string,
+  removable: boolean
+): NextlyColumn<ReleaseMember>[] {
+  const columns: NextlyColumn<ReleaseMember>[] = [
+    {
+      name: "action",
+      header: "Action",
+      cell: ({ row }) => (
+        <Badge variant={row.action === "publish" ? "success" : "outline"}>
+          {ACTION_LABEL[row.action]}
+        </Badge>
+      ),
+    },
+    {
+      name: "document",
+      header: "Document",
+      cell: ({ row }) => (
+        <Link
+          href={documentHref(row)}
+          className="inline-flex min-w-0 items-center gap-1 truncate font-medium text-foreground"
+        >
+          <span className="truncate">
+            {row.scopeSlug}
+            {row.scopeKind === "collection" ? ` / ${row.entryId}` : ""}
+          </span>
+          <ExternalLink className="size-3.5 shrink-0" aria-hidden />
+        </Link>
+      ),
+    },
+    {
+      name: "kind",
+      header: "Kind",
+      cell: ({ row }) => (
+        <span className="text-muted-foreground">
+          {row.scopeKind === "single" ? "Single" : "Collection entry"}
+        </span>
+      ),
+    },
+  ];
+
+  // The column is ABSENT rather than empty when the reader cannot remove
+  // anything: a header for a control that never appears reads as a permission
+  // that failed to load.
+  if (removable) {
+    columns.push({
+      name: "remove",
+      header: "",
+      cell: ({ row }) => (
+        <MemberRemoveButton member={row} releaseId={releaseId} />
+      ),
+    });
+  }
+  return columns;
+}
+
 function documentHref(member: ReleaseMember): string {
   return member.scopeKind === "single"
     ? buildRoute(ROUTES.SINGLE_EDIT, { slug: member.scopeSlug })
@@ -68,14 +133,19 @@ function documentHref(member: ReleaseMember): string {
       });
 }
 
-function MemberRow({
+/**
+ * The per-row removal, with its confirmation.
+ *
+ * A cell rather than a `RowAction`, because the removal has to hold its dialog
+ * OPEN while it is failing — see the note below — and a generic row action has
+ * nowhere to keep that state.
+ */
+function MemberRemoveButton({
   member,
   releaseId,
-  removable,
 }: {
   member: ReleaseMember;
   releaseId: string;
-  removable: boolean;
 }) {
   const remove = useRemoveReleaseMember(releaseId);
   const [confirming, setConfirming] = useState(false);
@@ -85,79 +155,48 @@ function MemberRow({
   const open = confirming || remove.isError;
 
   return (
-    <li>
-      <Card className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Badge
-              variant={member.action === "publish" ? "success" : "outline"}
-            >
-              {ACTION_LABEL[member.action]}
-            </Badge>
-            <Link
-              href={documentHref(member)}
-              className="inline-flex min-w-0 items-center gap-1 truncate font-medium text-foreground"
-            >
-              <span className="truncate">
-                {member.scopeSlug}
-                {member.scopeKind === "collection"
-                  ? ` / ${member.entryId}`
-                  : ""}
-              </span>
-              <ExternalLink className="size-3.5 shrink-0" aria-hidden />
-            </Link>
-          </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {member.scopeKind === "single" ? "Single" : "Collection entry"}
+    <AlertDialog
+      open={open}
+      onOpenChange={next => {
+        if (!next) remove.reset();
+        setConfirming(next);
+      }}
+    >
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setConfirming(true)}
+        disabled={remove.isPending}
+        // Named, not "Remove": a screen reader hears the rows in sequence
+        // and "Remove, Remove, Remove" identifies none of them.
+        aria-label={`Remove ${member.scopeSlug} from this release`}
+      >
+        <Trash2 className="size-4" aria-hidden />
+      </Button>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove from this release?</AlertDialogTitle>
+          <AlertDialogDescription>
+            The document itself is not changed. It simply stops being part of
+            what goes live with this release.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {remove.isError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {releaseErrorMessage(
+              remove.error,
+              "This document was not removed — it is still in the release."
+            )}
           </p>
-        </div>
-
-        {removable ? (
-          <AlertDialog
-            open={open}
-            onOpenChange={next => {
-              if (!next) remove.reset();
-              setConfirming(next);
-            }}
-          >
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setConfirming(true)}
-              disabled={remove.isPending}
-              // Named, not "Remove": a screen reader hears the rows in sequence
-              // and "Remove, Remove, Remove" identifies none of them.
-              aria-label={`Remove ${member.scopeSlug} from this release`}
-            >
-              <Trash2 className="size-4" aria-hidden />
-            </Button>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Remove from this release?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  The document itself is not changed. It simply stops being part
-                  of what goes live with this release.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              {remove.isError ? (
-                <p role="alert" className="text-sm text-destructive">
-                  {releaseErrorMessage(
-                    remove.error,
-                    "This document was not removed — it is still in the release."
-                  )}
-                </p>
-              ) : null}
-              <AlertDialogFooter>
-                <AlertDialogCancel>Keep it</AlertDialogCancel>
-                <AlertDialogAction onClick={() => remove.mutate(member.id)}>
-                  Remove
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
         ) : null}
-      </Card>
-    </li>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction onClick={() => remove.mutate(member.id)}>
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -360,16 +399,15 @@ export function ReleaseDetail({ id }: { id: string }) {
             </p>
           </Card>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {rows.map(member => (
-              <MemberRow
-                key={member.id}
-                member={member}
-                releaseId={id}
-                removable={removable}
-              />
-            ))}
-          </ul>
+          <DataTableView<ReleaseMember>
+            columns={memberColumns(id, removable)}
+            rows={rows}
+            getRowId={member => member.id}
+            primaryColumn="document"
+            registryKey="release-members"
+            ariaLabel="Documents in this release"
+            emptyMessage="Nothing has been added to this release yet."
+          />
         )}
       </section>
     </>

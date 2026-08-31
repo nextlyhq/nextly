@@ -159,6 +159,17 @@ describe("release route authority", () => {
     ).toEqual({ action: "publish", resource: "content-releases" });
   });
 
+  it("demands only READ to ask what is blocking a release", async () => {
+    // A preflight is a question, not a change. Demanding `publish` to ask it
+    // would mean the person assembling a release — who can add and remove the
+    // documents that cause a blocker — could not find out which ones they are,
+    // and would have to hand it to a publisher to be told.
+    expect(await authorityFor("listReleaseBlockers")).toEqual({
+      action: "read",
+      resource: "content-releases",
+    });
+  });
+
   it("demands publish to cancel", async () => {
     // Someone who could cancel but not schedule could still silently stop a
     // launch, so the two share one authority.

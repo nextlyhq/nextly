@@ -100,6 +100,27 @@ export const MAX_RELEASE_TITLE_LENGTH = 255;
 export const MAX_RELEASE_TIMEZONE_LENGTH = 64;
 
 /**
+ * How many documents one release may hold.
+ *
+ * A bound rather than a policy. Nothing about the model stops a release growing
+ * without limit, and three things degrade together as it does: `listMembers` is
+ * unpaged and the detail page renders all of it, the drain performs members one
+ * at a time inside a wall-clock budget, and a blocked release derives its
+ * reasons over every member on every read.
+ *
+ * A thousand is chosen to sit well above any release somebody assembles
+ * deliberately — a site relaunch is tens of documents, not hundreds — while
+ * still catching the case this exists for: a script adding in a loop, which
+ * otherwise builds a release nothing can display and no single pass can settle.
+ *
+ * NOT an atomic invariant, and the code says so rather than implying otherwise:
+ * two concurrent adds can both read a count below the cap. That is acceptable
+ * because the failure it prevents is unbounded growth, not the thousand-and-
+ * first row.
+ */
+export const MAX_RELEASE_MEMBERS = 1000;
+
+/**
  * Who is asking, and whether to ask at all.
  *
  * `overrideAccess` matches every other service in this package: the Direct API
@@ -749,6 +770,7 @@ export class ReleasesService {
     // Claimed ATOMICALLY, and the author checked, before anything is written.
     await this.claimAssemblable(releaseId, actor);
     await this.requireLiveAuthor(actor.userId);
+    await this.assertRoomForOneMore(releaseId);
 
     try {
       const member = await this.deps.repository.addMember({
@@ -946,6 +968,28 @@ export class ReleasesService {
    * `AUTHOR_UNAVAILABLE` on every pass — the release stays scheduled forever and
    * the only symptom is content that never appeared.
    */
+  /**
+   * Refuse a release that has reached its size bound.
+   *
+   * Counted from the members themselves rather than a stored total, for the
+   * reason the blocker reasons are derived: a cached count drifts the moment a
+   * member is removed by another route, and a cap enforced from a stale number
+   * refuses a release that has room.
+   */
+  private async assertRoomForOneMore(releaseId: string): Promise<void> {
+    const held = await this.deps.repository.listMembers(releaseId);
+    if (held.length < MAX_RELEASE_MEMBERS) return;
+    throw NextlyError.conflict({
+      message: `A release can hold at most ${MAX_RELEASE_MEMBERS} documents. Remove something, or schedule this release and start another.`,
+      logContext: {
+        reason: "release-member-limit",
+        releaseId,
+        held: held.length,
+        limit: MAX_RELEASE_MEMBERS,
+      },
+    });
+  }
+
   private async requireLiveAuthor(userId: string | null): Promise<void> {
     if (userId === null) return;
     const live = await this.deps.repository.liveAuthors([userId]);
