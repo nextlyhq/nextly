@@ -82,6 +82,11 @@ export type SharedStyleInputs = Pick<
   | "namedClasses"
   | "tokenPrefix"
   | "blockBases"
+  // The parts tier, for exactly the reason `blockBases` is here: a block
+  // adding or changing a part changes the CSS `compilePageCss` emits, and a
+  // stamp that cannot see it hands back the artifact compiled before the
+  // change. The new rules then never appear until some unrelated input moves.
+  | "blockParts"
   // The typographic baseline is part of the IDENTITY, not merely of the
   // compile. A host replacing it changes what every heading and paragraph
   // renders as, and a stored sheet compiled against the old one is wrong in a
@@ -612,6 +617,16 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // to different stylesheets, and a stamp that cannot see the difference
     // hands the first one's sheet to the second.
     blockBaseParts(inputs.elementBases, reading),
+    // The parts tier. SPREAD rather than held in a fixed slot, the same care
+    // `previewStates` and `previewContainer` take: while no block declares a
+    // part this array's shape is exactly what it was, so every artifact already
+    // stored keeps its stamp. A fixed slot would have invalidated every page on
+    // the site to record a field unset on all of them — and the moment a block
+    // does declare one, the element appears and the stamp moves, which is the
+    // whole point.
+    ...(blockPartsPresent(inputs.blockParts)
+      ? [blockPartsParts(inputs.blockParts, reading)]
+      : []),
     // A preview sheet gives every interaction state a forceable form, so its
     // selectors are not the published ones and the two must not share a stored
     // artifact. Without this, `resolvePageStyles` — exported, and returning a
@@ -625,6 +640,48 @@ function labelFor(inputs: SharedStyleInputs, reading: Reading): string {
     // field that is unset on all of them.
     ...(inputs.previewStates === true ? ["preview-states"] : []),
   ]);
+}
+
+/** True if any block declares any part, so the tier can affect the sheet. */
+function blockPartsPresent(
+  blockParts: SharedStyleInputs["blockParts"]
+): boolean {
+  // A type present with an EMPTY record emits nothing, so it must not move a
+  // stamp — the same reasoning that keeps a discarded breakpoint out of the
+  // identity above.
+  return Object.values(blockParts ?? {}).some(
+    parts => Object.keys(parts ?? {}).length > 0
+  );
+}
+
+/**
+ * Each block's parts, keyed by type and then by part name, reduced as classes
+ * are.
+ *
+ * Both levels sorted for the reason the block tier's single level is: a record
+ * has no meaningful order, and two equal sets must not stamp apart. The part's
+ * envelope goes through the SAME reduction, because it is a style envelope of
+ * the same shape arriving from the same untrusted place.
+ */
+function blockPartsParts(
+  blockParts: SharedStyleInputs["blockParts"],
+  reading: Reading
+): unknown[] {
+  const byType = blockParts ?? {};
+  return Object.keys(byType)
+    .sort()
+    .map(type => {
+      const parts = byType[type] ?? {};
+      return [
+        structural(type, reading),
+        Object.keys(parts)
+          .sort()
+          .map(name => [
+            structural(name, reading),
+            styleEnvelope(parts[name]?.baseStyles, reading),
+          ]),
+      ];
+    });
 }
 
 /** Each block type's defaults, in a fixed key order, reduced as classes are. */

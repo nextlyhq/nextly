@@ -35,6 +35,9 @@
 
 import {
   resolveSiteTokens,
+  isPlainRecord,
+  DEFAULT_LIMITS,
+  type DocumentLimits,
   getBlock,
   hasBlock,
   registerBlocks,
@@ -75,6 +78,7 @@ import {
   EmptyContainerAppenders,
   InsertPanel,
   InspectorPanel,
+  selectionIsInspectable,
   pageStyleTrace,
   LayersPanel,
   TokensPanel,
@@ -87,7 +91,10 @@ import {
   useInlineEditing,
   documentAfter,
   type InlineEditOutcome,
+  ClassManagerPanel,
+  type ClassCreation,
   FontsPanel,
+  type ClassRenameOutcome,
 } from "@nextlyhq/builder/shell";
 import {
   loadInlineRichTextEditor,
@@ -116,12 +123,14 @@ import {
 } from "react";
 import {
   useController,
+  useFormState,
   useWatch,
   type Control,
   type FieldValues,
   type Path,
 } from "react-hook-form";
 
+import { classUsageOf } from "../class-usage";
 import { emptyBlockDocument } from "../fields/blocks-document";
 import { hostFetchPolicy, readRemotePatterns } from "../host-policy";
 import {
@@ -178,7 +187,13 @@ export interface BlocksFieldProps<
  * and shrink the canvas to show it, which is why this grows one entry at a time
  * rather than being declared ahead of the panels.
  */
-const AVAILABLE_PANELS = ["insert", "layers", "tokens", "fonts"] as const;
+const AVAILABLE_PANELS = [
+  "insert",
+  "layers",
+  "tokens",
+  "fonts",
+  "classes",
+] as const;
 
 /**
  * With an entry-fields panel to fill, `settings` joins them.
@@ -613,6 +628,183 @@ function TokensStudio({
  * just created and applied wins over the ones already there rather than being
  * silently overridden by them.
  */
+/**
+ * One serialised writer for every whole-section class write.
+ *
+ * Every write here is read-modify-write over the WHOLE section: the payload is
+ * the complete class list, because that is what `saveSection` stores. So the
+ * list a write composes from decides what survives it, and the rendered
+ * `library` is stale for as long as a save takes to come back through the
+ * cache.
+ *
+ * Two things follow, and each was a separate defect.
+ *
+ * **Composition must happen inside the queue, not before it.** Serialising
+ * only TRANSMISSION is not enough: both callers compose their payload, then
+ * queue, so the second was already built without the first. `run` therefore
+ * takes a FUNCTION and calls it after the previous write settles, so every
+ * payload is composed against the result of the one before it.
+ *
+ * **One base, shared.** Creating and renaming are the same read-modify-write
+ * over the same list. Two independent bases meant a rename that had not yet
+ * refreshed was invisible to a creation, which then wrote a list carrying the
+ * old slug — and in the other order, dropped the new class.
+ *
+ * A completed write ADVANCES the base; a fresh read from the host REPLACES it,
+ * because the server's answer is authoritative the moment it arrives.
+ */
+interface ClassWrites {
+  /**
+   * Run one whole-section write, composed against the freshest list.
+   *
+   * The callback receives the base and answers with the payload it composed
+   * plus its own result. Returning `next` separately is what lets this advance
+   * the base ONLY when the write succeeded — a refused write changed nothing,
+   * and building the following edit on it would persist something the server
+   * rejected.
+   */
+  run: <T>(
+    write: (existing: readonly NamedClass[] | undefined) => Promise<{
+      result: T;
+      next?: readonly NamedClass[];
+    }>
+  ) => Promise<T>;
+}
+
+function useClassWrites(
+  library: readonly NamedClass[] | undefined
+): ClassWrites {
+  const held = useRef(library);
+  /*
+   * The host's answer supersedes anything composed locally. This runs only
+   * when `library` changes identity, which is exactly when a re-read has
+   * landed — during a save's window the identity is unchanged and the base
+   * keeps whatever the writes advanced it to.
+   */
+  useEffect(() => {
+    held.current = library;
+  }, [library]);
+
+  // The chain every write joins. Held as a ref so it survives re-renders: a
+  // queue recreated on render would let two writes run concurrently again.
+  const tail = useRef<Promise<unknown>>(Promise.resolve());
+
+  const run = useCallback(
+    <T,>(
+      write: (existing: readonly NamedClass[] | undefined) => Promise<{
+        result: T;
+        next?: readonly NamedClass[];
+      }>
+    ): Promise<T> => {
+      const started = tail.current.then(async () => {
+        const answered = await write(held.current);
+        if (answered.next !== undefined) held.current = answered.next;
+        return answered.result;
+      });
+      // The chain must not break on a rejection, or every later write is
+      // rejected with an error belonging to an edit the author has forgotten.
+      tail.current = started.then(
+        () => undefined,
+        () => undefined
+      );
+      return started;
+    },
+    []
+  );
+
+  return { run };
+}
+
+/**
+ * The document bounds the host renders under, as published to the browser.
+ *
+ * Read DEFENSIVELY and one key at a time: `clientConfig` is JSON that crossed a
+ * transport, so nothing here can assume a shape. Anything unreadable falls back
+ * to the engine's defaults, which is what the renderer itself falls back to —
+ * so the two still agree rather than diverging in the direction that would
+ * misreport which classes a page applies.
+ */
+function readDocumentLimits(
+  clientConfig: Record<string, unknown> | undefined
+): DocumentLimits {
+  const declared = clientConfig?.limits;
+  if (!isPlainRecord(declared)) return DEFAULT_LIMITS;
+  // Built by overriding the defaults key by key rather than by asserting a
+  // shape onto the transported value: the keys come from `DEFAULT_LIMITS`, so
+  // a bound the engine adds later is carried without this being edited, and a
+  // key the host sent that the engine does not have is ignored.
+  const merged: DocumentLimits = { ...DEFAULT_LIMITS };
+  for (const key of Object.keys(DEFAULT_LIMITS) as (keyof DocumentLimits)[]) {
+    const supplied = declared[key];
+    /*
+     * Zero and Infinity are both LEGITIMATE bounds, so neither may be narrowed
+     * away here. A host setting `maxNodes: 0` gets a renderer that draws
+     * nothing, and substituting the default would have the panel mark classes
+     * as present on a page that renders none of them; the engine supports an
+     * infinite byte limit outright. What is refused is a value that is not a
+     * number, or one below zero, which no bound can mean.
+     */
+    // `null` is the wire spelling for an INFINITE bound: `Infinity` is not a
+    // JSON value and the client config is refused unless it survives the round
+    // trip unchanged, so the publisher encodes it and this decodes it.
+    if (supplied === null) {
+      merged[key] = Number.POSITIVE_INFINITY;
+      continue;
+    }
+    if (
+      typeof supplied === "number" &&
+      !Number.isNaN(supplied) &&
+      supplied >= 0
+    ) {
+      merged[key] = supplied;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Whether a read has FAILED rather than merely not finished yet.
+ *
+ * A separate function because "not arrived" and "will never arrive" are
+ * different states with different wording, and reading them from one
+ * expression inside the hook made the hook answer two questions at once.
+ */
+function classReadFailed(pending: boolean, error: unknown): boolean {
+  return !pending && error !== null && error !== undefined;
+}
+
+/**
+ * The library to show, or `undefined` while it is not known.
+ *
+ * `undefined` while the read is in flight, and the resolved list once it is
+ * not — including an empty one. `useSiteStyle` names `pending` as a real third
+ * state for exactly this reason: the defaults alone are a legitimate answer, so
+ * a surface cannot tell "nothing is stored" from "the read has not come back"
+ * by looking at the value.
+ */
+/**
+ * The empty library, as ONE value rather than a fresh array each time.
+ *
+ * `?? []` builds a new array on every render, and `useClassWrites` reads a
+ * changed identity as "the host has re-read" — so a site whose stored style
+ * declares no classes looked like it was re-reading continuously, and any
+ * render during an in-flight save reset the write base to the stale list. The
+ * next queued write then composed from it and discarded the edit before it,
+ * while reporting success.
+ */
+const NO_CLASSES: readonly NamedClass[] = Object.freeze([]);
+
+function readableClassLibrary(
+  siteStyle: { classes?: readonly NamedClass[] } | undefined,
+  pending: boolean,
+  failed: boolean
+): readonly NamedClass[] | undefined {
+  if (pending || failed) return undefined;
+  // `undefined` above and `NO_CLASSES` here stay distinct: the first is a read
+  // that has not answered, the second is one that answered with nothing.
+  return siteStyle?.classes ?? NO_CLASSES;
+}
+
 function useClassSurface(
   siteStyle: { classes?: readonly NamedClass[] } | undefined,
   pending: boolean,
@@ -620,16 +812,42 @@ function useClassSurface(
   /** The site's own config, whose classes storage layers over. */
   config: { classes?: readonly NamedClass[] } | undefined
 ) {
+  // Derived outside the hook, so this decides nothing and only distributes what
+  // was decided — which is what keeps the component rendering the inspector
+  // free of the branch.
+  const failed = classReadFailed(pending, error);
+  const library = readableClassLibrary(siteStyle, pending, failed);
+  const configured = config?.classes;
   /*
-   * `undefined` while the read is in flight, and the resolved list once it is
-   * not — including an empty one. `useSiteStyle` names `pending` as a real
-   * third state for exactly this reason: the defaults alone are a legitimate
-   * answer, so a surface cannot tell "nothing is stored" from "the read has
-   * not come back" by looking at the value. Decided here rather than in the
-   * markup, so the component that renders the inspector holds no branch.
+   * ONE writer for both edits. Creating and renaming are the same
+   * read-modify-write over the same list, so two independent queues let a
+   * rename that had not yet refreshed be invisible to a creation — which then
+   * wrote a list carrying the old slug, and in the other order dropped the new
+   * class.
    */
-  const failed = !pending && error !== null && error !== undefined;
-  const library = pending || failed ? undefined : (siteStyle?.classes ?? []);
+  const writes = useClassWrites(library);
+  /*
+   * Which name each class is heading for while its rename is on the network.
+   *
+   * Held HERE because it must survive the manager panel being unmounted, which
+   * the rail does on every switch. State rather than a ref: the panel renders
+   * from it, so a change has to reach the screen.
+   */
+  const [pendingSlugs, setPendingSlugs] = useState<Record<string, string>>({});
+  const markPending = useCallback(
+    (classId: string, slug: string | undefined) => {
+      setPendingSlugs(current => {
+        if (slug === undefined) {
+          if (!(classId in current)) return current;
+          const { [classId]: _gone, ...rest } = current;
+          return rest;
+        }
+        if (current[classId] === slug) return current;
+        return { ...current, [classId]: slug };
+      });
+    },
+    []
+  );
   return {
     library,
     /*
@@ -644,12 +862,20 @@ function useClassSurface(
      * against it would compose a library missing everything stored — and the
      * save would then delete those classes rather than add one.
      */
-    create: useCreateClass(library, config?.classes),
+    create: useCreateClass(writes, configured),
+    /** Which classes are mid-rename, for the manager's no-op check. */
+    pendingSlugs,
+    /*
+     * Withheld the same way and for the same reason: renaming against a
+     * library missing everything stored would save that partial list, which
+     * deletes the classes it could not see rather than renaming one.
+     */
+    rename: useRenameClass(writes, configured, markPending),
   };
 }
 
 function useCreateClass(
-  library: readonly NamedClass[] | undefined,
+  writes: ClassWrites,
   configured: readonly NamedClass[] | undefined
 ) {
   // Its own write handle rather than one passed in. The caller is already the
@@ -657,45 +883,135 @@ function useCreateClass(
   // itself is a statement that does not need to live there.
   const { save: saveSection } = useSaveSiteStyle();
   return useCallback(
-    async (slug: string) => {
-      if (library === undefined) {
+    async (slug: string) =>
+      // Composed INSIDE the queue, so a creation following a rename builds on
+      // that rename rather than on the list they both started from.
+      //
+      // The result type is stated rather than inferred: inference takes the
+      // first branch it meets, which is the refusal, and the success branch
+      // then fails to assign.
+      writes.run<ClassCreation>(async existing => {
+        if (existing === undefined) {
+          return {
+            result: {
+              ok: false as const,
+              reason:
+                "This site's classes could not be read, so none can be added.",
+            },
+          };
+        }
+        const classId = newId();
+        const next: NamedClass[] = [
+          ...existing,
+          {
+            id: classId,
+            slug,
+            orderIndex: nextOrderIndex(existing),
+            styles: {},
+          },
+        ];
+        /*
+         * Only what DIFFERS from the site's own config classes. The base is the
+         * MERGED set the canvas compiles, so saving it whole would copy every
+         * config class into the database on the first creation and mask the
+         * site's code from then on — the argument `tokenOverrideOf` already
+         * makes for tokens.
+         */
+        const result = await saveSection(
+          "classes",
+          classOverrideOf(configured, next)
+        );
+        // `next` is returned ONLY on success, so a refused write never becomes
+        // the base the following edit builds on.
+        if (result.saved) {
+          return { result: { ok: true as const, classId }, next };
+        }
+        const reasons = Object.values(result.issues);
+        // An empty `issues` is still a refusal — the transport could not
+        // describe it. Reporting it as saved is the one outcome that must never
+        // be silent, which is the rule the breakpoints writer below follows too.
         return {
-          ok: false as const,
-          reason:
-            "This site's classes could not be read, so none can be added.",
+          result: {
+            ok: false as const,
+            reason:
+              reasons.length > 0
+                ? reasons.join(" ")
+                : "This class could not be saved.",
+          },
         };
+      }),
+    [writes, configured, saveSection]
+  );
+}
+
+/**
+ * Rename one class, through the same section write that creates one.
+ *
+ * Answers the OUTCOME rather than reporting success by staying quiet. A site
+ * style save is a network write and the panel clears its field as soon as the
+ * author finishes typing, so a refusal that returned nothing would leave the
+ * row reading as renamed until the next read contradicted it.
+ */
+function useRenameClass(
+  writes: ClassWrites,
+  configured: readonly NamedClass[] | undefined,
+  /**
+   * Record which name a class is heading for while its write is in flight.
+   *
+   * Held by the CALLER rather than by the panel, because a rename outlives the
+   * panel: switching rail panels unmounts the manager, and a field remembering
+   * its own pending name lost it on exactly the switch that makes the window
+   * long enough to matter. Without it, an author who reverts a rename after
+   * coming back has the revert read as a no-op while the first write lands.
+   */
+  markPending: (classId: string, slug: string | undefined) => void
+) {
+  const { save: saveSection } = useSaveSiteStyle();
+  return useCallback(
+    async (classId: string, slug: string): Promise<ClassRenameOutcome> => {
+      markPending(classId, slug);
+      try {
+        return await writes.run<ClassRenameOutcome>(async existing => {
+          if (existing === undefined) {
+            return {
+              result: {
+                ok: false as const,
+                reason:
+                  "This site's classes could not be read, so none can be renamed.",
+              },
+            };
+          }
+          const next = existing.map(entry =>
+            entry.id === classId ? { ...entry, slug } : entry
+          );
+          const result = await saveSection(
+            "classes",
+            classOverrideOf(configured, next)
+          );
+          if (result.saved) return { result: { ok: true as const }, next };
+          const reasons = Object.values(result.issues);
+          return {
+            result: {
+              ok: false as const,
+              reason:
+                reasons.length > 0
+                  ? reasons.join(" ")
+                  : "This class could not be renamed.",
+            },
+          };
+        });
+      } finally {
+        /*
+         * Cleared however it went, and in a `finally` so a rejection cannot
+         * leave a class permanently reading as mid-rename. A refused write
+         * leaves the class with the name it had; a successful one is followed
+         * by a read carrying the new one. Either way the stored slug is the
+         * answer again.
+         */
+        markPending(classId, undefined);
       }
-      const existing = library;
-      const classId = newId();
-      const next: NamedClass[] = [
-        ...existing,
-        { id: classId, slug, orderIndex: nextOrderIndex(existing), styles: {} },
-      ];
-      /*
-       * Only what DIFFERS from the site's own config classes. `library` is the
-       * MERGED set the canvas compiles, so saving it whole would copy every
-       * config class into the database on the first creation and mask the
-       * site's code from then on — the argument `tokenOverrideOf` already
-       * makes for tokens.
-       */
-      const result = await saveSection(
-        "classes",
-        classOverrideOf(configured, next)
-      );
-      if (result.saved) return { ok: true as const, classId };
-      const reasons = Object.values(result.issues);
-      // An empty `issues` is still a refusal — the transport could not describe
-      // it. Reporting it as saved is the one outcome that must never be silent,
-      // which is the rule the breakpoints writer below follows too.
-      return {
-        ok: false as const,
-        reason:
-          reasons.length > 0
-            ? reasons.join(" ")
-            : "This class could not be saved.",
-      };
     },
-    [library, configured, saveSection]
+    [writes, configured, saveSection, markPending]
   );
 }
 
@@ -886,6 +1202,75 @@ function isSaveChord(event: KeyboardEvent): boolean {
   );
 }
 
+/**
+ * The interaction state to SHOW, given the state being edited and how many
+ * blocks are selected.
+ *
+ * Suppressed rather than reset whenever the switcher is not on screen. The
+ * inspector replaces its whole tab strip — for a multi-selection, and for a
+ * selection it cannot inspect at all — so the state control goes with it, and
+ * the panel's own tab handler cannot catch either case because the stored tab
+ * value is still `style` and no tab change happens. A forced state outliving
+ * its control is a canvas drawn mid-hover with nothing on screen explaining
+ * why.
+ *
+ * Decides WHETHER THE CONTROL IS THERE rather than taking a selection count,
+ * because a count cannot see the second case: an unregistered block type reads
+ * as one ordinary selection while the panel shows no tabs for it. The
+ * inspectability half is asked of the same predicate the panel's own early
+ * return uses, so the two cannot disagree about what is inspectable.
+ *
+ * Derived rather than written back, so the author's choice SURVIVES: they
+ * shift-click a second block, the canvas returns to the normal appearance, and
+ * clicking back to one block restores the state they were editing. Writing
+ * `base` into the state instead would silently discard it.
+ */
+function shownStyleStateFor(
+  editing: StyleState,
+  document: BlockDocument,
+  selectedIds: readonly string[],
+  selectedId: string | null
+): StyleState {
+  const switcherIsOnScreen =
+    selectedIds.length <= 1 && selectionIsInspectable(document, selectedId);
+  return switcherIsOnScreen ? editing : "base";
+}
+
+/**
+ * Whether this document holds unsaved work, from EITHER surface that writes it.
+ *
+ * The status pill otherwise reads the editor's `undoDepth` alone, which is its
+ * own history and says nothing about the form — so an author who renamed the
+ * page and touched no block was told the document was saved. Two surfaces now
+ * write to one document, and the pill has to answer for both.
+ *
+ * The blocks field is COUNTED here, and an earlier version excluded it. The
+ * reasoning for excluding it was that the editor owns that field and reports
+ * its own history, so counting it would double the undo depth or report saved
+ * work. Both halves were wrong. Double-counting cannot matter to a boolean, and
+ * the form's baseline advances on a successful submit — `useEntryForm` resets
+ * it — so a dirty blocks field means genuinely unsaved blocks.
+ *
+ * Excluding it lost the one case that has no other witness: an author who edits
+ * blocks, leaves the editor, and opens it again before saving. Leaving commits
+ * the document into the form, so the field is dirty; reopening builds a fresh
+ * editor whose `undoDepth` is zero. With the field excluded, nothing was left
+ * to say the document had unsaved work, and the pill read clean over blocks
+ * that had never been saved.
+ *
+ * The editor's own history is taken as an argument rather than combined at the
+ * call site, so "is this document dirty" is answered in one place. It is also
+ * one fewer branch inside the largest component in this package, which the
+ * complexity gate refuses to let grow.
+ */
+function useDocumentDirty<TFieldValues extends FieldValues>(
+  control: Control<TFieldValues>,
+  editorDirty: boolean
+): boolean {
+  const { dirtyFields } = useFormState({ control });
+  return editorDirty || Object.keys(dirtyFields).length > 0;
+}
+
 function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   initialValue,
   onCommit,
@@ -947,14 +1332,37 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * edited state plus base — correct exactly while the canvas is simulating
    * that state. Wired from one value that precondition holds by construction.
    *
-   * A CONSTANT rather than state, because no control chooses it yet and state
-   * nothing writes is state that lints as unused and reads as unfinished. What
-   * matters now is that ONE value reaches both surfaces: the day a control
-   * arrives it replaces this line and finds both call sites already wired,
-   * rather than having to discover that the canvas and the panel were each
-   * defaulting on their own.
+   * ONE value reaching both surfaces, which is the property that matters: the
+   * panel states no `liveStates`, so its provenance falls back to the edited
+   * state plus base — correct exactly while the canvas is simulating the state
+   * being edited, and wrong the moment it is not. Held here rather than in
+   * either consumer so that precondition holds by construction; held in both,
+   * a control would report a value the canvas is not showing and nothing would
+   * say so.
+   *
+   * Editor state, not document state. Which state an author is LOOKING at is
+   * not a property of the page, so it is neither stored nor undoable, and two
+   * people editing one page can be looking at different states.
    */
-  const styleState: StyleState = "base";
+  const [styleState, setStyleState] = useState<StyleState>("base");
+  /*
+   * Memoised because it is a PROP OBJECT: rebuilt on every render it would be a new
+   * identity every time, and the panel it feeds is the one surface here that
+   * holds a draft. `setStyleState` is stable, so this changes exactly when the
+   * state does.
+   */
+  // ONE derivation feeding BOTH consumers, which is what keeps the panel and the
+  // canvas showing the same thing. See `shownStyleStateFor`.
+  const shownStyleState = shownStyleStateFor(
+    styleState,
+    editor.document,
+    editor.selection.ids,
+    editor.selectedId
+  );
+  const styleStateBinding = useMemo(
+    () => ({ state: shownStyleState, onChange: setStyleState }),
+    [shownStyleState]
+  );
   const drag = useCanvasDrag({ editor, slots, nesting, canvasRoot });
   /*
    * Is a drag happening — of EITHER kind.
@@ -1006,10 +1414,17 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const inline = useInlineEditing(editor, loadInlineRichTextEditor, announce);
 
   /*
-   * The entry's other fields, or null when there is no surrounding form. Null
-   * is what withholds the panel rather than opening an empty one.
+   * The entry's other fields, ALREADY DRAWN, or null when there are none.
+   *
+   * One value feeds both the rail's availability and the panel's body below,
+   * so the two cannot disagree about whether there is anything to show. Asking
+   * separately is what put an empty Settings panel on the rail: every entry
+   * form has a renderer, so a gate on the renderer's existence is true even for
+   * a collection whose only fields are its title, its slug and this one.
    */
-  const renderEntryFields = useEntryFieldsPanel();
+  const entryFields = useEntryFieldsPanel(name);
+
+  const documentDirty = useDocumentDirty(control, editor.undoDepth > 0);
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -1429,6 +1844,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   useCheckpoints({ name, control, document: editor.document });
 
   /*
+   * Which classes the OPEN document renders, for the manager's on-this-page
+   * filter.
+   *
+   * `classUsageOf` rather than a walk written here: it is the same traversal
+   * the style compiler and the usage index already share, and two walks with
+   * equal limits reached by different routes select different nodes — a class
+   * on a node one walk reaches and the other does not would be reported as
+   * absent from a page that renders it.
+   *
+   * `complete` is deliberately unread. It says whether the walk hit the
+   * document's node ceiling, which bounds what this could CLAIM about usage —
+   * and this claims nothing about usage. It answers one question, "does the
+   * open page apply this class", and a truncated walk answers that for fewer
+   * nodes rather than answering it wrongly.
+   */
+  const documentClasses = useMemo(
+    // The HOST's limits, not the engine's defaults. A site that raised or
+    // lowered them renders under those, and a walk here under different bounds
+    // selects different nodes — which would report a class as absent from a
+    // page that renders it, or present on one that does not.
+    () => classUsageOf(editor.document, readDocumentLimits(clientConfig)),
+    [editor.document, clientConfig]
+  );
+
+  /*
    * Tell the form this editor holds work its values do not contain, so the
    * navigation guard warns and the save shortcut works while the canvas is
    * open. `undoDepth` rather than comparing documents: an edit and its undo
@@ -1577,7 +2017,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
       <BuilderShell
         onExit={done}
         availablePanels={
-          renderEntryFields === null
+          entryFields === null
             ? AVAILABLE_PANELS
             : AVAILABLE_PANELS_WITH_SETTINGS
         }
@@ -1597,7 +2037,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         // editor is open, because the document is committed on the way out.
         topBar={
           <>
-            <DocumentStatusPill isDirty={editor.undoDepth > 0} />
+            <DocumentStatusPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the
@@ -1682,7 +2122,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
             // inferring one from the document. Two refs would let the panel
             // read a canvas that is not the one on screen.
             canvasRoot={canvasElement}
-            styleState={styleState}
+            styleState={styleStateBinding}
             classLibrary={classes.library}
             classLibraryAbsence={classes.absence}
             onCreateClass={classes.create}
@@ -1775,6 +2215,33 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 pending={siteStylePending}
               />
             ),
+            classes: () => (
+              <ClassManagerPanel
+                absence={classes.absence}
+                pendingSlugs={classes.pendingSlugs}
+                documentClassIds={documentClasses.ids}
+                /*
+                  Whether that walk reached the whole document. It stops at the
+                  node ceiling, and a class applied past it is missing from the
+                  list — which the panel must not read as "not on this page".
+                */
+                documentScan={documentClasses.complete ? "complete" : "partial"}
+                library={classes.library}
+                onRename={classes.rename}
+                /*
+                  No `usage`, and no `onDelete`. The usage index is a
+                  collection and this surface has no read for one, so the panel
+                  reports that nothing was read rather than reporting an empty
+                  index — which would say every class is unused. Deleting needs
+                  that same reach plus a write stripping the class from every
+                  document holding it, so it is withheld entirely rather than
+                  offered as a control that cannot keep its promise.
+                */
+                suppliedClassIds={configSiteStyle?.classes?.map(
+                  entry => entry.id
+                )}
+              />
+            ),
             fonts: () => (
               <FontsPanel
                 faces={offerableFaces(
@@ -1799,13 +2266,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             ),
             /*
-              The entry's own fields — SEO, relations, whatever this collection
-              declares — which the takeover removed from the page behind this
-              editor. Rendered by the ADMIN's closure, not reconstructed here:
-              how a field is drawn is the entry form's contract, and a second
-              renderer would drift from it.
+              The document's title and slug, and the entry's own fields — SEO,
+              relations, whatever this collection declares — which this editor
+              covered when it took the window. Drawn by the ADMIN, not
+              reconstructed here: how a field is drawn is the entry form's
+              contract, and a second renderer would drift from it.
+
+              The same value the rail was derived from, so a panel is never
+              offered that this returns nothing for.
             */
-            settings: () => renderEntryFields?.(name) ?? null,
+            settings: () => entryFields,
           };
           return panels[panel]?.() ?? null;
         }}
@@ -1882,7 +2352,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 document={editor.document}
                 rootRef={canvasRoot}
                 onRoot={setCanvasElement}
-                forcedState={styleState}
+                forcedState={shownStyleState}
                 siteStyles={siteSheet(canvasSiteStyle)}
                 selectedId={editor.selectedId}
                 selectedIds={editor.selection.ids}

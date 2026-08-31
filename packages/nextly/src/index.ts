@@ -459,6 +459,45 @@ export {
   type PluginNavSection,
 } from "./plugins";
 
+// The widget domain's public surface: the registry every core and
+// plugin-contributed widget shares, the source registry a query names, and
+// the validated query shape itself.
+// Every contract a published shape NAMES is published beside it. There is no
+// `nextly/widgets` subpath, so this is the only place a plugin author can
+// reach them, and a public property whose type has no public name can be
+// inferred but never annotated: `WidgetDefinition.defaultHeight` is a
+// `WidgetHeight`, and `WidgetSource` is built out of `WidgetSourceField`,
+// `WidgetSourceKind` and `WidgetOp`.
+export {
+  WIDGET_SIZES,
+  WIDGET_HEIGHTS,
+  WIDGET_ARCHETYPES,
+  WIDGET_SOURCE_KINDS,
+  WIDGET_SOURCE_FIELD_TYPES,
+  WIDGET_OPS,
+  registerWidget,
+  overrideWidget,
+  extendWidget,
+  deregisterWidget,
+  getWidget,
+  listWidgets,
+  registerSource,
+  listSources,
+  validateWidgetQuery,
+  MAX_WIDGET_LIMIT,
+  type WidgetDefinition,
+  type WidgetQuery,
+  type WidgetSize,
+  type WidgetHeight,
+  type WidgetArchetype,
+  type WidgetSource,
+  type WidgetSourceField,
+  type WidgetSourceFieldType,
+  type WidgetSourceKind,
+  type WidgetOp,
+  type WidgetPatch,
+} from "./domains/widgets";
+
 // Value exports for the email provider contract. A plugin calls
 // defineEmailProvider so its own config type is checked where the definition is
 // written, and erased only at the boundary the registry stores it behind.
@@ -647,6 +686,15 @@ export type {
 export { runJobsPass } from "./domains/jobs/jobs-runner";
 export type { RunJobsPassOptions } from "./domains/jobs/jobs-runner";
 export type { RunJobsResult } from "./domains/jobs/run-jobs";
+// The QUEUE side. `nextly.jobs.queue` is the call almost every application
+// makes; everything above it is the machinery that then runs the work, and only
+// an application assembling its own runner needs those.
+export type {
+  JobInputFor,
+  JobSlug,
+  QueueJobArgs,
+  QueueJobResult,
+} from "./direct-api/types/jobs";
 
 // The release materialiser, as a job definition. Exported so an application can
 // register it with the runner today: the periodic trigger that would register it
@@ -663,6 +711,12 @@ export type {
 } from "./domains/releases/apply-due-releases";
 
 export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from "./domains/versions/draft-split-eligibility";
+
+// The projection that makes the line above USABLE from its documented
+// producer. `getCollection()` is declared to return `Collection`, which has no
+// root-level `fields`, `status` or `versions`, so its result is not assignable
+// to `ResolvedDraftSplitCollection` however faithfully the record carries them.
+export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {

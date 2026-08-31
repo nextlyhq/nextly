@@ -126,6 +126,14 @@ const POST_045_TABLES = [
   // table present in only one of the two is re-proposed on every reconcile
   // instead of round-tripping to silence.
   "nextly_jobs",
+  // The document soft lock, post-0.45 like the tables above: an existing
+  // install gains it on upgrade, so its CREATE TABLE and its two indexes are
+  // legitimate rather than phantom. The pass-2 assertion below is what proves
+  // the declaration round-trips — this table is reached through the core
+  // schema, the dialect bundles AND the SQLite bootstrap DDL, and a shape that
+  // disagrees between any two of them is re-proposed on every reconcile rather
+  // than settling to silence.
+  "nextly_document_lock",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the

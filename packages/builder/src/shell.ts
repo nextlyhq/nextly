@@ -39,6 +39,21 @@ export type { BuilderShellProps } from "./builder-shell";
  * keeps the cascade from being walked per control; `style-trace.ts` says why it
  * is compiled a second time.
  */
+/*
+ * The inspector's own answer to whether it can show anything for a selection,
+ * exported because a HOST needs it.
+ *
+ * A host drawing both the panel and the canvas has to keep them agreeing about
+ * the interaction state, and the panel withholds its whole tab strip — the
+ * state control with it — for a selection it cannot inspect. An unregistered
+ * block type is that case and reads as one ordinary selection to anything
+ * counting ids, so a host deriving the answer itself gets it wrong on exactly
+ * the input the predicate exists for.
+ *
+ * A pure function over a document, so it crosses this entry carrying no state
+ * and no React.
+ */
+export { selectionIsInspectable } from "./inspector";
 export { pageStyleTrace } from "./style-trace";
 
 /**
@@ -399,9 +414,31 @@ export type { SelectionBreadcrumbProps } from "./breadcrumb";
  * not the save.
  */
 export { ClassSelector } from "./class-selector";
-export type { ClassSelectorProps } from "./class-selector";
+/*
+ * `ClassCreation` travels with the selector's props because a HOST implements
+ * `onCreateClass` and has to name what it answers with. It was reachable only
+ * through `ClassSelectorProps["onCreateClass"]`, which spells one type as a
+ * lookup into another and reads as though the answer were private.
+ */
+export type { ClassCreation, ClassSelectorProps } from "./class-selector";
+/*
+ * The notice surface is deliberately NOT exported.
+ *
+ * `BuilderShell` owns its queue and renders the region itself, and it offers no
+ * way to supply a queue or to suppress the built-in region — so a host calling
+ * `useNoticeQueue` would build a SECOND, empty queue and place a region that
+ * can never receive anything, while the shell's own went on reporting. An
+ * export whose documented use cannot work is worse than its absence, because
+ * the failure is silent and looks like a wiring mistake at the call site.
+ *
+ * Publishing it needs the shell to accept a queue first. That is a contract
+ * change rather than an export, so it waits for a host that wants it.
+ */
 export { ClassManagerPanel } from "./class-manager-panel";
-export type { ClassManagerPanelProps } from "./class-manager-panel";
+export type {
+  ClassManagerPanelProps,
+  ClassRenameOutcome,
+} from "./class-manager-panel";
 export {
   classRows,
   filterClassRows,

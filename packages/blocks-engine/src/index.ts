@@ -42,6 +42,7 @@ export {
 export type {
   BlockDocument,
   BlockNode,
+  BlockPart,
   Binding,
   BindingSource,
   BindingFormat,
@@ -178,6 +179,7 @@ export type {
   BlockDefinition,
   BlockEditorMeta,
   BlockIcon,
+  BlockIsland,
   BlockExample,
   BlockSeoContribution,
   BlockSeoImage,
@@ -412,6 +414,7 @@ export type {
   StyleCompileContext,
 } from "./style/compile-page";
 export {
+  blockPartClassName,
   blockTypeClassName,
   // The digest itself, for a caller naming something other than a node from an
   // id — a per-document scope class, say. Exported so that caller reaches for
@@ -421,6 +424,12 @@ export {
   nodeClassName,
   nodeClassNames,
   BLOCK_TYPE_CLASS_PREFIX,
+  // The opt-in a container wears to take the site's content width. Public
+  // because two packages meet on it: the renderer puts it on an element and
+  // this engine's site stylesheet writes the rule that matches. A selector in
+  // one and a literal in the other would be one contract with two spellings,
+  // and the half that drifted would simply stop matching rather than fail.
+  CONTENT_WIDTH_CLASS,
   NODE_CLASS_PREFIX,
   PAGE_ROOT_CLASS,
   PAGE_ROOT_SELECTOR,

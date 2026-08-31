@@ -9,7 +9,13 @@
  * nothing would report the loss. The colour and the meaning are different
  * things, and only the host knows the second.
  */
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,13 +101,19 @@ describe("choosing a preset", () => {
 });
 
 describe("the hex field", () => {
-  it("publishes a colour once it is one", () => {
+  it("publishes a colour once it is one AND finished", () => {
+    /*
+     * The finish is the addition, and the reason is in the case below it: a
+     * prefix of a valid colour is itself a valid colour, so publishing per
+     * keystroke let an intermediate stand as the stored value whenever the
+     * author stopped early.
+     */
     const onColorChange = vi.fn();
     render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
 
-    fireEvent.change(screen.getByLabelText("Hex colour"), {
-      target: { value: "#3b82f6" },
-    });
+    const field = screen.getByLabelText("Hex colour");
+    fireEvent.change(field, { target: { value: "#3b82f6" } });
+    fireEvent.blur(field);
 
     expect(onColorChange).toHaveBeenCalledWith("#3b82f6");
   });
@@ -293,9 +305,11 @@ describe("hue survives a colour that has none", () => {
     const onColorChange = vi.fn();
     render(<Controlled initial="#0000ff" onColorChange={onColorChange} />);
 
-    fireEvent.change(screen.getByLabelText("Hex colour"), {
-      target: { value: "#000000" },
-    });
+    const field = screen.getByLabelText("Hex colour");
+    fireEvent.change(field, { target: { value: "#000000" } });
+    // FINISHED, because a typed colour is reported when the author finishes it
+    // and this case needs the surface actually moved to black before it arrows.
+    fireEvent.blur(field);
     // Black is unlit AS WELL as colourless, so brightness and saturation both
     // have to come back up before any hue is observable at all. A single step
     // on one axis lands on `#030303`, which is grey whichever hue is stored —
@@ -352,5 +366,670 @@ describe("recent colours", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "#ff0000" }));
     expect(onColorChange).toHaveBeenCalledWith("#ff0000");
+  });
+});
+
+describe("a colour typed one character at a time", () => {
+  const hexField = () => screen.getByLabelText("Hex colour");
+
+  it("reports NOTHING until the author finishes it", () => {
+    /*
+     * The defect this closes, in the sequence it was measured in. `parseHex`
+     * accepts 3, 4, 6 and 8 digits, so a PREFIX of a valid colour is itself a
+     * valid colour: `#123456` passes through `#123` and `#1234` on the way.
+     * Publishing each of those made the last one stick whenever the author
+     * paused — `#12345` left the host holding `#11223344`, a colour nobody
+     * typed, silently replacing the stored one.
+     *
+     * Asserted on the CALL COUNT as well as the value, because a version that
+     * published the right final colour after publishing two wrong ones would
+     * satisfy a value-only assertion while the defect was still live: the harm
+     * is what a host commits when the author stops early.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    for (const text of ["#1", "#12", "#123", "#1234", "#12345"]) {
+      fireEvent.change(hexField(), { target: { value: text } });
+    }
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("reports the colour once ENTER finishes it", () => {
+    // The control. Without it the case above passes on a picker that never
+    // reports anything at all.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter" });
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
+  });
+
+  it("reports it on leaving the field", () => {
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
+  });
+
+  it("reports NOTHING when focus merely passes through the field", () => {
+    /*
+     * Tabbing into the hex field and out again is not an edit. Reading the
+     * field's VALUE on blur rather than the draft would report the colour
+     * already on screen every time, so an untouched control looks edited and a
+     * host that persists each callback writes for nothing.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#3b82f6" onColorChange={onColorChange} />);
+
+    fireEvent.focus(hexField());
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("reports a finished colour ONCE, not again on the way out", () => {
+    // Enter finishes it; the blur that follows has no draft left to report, so
+    // a host persisting each callback does not see the same edit twice.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter" });
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports ONCE when an outside press and its blur arrive together", () => {
+    /*
+     * An outside press moves focus, so the dismissal path and the blur path can
+     * BOTH finish the same draft. `setDraftHex(null)` is only queued, so unless
+     * something flushes between them each reads a still-non-null draft and
+     * reports the colour twice — duplicate persistence for one edit.
+     *
+     * Dispatched NATIVELY rather than through `fireEvent`, which wraps each
+     * call in `act` and flushes between them: that ordering is the safe one and
+     * would pass against the version that had the bug. These two go out in one
+     * turn, which is the ordering in question.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    /*
+     * `focusout`, not `blur`. React delegates from its root and maps `onBlur`
+     * onto the bubbling `focusout`, so a non-bubbling native `blur` reaches no
+     * handler: the second path would not run, and this case would be green
+     * because nothing happened twice rather than because the guard held.
+     */
+    field.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#123456");
+  });
+
+  it("does not report a draft a PRESET replaces", () => {
+    /*
+     * The browser blurs the field before the preset's press becomes a click, so
+     * a draft left in place is published first and the replacement second —
+     * two edits recorded for the one the author made, and for a preset an
+     * `onColorChange` beside the `onSwatchSelect` that was the point.
+     */
+    const onColorChange = vi.fn();
+    const onSwatchSelect = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        onSwatchSelect={onSwatchSelect}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const preset = screen.getByRole("button", { name: "Primary" });
+    preset.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    /*
+     * With `relatedTarget`, because that is what a browser supplies and it is
+     * what the handler reads: focus is moving TO the preset, which is inside
+     * the picker, so this blur is not a finish.
+     */
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: preset })
+    );
+    fireEvent.click(preset);
+
+    expect(onColorChange).not.toHaveBeenCalledWith("#123456");
+  });
+
+  it("finishes a colour when the KEYBOARD leaves the picker entirely", () => {
+    /*
+     * Type, tab to a control further inside the picker, then tab out without
+     * activating it. Watched at the field alone this was lost: the field's own
+     * blur was declined because focus had moved to something inside, and
+     * nothing watched the boundary focus actually crossed. No pointer is
+     * involved, so the press listener cannot cover it either.
+     */
+    const onColorChange = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    // Field -> preset: still inside, so nothing is finished yet.
+    const preset = screen.getByRole("button", { name: "Primary" });
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: preset })
+    );
+    expect(onColorChange).not.toHaveBeenCalled();
+
+    // Preset -> somewhere else entirely: the picker has been left.
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    preset.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: outside })
+    );
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("does not finish a TOUCH press that becomes a scroll", () => {
+    /*
+     * An outside touch press may become a scroll or a long press rather than a
+     * tap, and a dismissable layer waits for the resulting click before
+     * dismissing for that reason. Finishing on the press would publish a draft
+     * while the picker stays open and the field is still being edited.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+
+    // A scroll produces no click, so nothing finished.
+    expect(onColorChange).not.toHaveBeenCalled();
+
+    /*
+     * And the wait does not OUTLIVE the gesture. Treating the next click as the
+     * original tap is what a version retaining the listener would also pass, so
+     * this presses again first — the press that ends the abandoned wait — and
+     * the click that follows belongs to a gesture that started inside the
+     * field, which finishes nothing.
+     */
+    const field = hexField() as HTMLInputElement;
+    field.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+    field.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("finishes a TOUCH tap whose wait spans a RERENDER", () => {
+    /*
+     * An outside target that sets state from its own `pointerdown` rerenders
+     * this picker before the click arrives. The listeners are re-registered on
+     * every render so their closures stay current, and ending the wait in that
+     * cleanup killed a legitimate one — the completion was removed and a
+     * finished colour never reached the host.
+     *
+     * A render is not an abandoned gesture. What ends a wait is a new press, a
+     * cancelled gesture, or the picker going away.
+     */
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+
+    // The rerender the outside handler's own state change would cause.
+    view.rerender(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    outside.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("finishes a TOUCH tap that completes outside", () => {
+    /*
+     * The control for the case above: without it, a picker that had simply
+     * stopped finishing on touch altogether would satisfy every assertion
+     * there.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    outside.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        pointerType: "touch",
+      })
+    );
+    outside.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("keeps a draft when a swatch has NO handler to replace it with", () => {
+    /*
+     * `onSwatchSelect` is optional and the type permits swatches without it.
+     * Dropping a draft for a callback that does nothing loses the typed colour
+     * and puts nothing in its place — the swatch does not reach the host
+     * either, so the edit simply disappears.
+     */
+    const onColorChange = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Primary" }));
+
+    // Still there to be finished.
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("leaves Enter to a legacy IME reporting only keyCode 229", () => {
+    // Older engines report the composition as `keyCode` 229 with `isComposing`
+    // false, so reading one signal blocks candidate acceptance on exactly the
+    // engines that need the guard most.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter", keyCode: 229 });
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("does not finish on a blur with NO destination during an inside press", () => {
+    /*
+     * Some engines do not focus a button when it is pressed, so the field's
+     * `focusout` arrives with a null `relatedTarget` and reads as focus leaving
+     * the picker — finishing the draft before the swatch click can supersede
+     * it, which is the double report the whole arrangement avoids.
+     *
+     * The control is the same blur with NO press in progress, below, which must
+     * still finish: without it this case would pass on a picker that ignored
+     * every null-destination blur.
+     */
+    const onColorChange = vi.fn();
+    const onSwatchSelect = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        onSwatchSelect={onSwatchSelect}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const preset = screen.getByRole("button", { name: "Primary" });
+    preset.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+    fireEvent.click(preset);
+
+    expect(onColorChange).not.toHaveBeenCalled();
+    expect(onSwatchSelect).toHaveBeenCalled();
+  });
+
+  it("finishes a deferred draft when the press replaced NOTHING", () => {
+    /*
+     * The other half of the null-destination guard. Skipping that blur hands
+     * the draft to the press's own action — but a swatch with no handler
+     * replaces nothing, and focus has already left the field, so no further
+     * blur is coming. Left there, the draft dies with the picker.
+     *
+     * The control is the case above it, where the swatch DOES have a handler
+     * and this must stay quiet: without that pair, a picker finishing on every
+     * click would satisfy this one.
+     */
+    const onColorChange = vi.fn();
+    render(
+      <ColorPicker
+        color="#000000"
+        onColorChange={onColorChange}
+        swatches={[{ id: "p", label: "Primary", color: "#3b82f6", value: "p" }]}
+      />
+    );
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const preset = screen.getByRole("button", { name: "Primary" });
+    preset.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+    preset.dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true })
+    );
+    fireEvent.click(preset);
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("DOES finish on a blur with no destination when no press is in progress", () => {
+    // The control for the case above: focus leaving to nowhere — a window
+    // losing focus, say — is still a finish.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("reports ONLY the sample when the EYEDROPPER succeeds after a null blur", async () => {
+    /*
+     * Sampling resolves later than the click that would otherwise settle the
+     * deferred finish, so the typed colour was reported first and the sampled
+     * one after it — two persisted edits for the one the author made.
+     *
+     * Asserted on the CALL COUNT as well as the value: reporting `#abcdef`
+     * last is true of the broken version too.
+     */
+    const onColorChange = vi.fn();
+    const windowWithEyeDropper = window as unknown as Record<string, unknown>;
+    windowWithEyeDropper.EyeDropper = class {
+      open(): Promise<{ sRGBHex: string }> {
+        return Promise.resolve({ sRGBHex: "#abcdef" });
+      }
+    };
+
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const eyedropper = screen.getByRole("button", {
+      name: "Pick a colour from the screen",
+    });
+    eyedropper.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: null })
+    );
+    eyedropper.dispatchEvent(
+      new PointerEvent("pointerup", { bubbles: true, cancelable: true })
+    );
+    fireEvent.click(eyedropper);
+    await act(async () => undefined);
+
+    expect(onColorChange).toHaveBeenCalledTimes(1);
+    expect(onColorChange.mock.calls[0]?.[0]?.toLowerCase()).toBe("#abcdef");
+
+    delete windowWithEyeDropper.EyeDropper;
+  });
+
+  it("keeps a draft when the EYEDROPPER is cancelled", async () => {
+    /*
+     * The eyedropper's button is inside the picker, so pressing it is not a
+     * dismissal — but it is not a replacement either until sampling succeeds.
+     * Cancelling leaves nothing to replace the value with, so a draft dropped
+     * on the press would be lost with nothing put in its place.
+     */
+    const onColorChange = vi.fn();
+    const windowWithEyeDropper = window as unknown as Record<string, unknown>;
+    windowWithEyeDropper.EyeDropper = class {
+      open(): Promise<{ sRGBHex: string }> {
+        return Promise.reject(new Error("dismissed"));
+      }
+    };
+
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+
+    const eyedropper = screen.getByRole("button", {
+      name: "Pick a colour from the screen",
+    });
+    eyedropper.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    field.dispatchEvent(
+      new FocusEvent("focusout", { bubbles: true, relatedTarget: eyedropper })
+    );
+    /*
+     * CLICKED and awaited, so the sampling actually runs and rejects. Pressing
+     * alone never calls it, and the case would then pass against a version that
+     * cleared the draft before awaiting or inside the cancellation handler —
+     * which is the whole of what it exists to check.
+     */
+    fireEvent.click(eyedropper);
+    await act(async () => undefined);
+
+    // Still there to be finished, rather than silently gone.
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+
+    delete windowWithEyeDropper.EyeDropper;
+  });
+
+  it("keeps a draft when the press is the FIELD itself", () => {
+    /*
+     * The control for the case above, and the one a blanket "inside presses
+     * drop the draft" rule would break: clicking into the field to move the
+     * caret must not discard what is being typed.
+     */
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    const field = hexField() as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "#123456" } });
+    field.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, cancelable: true })
+    );
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("drops a draft the HOST replaces", () => {
+    /*
+     * An undo, or an edit made elsewhere, arrives as a new `color`. Text typed
+     * against the old value is stale, and left in place the next blur publishes
+     * it back over the value that just arrived.
+     */
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    view.rerender(
+      <ColorPicker color="#00ff00" onColorChange={onColorChange} />
+    );
+    fireEvent.blur(hexField());
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves Enter to the IME while a composition is active", () => {
+    // Accepting a candidate is not finishing a colour; consuming that Enter
+    // blocks the acceptance and reports the pre-composition text.
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />);
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    fireEvent.keyDown(hexField(), { key: "Enter", isComposing: true });
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("works inside a SHADOW ROOT, where a press on the field keeps its draft", () => {
+    /*
+     * What this DOES prove: the picker functions when mounted inside a shadow
+     * root — the listener attaches, a press on the field is read as inside, and
+     * the draft survives to be finished.
+     *
+     * What it does NOT prove, stated because the name would otherwise imply it:
+     * the `composedPath` branch that exists for this case. A composed event
+     * crossing a shadow boundary is retargeted to the HOST in a browser, so a
+     * containment test would find an element the picker does not contain and
+     * read a press on the field as an outside dismissal. jsdom does not
+     * reproduce that retargeting — measured, removing the `composedPath` branch
+     * leaves this case passing — so the branch is reasoned from the spec rather
+     * than covered here, and a reader should not take this green as evidence
+     * for it.
+     */
+    const holder = document.createElement("div");
+    document.body.appendChild(holder);
+    const shadow = holder.attachShadow({ mode: "open" });
+    const mount = document.createElement("div");
+    shadow.appendChild(mount);
+
+    const onColorChange = vi.fn();
+    render(<ColorPicker color="#000000" onColorChange={onColorChange} />, {
+      container: mount,
+    });
+
+    // BY ITS ID, not the first input in the tree — the sliders come first, and
+    // a probe that grabbed one of those tested the hue control while claiming
+    // to test the hex field.
+    const field = shadow.querySelector<HTMLInputElement>('input[id$="-hex"]');
+    expect(field).not.toBeNull();
+    if (field === null) return;
+
+    fireEvent.change(field, { target: { value: "#123456" } });
+    field.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      })
+    );
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    expect(onColorChange).toHaveBeenCalledWith("#123456");
+  });
+
+  it("reports NOTHING when the picker GOES AWAY mid-draft", () => {
+    /*
+     * Dismissal is not a finish. Escape means cancel, so a draft dying with the
+     * surface is the conventional answer; and clicking away moves focus out of
+     * the field first, so that path commits through the blur instead.
+     *
+     * Reporting from an unmount would arrive after a host that coalesces a
+     * picker gesture on close has already decided what to write, so the value
+     * would be published into nothing — `style-colour-panel` writes once on
+     * close.
+     *
+     * A COMPLETE colour is used deliberately. The unfinished case below would
+     * pass on a picker that simply never reported, so this one carries the
+     * discrimination: the value was reportable and was still not reported.
+     */
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#123456" } });
+    view.unmount();
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("reports NOTHING when an unfinished colour goes away", () => {
+    // The measured case end to end: stop at five digits, dismiss, and the host
+    // must still hold what it held.
+    const onColorChange = vi.fn();
+    const view = render(
+      <ColorPicker color="#000000" onColorChange={onColorChange} />
+    );
+
+    fireEvent.change(hexField(), { target: { value: "#12345" } });
+    view.unmount();
+
+    expect(onColorChange).not.toHaveBeenCalled();
+  });
+
+  it("shows the STORED colour again after an unfinished draft is dropped", () => {
+    // What is shown and what is saved have to agree once the draft is gone.
+    // They did not before: the field kept the text while the host held a stale
+    // intermediate.
+    render(<ColorPicker color="#000000" onColorChange={vi.fn()} />);
+
+    fireEvent.change(hexField(), { target: { value: "#12345" } });
+    fireEvent.blur(hexField());
+
+    expect((hexField() as HTMLInputElement).value.toLowerCase()).toBe(
+      "#000000"
+    );
   });
 });

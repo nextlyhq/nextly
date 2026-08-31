@@ -22,7 +22,15 @@ export interface VersionsWhereCondition {
   // the working draft (a non-autosave row with no version number) from reads
   // that assume a non-autosave row carries a sequence number. The adapter's
   // WhereOperator spells the set operator uppercase.
-  op: "=" | "!=" | "<" | "IN" | "IS NULL" | "IS NOT NULL";
+  // `>=` and `<=` power the releases window query — "scheduled between these
+  // two instants" — which a dashboard widget and a release index both ask with
+  // different bounds. Added rather than filtered in memory: the alternative is
+  // selecting every release and discarding most of it in JS, which is what
+  // `findDueReleases` does and is only tolerable there because it is already
+  // narrowed to `state = "scheduled"`. The adapter has supported both since
+  // `WHERE_OPERATORS` was written; this union was simply narrower than what it
+  // fronts, and widening a subset keeps the adapter assignable to this port.
+  op: "=" | "!=" | "<" | ">=" | "<=" | "IN" | "IS NULL" | "IS NOT NULL";
   // Matches the adapter's WhereCondition.value so the adapter and the
   // transaction context both structurally satisfy VersionsDbApi (a looser
   // `unknown` here breaks that assignability under method-parameter variance).
@@ -44,7 +52,19 @@ export interface VersionsWhere {
 export interface VersionsSelectOptions {
   columns?: string[];
   where?: VersionsWhere;
-  orderBy?: { column: string; direction?: "asc" | "desc" }[];
+  /**
+   * `nulls` is exposed because DEFAULT null ordering is dialect-dependent:
+   * PostgreSQL sorts nulls FIRST on a descending order while MySQL and SQLite
+   * sort them last. A "newest scheduled first" list containing unscheduled
+   * drafts therefore returns different rows per engine, and under a limit it can
+   * return only drafts and omit every scheduled release. The adapter has
+   * supported the control since it was written.
+   */
+  orderBy?: {
+    column: string;
+    direction?: "asc" | "desc";
+    nulls?: "first" | "last";
+  }[];
   limit?: number;
 }
 

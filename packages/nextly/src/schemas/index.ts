@@ -27,6 +27,7 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
+import { documentLockTables } from "./document-lock";
 import {
   dynamicCollectionsPg,
   dynamicCollectionsMysql,
@@ -168,6 +169,11 @@ export function getCoreSchema(
     // without this a column could never be added to an existing installation's copy. Same reasoning
     // as `nextly_schema_events` and `nextly_i18n_archive` below.
     ...Object.values(fieldGroupLockTables(dialect)),
+    // `nextly_document_lock` — one row per document being edited right now.
+    // Declared here because it is the set `nextly migrate` pushes: a table
+    // outside it is never created on a real installation, however completely
+    // its own module declares it.
+    ...Object.values(documentLockTables(dialect)),
     ...Object.values(apiKeyTables(dialect)),
     // `nextly_schema_events` (the migration ledger) is a first-class managed
     // table. It is still bootstrapped out-of-band via `getSchemaEventsDdl` so
@@ -277,6 +283,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   // Read by live introspection. Absent here, the table is created and then invisible to every
   // snapshot, so the drift check proposes adding it again on every run.
   "nextly_field_group_lock",
+  "nextly_document_lock",
   "dynamic_collections",
   "dynamic_singles",
   STORAGE_FORMAT.registryTable,
@@ -367,3 +374,13 @@ export {
   nextlyWebhookDeliveries,
 } from "./webhooks/postgres";
 export * from "./security-config"; // Zod — review in Task 19
+
+// Content-release lifecycle vocabulary. Types only: the admin renders a state
+// and must not be able to name one the engine cannot produce, and a second
+// spelling of these unions in a client is how a screen starts describing a
+// state the server has never sent.
+export type {
+  ReleaseState,
+  ReleaseMemberAction,
+  ReleaseBlockerReason,
+} from "./releases/types";

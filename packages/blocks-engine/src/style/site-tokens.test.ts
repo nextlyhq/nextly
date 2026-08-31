@@ -505,9 +505,64 @@ describe("emitTokenBlocks", () => {
       },
       SCOPE
     );
-    expect(css).toContain(
-      `[${DARK_MODE_ATTRIBUTE}="dark"] ${SCOPE}{--site-color-text:#eee}`
+    // BOTH forms, because the selector decides which one can match and this
+    // function serves two. A scoped selector is matched by the ancestor form,
+    // which is the flexible one — a host may carry the switch anywhere above
+    // it. A site sheet declares on `:root`, which IS the document element and
+    // has no ancestor, so only the attached form can reach it.
+    // Wrapped in `:is()`, because this selector may be a LIST and appending
+    // the attribute to one would qualify only its last member.
+    expect(css).toContain(`[${DARK_MODE_ATTRIBUTE}="dark"] :is(${SCOPE})`);
+    expect(css).toContain(`:is(${SCOPE})[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    expect(css).toContain("--site-color-text:#eee");
+  });
+
+  it("qualifies every member of a scoped selector LIST", () => {
+    // Appending the attribute to `.a,.b` qualifies only the last member, so
+    // `.a` would take the dark values with no attribute anywhere and a scoped
+    // preview would render dark permanently.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ".preview-a,.preview-b"
     );
+    const dark = css.slice(css.indexOf("#111") + 4);
+    expect(dark).not.toMatch(/(^|[,{])\s*\.preview-a\s*[,{]/);
+    expect(dark).toContain(":is(.preview-a,.preview-b)");
+  });
+
+  it("declares root-scoped dark values on whichever element carries the switch", () => {
+    // `:root` IS `<html>`, so no rule describing an ancestor can reach it — and
+    // a rule ATTACHED to it reaches only the case where the host put the
+    // attribute on `<html>`. Custom properties inherit, so declaring them on
+    // the attribute-bearing element covers `<html>`, `<body>` and a wrapper
+    // alike. Measured in a browser across all three placements.
+    const { css } = emitTokenBlocks(
+      {
+        tokens: [
+          {
+            name: "color.text",
+            kind: "color",
+            values: { light: "#111", dark: "#eee" },
+          },
+        ],
+      },
+      ":root"
+    );
+    expect(css).toContain(
+      `[${DARK_MODE_ATTRIBUTE}="dark"]{--site-color-text:#eee}`
+    );
+    // Not anchored to the root, which is the form that only works on `<html>`.
+    expect(css).not.toContain(`:root[${DARK_MODE_ATTRIBUTE}="dark"]`);
+    // And the light block still declares on the root itself.
+    expect(css).toContain(":root{--site-color-text:#111}");
   });
 
   it("follows the operating system when the site asks for that instead", () => {

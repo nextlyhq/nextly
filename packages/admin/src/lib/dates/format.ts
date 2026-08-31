@@ -35,7 +35,16 @@ const HAS_EXPLICIT_TIMEZONE = /(?:Z|[+-]\d{2}:\d{2})$/i;
 
 let activeConfig: GlobalDateTimeConfig = {};
 
-function isValidTimezone(timezone: string | undefined): boolean {
+/**
+ * Whether the platform can format in `timezone`.
+ *
+ * Exported because a caller that LABELS its output with the zone it asked for
+ * has to know the zone was honoured. `formatGlobalDateTime` falls back to the
+ * configured or local zone for an unusable one, which is right for rendering
+ * and wrong for a caller that would then print a local time under a foreign
+ * zone's name.
+ */
+export function isValidTimezone(timezone: string | undefined): boolean {
   if (!timezone) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone });

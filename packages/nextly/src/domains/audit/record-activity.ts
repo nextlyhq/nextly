@@ -17,6 +17,7 @@
 import type { RequestActor } from "../../auth/request-actor";
 import { container } from "../../di/container";
 import type { NextlyServiceConfig } from "../../di/register";
+import { entryHeading } from "../../lib/entry-heading";
 import type {
   ActivityLogAction,
   ActivityLogService,
@@ -92,32 +93,27 @@ function collectionViews(): CollectionViews {
 }
 
 /**
- * The heading shown for an entry in the feed, in descending preference:
- * the collection's configured title field, then a `title` or `name` field,
- * then the id.
+ * The heading recorded for an entry in the feed.
+ *
+ * The WALK is shared with the dashboard's recent-entries list (`lib/entry-heading`)
+ * because both answer the same question about the same fields; only the source
+ * of the title field differs, which is what this resolves. Two walks would
+ * disagree about which entry is which depending on where you read it.
  *
  * Denormalized on purpose. The feed outlives the entry it names, so resolving
  * the heading at read time would leave a deleted entry's row unlabelled — the
  * one entry whose label the reader can no longer recover any other way.
  */
-function entryHeading(
+function feedHeading(
   collection: string,
   data: Record<string, unknown>,
   entryId: string | undefined
 ): string | undefined {
-  const titleField = collectionViews().titleFields.get(collection);
-  const candidates = [
-    titleField ? data[titleField] : undefined,
-    data.title,
-    data.name,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.length > 0) return candidate;
-    if (typeof candidate === "number" || typeof candidate === "bigint") {
-      return String(candidate);
-    }
-  }
-  return entryId;
+  return entryHeading(
+    data,
+    collectionViews().titleFields.get(collection),
+    entryId
+  );
 }
 
 /**
@@ -208,7 +204,7 @@ export async function recordMutationActivity(
     collection: input.collection,
     ...(input.entryId !== undefined ? { entryId: input.entryId } : {}),
     ...(() => {
-      const heading = entryHeading(input.collection, input.data, input.entryId);
+      const heading = feedHeading(input.collection, input.data, input.entryId);
       return heading !== undefined ? { entryTitle: heading } : {};
     })(),
     ...(metadata !== undefined ? { metadata } : {}),

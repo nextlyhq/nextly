@@ -37,10 +37,12 @@ import { NextlyError } from "../../errors";
 import type { JobState } from "../../schemas/jobs/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
+import { normalizeJobSlug } from "./job-registry";
+import { MAX_PORTABLE_KEY_LENGTH } from "./portable-key";
+
 const JOBS = "nextly_jobs";
 
 /** The longest value every supported dialect can store in an indexed column. */
-const MAX_PORTABLE_KEY_LENGTH = 191;
 
 /**
  * The transaction surface the lease claim needs (subset of the adapter tx).
@@ -166,21 +168,18 @@ export class JobsRepository {
    * why this is not a read-then-write.
    */
   async enqueue(input: NewJob): Promise<EnqueueResult> {
-    // The same portable bound the slug is held to. MySQL stores this in
-    // varchar(191) — the widest utf8mb4 value it will index — and refuses a
-    // longer one in strict mode, while PostgreSQL and SQLite accept it. Without
-    // this check a dedupe key works on two dialects and throws on the third, at
-    // enqueue time rather than where the caller chose the key.
-    // Validated here as well as in `defineJob`. This is an exported surface: a
-    // caller can reach it with a slug that never went through a definition, and
-    // MySQL would then refuse the insert while the other two dialects accepted
-    // it.
-    if (input.slug.length > MAX_PORTABLE_KEY_LENGTH) {
-      throw NextlyError.invalidInput({
-        message: `A job slug may be at most ${MAX_PORTABLE_KEY_LENGTH} characters.`,
-        logContext: { length: input.slug.length },
-      });
-    }
+    // The SAME check `defineJob` applies, CALLED rather than restated. This is an
+    // exported surface, so a caller can reach it with a slug that never went
+    // through a definition — and when the two validators disagreed the gap did
+    // not produce a rejected write, it produced an ACCEPTED one: `task: ""` was
+    // refused at definition and stored here, giving a row whose slug no registry
+    // lookup can match, deferred by every drain forever.
+    //
+    // Also the portable bound. MySQL stores a slug in varchar(191) — the widest
+    // utf8mb4 value it will index — and refuses a longer one in strict mode
+    // while PostgreSQL and SQLite accept it, so an unchecked slug works on two
+    // dialects and throws on the third.
+    const slug = normalizeJobSlug(input.slug);
     if (
       input.dedupeKey !== null &&
       input.dedupeKey.length > MAX_PORTABLE_KEY_LENGTH
@@ -191,7 +190,10 @@ export class JobsRepository {
       });
     }
 
-    return this.insertOrDedupe(input, true);
+    // The NORMALISED slug is what gets stored, not the caller's original. A
+    // validator that answers about one string while a different one is written
+    // is not a validator.
+    return this.insertOrDedupe({ ...input, slug }, true);
   }
 
   /**

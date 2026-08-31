@@ -57,6 +57,7 @@ import {
 import { runJobsRoute } from "./api/jobs-run-route";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
+import { handleReleaseRequest } from "./api/releases";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
 // canonical respondX wire shapes (spec §5.1) instead of the
 // hand-rolled `{ data: <payload> }` envelope.
@@ -82,9 +83,11 @@ import {
   redeliverWebhookDelivery,
   drainWebhooks,
 } from "./api/webhooks";
+import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { publishableWidgets } from "./domains/widgets/publish";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -98,6 +101,7 @@ import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import { buildPluginAdminMeta } from "./plugins/admin-meta";
 import { runPluginRoute } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
+import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
 import {
   parseRestRoute,
@@ -342,6 +346,7 @@ async function handleApiKeyRequest(
 const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
+  "releases",
   "jobs",
   "generalSettings",
   "previewLinks",
@@ -478,6 +483,8 @@ async function handleDashboardRequest(
       return getDashboardRecentEntries(req);
     case "getDashboardActivity":
       return getDashboardActivity(req);
+    case "postWidgetQuery":
+      return postWidgetQuery(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -594,6 +601,7 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "countEntries",
   "duplicateEntry",
   "publishAllLocales",
+  "unpublishAllLocales",
   // Version history is guarded by the same per-collection read permission as
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
@@ -1022,6 +1030,14 @@ async function handleServiceRequest(
     return handleWebhookRequest(req, method, routeParams);
   }
 
+  // ==================== CONTENT RELEASES DIRECT DISPATCH ====================
+  // Beside the handlers above and for the same reason: it owns its auth and
+  // parses its own JSON, so it must stay above the shared body read below or
+  // the stream reaches it consumed.
+  if (service === "releases") {
+    return handleReleaseRequest(req, method, routeParams);
+  }
+
   // ==================== JOBS DIRECT DISPATCH ====================
   // Beside the webhook drain and for the same reason: the handler owns its own
   // authorization, and it must stay above the shared body read below.
@@ -1073,8 +1089,10 @@ async function handleServiceRequest(
   }
 
   // ==================== DASHBOARD DIRECT DISPATCH ====================
-  // Dashboard handlers own their auth (requireAuthentication). Read-only
-  // endpoints — no body to consume, but keeping consistent dispatch pattern.
+  // Dashboard handlers own their auth (requireAuthentication). Intercepting
+  // here keeps the pattern consistent with API keys and general settings; the
+  // GET endpoints have no body, and postWidgetQuery reads its own via
+  // req.json() before anything else touches the stream.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
   }
@@ -1447,6 +1465,26 @@ async function buildAdminMeta(): Promise<{
     }
   }
 
+  // The widget REGISTRY, beside the contributions above. The two are different
+  // channels to the same grid and neither subsumes the other: a contribution is
+  // DECLARED in `contributes.admin.widgets` and travels with the plugin's
+  // config, while a registration is an imperative `registerWidget` call made
+  // during boot. Serializing only the first left an app that used the public
+  // registration API invisible to the renderer built around that registry --
+  // its card never drew and its query never entered the batch.
+  //
+  // Only this half of the payload can carry it. The registry is populated
+  // during boot, and `handleAdminMetaWorkspaceRequest` is the caller that
+  // awaits `ensureServicesInitialized()` first; the public branding route is
+  // served without it and would answer from an empty store. That the workspace
+  // half already describes the RUNNING installation rather than the configured
+  // one -- `showBuilder` from the live resolver, `customGroups` from the
+  // database -- is the same property this relies on.
+  const registered = publishableWidgets();
+  if (registered.length > 0) {
+    workspace.widgets = registered;
+  }
+
   // Override config branding with DB values when available
   try {
     if (container.has("generalSettingsService")) {
@@ -1742,6 +1780,11 @@ export function createDynamicHandlers(options?: {
     // instead of at startup. This module runs when the route file is imported,
     // which is the earliest deterministic point the config exists.
     assertClientConfigs(options.config.plugins ?? []);
+    // And the widgets beside it. `/api/admin-meta/workspace` serializes both
+    // halves through one `JSON.stringify`, so a widget carrying a bigint takes
+    // the whole authenticated workspace payload down for every admin -- a
+    // wider failure than a bad `clientConfig`, reached the same way.
+    assertAdminWidgets(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

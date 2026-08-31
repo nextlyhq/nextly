@@ -112,11 +112,18 @@ export function emittableFaces(
   return faces.filter(face => validateFontFace(face, "fonts").length === 0);
 }
 
-/** The families those faces provide, lowercased for comparison. */
+/**
+ * The families those faces provide, lowercased for comparison.
+ *
+ * NOT trimmed, because the emitter does not trim either: `emitFontFaces`
+ * writes `font-family:"${cssString(face.family)}"`, so a face called
+ * `" Brand "` declares a family whose name carries those spaces and only a
+ * token quoting them verbatim selects it. Trimming one side and not the other
+ * made the two representations disagree, and a face the browser matches was
+ * reported as one the site never loads.
+ */
 function hostedFamilies(faces: readonly FontFaceDef[]): ReadonlySet<string> {
-  return new Set(
-    emittableFaces(faces).map(face => face.family.trim().toLowerCase())
-  );
+  return new Set(emittableFaces(faces).map(face => face.family.toLowerCase()));
 }
 
 function sourceOf(
@@ -130,9 +137,11 @@ function sourceOf(
   // claim. So a site loading a face it called `serif` still gets the browser
   // default from a bare `serif`, and only a quoted value reaches its file.
   if (entry.kind === "generic") return "generic";
-  // NOT trimmed. The reader already removed the separation around an unquoted
-  // name and kept a quoted one verbatim, so trimming here would undo that and
-  // match `" Brand "` — a different family — against a face called `Brand`.
+  // NOT trimmed, and neither is the set this is looked up in — the two must
+  // normalise identically or they answer about different families. The reader
+  // already removed the separation around an unquoted name and kept a quoted
+  // one verbatim, so trimming here would undo that and match `" Brand "`
+  // against a face called `Brand`.
   const key = entry.part.name.toLowerCase();
   return hosted.has(key) ? "hosted" : "not-provided";
 }

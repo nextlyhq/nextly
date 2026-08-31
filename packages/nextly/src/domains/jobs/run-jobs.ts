@@ -155,6 +155,12 @@ export async function runJobs(deps: RunJobsDeps): Promise<RunJobsResult> {
   const leaseMs = deps.leaseMs ?? DEFAULT_LEASE_MS;
 
   const startedAt = now().getTime();
+  // The whole pass shares ONE deadline, rather than each job receiving a fresh
+  // budget when it starts. A per-job budget would be a promise the runner cannot
+  // keep: the invocation dies at this instant whatever a later job was told, so
+  // a job starting late genuinely has little time, and saying otherwise is how a
+  // handler gets killed mid-write believing it had room.
+  const deadline = new Date(startedAt + maxDurationMs);
   const result: RunJobsResult = {
     claimed: 0,
     done: 0,
@@ -177,7 +183,7 @@ export async function runJobs(deps: RunJobsDeps): Promise<RunJobsResult> {
     if (job === null) continue;
     result.claimed += 1;
 
-    const outcome = await runOne(deps, job, runnerId, now);
+    const outcome = await runOne(deps, job, runnerId, now, deadline);
     if (outcome === LEASE_LOST) {
       result.unrecorded += 1;
       continue;
@@ -219,7 +225,9 @@ async function runOne(
   deps: RunJobsDeps,
   job: JobRow,
   runnerId: string,
-  now: () => Date
+  now: () => Date,
+  /** The pass's wall-clock deadline, handed to the handler on its context. */
+  deadline: Date
 ): Promise<FinalizeInput | typeof LEASE_LOST> {
   const terminal = (lastError: string): FinalizeInput => {
     return {
@@ -321,6 +329,12 @@ async function runOne(
         user: identity.user,
         now: now(),
         content: createJobContentApi(identity.user, deps.contentApi),
+        // A FRESH Date per invocation, from the pass's fixed instant. `Date` is
+        // mutable, so handing every handler the same object lets one that calls
+        // `setTime` on it — applying a safety margin, say — silently move the
+        // deadline every later job in this pass is given. Copying costs nothing
+        // and makes the value behave the way its readers assume it does.
+        deadline: new Date(deadline.getTime()),
       })
     );
   } catch (error) {

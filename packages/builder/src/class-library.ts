@@ -210,6 +210,32 @@ export function filterClassRows(
 }
 
 /**
+ * The rows whose name contains what the author typed.
+ *
+ * Beside {@link filterClassRows} rather than inside it, because they answer
+ * different questions: a filter narrows by what the INDEX or the open document
+ * says, and this narrows by the name. Folding them together would make one
+ * function whose result depends on two unrelated inputs, and the chips would
+ * then have to know about the query to explain an empty list.
+ *
+ * Matched on the SLUG alone. A class has no other name — the id is storage and
+ * an author never sees it — so matching an id would return rows for a string
+ * they cannot see in the list.
+ *
+ * Case-insensitive because a slug is lowercase by construction and an author
+ * typing capitals means the same class rather than none. Substring rather than
+ * prefix: the useful search on `hero-banner-wide` is `banner`.
+ */
+export function searchClassRows(
+  rows: readonly ClassRow[],
+  query: string
+): ClassRow[] {
+  const needle = query.trim().toLowerCase();
+  if (needle === "") return [...rows];
+  return rows.filter(row => row.slug.toLowerCase().includes(needle));
+}
+
+/**
  * The class ids on a node that the compiler will actually read.
  *
  * The engine applies the first `MAX_CLASSES_PER_NODE` and warns about the rest,

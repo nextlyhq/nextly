@@ -80,29 +80,3 @@ export function isIdempotencyError(err: unknown): boolean {
     /check that column\/key exists/i,
   ]);
 }
-
-/**
- * Whether an execution error says a statement named a column the table lacks.
- *
- * Distinct from {@link isIdempotencyError}: that one recognises work already
- * done, this one recognises work whose PRECONDITION has not been done yet. The
- * only caller that may act on it is the additive-tables-only baseline, where an
- * index over a not-yet-added column is an expected casualty of diffing from an
- * empty snapshot, and the pass that follows creates the column and the index in
- * order.
- *
- * PostgreSQL's wording is matched as `column ... does not exist` rather than a
- * bare "does not exist", for the same reason error 1091 is matched in full
- * above: a bare match would also catch a statement naming a genuinely missing
- * TABLE, and treating that as tolerable would hide a broken reconcile.
- */
-export function isMissingColumnError(err: unknown): boolean {
-  return errorSays(err, [
-    // SQLite
-    /no such column/i,
-    // MySQL (ER_KEY_COLUMN_DOES_NOT_EXIST)
-    /key column .* doesn't exist in table/i,
-    // PostgreSQL
-    /column .* does not exist/i,
-  ]);
-}

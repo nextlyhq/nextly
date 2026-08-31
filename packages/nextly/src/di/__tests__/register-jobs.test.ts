@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApplyDueReleasesResult } from "../../domains/releases/apply-due-releases";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
+import { WEBHOOK_DRAIN_JOB } from "../../domains/webhooks/webhook-drain-job";
 import type { Logger } from "../../shared/types";
 
 import { reportReleasesOutcome } from "../registrations/register-jobs";
@@ -55,6 +56,7 @@ function result(
   return {
     due: 1,
     published: 1,
+    blocked: 0,
     applied: 1,
     failed: 0,
     outcomes: [],
@@ -76,6 +78,13 @@ describe("the registered job types", () => {
         registerSingleton: (name: string, factory: () => unknown) => {
           singletons.set(name, factory());
         },
+        // The registry constructs the webhook drain job, which resolves its
+        // deps from the container. Answered with inert stand-ins: these cases
+        // are about WHICH job types get registered, not what they do.
+        get: () => ({
+          getEnabledEndpointsFresh: async () => [],
+          select: async () => [],
+        }),
       },
     }));
 
@@ -85,9 +94,30 @@ describe("the registered job types", () => {
     registerJobServices({
       adapter: { select: async () => [] },
       logger: logger(),
+      config: {
+        plugins: [
+          {
+            name: "acme",
+            contributes: {
+              jobs: [
+                (await import("../../domains/jobs/job-registry")).defineJob({
+                  slug: "acme:export",
+                  handler: async () => {},
+                }),
+              ],
+            },
+          },
+        ],
+      },
     } as never);
 
     const registry = singletons.get("jobRegistry") as JobRegistry;
+
+    // THE assertion this whole seam exists for. `defineJob` works in isolation
+    // forever; what was missing was any path from a plugin's definition into the
+    // registry a drain actually reads. Asserting the definition exists would
+    // have passed the entire time the feature was broken.
+    expect(registry.get("acme:export")).toBeDefined();
     expect(registry.get(RELEASES_DRAIN_JOB)).toBeDefined();
 
     // And registered as a SWEEP. Being in the registry only means the runner
@@ -96,6 +126,13 @@ describe("the registered job types", () => {
     // find. Registered-but-not-a-sweep is the same silent failure as
     // defined-but-not-registered, one layer along.
     expect(registry.sweeps().map(d => d.slug)).toContain(RELEASES_DRAIN_JOB);
+
+    // Webhook delivery, consumer #1. An event reaches the outbox on a content
+    // write, but the DRAIN that delivers it has no request of its own — so like
+    // the releases pass it must be kept queued, or an installation that goes
+    // quiet stops delivering what it still owes.
+    expect(registry.get(WEBHOOK_DRAIN_JOB)).toBeDefined();
+    expect(registry.sweeps().map(d => d.slug)).toContain(WEBHOOK_DRAIN_JOB);
 
     vi.doUnmock("../container");
     vi.resetModules();
@@ -110,6 +147,13 @@ describe("the registered job types", () => {
         registerSingleton: (name: string, factory: () => unknown) => {
           singletons.set(name, factory());
         },
+        // The registry constructs the webhook drain job, which resolves its
+        // deps from the container. Answered with inert stand-ins: these cases
+        // are about WHICH job types get registered, not what they do.
+        get: () => ({
+          getEnabledEndpointsFresh: async () => [],
+          select: async () => [],
+        }),
       },
     }));
 
@@ -126,6 +170,9 @@ describe("the registered job types", () => {
     registerJobServices({
       adapter: { select: async () => [] },
       logger: logger(),
+      // `config` is required by RegistrationContext and is always present in
+      // production; a fixture omitting it tests a context that cannot occur.
+      config: { plugins: [] },
     } as never);
 
     expect(singletons.get("jobsRepository")).toBeInstanceOf(JobsRepository);
@@ -147,6 +194,7 @@ describe("reportReleasesOutcome", () => {
     reportReleasesOutcome(log, {
       due: 5,
       published: 1,
+      blocked: 0,
       applied: 1,
       failed: 0,
       deferred: 4,
@@ -169,6 +217,7 @@ describe("reportReleasesOutcome", () => {
     reportReleasesOutcome(log, {
       due: 9,
       published: 2,
+      blocked: 0,
       applied: 2,
       failed: 0,
       deferred: 0,
@@ -221,9 +270,32 @@ describe("reportReleasesOutcome", () => {
     // would bury the pass that mattered.
     const log = logger();
 
-    reportReleasesOutcome(log, result({ due: 0, published: 0, applied: 0 }));
+    reportReleasesOutcome(
+      log,
+      result({ due: 0, published: 0, blocked: 0, applied: 0 })
+    );
 
     expect(log.info).not.toHaveBeenCalled();
     expect(log.error).not.toHaveBeenCalled();
+  });
+  it("reports the releases this pass STOPPED", () => {
+    // One failed member can stop a whole overlapping component, so the per-
+    // member error below names one release while several were moved. Without
+    // this line the operator reading the log never learns the others stopped.
+    const log = logger();
+    reportReleasesOutcome(log, {
+      due: 2,
+      published: 0,
+      blocked: 2,
+      applied: 0,
+      failed: 1,
+      deferred: 0,
+      undischarged: 0,
+      outcomes: [],
+    });
+    expect(log.info).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ blocked: 2 })
+    );
   });
 });

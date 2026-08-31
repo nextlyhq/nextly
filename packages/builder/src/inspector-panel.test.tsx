@@ -35,7 +35,7 @@ import {
   type BlockNode,
 } from "@nextlyhq/blocks-engine";
 
-import { InspectorPanel } from "./inspector-panel";
+import { editedStyleState, InspectorPanel } from "./inspector-panel";
 import { applyOp } from "./ops";
 import type { EditorState } from "./editor-state";
 
@@ -157,6 +157,198 @@ describe("what InspectorPanel forwards to the style tab", () => {
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
 
     expect(screen.queryByRole("combobox", { name: /add a class/i })).toBeNull();
+  });
+
+  it("offers the state switcher when the host can act on the choice", () => {
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ onChange: vi.fn() }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(
+      screen.getByRole("radiogroup", { name: "Interaction state" })
+    ).toBeDefined();
+  });
+
+  it("withholds it from a host that cannot act on the choice", () => {
+    /*
+     * The control, and a contract rather than a tidiness rule: this panel's
+     * state and `Canvas.forcedState` are ONE value, so a switcher whose
+     * selection nothing carries to the canvas would report a state the author
+     * is not looking at — the arrangement that contract exists to prevent.
+     */
+    register();
+    render(<InspectorPanel editor={editorFor(documentOf({}))} />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(
+      screen.queryByRole("radiogroup", { name: "Interaction state" })
+    ).toBeNull();
+  });
+
+  it("marks the states the SELECTED NODE has styles for", () => {
+    /*
+     * The chain, asserted through the rendered control rather than by
+     * inspecting props: the marker is only useful if the node's own stored
+     * styles reach it, and a switcher that received nothing renders perfectly
+     * while marking nothing at all.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(
+          documentOf({
+            styles: { hover: { base: { color: "#000001" } } },
+          } as Partial<BlockNode>)
+        )}
+        styleState={{ onChange: vi.fn() }}
+        /*
+         * The site's tiers, because the marker answers "set here, and
+         * expressible by this site" — without them it refuses rather than
+         * guessing, so a case omitting them would assert the refusal instead of
+         * the forwarding it is named for.
+         */
+        breakpoints={{
+          viewport: [{ id: "base", label: "Desktop" }],
+          container: [],
+        }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(
+      screen.getByRole("radio", { name: /Hover.*has styles/ })
+    ).toBeDefined();
+    expect(screen.queryByRole("radio", { name: /Pressed.*has styles/ })).toBe(
+      null
+    );
+  });
+
+  it("edits BASE when a host supplies a state with no setter", () => {
+    /*
+     * The binding permits `{ state: "hover" }` alone, and read literally that is
+     * a state nobody can leave: the switcher is withheld because nothing could
+     * act on a choice, the tab handler has no callback to return the canvas
+     * with, and the controls below would go on reading and writing hover with
+     * no visible control saying so — the arrangement this panel's contract
+     * exists to prevent, reached through the type rather than a miswiring.
+     *
+     * Asserted through the rendered controls rather than on a prop, because
+     * what matters is which state the panel EDITS. The class surface is the
+     * cheapest observable that differs, so the case reads the switcher's
+     * absence and the style panel's presence together.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ state: "hover" }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    expect(
+      screen.queryByRole("radiogroup", { name: "Interaction state" })
+    ).toBeNull();
+    expect(editedStyleState({ state: "hover" })).toBe("base");
+    expect(editedStyleState({ state: "hover", onChange: vi.fn() })).toBe(
+      "hover"
+    );
+  });
+
+  it("OPENS on Style when a host mounts with a state already chosen", () => {
+    /*
+     * A host restoring what an author was editing supplies a non-base state at
+     * mount. The tab handler cannot catch that — it fires on a CHANGE, and a
+     * mount is not one — so opening on Content would leave the canvas drawing
+     * the block mid-hover with the only control that explains or clears it
+     * behind a tab nobody was told to open.
+     *
+     * Asserted on the switcher being REACHABLE rather than on the tab's own
+     * state, because what the author needs is the control, and a test on the
+     * internal value would pass on a panel that opened the right tab and
+     * rendered nothing in it.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ state: "hover", onChange: vi.fn() }}
+      />
+    );
+
+    expect(
+      screen.getByRole("radiogroup", { name: "Interaction state" })
+    ).toBeDefined();
+  });
+
+  it("still opens on Content for an ordinary mount", () => {
+    /*
+     * The control, and it carries the whole default: every existing caller
+     * names no state, and a panel that opened on Style for them would move a
+     * surface nobody asked to move.
+     */
+    register();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ onChange: vi.fn() }}
+      />
+    );
+
+    expect(
+      screen.queryByRole("radiogroup", { name: "Interaction state" })
+    ).toBeNull();
+  });
+
+  it("reports the state the author chose", () => {
+    register();
+    const onStyleStateChange = vi.fn();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ onChange: onStyleStateChange }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^Hover/ }));
+
+    expect(onStyleStateChange).toHaveBeenCalledWith("hover");
+  });
+
+  it("drops the forced state when the author LEAVES the style tab", () => {
+    /*
+     * The one real cost of placing this control inside the Style tab is that it
+     * goes off screen with the tab, so a state left switched on becomes a
+     * canvas disagreeing with everything visible — editing the text of a button
+     * drawn mid-press, with no control on screen saying why.
+     *
+     * Asserted as the LAST call rather than as any call, because selecting the
+     * state also calls this and a test satisfied by that would pass with the
+     * reset deleted.
+     */
+    register();
+    const onStyleStateChange = vi.fn();
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf({}))}
+        styleState={{ state: "hover", onChange: onStyleStateChange }}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Content" }));
+
+    expect(onStyleStateChange).toHaveBeenLastCalledWith("base");
   });
 });
 

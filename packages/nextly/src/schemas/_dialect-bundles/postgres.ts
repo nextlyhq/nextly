@@ -31,6 +31,7 @@ export { users, accounts, sessions } from "../users/postgres";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/postgres";
+export { nextlyDocumentLock } from "../document-lock/postgres";
 
 // Auth tokens.
 export {

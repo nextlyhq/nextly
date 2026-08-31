@@ -53,6 +53,10 @@ function embedArgs<P>(
     props,
     node: { id: "n1", type: "core/embed", version: 1, props: {} },
     className: "nx-n1",
+    // Required by the render contract. These fixtures declare no parts, so the
+    // answer is empty for every name — but a renderer that could omit it would
+    // leave every block's parts unmarked with nothing to report.
+    partClass: () => "",
     ctx: context(),
     renderSlot: () => null,
     ...(hostPolicy === undefined ? {} : { hostPolicy }),
@@ -296,6 +300,8 @@ describe("core/image", () => {
       props,
       node: { id: "n1", type: "core/image", version: 1, props: {} },
       className: "nx-n1",
+      // This block declares no parts; the contract requires the answer anyway.
+      partClass: () => "",
       ctx: {
         ...context(),
         resolveMedia: () =>
@@ -588,6 +594,8 @@ describe("the render and the link preview choose the same image", () => {
       props: both,
       node: { id: "n1", type: "core/image", version: 1, props: {} },
       className: "nx-n1",
+      // This block declares no parts; the contract requires the answer anyway.
+      partClass: () => "",
       ctx: {
         ...context(),
         resolveMedia: () =>
@@ -620,6 +628,8 @@ describe("the render and the link preview choose the same image", () => {
       },
       node: { id: "n1", type: "core/image", version: 1, props: {} },
       className: "nx-n1",
+      // This block declares no parts; the contract requires the answer anyway.
+      partClass: () => "",
       ctx: {
         ...context(),
         resolveMedia: () =>

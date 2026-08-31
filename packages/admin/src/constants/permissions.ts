@@ -49,6 +49,10 @@ export const SYSTEM_RESOURCES_IN_DISPLAY_ORDER = [
   "email-templates",
   "api-keys",
   "webhooks",
+  // Operational rather than content: running the background job queue by hand.
+  // Placed after webhooks so the tail of the list stays the machinery an
+  // operator manages rather than the content an editor does.
+  "background-jobs",
 ] as const;
 
 /**

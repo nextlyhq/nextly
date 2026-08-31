@@ -6,8 +6,11 @@ import {
   nodeClassNames,
   walkNodes,
   DEFAULT_LIMITS,
+  type AnyBlockDefinition,
   type BlockDocument,
+  type BlockIsland,
   type BlockNode,
+  type BlockPart,
   type CompiledPageCss,
   type DocumentLimits,
   type MayFetchUrl,
@@ -18,7 +21,11 @@ import {
 } from "@nextlyhq/blocks-engine";
 
 import { withTypographyDefaults } from "./blocks/typography-defaults";
-import type { DocumentReadStages } from "./prepare-document";
+import { prepareDocumentForRead } from "./prepare-document";
+import type {
+  DocumentReadStages,
+  PrepareDocumentArgs,
+} from "./prepare-document";
 import type { BlockResolver } from "./resolver";
 import {
   UNIDENTIFIED_SHARED_INPUTS,
@@ -199,12 +206,162 @@ export function blockBasesFor(
   blocks: BlockResolver,
   stated?: Readonly<Record<string, NodeStyles>>
 ): Record<string, NodeStyles> {
-  const bases: Record<string, NodeStyles> = {};
+  return perUsedType(
+    document,
+    blocks,
+    definition => definition.baseStyles,
+    stated
+  );
+}
+
+/**
+ * The parts of each block type this document draws, keyed by type.
+ *
+ * The same question as {@link blockBasesFor} asked of a different field, and it
+ * goes through the same walk for that reason: two walkers agreeing today drift
+ * apart later, and the drift would be silent — one tier of a block's styles
+ * would keep reaching the sheet while the other stopped, which reads as the
+ * block having declared nothing.
+ */
+export function blockPartsFor(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  stated?: Readonly<Record<string, Readonly<Record<string, BlockPart>>>>
+): Record<string, Readonly<Record<string, BlockPart>>> {
+  return perUsedType(document, blocks, definition => definition.parts, stated);
+}
+
+/**
+ * The islands a document contains, keyed by block type.
+ *
+ * The question `"use client"` cannot answer. A directive is a fact about a
+ * MODULE and is visible to a bundler; a stored page is JSON naming block types,
+ * and this package must answer from the document without importing every block
+ * in the library or inspecting how one was compiled.
+ *
+ * EMPTY means the page needs no JavaScript OF ITS OWN. It does not mean the
+ * page ships no script at all: a host framework has a floor of its own that no
+ * block library can remove, and conflating the two makes the statement
+ * unmeasurable rather than merely optimistic.
+ *
+ * Walks the tree ITSELF rather than through the style tiers' shared reading,
+ * and the divergence is deliberate. Those ask which types COULD appear, because
+ * a rule missing for a row a loop did draw leaves it unstyled. This asks which
+ * will CERTAINLY appear, because naming one that never renders claims a static
+ * page is interactive. The same tree answers the two questions differently, so
+ * collapsing them would have to break one of them.
+ */
+export function islandsFor(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  // The SAME caps the renderer honours. Defaulted, this reads `DEFAULT_LIMITS`
+  // while a site that raised `maxDepth` renders deeper than this walk sees — so
+  // an island the page draws is truncated away here and the caller is told the
+  // page needs less JavaScript than it does. A reader that answers about a page
+  // has to be given the page's own bounds.
+  options: Omit<PrepareDocumentArgs, "resolver"> = {}
+): Record<string, BlockIsland> {
+  // The RENDER-EQUIVALENT tree, not the stored one. A node can be condition
+  // gated, resolve to a placeholder, or belong to a block whose props draw
+  // nothing — in each case the renderer emits no markup for it, and naming its
+  // island tells a caller the page needs JavaScript that never arrives.
+  //
+  // Reused rather than re-derived: this is the sequence the renderer itself
+  // runs, so the two cannot answer differently. Three passes decided separately
+  // is how a gated node's assets stayed on a page whose markup was withheld.
+  const prepared = prepareDocumentForRead(document, {
+    ...options,
+    resolver: blocks,
+  });
+  if (prepared === null) return {};
+  // The preparation deliberately does NOT decide this one: a block declaring
+  // that its props draw nothing is a separate question from a node resolving to
+  // a placeholder, and `prepare-document` says so where it draws the line. So
+  // the drawless test is asked here, through the same helper the style tiers
+  // use — an image still waiting for its picture emits no markup, and an island
+  // among them would otherwise make a static page ask for JavaScript.
+  const drawsNothing = drawlessTestFor(blocks);
+
+  const found: Record<string, BlockIsland> = {};
+  // ITERATIVE, and the depth this walks is the PREPARED tree's rather than the
+  // stored one's. Preparation caps document depth, so a chain of any length —
+  // and a node that contains itself — arrives here already finite. The stack is
+  // what keeps that a property of this function rather than a fact borrowed
+  // from another module: a recursive descent threw `RangeError` on a deep
+  // document before returning any answer, and a reader asking whether a page
+  // needs JavaScript should not be the thing that fails.
+  //
+  // No visited set. With the tree already bounded there is nothing for one to
+  // catch, and a guard whose rejection branch cannot run is memory spent to
+  // look careful.
+  const stack: BlockNode[] = [...prepared.nodes];
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) continue;
+
+    // Its SUBTREE with it, which is what `pruneNodes` does for the same
+    // question: a block that draws nothing never calls `renderSlot`, so nothing
+    // stored beneath it reaches the page either.
+    if (drawsNothing(node)) continue;
+
+    const definition = blocks.get(node.type);
+    const island = definition?.island;
+    if (island !== undefined && found[node.type] === undefined) {
+      found[node.type] = island;
+    }
+    stack.push(...drawnSlots(node, definition));
+  }
+  return found;
+}
+
+/**
+ * The children this node will CERTAINLY draw.
+ *
+ * A slot the block may decline to render cannot say the page needs JavaScript.
+ * Reading a stored document cannot tell whether the block drew it — that is
+ * settled by rendering — so a slot the definition declares conditional is
+ * skipped, which is what `conditionalSlots` requires of anything deriving a
+ * page-level fact without rendering.
+ *
+ * Skipped rather than guessed, and this is the CAUTIOUS direction: a
+ * conditional slot that WAS drawn under-reports one island, while the reverse
+ * tells a caller a page is interactive when nothing on it ever runs.
+ */
+function drawnSlots(
+  node: BlockNode,
+  definition: AnyBlockDefinition | undefined
+): BlockNode[] {
+  const slots = node.slots;
+  if (slots === undefined) return [];
+  const conditional = new Set(definition?.conditionalSlots ?? []);
+  return Object.keys(definition?.slots ?? {})
+    .filter(name => !conditional.has(name))
+    .flatMap(name => slots[name] ?? []);
+}
+
+/**
+ * One reading of "which block types does this tree use", answered for whichever
+ * field the caller names.
+ *
+ * `stated` narrows a supplied record to this tree instead of reading the
+ * resolver, and it is the same walk because it is the same question.
+ */
+function perUsedType<T>(
+  document: BlockDocument,
+  blocks: BlockResolver,
+  read: (definition: AnyBlockDefinition) => T | undefined,
+  stated?: Readonly<Record<string, T>>
+): Record<string, T> {
+  const found: Record<string, T> = {};
   walkNodes(document.nodes, node => {
-    if (bases[node.type] !== undefined) return;
-    const baseStyles =
+    if (found[node.type] !== undefined) return;
+    const definition = blocks.get(node.type);
+    const value =
       stated === undefined
-        ? blocks.get(node.type)?.baseStyles
+        ? definition === undefined
+          ? undefined
+          : read(definition)
         : // OWN properties only, because that is the boundary `compilePageCss`
           // draws: it emits a base for a used type only when
           // `Object.hasOwn(bases, type)` succeeds. A record reached through
@@ -216,9 +373,9 @@ export function blockBasesFor(
           Object.hasOwn(stated, node.type)
           ? stated[node.type]
           : undefined;
-    if (baseStyles !== undefined) bases[node.type] = baseStyles;
+    if (value !== undefined) found[node.type] = value;
   });
-  return bases;
+  return found;
 }
 
 /**
@@ -268,6 +425,11 @@ function compileContextFor(
       storedDocument ?? document,
       blocks,
       styleContext.blockBases
+    ),
+    blockParts: blockPartsFor(
+      storedDocument ?? document,
+      blocks,
+      styleContext.blockParts
     ),
     drawsNothing,
   });

@@ -9,7 +9,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import { JobRegistry, defineJob } from "../job-registry";
+import {
+  JobRegistry,
+  MAX_JOB_SLUG_LENGTH,
+  SWEEP_KEY_PREFIX,
+  defineJob,
+} from "../job-registry";
 import { runJobsPass, sweepDedupeKey } from "../jobs-runner";
 
 function registryWith(...defs: ReturnType<typeof defineJob>[]): JobRegistry {
@@ -41,6 +46,44 @@ const sweeper = defineJob({
   slug: "test:sweep",
   handler: async () => {},
   sweep: true,
+});
+
+describe("a sweep's slug is charged for its dedupe key", () => {
+  it("refuses a sweep slug that would produce an over-long dedupe key", () => {
+    // The two limits are equal (191), so a slug at the maximum yields a key
+    // over it. Caught at definition, where a person is reading the error —
+    // not at enqueue, which runs on a scheduler tick with nobody watching, and
+    // where a refused sweep is deliberately swallowed so it cannot fail a pass.
+    expect(() =>
+      defineJob({
+        slug: "s".repeat(MAX_JOB_SLUG_LENGTH),
+        handler: async () => {},
+        sweep: true,
+      })
+    ).toThrow(/dedupe key is derived from it/);
+  });
+
+  it("accepts the same slug when it is NOT a sweep", () => {
+    // The control. Charging every job type for a prefix only sweeps use would
+    // narrow a limit that works, and would make the case above pass for a
+    // reason unrelated to sweeps.
+    expect(() =>
+      defineJob({
+        slug: "s".repeat(MAX_JOB_SLUG_LENGTH),
+        handler: async () => {},
+      })
+    ).not.toThrow();
+  });
+
+  it("accepts a sweep slug that leaves room for the prefix", () => {
+    expect(() =>
+      defineJob({
+        slug: "s".repeat(MAX_JOB_SLUG_LENGTH - SWEEP_KEY_PREFIX.length),
+        handler: async () => {},
+        sweep: true,
+      })
+    ).not.toThrow();
+  });
 });
 
 describe("a pass keeps its sweeps queued", () => {

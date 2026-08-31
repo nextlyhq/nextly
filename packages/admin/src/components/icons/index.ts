@@ -42,6 +42,7 @@ export {
   Briefcase, // Collection Settings: icon picker
   Building, // Collection Settings: icon picker
   Calendar, // useFields: date picker
+  CalendarClock, // Releases nav: content batched to go live at an instant
   Camera, // Collection Settings: icon picker
   Check,
   CheckCircle2,

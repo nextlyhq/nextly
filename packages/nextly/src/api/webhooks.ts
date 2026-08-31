@@ -37,6 +37,7 @@ import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain"
 import { DRAIN_REQUEST_TIMEOUT_MS } from "../domains/webhooks/deliver";
 import {
   runWebhookDrain,
+  SCHEDULED_DRAIN_BOUNDS,
   type RunWebhookDrainOptions,
   type WebhookDrainDatabase,
 } from "../domains/webhooks/drain-runner";
@@ -161,10 +162,6 @@ function denySessionOnly(
  * `budget + 10s`, comfortably inside a typical serverless window; the round and
  * batch caps are secondary limits on a healthy, fast backlog.
  */
-const DRAIN_MAX_ROUNDS = 10;
-const DRAIN_DELIVER_BATCH = 25;
-const DRAIN_FANOUT_BATCH = 50;
-const DRAIN_MAX_DURATION_MS = 25_000;
 
 /**
  * Authorize a webhook drain trigger.
@@ -223,10 +220,7 @@ export const drainWebhooks = withErrorHandler(
       // Bound the work one scheduler tick performs; the next tick continues.
       // maxDurationMs is the hard bound (stops mid-batch when receivers hang);
       // the shorter timeout caps the single in-flight overrun past it.
-      maxRounds: DRAIN_MAX_ROUNDS,
-      fanOutBatchSize: DRAIN_FANOUT_BATCH,
-      deliverBatchSize: DRAIN_DELIVER_BATCH,
-      maxDurationMs: DRAIN_MAX_DURATION_MS,
+      ...SCHEDULED_DRAIN_BOUNDS,
       requestTimeoutMs: DRAIN_REQUEST_TIMEOUT_MS,
       retention,
     });

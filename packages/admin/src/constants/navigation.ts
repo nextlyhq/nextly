@@ -1,4 +1,5 @@
 import {
+  CalendarClock,
   FileText,
   Image,
   LayoutDashboard,
@@ -36,6 +37,7 @@ export type NavigationCategory =
   | "collections"
   | "singles"
   | "media"
+  | "releases"
   | "translations"
   | "plugins"
   | "settings"
@@ -99,6 +101,21 @@ export type SidebarNavigation = NavigationItem[];
  * Dynamic items (collections, singles, plugins) are rendered by their
  * respective DynamicNav components and are not listed here.
  */
+/**
+ * The grants that reveal the Releases section, as ANY-OF.
+ *
+ * Named because three places gate on it — the nav item, the list route and the
+ * detail route — and they must agree. Assembling or scheduling implies reading:
+ * the three permissions are seeded independently, and the service applies the
+ * same implication, so a role holding only `create` can create a release
+ * through the API and must be able to see the one it just made.
+ */
+export const RELEASE_SECTION_PERMISSIONS = [
+  "read-content-releases",
+  "create-content-releases",
+  "publish-content-releases",
+];
+
 export const SIDEBAR_NAVIGATION: SidebarNavigation = [
   // === MAIN (NIS) ===
   {
@@ -116,6 +133,26 @@ export const SIDEBAR_NAVIGATION: SidebarNavigation = [
     icon: Image,
     category: "media",
     requiredPermission: "read-media",
+  },
+
+  // === RELEASES ===
+  // Beside Media rather than under Settings: a release is editorial work on a
+  // schedule, and Settings is where configuration lives — filing a daily tool
+  // there puts it in the place people visit least.
+  {
+    title: "Releases",
+    href: ROUTES.RELEASES,
+    icon: CalendarClock,
+    category: "releases",
+    // The resource is `content-releases`, NOT `releases`: registering the
+    // shorter name would reserve a word real sites use for content, and "press
+    // releases" is among the most common collections on a corporate site.
+    // Seeded and already listed among the system resources, so this filters
+    // rather than hiding the item from everyone.
+    // Any of the three. Assembling or scheduling implies reading — the grants
+    // are seeded independently, so a role given only `create` would otherwise
+    // be able to create releases through the API and never see one.
+    requiredPermission: RELEASE_SECTION_PERMISSIONS,
   },
 
   // === TRANSLATIONS ===

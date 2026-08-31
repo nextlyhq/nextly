@@ -228,6 +228,14 @@ export class CollectionEntryService extends BaseService {
     routeAuthorized?: boolean;
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
+    /**
+     * Draft/Published filter override (only effective when the collection has
+     * the status lifecycle). Declared rather than merely forwarded: `params`
+     * reaches the query service whole, so an undeclared option travels at
+     * runtime while looking absent to every reader of this signature -- and the
+     * one thing nobody re-checks is an option that appears not to exist.
+     */
+    status?: "published" | "draft" | "all";
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
     return this.queryService.countEntries(params);
   }

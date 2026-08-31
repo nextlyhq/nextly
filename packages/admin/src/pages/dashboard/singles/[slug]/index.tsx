@@ -19,6 +19,8 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
+import { AddToReleaseButton } from "@admin/components/features/releases/AddToReleaseButton";
+import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
   SingleForm,
   type SingleSchema,
@@ -331,12 +333,35 @@ export default function SingleEditPage({
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
       <MeasuredPageFrame>
+        {/* Full width and first, for the reason the entry editor gives. */}
+        <ScheduledReleaseBanner
+          document={
+            slug
+              ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
+              : undefined
+          }
+          onDefaultLocale={!isNonDefaultLocale}
+        />
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
           // expects FieldConfig[] (discriminated). The runtime payload is the
           // same; widening here until the schema layer unifies on FieldConfig.
           schema={schema as unknown as SingleSchema}
           document={document}
+          /* A Single is a release member exactly as a collection entry is — the
+             engine models both and the release detail page links to both — so
+             omitting this control here would leave the Single half reachable
+             only through the API. With the form's own actions, matching the
+             collection editor. */
+          documentActions={
+            <AddToReleaseButton
+              scopeKind="single"
+              scopeSlug={slug ?? ""}
+              entryId={document.id}
+              lifecycleEnabled={schema?.status === true}
+              onDefaultLocale={!isNonDefaultLocale}
+            />
+          }
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}
           onCancel={handleCancel}

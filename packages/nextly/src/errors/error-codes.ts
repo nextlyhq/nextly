@@ -76,6 +76,11 @@ export const NEXTLY_ERROR_STATUS = {
   // Plugin platform — a declared admin.clientConfig that cannot be delivered
   // to the browser, refused at boot rather than serialized mangled.
   NEXTLY_PLUGIN_CLIENT_CONFIG_INVALID: 500,
+  // Plugin platform — a contributed admin widget that cannot be delivered to
+  // the browser. Refused at boot because it is serialized into the ONE
+  // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
+  // fails that request for every admin, not just the widget's own card.
+  NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin platform (P4) — contributes.routes collection (D25).

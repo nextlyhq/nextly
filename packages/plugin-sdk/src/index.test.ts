@@ -31,3 +31,31 @@ describe("@nextlyhq/plugin-sdk", () => {
     });
   });
 });
+
+describe("the dashboard widget surface is reachable from the SDK", () => {
+  // AGENTS.md: a plugin imports only from `@nextlyhq/plugin-sdk` and
+  // `@nextlyhq/ui`, never from core. The widget registry and the source
+  // registry were exported from the `nextly` root alone, so an author
+  // following that rule could not register a widget at all. Asserted through
+  // the SDK's own entry point, for the same reason the `NextlyError` case
+  // above is: importing from core would pass while the stable surface stayed
+  // empty.
+  it("re-exports the registration functions as callable values", async () => {
+    const sdk = await import("./index");
+    expect(typeof sdk.registerWidget).toBe("function");
+    expect(typeof sdk.registerSource).toBe("function");
+  });
+
+  it("re-exports the vocabularies a declaration is checked against", async () => {
+    // The runtime arrays, not just their types: a plugin picking a size or an
+    // op from a list needs the values, and a type-only re-export would compile
+    // and then be `undefined` at runtime.
+    const sdk = await import("./index");
+    expect(sdk.WIDGET_SIZES).toContain("md");
+    expect(sdk.WIDGET_HEIGHTS).toContain("tall");
+    expect(sdk.WIDGET_ARCHETYPES).toContain("metric");
+    expect(sdk.WIDGET_OPS).toContain("count");
+    expect(sdk.WIDGET_SOURCE_KINDS).toContain("collection");
+    expect(sdk.WIDGET_SOURCE_FIELD_TYPES).toContain("string");
+  });
+});

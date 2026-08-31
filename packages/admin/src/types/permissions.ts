@@ -38,6 +38,16 @@ export interface AdminCapabilities {
   canViewSettings: boolean;
   /** Has 'read-webhooks' or the 'update-webhooks' management umbrella */
   canViewWebhooks: boolean;
+  /**
+   * Has 'read-content-releases'.
+   *
+   * A flag of its own because `content-releases` is a SYSTEM resource, so it is
+   * deliberately skipped when the per-collection map is built — and the generic
+   * `action-resource` lookup then finds nothing and answers false. Without this,
+   * a permission that IS held reads as absent and the section disappears for
+   * everyone but a super-admin.
+   */
+  canViewReleases: boolean;
 
   // Per-collection visibility (keyed by collection slug)
   collections: Record<string, CollectionCapabilities>;

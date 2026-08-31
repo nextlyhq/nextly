@@ -22,10 +22,12 @@
  * @module domains/jobs/job-registry
  */
 
+import type { JobInput } from "../../direct-api/types/jobs";
 import { NextlyError } from "../../errors";
 import type { UserContext } from "../collections/services/collection-types";
 
 import type { JobContentApi } from "./job-content-api";
+import { MAX_PORTABLE_KEY_LENGTH, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 
 /** Attempts a job gets before it is given up on. */
 export const DEFAULT_MAX_ATTEMPTS = 5;
@@ -39,7 +41,9 @@ export const DEFAULT_MAX_ATTEMPTS = 5;
  * dialect, rather than accepted at definition and failing only at enqueue time
  * and only on MySQL.
  */
-export const MAX_JOB_SLUG_LENGTH = 191;
+export const MAX_JOB_SLUG_LENGTH = MAX_PORTABLE_KEY_LENGTH;
+
+export { SWEEP_KEY_PREFIX, MAX_SWEEP_SLUG_LENGTH } from "./portable-key";
 
 /** What a handler is told about the run it is in. */
 export interface JobContext {
@@ -68,13 +72,36 @@ export interface JobContext {
    * default.
    */
   content: JobContentApi;
+  /**
+   * The instant the pass running this job intends to stop.
+   *
+   * The runner cannot enforce it. `maxDurationMs` is checked before each CLAIM,
+   * so it bounds how many jobs a pass STARTS and nothing more: once a handler is
+   * running, nothing here can interrupt a promise mid-flight, and a cancellation
+   * the handler did not cooperate with would abandon whatever it had half-done
+   * outside the database.
+   *
+   * So `run-jobs` names two things that bound a running handler — the lease, and
+   * "the handler itself being written to fit a tick". This is what makes the
+   * second one possible. Without it the runner asks handlers to fit a budget it
+   * never tells them, and every handler that wants to comply has to be handed
+   * one out of band, which is a second description of the same number.
+   *
+   * A handler that ignores it is not wrong; most jobs are short. A handler that
+   * walks an unbounded set — every due release, every stale entry — should stop
+   * when this passes and leave the rest, because the queue is durable and the
+   * next tick continues. **Stopping early must DEFER the remainder, never
+   * discharge it:** work that was never attempted produces no failure, and an
+   * absent failure reads as success.
+   */
+  deadline: Date;
 }
 
 export interface JobRetryPolicy {
   maxAttempts: number;
 }
 
-export interface JobDefinition<TInput = unknown> {
+export interface JobDefinition<TInput extends JobInput = JobInput> {
   slug: string;
   handler: (input: TInput, context: JobContext) => Promise<void>;
   retry: JobRetryPolicy;
@@ -90,13 +117,22 @@ export interface JobDefinition<TInput = unknown> {
   sweep: boolean;
 }
 
-export interface JobDefinitionInput<TInput = unknown> {
+export interface JobDefinitionInput<TInput extends JobInput = JobInput> {
   slug: string;
   handler: (input: TInput, context: JobContext) => Promise<void>;
   /** Defaults to {@link DEFAULT_MAX_ATTEMPTS} attempts. */
   retry?: Partial<JobRetryPolicy>;
-  /** Keep one queued at all times; see {@link JobDefinition.sweep}. */
-  sweep?: boolean;
+  /**
+   * Keep one queued at all times; see {@link JobDefinition.sweep}.
+   *
+   * Available only when the handler accepts `null`. A trigger queues a sweep on
+   * its own initiative and has nothing to construct an input from, so it records
+   * `input: null` — and a handler declared to receive `{ cursor: string }` would
+   * be invoked with `null` on every tick, fail, retry and eventually give up. The
+   * conditional type turns that into a compile error at the definition instead of
+   * a job that quietly never succeeds.
+   */
+  sweep?: null extends TInput ? boolean : false;
 }
 
 /**
@@ -108,21 +144,47 @@ export interface JobDefinitionInput<TInput = unknown> {
  * and the natural reading of "no budget" — retry forever — turns a permanently
  * failing job into an infinite loop.
  */
-export function defineJob<TInput = unknown>(
-  input: JobDefinitionInput<TInput>
-): JobDefinition<TInput> {
-  const slug = input.slug.trim();
-  if (slug.length === 0) {
+/**
+ * The one place a job slug is checked, for every path that writes one.
+ *
+ * `defineJob` and `JobsRepository.enqueue` both accept a slug and had drifted:
+ * the definition trimmed and refused an empty one, while the enqueue checked
+ * only the maximum length. So `queue({ task: "" })` wrote a row that no registry
+ * lookup could ever match, and every drain deferred it forever — a queue growing
+ * rows that look pending and are unrunnable.
+ *
+ * Returns the normalised slug rather than a boolean, so a caller cannot validate
+ * one string and then store a different one.
+ */
+export function normalizeJobSlug(slug: string): string {
+  const normalized = slug.trim();
+  if (normalized.length === 0) {
     // The slug is the join between a stored row and the code that runs it, so a
     // blank one stores rows nothing can ever claim.
     throw NextlyError.invalidInput({
       message: "A job type needs a non-empty slug.",
     });
   }
-
-  if (slug.length > MAX_JOB_SLUG_LENGTH) {
+  if (normalized.length > MAX_JOB_SLUG_LENGTH) {
     throw NextlyError.invalidInput({
       message: `A job slug may be at most ${MAX_JOB_SLUG_LENGTH} characters.`,
+      logContext: { slug: normalized, length: normalized.length },
+    });
+  }
+  return normalized;
+}
+
+export function defineJob<TInput extends JobInput = JobInput>(
+  input: JobDefinitionInput<TInput>
+): JobDefinition<TInput> {
+  const slug = normalizeJobSlug(input.slug);
+
+  // A sweep is charged for its own dedupe key here, where the slug is refused
+  // with a message naming the real budget — rather than at enqueue, which runs
+  // on a scheduler tick with nobody watching.
+  if (input.sweep && slug.length > MAX_SWEEP_SLUG_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `A sweep's slug may be at most ${MAX_SWEEP_SLUG_LENGTH} characters, because its dedupe key is derived from it.`,
       logContext: { slug, length: slug.length },
     });
   }
@@ -155,7 +217,16 @@ export function defineJob<TInput = unknown>(
 export class JobRegistry {
   private readonly definitions = new Map<string, JobDefinition<never>>();
 
-  register<TInput>(definition: JobDefinition<TInput>): void {
+  register<TInput extends JobInput>(definition: JobDefinition<TInput>): void {
+    // Keyed by the NORMALISED slug. `JobDefinition` is structural, so a
+    // definition can arrive without having passed through `defineJob`; keying it
+    // verbatim would admit `" acme:export "` under a key no enqueue — which
+    // normalises — could ever look up.
+    const slug = normalizeJobSlug(definition.slug);
+    // Copied only when normalisation actually changed the slug, so a
+    // well-formed definition is stored as the very object handed in and
+    // `get(slug)` returns it unchanged.
+    if (slug !== definition.slug) definition = { ...definition, slug };
     if (this.definitions.has(definition.slug)) {
       throw NextlyError.invalidInput({
         message: `A job type is already registered for "${definition.slug}".`,

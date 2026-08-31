@@ -21,6 +21,34 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { get: (...args: unknown[]) => protectedGet(...args) },
 }));
 
+/**
+ * The provider's THIRD input, and the one the two API mocks above cannot
+ * reach. `BrandingProvider` gates the workspace query on `enabled:
+ * !sessionPending`, so `useAuthSession` decides whether that query is ever
+ * allowed to run — and its real implementation calls `getSession()`, which
+ * issues a genuine `fetch` to `${location.origin}/admin/api/auth/session`
+ * rather than going through `publicApi`. Left unmocked, whether these tests
+ * pass depends on what answers port 3000 on the machine running them: nothing
+ * listening refuses the connection at once and the session settles, while a
+ * dev server that accepts and never answers leaves it pending forever, the
+ * workspace query permanently disabled, and every status here stuck on
+ * `pending`.
+ *
+ * A settled session is supplied so the assertions below are about the two
+ * admin-meta halves, which is what this file covers. The session's own effect
+ * on the status — resolving, signed out, signed in — is covered next door in
+ * `BrandingProvider.session.test.tsx`, which drives it per test.
+ */
+const SETTLED_SESSION = {
+  data: { isSetup: true, isAuthenticated: true },
+  isPending: false,
+};
+
+vi.mock("@admin/hooks/queries/useAuthSession", () => ({
+  useAuthSession: () => SETTLED_SESSION,
+  authSessionKey: ["auth", "session"],
+}));
+
 import {
   BrandingProvider,
   useAppName,

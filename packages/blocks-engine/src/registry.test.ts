@@ -103,6 +103,10 @@ describe("the define-then-register workflow keeps its prop types", () => {
       // call that omits them is not the call a renderer makes.
       renderSlot: () => undefined,
       ctx: undefined,
+      // Required for the same reason: this block declares no parts, so the
+      // answer is empty for every name, and a renderer that could omit it would
+      // leave every block's parts unmarked with nothing to report.
+      partClass: () => "",
     });
     expect(output).toBe("hello reader");
   });
@@ -146,6 +150,108 @@ describe("registration rules", () => {
     expect(getBlock("core/text")?.description).toBe("A test block.");
     expect(getBlockSource("core/text")).toBe("core");
     expect(allBlocks()).toHaveLength(1);
+  });
+
+  it("registers a block that says why it needs JavaScript", () => {
+    // The must-pass control for the rejections below: a gate refusing every
+    // island would pass all of them while making the declaration unusable.
+    registerBlocks([
+      block({
+        name: "core/ticker",
+        island: { reason: "counts down to a date the server cannot know." },
+      } as never),
+    ]);
+    expect(hasBlock("core/ticker")).toBe(true);
+  });
+
+  it("refuses an island that states no reason", () => {
+    // The reason is the whole value of the field. A block that declares
+    // interactivity without saying what it is for records the cost on every
+    // visitor and hides the justification from the next reviewer.
+    for (const island of [{}, { reason: "" }, { reason: "   " }]) {
+      expect(() =>
+        registerBlocks([block({ name: "core/h1", island } as never)])
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*reason/s);
+    }
+  });
+
+  it("refuses an unknown key inside island, as the manifest schema does", () => {
+    // The two gates disagreeing is the failure either exists to prevent:
+    // accepting it here and refusing it during manifest generation lets a
+    // plugin boot successfully and then break `generate`.
+    expect(() =>
+      registerBlocks([
+        block({
+          name: "core/tick2",
+          island: { reason: "counts down.", budgetBytes: 100 },
+        } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*budgetBytes/s);
+  });
+
+  it("refuses an island that is not a record", () => {
+    for (const island of [null, [], true, "yes"]) {
+      expect(() =>
+        registerBlocks([block({ name: "core/h2", island } as never)])
+      ).toThrow(/NEXTLY_BLOCK_INVALID.*island/s);
+    }
+  });
+
+  it("registers a block declaring well-formed parts", () => {
+    // The control every rejection below needs: a gate that refused every parts
+    // record would pass all of them while making the feature unusable.
+    registerBlocks([
+      block({
+        name: "core/captioned",
+        parts: { caption: { baseStyles: {} } },
+      } as never),
+    ]);
+    expect(hasBlock("core/captioned")).toBe(true);
+  });
+
+  it("rejects parts that are not a record, at BOOT rather than at render", () => {
+    // Unchecked, a `null` reaches the compile context and `Object.keys` throws
+    // during page-style resolution — a long way from the definition that caused
+    // it, naming neither the block nor the field.
+    expect(() =>
+      registerBlocks([block({ name: "core/d1", parts: null } as never)])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*parts/s);
+    expect(() =>
+      registerBlocks([block({ name: "core/d2", parts: [] } as never)])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*parts/s);
+  });
+
+  it("rejects a part name the compiler would refuse to emit", () => {
+    // Registration and emission ask the SAME predicate. A name accepted here
+    // and refused there registers a block whose part is silently never styled.
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/e1", parts: { "a--b": {} } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*a--b/s);
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/e2", parts: { Caption: {} } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*Caption/s);
+  });
+
+  it("rejects a part name Object.prototype already owns", () => {
+    // `constructor` passes the slug grammar, and a record cannot store it and
+    // read it back: the lookup answers with the inherited member.
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/f", parts: { constructor: {} } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*constructor/s);
+  });
+
+  it("rejects a part whose declaration is not a record", () => {
+    expect(() =>
+      registerBlocks([
+        block({ name: "core/g", parts: { caption: null } } as never),
+      ])
+    ).toThrow(/NEXTLY_BLOCK_INVALID.*caption/s);
   });
 
   it("rejects a non-namespaced name", () => {

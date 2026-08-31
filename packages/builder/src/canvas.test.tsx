@@ -1195,6 +1195,100 @@ describe("what the canvas reports about the box it got", () => {
     });
   });
 
+  describe("where in the region a box narrower than it sits", () => {
+    /*
+     * Every case here asserts `marginInline`, and it is the whole subject
+     * rather than an incidental of one: measured in a browser, a 912px region
+     * leaves a half-scale box 228px of free space on each side WITH the margin
+     * and 456px on one side without it. The alignment is the only thing that
+     * differs, so nothing else in these cases can carry the assertion.
+     *
+     * The control is not here. "Previewing with no width" — in the box suite
+     * above — requires `marginInline` to be EMPTY, because a box that fills its
+     * region has no free space to distribute and a margin governing nothing
+     * misleads whoever reads the canvas root. That case and these are the two
+     * halves of the same rule, and a change that makes all of them agree has
+     * broken one of them.
+     */
+    it("centres a tier at the scale its author chose, not only where it fits", () => {
+      /*
+       * The tier is 600px in a 912px region either way. FITTING, the canvas
+       * centres it; the moment a scale is chosen the same tier took the branch
+       * below, which set a width and no margin — so touching the zoom control
+       * moved the page to the left edge without changing what it was showing.
+       *
+       * Asserted at 1 deliberately. A defect reported as "zooming out breaks
+       * centring" is really "choosing a scale breaks it", and 1 is the value
+       * that separates the two: at 1 nothing is magnified or shrunk, so a fix
+       * addressing only scales below 1 leaves this case exactly as it was.
+       */
+      const { container } = atWidth(600, { kind: "fixed", scale: 1 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(root.style.width).toBe("600px");
+      expect(root.style.marginInline).toBe("auto");
+    });
+
+    it("keeps that tier centred at a scale below 1", () => {
+      // The reported case. Separate from the one above rather than a second
+      // assertion inside it, because they fail independently: the branch is
+      // shared but a fix guarded on `scale < 1` passes here and not there.
+      const { container } = atWidth(600, { kind: "fixed", scale: 0.5 });
+      region(912);
+
+      const root = rootOf(container);
+      expect(root.style.width).toBe("600px");
+      expect(root.style.marginInline).toBe("auto");
+    });
+
+    it("centres the widest tier when an author zooms out of it", () => {
+      /*
+       * The widest tier requests no width, so the box IS the region — until a
+       * scale is chosen, which pins the width and paints it smaller. That is
+       * the state the editor opens in, so it is where the zoom control is used
+       * most, and it reached a different branch from the case above.
+       */
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={PREVIEWABLE}
+          preview={{ container: "nx-preview-viewport" }}
+          zoom={{ kind: "fixed", scale: 0.5 }}
+        />
+      );
+
+      expect(rootOf(container).style.marginInline).toBe("auto");
+    });
+
+    it("centres a site that previews no viewport at all", () => {
+      // No container name and no declared tiers is the DEFAULT configuration,
+      // so this is the branch most sites take. It carries no preview object at
+      // all, which is why it is reached separately from every case above.
+      const { container } = render(
+        <Canvas
+          document={
+            {
+              formatVersion: 1,
+              kind: "page",
+              nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+            } as never
+          }
+          siteStyles={{ css: "", classes: {} } as never}
+          zoom={{ kind: "fixed", scale: 0.5 }}
+        />
+      );
+
+      expect(rootOf(container).style.marginInline).toBe("auto");
+    });
+  });
+
   /** A canvas previewing, with a reporter the test can read. */
   function measured(onMeasured: (width: number | undefined) => void) {
     return render(
@@ -2236,5 +2330,181 @@ describe("forcing the interaction state the panel is editing", () => {
         previewStateClass(state)
       );
     }
+  });
+});
+
+describe("forcing a state onto a tree React commits over time", () => {
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+        {
+          /*
+           * A block that draws ITS OWN CHILD TWICE, which is what makes one
+           * node id many elements. `core/collection-loop` renders its children
+           * slot once per entry, so this is the shape of a shipping block
+           * rather than an invented one — and it is built here rather than
+           * inserted after the fact so that this case separates "reaches every
+           * copy" from "re-reads when the tree changes". A test that injected
+           * the second copy late would pass on either fix alone.
+           */
+          name: "acme/twice",
+          version: 1,
+          description: "A block that repeats its child.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                key: "one",
+                [NODE_ID_ATTRIBUTE]: "child",
+              }),
+              createElement("div", {
+                key: "two",
+                [NODE_ID_ATTRIBUTE]: "child",
+              })
+            ),
+        },
+      ] as never,
+      { source: "canvas-late-state-test" }
+    );
+  });
+  afterAll(clearBlocks);
+
+  const copiesOf = (id: string) =>
+    Array.from(document.querySelectorAll(`[${NODE_ID_ATTRIBUTE}="${id}"]`));
+
+  it("marks EVERY rendering of the selected node, not the first one found", async () => {
+    /*
+     * A node id is unique in a document and not in the tree drawn from it. The
+     * selection walk already marks every copy primary, so a forced state that
+     * stopped at the first would outline ten rows and preview the hover
+     * appearance on one — which reads as the state being broken.
+     *
+     * Asserted over the whole set rather than on copy two alone, so the case
+     * still separates if the order the copies are found in changes.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "loop", type: "acme/twice", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="child"
+        forcedState="hover"
+      />
+    );
+    await act(async () => undefined);
+
+    const copies = copiesOf("child");
+    expect(copies).toHaveLength(2);
+    for (const copy of copies) {
+      expect(copy.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+      expect(copy.className).toContain(previewStateClass("hover"));
+    }
+  });
+
+  it("marks a node that arrives AFTER the commit the effect ran on", async () => {
+    /*
+     * The Suspense case, driven at the DOM rather than through a real promise:
+     * what the effect can observe is an element carrying the node id being
+     * inserted, and a resolving block is one way that happens. Nothing in the
+     * dependency list moves — same document, same selection, same forced state
+     * — so an effect that ran once and stopped leaves this element unmarked
+     * until an unrelated change happens to run it again.
+     *
+     * The block selected here is the one that does NOT exist at first render,
+     * which is what makes the assertion about arrival rather than about
+     * marking in general.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="late"
+        forcedState="hover"
+      />
+    );
+    await act(async () => undefined);
+    expect(copiesOf("late")).toHaveLength(0);
+
+    const host = document.querySelector(`.${PAGE_ROOT_CLASS}`);
+    expect(host).not.toBeNull();
+    await act(async () => {
+      const arrived = document.createElement("div");
+      arrived.setAttribute(NODE_ID_ATTRIBUTE, "late");
+      host?.appendChild(arrived);
+    });
+
+    const [late] = copiesOf("late");
+    expect(late?.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+    expect(late?.className).toContain(previewStateClass("hover"));
+  });
+
+  it("clears an element that LOSES the node id it was marked for", async () => {
+    /*
+     * A render can move a node id between two elements that both already exist,
+     * changing no child list — which is the attribute-only case this effect
+     * subscribes to, and the one where the element left behind is reachable by
+     * neither the node-id selector nor the page root.
+     *
+     * Asserted on the OLD element rather than on the new one: marking the
+     * arrival is what the case above already covers, and a walk that marks the
+     * arrival while leaving the departure dressed draws two outlines and forces
+     * hover on a block nothing is editing.
+     */
+    render(
+      <Canvas
+        document={
+          {
+            formatVersion: 1,
+            kind: "page",
+            nodes: [{ id: "a", type: "acme/leaf", version: 1, props: {} }],
+          } as never
+        }
+        siteStyles={{ css: "", classes: {} } as never}
+        selectedId="movable"
+        forcedState="hover"
+      />
+    );
+
+    const host = document.querySelector(`.${PAGE_ROOT_CLASS}`);
+    const first = document.createElement("div");
+    const second = document.createElement("div");
+    first.setAttribute(NODE_ID_ATTRIBUTE, "movable");
+    await act(async () => {
+      host?.appendChild(first);
+      host?.appendChild(second);
+    });
+    expect(first.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+    expect(first.className).toContain(previewStateClass("hover"));
+
+    await act(async () => {
+      first.removeAttribute(NODE_ID_ATTRIBUTE);
+      second.setAttribute(NODE_ID_ATTRIBUTE, "movable");
+    });
+
+    expect(second.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
+    expect(first.getAttribute(SELECTED_ATTRIBUTE)).toBeNull();
+    expect(first.className).not.toContain(previewStateClass("hover"));
   });
 });

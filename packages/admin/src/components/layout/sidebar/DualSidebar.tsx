@@ -268,6 +268,23 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const visibleMenuItems = useMemo(
     () =>
       filteredMenuItems.filter(item => {
+        // A slug declared on the entry is a hard gate, ahead of the per-section
+        // cases below: those decide whether a section has anything to SHOW,
+        // which is a different question from whether the reader may see it.
+        //
+        // While the grants are still loading the entry is shown, matching Media
+        // and Settings. The alternative flashes the rail — an item appearing a
+        // moment after the page settles reads as the UI changing its mind, and
+        // the destination refuses on its own anyway.
+        if (item.requiredPermission && !hasPermissionDataPending) {
+          // A LIST is any-of, matching the canonical declaration: that is how an
+          // umbrella permission is written, and treating it as all-of would hide
+          // a section from someone holding one of the grants that reaches it.
+          const needed = Array.isArray(item.requiredPermission)
+            ? item.requiredPermission
+            : [item.requiredPermission];
+          if (!needed.some(slug => hasPermission(slug))) return false;
+        }
         switch (item.id) {
           case "collections":
             return hasCollectionsSection;
@@ -287,6 +304,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
       }),
     [
       filteredMenuItems,
+      hasPermission,
+      hasPermissionDataPending,
       hasCollectionsSection,
       hasSinglesSection,
       pluginsSectionVisible,

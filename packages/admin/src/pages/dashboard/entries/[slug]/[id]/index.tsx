@@ -20,6 +20,8 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { AddToReleaseButton } from "@admin/components/features/releases/AddToReleaseButton";
+import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
   CONTENT_PAGE_MEASURE,
   CONTENT_MEASURE_LENGTH,
@@ -473,6 +475,15 @@ export default function EditEntryPage({
             />
           }
         >
+          {/* A custom edit view replaces the FORM, not the facts about the
+              document. Its editor is as able to save changes into a scheduled
+              release as any other, and omitting the banner here would withhold
+              the warning from precisely the documents a project cared enough
+              about to build a bespoke editor for. */}
+          <ScheduledReleaseBanner
+            document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+            onDefaultLocale={!isNonDefaultLocale}
+          />
           {/* Boxed for the same reason the injection slots are: under the
               measured frame this is a direct child of a CSS grid, and the rule
               that puts a child in the content column can only place a
@@ -526,10 +537,37 @@ export default function EditEntryPage({
             <PluginSlot path={beforeEditPath} props={editInjectionProps} />
           </div>
         )}
+        {/* FULL WIDTH and first, matching the historical-version banner: this
+            is a standing fact about the whole document, and a bar constrained
+            to the content measure reads as a note about the fields under it.
+            It does not touch the per-language staleness markers in the language
+            panel — those answer a different question, and a stale translation
+            inside a scheduled release is exactly where an editor needs both. */}
+        <ScheduledReleaseBanner
+          document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+          onDefaultLocale={!isNonDefaultLocale}
+        />
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
           mode="edit"
+          /* WITH the form's own actions, not in a bar above it. Adding a
+             document to a release is the same kind of act as publishing it, so
+             it belongs in the same cluster — and a full-width bar here ran
+             underneath the sticky side panel, which took both the click and the
+             hover. */
+          documentActions={
+            <AddToReleaseButton
+              scopeKind="collection"
+              scopeSlug={slug}
+              entryId={id}
+              // The same flag the editor's own publish controls read. A release
+              // member performs a publish or unpublish, and the route refuses a
+              // collection whose schema declares no lifecycle.
+              lifecycleEnabled={collection.status === true}
+              onDefaultLocale={!isNonDefaultLocale}
+            />
+          }
           locale={locale}
           onLocaleChange={changeLocale}
           {...(seedFromLocale === undefined ? {} : { seedFromLocale })}

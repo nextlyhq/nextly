@@ -87,6 +87,85 @@ export async function renderButton({
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
 // published types is typed the same as one compiled here. See `./index.ts`.
+/**
+ * What makes a call to action look like one.
+ *
+ * The block renders an `<a>` when it has a destination and a `<button>` when it
+ * does not, and both wear this class, so these declarations have to work for
+ * either element. That is why several of them look like a reset: an anchor
+ * arrives underlined and an inline box, a button arrives with the user agent's
+ * own font rather than the page's, and a default that fixed one would leave the
+ * other visibly different from its twin.
+ *
+ * **Colours are tokens; the geometry is literal.** The same split `core/card`
+ * makes, for the same reason: `color.primary` and `color.background` are in the
+ * default token set and carry per-mode values, so a literal would be wrong in
+ * whichever of light and dark it was not picked for. No radius or button-scale
+ * token is guaranteed to exist, so those stay values.
+ *
+ * `color.background` as the foreground is deliberate rather than convenient. It
+ * is the page's ground, so it sits at the opposite pole from `color.text` in
+ * both modes and therefore contrasts with a saturated `color.primary` in both —
+ * white on blue in light, near-black on light blue in dark. A literal white
+ * would fail the second.
+ *
+ * There is one look rather than a set of variants, because `type` here is the
+ * HTML attribute — `button`, `submit`, `reset` — and not a visual kind. A block
+ * default is keyed by block TYPE, so it could not tell variants apart even if
+ * they existed.
+ */
+const BUTTON_BASE_STYLES = {
+  base: {
+    base: {
+      display: "inline-block",
+      // A user agent gives `<button>` a border box and `<a>` a content box, so
+      // an authored width means two different outer sizes depending only on
+      // whether a destination is set. Measured with `width: 200px` and this
+      // set's own inline padding: the anchor came out 232px and the button
+      // 200px. Stated once here, both are the same control.
+      boxSizing: "border-box",
+      padding: {
+        blockStart: "0.5rem",
+        blockEnd: "0.5rem",
+        inlineStart: "1rem",
+        inlineEnd: "1rem",
+      },
+      backgroundColor: { $token: "color.primary" },
+      color: { $token: "color.background" },
+      borderRadius: "8px",
+      // A user agent draws a border on `<button>` and none on `<a>`, and this
+      // block renders whichever the presence of a destination selects. Left
+      // alone, adding or removing a link changes the control's outline and its
+      // outer size while every other declaration here says the two are one
+      // presentation. Zeroed rather than set: the block states no border, so
+      // the branch that would have inherited one states none either.
+      border: {
+        width: {
+          blockStart: "0",
+          blockEnd: "0",
+          inlineStart: "0",
+          inlineEnd: "0",
+        },
+        style: "none",
+      },
+      textDecoration: "none",
+      // Every inherited typography longhand, not just family and size. A user
+      // agent styles a `<button>` with its own complete font — measured against
+      // an ancestor stating Georgia/20px/700/italic/2 line-height/2px tracking,
+      // the anchor took all six and the button took two, so weight, style,
+      // line-height and letter-spacing all differed. Adding a destination
+      // changed the label's metrics, which is the one thing this set exists to
+      // prevent.
+      fontFamily: "inherit",
+      fontSize: "inherit",
+      fontWeight: "inherit",
+      fontStyle: "inherit",
+      lineHeight: "inherit",
+      letterSpacing: "inherit",
+    },
+  },
+} as const;
+
 export const button = defineBlock<ButtonProps, PageContext>({
   name: "core/button",
   version: 1,
@@ -101,6 +180,7 @@ export const button = defineBlock<ButtonProps, PageContext>({
     category: INTERACTIVE,
     keywords: ["link", "cta", "call to action"],
   },
+  baseStyles: BUTTON_BASE_STYLES,
   props: {
     label: { type: "text" },
     href: { type: "url" },

@@ -11,10 +11,10 @@
  *
  * @module use-rendered-tag
  */
-import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import * as React from "react";
 
 import type { EditorState } from "./editor-state";
+import { observeRenderedTree } from "./rendered-tree";
 import { renderedTagOf } from "./style-subject";
 
 /**
@@ -33,10 +33,10 @@ import { renderedTagOf } from "./style-subject";
  * the effect runs, and an async block resolving to a heading would report its
  * size as unset forever.
  *
- * A `MutationObserver` answers all three, so the dependency list is a
- * scheduling detail rather than a claim about correctness. It watches the
- * subtree for structure and for the node-id attribute itself, since a node's id
- * moving between elements changes the answer without adding or removing any.
+ * Observing the rendered tree answers all three, so the dependency list is a
+ * scheduling detail rather than a claim about correctness. WHAT counts as the
+ * tree changing lives in `rendered-tree`, shared with the canvas's own marker
+ * walk: both ask one question, and two answers to it drift.
  *
  * Read AFTER a commit rather than during a render: the canvas and the inspector
  * re-render together, so while a render body runs the DOM still holds the
@@ -58,20 +58,7 @@ export function useRenderedTag(
     read();
 
     if (canvasRoot == null) return;
-    // `MutationObserver` is absent in some non-browser DOMs, and this hook is
-    // useful without it — the read above still answers for everything that IS a
-    // dependency. Guarded rather than assumed, because throwing here would take
-    // the inspector down on a surface that renders perfectly well otherwise.
-    if (typeof MutationObserver !== "function") return;
-    const observer = new MutationObserver(read);
-    observer.observe(canvasRoot, {
-      childList: true,
-      subtree: true,
-      attributeFilter: [NODE_ID_ATTRIBUTE],
-    });
-    return () => {
-      observer.disconnect();
-    };
+    return observeRenderedTree(canvasRoot, read);
   }, [canvasRoot, selectedId, document]);
   return tag;
 }

@@ -170,6 +170,60 @@ export {
 } from "./plugins/plugin-categories";
 export { pluginAdminSlug } from "./plugins/plugin-slug";
 
+// The admin CONTRIBUTION shapes, published so the admin panel can DERIVE its
+// `/admin-meta` types from the declaration the server serializes rather than
+// restating them. `buildPluginAdminMeta` copies a contributed widget verbatim
+// into that payload, so the two were one shape declared twice -- and they
+// drifted, twice: `component` was optional on one side and required on the
+// other, and the whole declarative half (`title`, `archetype`, `defaultSize`,
+// `query`, `link`, ...) was added here and never on the admin's copy, so admin
+// code reading a property that was present on the wire got a type error.
+//
+// This subpath rather than the root, and that is the load-bearing part. The
+// admin's tsconfig maps the bare `nextly` specifier to `../nextly/src`, so
+// importing from `"nextly"` shadows the package exports and pulls core's whole
+// source tree in behind internal `@nextly/*` aliases that project does not
+// declare. `nextly/config` is not covered by that mapping, so it resolves
+// through the export map to the built declaration bundle the way any consumer's
+// would -- which is what makes the derivation reachable at all.
+//
+// Types only: `export type` carries no runtime binding, so nothing here adds a
+// byte to the config entry point's bundle.
+export type {
+  ComponentPath,
+  HeaderButtonId,
+  PluginAdminWidget,
+} from "./plugins/admin-contributions";
+//
+// Taken from the leaf modules rather than from `domains/widgets/index.ts`: that
+// barrel also carries `executeWidgetQuery`, and through it the Direct API, which
+// is exactly the weight this entry point exists to keep out of a
+// `nextly.config.ts`.
+//
+// `WidgetDefinition` is here for the same derivation reason as the contribution
+// shapes above: `/api/admin-meta/workspace` serializes the registry verbatim, so
+// the admin reads exactly this shape off the wire and restating it there would
+// be one contract declared twice.
+export type {
+  WidgetArchetype,
+  WidgetDefinition,
+  WidgetHeight,
+  WidgetSize,
+} from "./domains/widgets/definition";
+export type { WidgetQuery } from "./domains/widgets/query";
+// A VALUE, and the only one in this block. The admin batches a dashboard's
+// widgets into requests `POST /api/dashboard/query` will accept, so it needs the
+// number that endpoint refuses above -- and a second copy of it on the client
+// would send a batch the server rejects the day the two diverged. Its module has
+// no imports, so taking it here costs a `nextly.config.ts` nothing.
+export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
+export type {
+  WidgetOp,
+  WidgetSourceField,
+  WidgetSourceFieldType,
+  WidgetSourceKind,
+} from "./domains/widgets/sources";
+
 // A code-first `preview.url` built from a `{field}` path. Exported because a
 // package that ships a collection in code — the page builder's `pages`, say —
 // can only express its preview as a function, while the path is what its host

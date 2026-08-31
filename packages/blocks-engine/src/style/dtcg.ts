@@ -584,19 +584,87 @@ export type FamilyPartKind =
   | "keyword"
   | "invalid";
 
-/** Any `var(` call, however written. Case-insensitive: CSS functions are. */
-const VAR_CALL = /\bvar\s*\(/i;
+/**
+ * The opening of a `var(` call. Case-insensitive: CSS functions are.
+ *
+ * The name must TOUCH the paren. CSS produces a function token only when an
+ * identifier is immediately followed by `(`, so `var (--brand)` is an
+ * identifier standing beside a parenthesised block and never a substitution.
+ * Allowing whitespace here read that as dynamic, which is an all-clear for a
+ * declaration the browser drops.
+ */
+const VAR_CALL_SOURCE = `\\bvar\\(`;
 
 /**
- * Every `var(` in the text opening with a custom-property name.
+ * What may follow `var(` for the call to be one CSS will make.
  *
- * `--` is what makes an identifier a custom property, so `var(foo)` is not a
- * substitution CSS will make. Written as "no occurrence of `var(` NOT followed
- * by `--`", because one malformed call spoils the declaration however many
- * well-formed ones sit beside it.
+ * `var()` takes a custom-property name and then either a comma introducing a
+ * fallback or its own closing paren. `--` is what makes an identifier a custom
+ * property, so `var(foo)` substitutes nothing; and a name followed by anything
+ * else — `var(--brand extra)` — is a syntax error rather than a value, so the
+ * terminator is checked as well as the opening.
  */
-const WELL_FORMED_VAR_CALLS =
-  /^(?:(?!\bvar\s*\()[\s\S])*(?:\bvar\s*\(\s*--[^\s,()]*(?:(?!\bvar\s*\()[\s\S])*)*$/i;
+const VAR_CALL_ARGUMENT = new RegExp(
+  `^${CSS_WS}*--(?:[A-Za-z0-9_\\-\\u00a0-\\uffff]|\\\\.)*${CSS_WS}*[,)]`
+);
+
+/**
+ * Whether every parenthesis in the text is closed.
+ *
+ * A `var()` that never closes is a syntax error and the browser drops the
+ * declaration, so checking the first argument alone accepted
+ * `var(--brand, serif` as a working substitution. Escapes are stepped over:
+ * `\(` is a literal character rather than a nesting level, and counting it
+ * would report a balanced value as broken.
+ */
+function parensBalanced(text: string): boolean {
+  let depth = 0;
+  for (let at = 0; at < text.length; at += 1) {
+    const char = text[at];
+    if (char === "\\") {
+      // The escaped character cannot open or close anything.
+      at += 1;
+      continue;
+    }
+    if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      // A close with nothing open is as broken as one that never closes.
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0;
+}
+
+/**
+ * Whether every `var(` in the text opens a call CSS will actually make.
+ *
+ * Answers for the whole text rather than per call, because one malformed call
+ * spoils the declaration however many well-formed ones sit beside it. A
+ * fallback carrying its own `var()` is reached by the same scan, so nesting
+ * needs no separate rule.
+ *
+ * Read against the RAW spelling rather than the decoded name. A custom property
+ * may legitimately carry an escaped space — `var(--brand\ face)` names one
+ * identifier to a browser — and the reader has already turned that escape into
+ * a literal space by the time the name exists, where it is indistinguishable
+ * from the whitespace that ends an argument. The raw text still has the
+ * backslash, so the two cases stay apart.
+ */
+function varCallsWellFormed(text: string): boolean {
+  if (!parensBalanced(text)) return false;
+  const calls = new RegExp(VAR_CALL_SOURCE, "gi");
+  for (let call = calls.exec(text); call !== null; call = calls.exec(text)) {
+    const argument = text.slice(call.index + call[0].length);
+    if (!VAR_CALL_ARGUMENT.test(argument)) return false;
+  }
+  return true;
+}
+
+/** Whether the text carries a `var(` call at all, well-formed or not. */
+function hasVarCall(text: string): boolean {
+  return new RegExp(VAR_CALL_SOURCE, "i").test(text);
+}
 
 /** Classify one family-list item. */
 export function familyPartKind(part: FamilyPart): FamilyPartKind {
@@ -611,8 +679,23 @@ export function familyPartKind(part: FamilyPart): FamilyPartKind {
   // through to the next family. Reading every `var(` as dynamic gave that an
   // all-clear, which is the same shape as reading a dropped declaration as a
   // working keyword.
-  if (VAR_CALL.test(part.name)) {
-    return WELL_FORMED_VAR_CALLS.test(part.name) ? "dynamic" : "invalid";
+  /*
+   * Detection and validation read the SAME text, which is the raw spelling.
+   *
+   * Reading one from the decoded name and the other from the raw text made
+   * them answer about different sets of calls: a function name written with an
+   * escape — `v\61 r(foo)` — is a `var(` to the decoded reader and nothing at
+   * all to the raw one, so every call went unvalidated and the value was
+   * certified as a working substitution.
+   *
+   * The cost of choosing raw is stated rather than hidden: a var() whose own
+   * NAME is escaped is read as invalid instead of dynamic. It is still refused
+   * for the right reason — the grammar below rejects the parentheses — and a
+   * function name spelled with escapes is not a value this format can express
+   * either way.
+   */
+  if (hasVarCall(part.raw)) {
+    return varCallsWellFormed(part.raw) ? "dynamic" : "invalid";
   }
   if (CSS_WIDE_KEYWORDS.has(lower)) return "keyword";
   // Reserved, and not a whole-value keyword: bare `default` names no family and

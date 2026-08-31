@@ -399,3 +399,56 @@ describe("the typographic baseline's origin", () => {
     expect(styleOrigin(elementTrace(), box, askFontSize)).toBeUndefined();
   });
 });
+
+describe("a rule for an element the block draws inside itself", () => {
+  /** A trace carrying one part rule and, optionally, a page value under it. */
+  function partTrace(pageColour?: string): readonly StyleTraceEntry[] {
+    const { trace } = compilePageCss(
+      page(
+        [node({})],
+        pageColour === undefined
+          ? undefined
+          : { styles: styles({ color: pageColour }) }
+      ),
+      {
+        breakpoints: FIXTURE_BREAKPOINTS,
+        blockParts: {
+          "core/box": { caption: { baseStyles: styles({ color: "green" }) } },
+        },
+        trace: true,
+      } as never
+    );
+    expect(trace).toBeDefined();
+    return trace ?? [];
+  }
+
+  it("is not what the NODE is showing for that property", () => {
+    // The part's rule lands on an element the block marks inside its root, so
+    // the node's own box never wears it. Attributed to the node, a style
+    // inspector offers a control that reports a value the browser applies
+    // somewhere else — and editing it would appear to do nothing.
+    const showing = styleOrigin(partTrace(), box, atBase);
+
+    expect(showing).toBeUndefined();
+  });
+
+  it("does not outrank a value that DOES reach the node", () => {
+    // The sharper form: with a page value present, attributing the part would
+    // not merely add a phantom entry, it would replace the true answer.
+    const showing = styleOrigin(partTrace("black"), box, atBase);
+
+    expect(showing?.origin).toEqual({ kind: "page" });
+  });
+
+  it("still reports a block's ROOT default, which does reach the node", () => {
+    // The control both assertions above need. A `blockType` origin rejected
+    // outright would satisfy them while hiding every block default there is.
+    const trace = traceOf(page([node({})]), [], {
+      "core/box": styles({ color: "green" }),
+    });
+
+    const showing = styleOrigin(trace, box, atBase);
+
+    expect(showing?.origin).toEqual({ kind: "blockType", type: "core/box" });
+  });
+});

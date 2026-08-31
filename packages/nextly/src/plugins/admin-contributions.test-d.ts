@@ -52,7 +52,9 @@ expectTypeOf<
   afterEdit?: ComponentPath;
 }>();
 
-// Widgets — RESERVED/type-only (rendering deferred).
+// Widgets — rendered by the dashboard grid, permission-gated. `component` is
+// REQUIRED and `size` is what the grid reads; the declarative fields are
+// optional additions nothing renders from yet.
 expectTypeOf<
   NonNullable<PluginAdminContributions["widgets"]>[number]
 >().toMatchTypeOf<{
@@ -60,7 +62,28 @@ expectTypeOf<
   component: ComponentPath;
   size?: "full" | "half";
   requiredPermission?: string;
+  title?: string;
+  archetype?: string;
+  defaultSize?: string;
 }>();
+
+// `component` is REQUIRED, asserted on its own. A widget without one reaches
+// `PluginSlot` with `path === undefined` and renders an empty cell silently,
+// so the type is the only thing standing between a plugin author and a card
+// that draws nothing. `toMatchTypeOf` against a REQUIRED `component` is an
+// evaluated assertion: were it optional, the match would fail.
+expectTypeOf<
+  NonNullable<PluginAdminContributions["widgets"]>[number]
+>().toMatchTypeOf<{ component: ComponentPath }>();
+
+// The declarative half must stay OPTIONAL while nothing renders from it, or
+// every existing `{ id, component, size }` declaration stops compiling. Read
+// through `Partial`, which a required property would refuse to satisfy.
+expectTypeOf<{
+  id: string;
+  component: ComponentPath;
+  size: "half";
+}>().toMatchTypeOf<NonNullable<PluginAdminContributions["widgets"]>[number]>();
 
 // A plugin can declare contributes.admin via definePlugin.
 definePlugin({

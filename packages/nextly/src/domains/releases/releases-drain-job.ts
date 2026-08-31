@@ -61,29 +61,7 @@ export function createReleasesDrainJob(deps: {
    * than defaulted to silence.
    */
   onOutcome: (result: ApplyDueReleasesResult) => void | Promise<void>;
-  /**
-   * How long one pass may spend STARTING content mutations.
-   *
-   * A drain runs behind a serverless cron tick as often as on a long-lived
-   * process, and a platform kills a tick at a fixed limit. The runner cannot
-   * bound this — `maxDurationMs` is checked before each CLAIM, so it bounds how
-   * many JOBS a pass starts, not how long one handler takes — and `run-jobs`
-   * names the handler being written to fit a tick as what bounds it instead.
-   *
-   * Taken here rather than read from `JobContext`, which carries `user`, `now`
-   * and `content` but no deadline: a handler is asked to fit a tick and told
-   * nothing about how long one is. Wiring a budget per job is the smaller
-   * change; giving every handler its run's deadline is the better one, and it
-   * belongs to the jobs domain rather than here.
-   *
-   * REQUIRED, for the same reason `onOutcome` is: optional, every existing
-   * wiring site keeps the unbounded behaviour this exists to remove, and the
-   * fix is opt-in for exactly the callers who do not know they need it. A
-   * default would be a number invented here for a tick length only the wiring
-   * site knows.
-   */
-  budgetMs: number;
-}): JobDefinition<unknown> {
+}): JobDefinition {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
     // A sweep: a release comes due at an instant with no request attached, so
@@ -94,18 +72,25 @@ export function createReleasesDrainJob(deps: {
     handler: async (_input, context) => {
       const startedAt = Date.now();
       const result = await applyDueReleases({
-        // ONE clock for both halves. The deadline is derived from the runner's
-        // `context.now`, so the comparison has to read the same source — left to
-        // its default, `applyDueReleases` compares a virtual deadline against
-        // real wall time, and a runner clock behind wall time stops after the
-        // first release while one ahead never stops at all.
-        //
-        // `context.now` is the instant the runner is treating as now, so it does
-        // not advance during the pass; elapsed time comes from the real clock
-        // offset by the difference. That keeps a virtual clock authoritative for
-        // WHEN the pass thinks it is, without making the budget unmeasurable.
+        // ONE origin for both sides of the pass's `now() >= deadline` test.
+        // `context.now` is the instant the runner is treating as now and does
+        // not advance during the pass, so elapsed time comes from the real clock
+        // offset by the difference: a virtual clock stays authoritative for WHEN
+        // the pass thinks it is, without making the budget unmeasurable.
         now: () => new Date(context.now.getTime() + (Date.now() - startedAt)),
-        deadline: new Date(context.now.getTime() + deps.budgetMs),
+        // The runner's own deadline, passed through. It needs no arithmetic:
+        // `runJobs` derives it and `context.now` from one clock, and the clock
+        // above is anchored to `context.now`, so the two sides already share an
+        // origin. Re-expressing it as `context.now + (deadline - context.now)`
+        // would cancel to this exact value — a no-op that reads as load-bearing.
+        //
+        // What this DOES replace is a budget of the job's own. `runJobs` checks
+        // its budget before starting a handler and cannot interrupt a running
+        // one, so a drain that begins late has less pass left than any constant
+        // could know: an earlier job that overran leaves this one with seconds
+        // rather than a whole tick, and taking a fixed budget anyway means
+        // outliving the invocation and being killed part-way.
+        deadline: context.deadline,
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({ contentApi: deps.contentApi }),
         runAs: deps.runAs,

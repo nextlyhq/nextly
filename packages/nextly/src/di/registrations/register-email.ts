@@ -89,7 +89,7 @@ export function registerEmailServices(ctx: RegistrationContext): void {
   // EmailTemplateService — CRUD for email templates
   container.registerSingleton<EmailTemplateService>(
     "emailTemplateService",
-    () => new EmailTemplateService(adapter, logger)
+    () => new EmailTemplateService(adapter, logger, config.email?.appName)
   );
 
   // EmailService — orchestration layer for email sending. Depends on

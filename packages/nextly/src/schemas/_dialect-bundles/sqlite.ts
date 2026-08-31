@@ -16,6 +16,7 @@ export { users, accounts, sessions } from "../users/sqlite";
 // `getCoreSchema`, because this bundle is what decides whether the table EXISTS: it is what
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/sqlite";
+export { nextlyDocumentLock } from "../document-lock/sqlite";
 
 export {
   emailVerificationTokens,
