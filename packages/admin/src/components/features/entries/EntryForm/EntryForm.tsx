@@ -148,6 +148,15 @@ export interface EntryFormProps {
    * import keeps this component unaware of releases, which is the same reason
    * `toolbarSlot` exists for plugins.
    */
+  /**
+   * Opens this entry's API response.
+   *
+   * Supplied by the route, which is what knows how to navigate. Without it the
+   * header offers no way to inspect the document at all: `Show JSON` used to
+   * fill that role and the menu now names this instead, so an unwired callback
+   * is a capability removed rather than replaced.
+   */
+  onViewApi?: () => void;
   documentActions?: ReactNode;
   /** Additional CSS classes for the form container */
   /**
@@ -265,6 +274,7 @@ export function EntryForm({
   translation,
   embedded = false,
   className,
+  onViewApi,
   documentActions,
 }: EntryFormProps) {
   /*
@@ -860,6 +870,9 @@ export function EntryForm({
                     and clipped the title's first character on the left and
                     the rail toggle on the right. */}
                             <EntrySystemHeader
+                              {...(onViewApi === undefined
+                                ? {}
+                                : { onViewApi })}
                               mode={mode}
                               titleField={titleField}
                               hasStatus={hasStatus}

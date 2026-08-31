@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  Button,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/ui";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
@@ -15,17 +8,10 @@ import { useFormContext } from "react-hook-form";
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
-  Code,
-  Copy,
-  EyeOff,
   Globe,
   History,
-  Loader2,
-  MoreHorizontal,
   PanelRight,
   PanelRightClose,
-  RotateCcw,
-  Trash2,
 } from "@admin/components/icons";
 import { useCan } from "@admin/hooks/useCan";
 import type { AutosaveStatus } from "@admin/hooks/useDocumentAutosave";
@@ -37,11 +23,12 @@ import { translationCounts } from "../translation-meta";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
+import { documentActions } from "./document-actions";
+import { DocumentActionBar, type ActionBinding } from "./DocumentActionBar";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
 import { PreviewActions } from "./PreviewActions";
-import { ShowJSONDialog } from "./ShowJSONDialog";
 import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
@@ -85,8 +72,15 @@ export interface EntrySystemHeaderProps {
   /** When the server last stored a recovery point, by the server's clock. */
   autosaveLastSavedAt?: Date | null;
   /** Form id for the single submit button when drafts are off. */
-  formId?: string;
   /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
+  /**
+   * The form this header's save submits.
+   *
+   * Load-bearing for a collection with NO status column: that save has always
+   * been a native submit with no intent attached, because every intent-carrying
+   * handler writes a `status` such a collection does not have.
+   */
+  formId?: string;
   entry?: EntryData | null;
   /** Collection slug for the Show JSON dialog. */
   collectionSlug: string;
@@ -189,16 +183,6 @@ export interface EntrySystemHeaderProps {
   onViewApi?: () => void;
 
   /**
-   * Whether to render the built-in Show JSON dropdown item (which uses
-   * `ShowJSONDialog`). Defaults to `true`. Set `false` to suppress the
-   * menu item entirely (e.g. for resources whose API surface isn't
-   * representable as a single GET).
-   *
-   * @default true
-   */
-  showJson?: boolean;
-
-  /**
    * Resource scope passed through to the Show JSON dialog and used by the
    * `View API response` URL display. Determines whether the dialog hits
    * `/api/collections/{slug}/entries/{id}` or `/api/singles/{slug}`.
@@ -265,7 +249,6 @@ export function EntrySystemHeader({
   onDelete,
   onDuplicate,
   onViewApi,
-  showJson = true,
   scope = "collection",
   historyFields,
   historyEnabled,
@@ -395,7 +378,8 @@ export function EntrySystemHeader({
   // affordances to show. Shared with the slug freeze and the public-URL notice,
   // which ask the same question and must not answer it differently.
   const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
-  const isPublishedEdit = mode === "edit" && effectiveStatus === "published";
+  const isPublishedEditState =
+    mode === "edit" && effectiveStatus === "published";
   // A drafts-enabled published entry that has a pending working draft: the
   // server flags the overlay read with `_isWorkingDraft`. This is Payload's
   // "Changed" state — Publish promotes it and the status pill reflects it.
@@ -412,6 +396,133 @@ export function EntrySystemHeader({
   // it — the sibling Save affordances are not either, and the endpoint refuses if
   // the caller truly may not update.
   const showDiscardDraft = hasWorkingDraft && !!onDiscardWorkingDraft;
+  /*
+   * What an author may do to this document, and what each verb runs.
+   *
+   * The two are separate on purpose. `documentVerbs` is about permissions and
+   * document state and is decided in a module with no React in it, so every
+   * combination is testable without rendering a header. The BINDINGS below are
+   * about this form at this instant — mid-submit, invalid, nothing changed —
+   * which only the form knows, and about which handler a verb runs, which only
+   * the host knows.
+   */
+  const documentVerbs = documentActions({
+    mode,
+    hasStatus,
+    draftsEnabled: draftsEnabled === true,
+    status: effectiveStatus === "published" ? "published" : "draft",
+    hasWorkingDraft: hasWorkingDraft === true,
+    readingHistory: isReadingHistory,
+    canPublish: canPublishDocument,
+    canUnpublish: canUnpublishDocument,
+    canDelete: onDelete !== undefined,
+    isDirty: isDirty === true,
+    canDuplicate: onDuplicate !== undefined,
+  });
+
+  /*
+   * Saving means three different calls depending on where the work lands, which
+   * is a fact about this host rather than about the document: a drafts-enabled
+   * published entry stores a working draft and leaves the live one alone, a
+   * drafts-disabled one re-asserts published, and anything else writes a draft.
+   * The model deliberately does not know this — it names ONE verb, `save`, and
+   * the label already says which of the three an author is about to get.
+   */
+  const runSave =
+    isPublishedEditState && draftsEnabled
+      ? onSaveWorkingDraft
+      : isPublishedEditState
+        ? onSaveChanges
+        : onSaveDraft;
+
+  /**
+   * Why a verb cannot run at this instant, or undefined when it can.
+   *
+   * Separate from the model's own reasons, which are about permission and
+   * document state. A save is additionally refused while a submit is in flight,
+   * while the form is invalid, and — on a published document — while nothing has
+   * changed, which is the existing behaviour kept rather than re-decided.
+   */
+  const busyReason = isSubmitting ? "Saving…" : undefined;
+  const invalidReason = isInvalid
+    ? "Fix the errors on this page first."
+    : undefined;
+  const saveReason =
+    busyReason ??
+    invalidReason ??
+    (isPublishedEditState && isDirty !== true
+      ? "Nothing has changed yet."
+      : undefined);
+
+  /*
+   * A collection with NO status column saves by SUBMITTING, with no intent.
+   *
+   * Every save handler a host exposes carries one, and the draft handler writes
+   * `status: "draft"` — a column such a collection does not have, so routing
+   * this through a callback turns both Create and Save into a failing write.
+   * The control has always been a submit button here for that reason.
+   */
+  const saveBinding: ActionBinding | undefined = hasStatus
+    ? runSave === undefined
+      ? undefined
+      : { onSelect: runSave, disabledReason: saveReason }
+    : {
+        // Never called: a submit-typed control does not use it. Present because
+        // a binding is what says the action exists at all.
+        onSelect: () => {},
+        submitForm: formId,
+        disabledReason: saveReason,
+      };
+
+  const actionBindings: Record<string, ActionBinding | undefined> = {
+    ...(saveBinding === undefined ? {} : { save: saveBinding }),
+    ...(onPublish === undefined
+      ? {}
+      : {
+          publish: {
+            onSelect: onPublish,
+            disabledReason: busyReason ?? invalidReason,
+          },
+        }),
+    ...(onDuplicate === undefined
+      ? {}
+      : { duplicate: { onSelect: onDuplicate, disabledReason: busyReason } }),
+    ...(onViewApi === undefined ? {} : { "view-api": { onSelect: onViewApi } }),
+    ...(showDiscardDraft
+      ? {
+          "discard-draft": {
+            onSelect: () => setDiscardDraftOpen(true),
+            disabledReason: busyReason,
+          },
+        }
+      : {}),
+    ...(onCancel === undefined
+      ? {}
+      : {
+          "discard-changes": {
+            // Says so before leaving: this action IS the answer to the
+            // unsaved-changes question, so being asked it again reads as a
+            // warning rather than as the confirmation just given.
+            onSelect: () => {
+              leaveWithoutWarning();
+              onCancel();
+            },
+            disabledReason: busyReason,
+          },
+        }),
+    ...(onUnpublish === undefined
+      ? {}
+      : {
+          unpublish: {
+            onSelect: () => setUnpublishOpen(true),
+            disabledReason: busyReason,
+          },
+        }),
+    ...(onDelete === undefined
+      ? {}
+      : { delete: { onSelect: onDelete, disabledReason: busyReason } }),
+  };
+
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -576,218 +687,26 @@ export function EntrySystemHeader({
                   localeCount: counts.total,
                 })}
           />
-          {/* No save affordances while a past version is on screen. They act on
-            the live document, which is not what is being read — an editor
-            offered "Save" over a historical page has been invited to make a
-            decision about something they cannot see. Restoring is offered
-            instead, from the banner over the version itself. */}
-          {isReadingHistory ? null : hasStatus && isPublishedEdit ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isSubmitting || isInvalid || !isDirty}
-                // On a drafts-enabled collection a save on a published entry
-                // stores a working draft (live untouched); otherwise it re-asserts
-                // published, keeping the lifecycle unchanged.
-                onClick={draftsEnabled ? onSaveWorkingDraft : onSaveChanges}
-                data-status={
-                  draftsEnabled ? "save-working-draft" : "save-changes"
-                }
-              >
-                {isSubmitting && (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                )}
-                {draftsEnabled ? "Save" : "Save changes"}
-              </Button>
-              {/* Promote the pending working draft to live. Shown only when one
-                exists — a fully-published entry has nothing to promote. */}
-              {hasWorkingDraft && canPublishDocument && (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={isSubmitting || isInvalid}
-                  onClick={onPublish}
-                  title="Publish"
-                  data-status="published"
-                >
-                  {isSubmitting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Globe className="h-3.5 w-3.5" />
-                  )}
-                  <ToolbarLabel priority="lifecycle">Publish</ToolbarLabel>
-                </Button>
-              )}
-              {canUnpublishDocument && (
-                <Button
-                  type="button"
-                  // Keep Publish the sole primary action when a draft is pending;
-                  // otherwise Unpublish stays the primary (published-only) action.
-                  variant={hasWorkingDraft ? "outline" : "default"}
-                  size="sm"
-                  disabled={isSubmitting}
-                  onClick={() => setUnpublishOpen(true)}
-                  title="Unpublish"
-                  data-status="unpublish"
-                >
-                  <EyeOff className="h-3.5 w-3.5" />
-                  <ToolbarLabel priority="lifecycle">Unpublish</ToolbarLabel>
-                </Button>
-              )}
-            </>
-          ) : hasStatus ? (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={isSubmitting || isInvalid}
-                onClick={onSaveDraft}
-                data-status="draft"
-              >
-                {isSubmitting && (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                )}
-                Save Draft
-              </Button>
-              {canPublishDocument && (
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={isSubmitting || isInvalid}
-                  onClick={onPublish}
-                  title="Publish"
-                  data-status="published"
-                >
-                  {isSubmitting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Globe className="h-3.5 w-3.5" />
-                  )}
-                  <ToolbarLabel priority="lifecycle">Publish</ToolbarLabel>
-                </Button>
-              )}
-            </>
-          ) : (
-            <Button
-              type="submit"
-              form={formId}
-              size="sm"
-              disabled={isSubmitting || isInvalid}
-            >
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Saving…
-                </>
-              ) : mode === "create" ? (
-                "Create"
-              ) : (
-                "Save"
-              )}
-            </Button>
-          )}
+          {/*
+            Every document verb, drawn where the model said each belongs.
 
-          {/* Single consolidated More menu — hidden entirely in create mode.
-            Why: in create mode the entry doesn't exist server-side yet, so
-            Duplicate / Show JSON / View API / Delete have nothing to act on,
-            and Discard changes is redundant with navigating away. Once the
-            entry is persisted (mode === "edit"), the full action set
-            appears. Resolves item 11 of 07-admin-bugs-feedback (PR-8). */}
-          {showEditMenuItems && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="px-2"
-                  aria-label="More actions"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {showDiscardDraft && (
-                  <DropdownMenuItem
-                    onClick={() => setDiscardDraftOpen(true)}
-                    disabled={isSubmitting}
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                    Discard draft
-                  </DropdownMenuItem>
-                )}
-                {isDirty && onCancel && (
-                  <DropdownMenuItem
-                    // Says so before leaving: this action IS the answer to the
-                    // unsaved-changes question, so being asked it again reads as
-                    // a warning rather than as the confirmation just given.
-                    onClick={() => {
-                      leaveWithoutWarning();
-                      onCancel();
-                    }}
-                    disabled={isSubmitting}
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                    Discard changes
-                  </DropdownMenuItem>
-                )}
-                {onDuplicate && (
-                  <>
-                    {(showDiscardDraft || (isDirty && onCancel)) && (
-                      <DropdownMenuSeparator />
-                    )}
-                    <DropdownMenuItem
-                      onClick={onDuplicate}
-                      disabled={isSubmitting}
-                    >
-                      <Copy className="h-3.5 w-3.5" />
-                      Duplicate
-                    </DropdownMenuItem>
-                  </>
-                )}
-                {showJson && (
-                  <ShowJSONDialog
-                    scope={scope}
-                    collectionSlug={collectionSlug}
-                    /* Why: collection scope needs the entry id to build
-                     /api/collections/{slug}/entries/{id}; single scope is
-                     keyed only by slug so entryId is unused. The outer
-                     showEditMenuItems gate guarantees entry?.id exists
-                     for the collection branch. */
-                    entryId={scope === "single" ? undefined : entry.id}
-                    trigger={
-                      <DropdownMenuItem onSelect={e => e.preventDefault()}>
-                        <Code className="h-3.5 w-3.5" />
-                        Show JSON
-                      </DropdownMenuItem>
-                    }
-                  />
-                )}
-                {onViewApi && (
-                  <DropdownMenuItem onClick={onViewApi}>
-                    <Code className="h-3.5 w-3.5" />
-                    View API response
-                  </DropdownMenuItem>
-                )}
-                {onDelete && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={onDelete}
-                      disabled={isSubmitting}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Delete
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+            One control leads and the rest are demoted, which the header could
+            not express while each button decided its own placement in JSX: a
+            published document with a pending draft drew Save, Publish and
+            Unpublish at equal weight, and Unpublish sat one slip from Publish.
+
+            No save affordances survive a historical view. They act on the live
+            document, which is not what is being read — an editor offered "Save"
+            over a past version has been invited to decide about something they
+            cannot see. Restoring is offered instead, from the banner over the
+            version itself. The model states that rule once, for every action,
+            rather than each control testing `isReadingHistory` for itself.
+          */}
+          <DocumentActionBar
+            actions={documentVerbs}
+            bindings={actionBindings}
+            pending={isSubmitting}
+          />
 
           {/* Rail toggle — far right, separated by a thin divider */}
           {onToggleRail && (
