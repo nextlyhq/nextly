@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/blocks-react",
-  "version": "0.0.2-alpha.61",
+  "version": "0.0.2-alpha.62",
   "description": "The React Server Component renderer for Nextly block documents, usable with or without the CMS.",
   "license": "MIT",
   "repository": {

@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/eslint-plugin",
-  "version": "0.0.2-alpha.61",
+  "version": "0.0.2-alpha.62",
   "description": "ESLint rules that keep Nextly admin UI on the design-token system — for first-party packages and for plugins built by anyone else.",
   "license": "MIT",
   "repository": {
