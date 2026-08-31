@@ -1851,13 +1851,11 @@ export class CollectionBulkService extends BaseService {
       // (not just those processed before the abort) and surface the batch error,
       // so a caller is not told 0 succeeded / 1 failed for a 3-id request.
       const rolledBackCount = state.successful;
-      if (rolledBackCount > 0) {
-        this.logger.warn("Bulk delete rolled back", {
-          collectionName: params.collectionName,
-          successfulBeforeRollback: rolledBackCount,
-          error: detailedErrorMessage(error),
-        });
-      }
+      this.logger.warn("Bulk delete rolled back", {
+        collectionName: params.collectionName,
+        successfulBeforeRollback: rolledBackCount,
+        error: detailedErrorMessage(error),
+      });
       state.successful = 0;
       state.ids = [];
       state.failed = ids.length;

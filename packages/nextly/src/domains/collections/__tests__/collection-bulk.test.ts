@@ -1219,5 +1219,26 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       expect(result.errors[0].error).toContain("Entry at index 2 failed");
       expect(result.errors[0].error).not.toContain("index 1");
     });
+
+    it("delete rollback emits an operator warning on the first item failure", async () => {
+      vi.spyOn(
+        CollectionMutationService.prototype,
+        "deleteSingleEntryInTransaction"
+      ).mockRejectedValue(new Error("driver connection dropped"));
+
+      await service.deleteEntries({ collectionName: "posts" }, [
+        "id-0",
+        "id-1",
+      ]);
+
+      expect(silentLogger.warn).toHaveBeenCalledWith(
+        "Bulk delete rolled back",
+        expect.objectContaining({
+          collectionName: "posts",
+          successfulBeforeRollback: 0,
+          error: "driver connection dropped",
+        })
+      );
+    });
   });
 });
