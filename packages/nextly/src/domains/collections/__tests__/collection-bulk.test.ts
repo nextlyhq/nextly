@@ -931,9 +931,11 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
         it("counts a stop-on-error returned failure once", async () => {
           // Only the first item is scripted; the abort happens before the
           // second runs (the mock's fallback covers an unexpected call).
-          scriptWorker(op, [committedThenFailed("nope")]);
+          const workerSpy = scriptWorker(op, [committedThenFailed("nope")]);
           const result = await op.self({ stopOnError: true });
 
+          expect(workerSpy).toHaveBeenCalledTimes(1);
+          expect(result.successful).toBe(0);
           if (op.name === "deleteEntries") {
             // Delete rebuilds the accounting: one error per requested id,
             // failed equals the requested count.
@@ -1118,7 +1120,7 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           it("delete rollback on commit failure reports commit error instead of earlier soft failure", async () => {
             scriptWorker(op, [
               okFor(op, 0),
-              new Error("non-aborting soft failure"),
+              committedThenFailed("non-aborting soft failure"),
             ]);
             const origTx = mockAdapter.transaction;
             mockAdapter.transaction = vi.fn(async (cb: any) => {
