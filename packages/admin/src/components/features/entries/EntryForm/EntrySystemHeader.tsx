@@ -29,7 +29,7 @@ import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
 import { PreviewActions } from "./PreviewActions";
-import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
+import { TOOLBAR_CONTAINER } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -277,22 +277,6 @@ export function EntrySystemHeader({
     getLocale,
   } = useLocalization();
   const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
-  /*
-   * A declared label is used VERBATIM, not built into a sentence.
-   *
-   * `previewLabel` is a complete button label, not a noun: collections
-   * legitimately name one "View page", and "Show View page" is not English.
-   * Where the author supplied nothing there is no such risk and the control
-   * keeps its own wording, which says what the click will do.
-   *
-   * Losing "Show"/"Hide" for a declared label costs nothing that is not carried
-   * elsewhere — `aria-pressed` states it for assistive technology and the
-   * variant states it visually, which is how a toggle button reports itself.
-   */
-  const previewToggleLabel =
-    previewLabel ?? (previewPaneOpen ? "Hide preview" : "Show preview");
-  const previewToggleTitle =
-    previewLabel ?? (previewPaneOpen ? "Hide the preview" : "Show the preview");
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -616,40 +600,24 @@ export function EntrySystemHeader({
             minting a link and opening a preview both act on what is already
             saved, so a submit in flight is a race with them and not merely a
             busy form. */}
+          {/* ONE control for the preview, not three. The pane toggle used to
+            sit beside this looking like a second preview button, with opening
+            and copying already sharing a menu of their own — three of the
+            header's controls for one idea. */}
           <PreviewActions
             size="sm"
             isPreviewAvailable={isPreviewAvailable}
             {...(onPreview === undefined ? {} : { onPreview })}
             {...(previewLabel === undefined ? {} : { previewLabel })}
+            {...(onTogglePreviewPane === undefined
+              ? {}
+              : { onTogglePreviewPane })}
+            previewPaneOpen={previewPaneOpen}
             isLinkAvailable={isLinkAvailable}
             {...(onCopyLink === undefined ? {} : { onCopyLink })}
             isCopyingLink={isCopyingLink}
             disabled={isSubmitting}
           />
-          {/* The pane toggle, beside the preview actions rather than inside
-              them: `PreviewActions` decides its own shape from which of OPEN
-              and COPY are available, and a third action would make that a
-              three-way decision for a control whose whole design is that it
-              collapses to one button when only one thing can be done.
-
-              Offered only where a pane exists to open — an embedded editor in
-              a modal passes no handler and gets no control. */}
-          {onTogglePreviewPane !== undefined && (
-            <Button
-              type="button"
-              variant={previewPaneOpen ? "secondary" : "ghost"}
-              size="sm"
-              onClick={onTogglePreviewPane}
-              disabled={isSubmitting}
-              aria-pressed={previewPaneOpen}
-              title={previewToggleTitle}
-            >
-              <PanelRight className="h-4 w-4" aria-hidden="true" />
-              <ToolbarLabel priority="secondary">
-                {previewToggleLabel}
-              </ToolbarLabel>
-            </Button>
-          )}
           {/* Sits with the actions rather than beside the title: it reports on
             the same work the save buttons act on, and reads as status for that
             cluster.
