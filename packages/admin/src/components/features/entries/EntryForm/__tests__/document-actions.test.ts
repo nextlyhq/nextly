@@ -96,10 +96,37 @@ describe("exactly one action leads", () => {
 });
 
 describe("the action that leads, per state", () => {
-  it("is Create while the document does not exist yet", () => {
-    expect(
-      actionsAt(documentActions(state({ mode: "create" })), "primary")[0]
-    ).toMatchObject({ id: "create", label: "Create" });
+  it("is Create only where there is no lifecycle to choose from", () => {
+    /*
+     * "Create" is the word for a collection with no publish state: one verb,
+     * and the document does not exist yet. A collection that HAS a lifecycle
+     * offers both from the start, so Create is the wrong word there — the case
+     * below.
+     */
+    const actions = documentActions(
+      state({ mode: "create", hasStatus: false })
+    );
+    expect(actionsAt(actions, "primary")[0]).toMatchObject({
+      id: "save",
+      label: "Create",
+    });
+    expect(actionsAt(actions, "toolbar")).toEqual([]);
+  });
+
+  it("offers Publish AND a draft save while creating in a lifecycle collection", () => {
+    /*
+     * Taken from the behaviour the header already had: creating in a collection
+     * with a publish state has always offered both, and dropping one would take
+     * away the ability to begin a document without publishing it.
+     */
+    const actions = documentActions(state({ mode: "create", hasStatus: true }));
+    expect(actionsAt(actions, "primary")[0]).toMatchObject({
+      id: "publish",
+      label: "Publish",
+    });
+    expect(actionsAt(actions, "toolbar").map(a => a.label)).toEqual([
+      "Save draft",
+    ]);
   });
 
   it("is Publish on a draft, with saving offered beside it", () => {
@@ -129,15 +156,38 @@ describe("the action that leads, per state", () => {
   });
 
   it("is Save on a clean live document, which has nothing to publish", () => {
-    const actions = documentActions(
-      state({ status: "published", hasWorkingDraft: false })
+    /*
+     * The WORD depends on where the work goes, a distinction the editor already
+     * drew and this keeps: with drafts on it lands in a draft, so "Save"; with
+     * drafts off it goes straight to readers, so "Save changes" says what will
+     * happen. Both are asserted, because a model ignoring `draftsEnabled` would
+     * pass whichever one it happened to hard-code.
+     */
+    const withDrafts = documentActions(
+      state({
+        status: "published",
+        hasWorkingDraft: false,
+        draftsEnabled: true,
+      })
     );
-    expect(actionsAt(actions, "primary")[0]).toMatchObject({
+    expect(actionsAt(withDrafts, "primary")[0]).toMatchObject({
+      id: "save",
+      label: "Save",
+    });
+    // And nothing joins it in the toolbar: there is no second act here.
+    expect(actionsAt(withDrafts, "toolbar")).toEqual([]);
+
+    const withoutDrafts = documentActions(
+      state({
+        status: "published",
+        hasWorkingDraft: false,
+        draftsEnabled: false,
+      })
+    );
+    expect(actionsAt(withoutDrafts, "primary")[0]).toMatchObject({
       id: "save",
       label: "Save changes",
     });
-    // And nothing joins it in the toolbar: there is no second act here.
-    expect(actionsAt(actions, "toolbar")).toEqual([]);
   });
 
   it("is Save for a collection with no publish lifecycle at all", () => {

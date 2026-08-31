@@ -117,35 +117,70 @@ const HISTORY_REASON =
  * - PUBLISHED AND CLEAN, or a collection with no lifecycle at all, saving is
  *   all there is.
  */
+const PRIMARY_RULES: readonly {
+  applies: (state: DocumentActionState) => boolean;
+  build: (state: DocumentActionState) => { id: string; label: string };
+}[] = [
+  /*
+   * A collection with NO lifecycle has exactly one verb, and its word depends
+   * only on whether the document exists yet.
+   */
+  {
+    applies: state => !state.hasStatus,
+    build: state => ({
+      id: "save",
+      label: state.mode === "create" ? "Create" : "Save",
+    }),
+  },
+  /*
+   * PUBLISHED WITH PENDING EDITS: publishing those edits is the act, and the
+   * label says so rather than repeating "Publish" at a document already live,
+   * where the shorter word reads as a no-op.
+   */
+  {
+    applies: state => isPublishedEdit(state) && state.hasWorkingDraft,
+    build: () => ({ id: "publish", label: "Publish changes" }),
+  },
+  /*
+   * PUBLISHED AND CLEAN: saving is all there is. "Save" where drafts are
+   * enabled, because the work lands in a draft rather than in front of readers,
+   * and "Save changes" where it goes straight out — a distinction the editor
+   * already drew and worth keeping.
+   */
+  {
+    applies: isPublishedEdit,
+    build: state => ({
+      id: "save",
+      label: state.draftsEnabled ? "Save" : "Save changes",
+    }),
+  },
+];
+
+/**
+ * A DRAFT, or a document being created in a collection that HAS a lifecycle:
+ * its purpose is to become published, so Publish leads and saving is the
+ * quieter companion beside it — the ranking the block editor and Sanity use.
+ */
+const PRIMARY_FALLBACK = { id: "publish", label: "Publish" };
+
+/**
+ * The one action an author is most likely reaching for, given the state.
+ *
+ * Derived rather than chosen at each call site, which is what stops two
+ * controls both claiming to be the main one. A TABLE for the same reason the
+ * built-ins are one: written as branches this reached a complexity the gate
+ * refuses, and the order of the rules — which IS the rule — was buried in the
+ * order the `if`s happened to be typed.
+ *
+ * FIRST MATCH WINS, so the rows read as "the most specific situation first".
+ */
 function primaryAction(state: DocumentActionState): DocumentAction {
+  const matched = PRIMARY_RULES.find(rule => rule.applies(state));
+  const { id, label } = matched?.build(state) ?? PRIMARY_FALLBACK;
   const blocked = state.readingHistory ? HISTORY_REASON : undefined;
-  if (state.mode === "create") {
-    return withReason(
-      { id: "create", label: "Create", placement: "primary" },
-      blocked
-    );
-  }
-  if (!state.hasStatus) {
-    return withReason(
-      { id: "save", label: "Save", placement: "primary" },
-      blocked
-    );
-  }
-  if (state.status === "published" && state.hasWorkingDraft) {
-    return withReason(
-      { id: "publish", label: "Publish changes", placement: "primary" },
-      blocked ?? publishReason(state)
-    );
-  }
-  if (state.status === "published") {
-    return withReason(
-      { id: "save", label: "Save changes", placement: "primary" },
-      blocked
-    );
-  }
   return withReason(
-    { id: "publish", label: "Publish", placement: "primary" },
-    blocked ?? publishReason(state)
+    { id, label, placement: "primary" },
+    blocked ?? (id === "publish" ? publishReason(state) : undefined)
   );
 }
 
@@ -200,11 +235,26 @@ interface ActionRule {
   mutates: boolean;
 }
 
-const isPublishedEdit = (s: DocumentActionState): boolean =>
-  s.mode === "edit" && s.hasStatus && s.status === "published";
+/**
+ * A FUNCTION declaration, not a const arrow, and that is load-bearing.
+ *
+ * Both action tables reference this at module-evaluation time, and a `const`
+ * initialised after them throws `Cannot access before initialization` the
+ * instant the module is imported. Declared this way it hoists, so the tables
+ * may sit wherever they read best rather than wherever the initialiser order
+ * permits.
+ *
+ * Worth stating because nothing static catches it: type-checking, linting and
+ * the complexity gate all passed on the broken arrangement — only running the
+ * module found it.
+ */
+function isPublishedEdit(s: DocumentActionState): boolean {
+  return s.mode === "edit" && s.hasStatus && s.status === "published";
+}
 
-const permissionReason = (verb: string): string =>
-  `You do not have permission to ${verb} in this collection.`;
+function permissionReason(verb: string): string {
+  return `You do not have permission to ${verb} in this collection.`;
+}
 
 /**
  * The built-in actions, in the order a surface presents them.
@@ -227,13 +277,16 @@ const BUILT_IN_ACTIONS: readonly ActionRule[] = [
     mutates: true,
   },
   /*
-   * A DRAFT keeps its save in the toolbar for the same reason from the other
-   * side: Publish leads, and an author who is not ready for readers still needs
-   * somewhere to put the work.
+   * A DRAFT — or a document being created where a lifecycle exists — keeps its
+   * save in the toolbar for the same reason from the other side: Publish leads,
+   * and an author not ready for readers still needs somewhere to put the work.
+   * Creating is included because a collection with a lifecycle has always
+   * offered both from the start; dropping one would take away the ability to
+   * begin a document without publishing it.
    */
   {
     id: "save",
-    applies: s => s.mode === "edit" && s.hasStatus && s.status === "draft",
+    applies: s => s.hasStatus && (s.mode === "create" || s.status === "draft"),
     label: () => "Save draft",
     placement: "toolbar",
     mutates: true,
