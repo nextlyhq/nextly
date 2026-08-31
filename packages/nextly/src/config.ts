@@ -199,8 +199,14 @@ export type {
 // barrel also carries `executeWidgetQuery`, and through it the Direct API, which
 // is exactly the weight this entry point exists to keep out of a
 // `nextly.config.ts`.
+//
+// `WidgetDefinition` is here for the same derivation reason as the contribution
+// shapes above: `/api/admin-meta/workspace` serializes the registry verbatim, so
+// the admin reads exactly this shape off the wire and restating it there would
+// be one contract declared twice.
 export type {
   WidgetArchetype,
+  WidgetDefinition,
   WidgetHeight,
   WidgetSize,
 } from "./domains/widgets/definition";

@@ -11,7 +11,11 @@
  * @module components/features/widgets/resolve-widgets
  */
 
-import type { PluginMetadata, PluginWidgetMeta } from "@admin/types/branding";
+import type {
+  PluginMetadata,
+  PluginWidgetMeta,
+  RegisteredWidgetMeta,
+} from "@admin/types/branding";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { legacySizeToWidgetSize } from "./sizes";
@@ -84,22 +88,87 @@ function resolveOne(
   };
 }
 
-/** The visible widgets, in declaration order, each id appearing once. */
+/**
+ * One REGISTERED widget as the grid renders it, or `undefined` when the user
+ * may not see it.
+ *
+ * Separate from `resolveOne` above rather than folded into it, because the two
+ * inputs are different contracts rather than two spellings of one. A
+ * contribution is almost entirely optional and needs every default that
+ * function supplies; a registered definition passed `validateWidgetDefinition`,
+ * which requires the title, the archetype and the size, requires a query for
+ * every data archetype and a component for `custom`, and forbids each where it
+ * does not belong. Nothing here has a default to invent, and giving it one
+ * would quietly accept a definition the registry would have refused.
+ *
+ * The permission gate IS shared, and deliberately: a denied widget's query must
+ * stay out of the batch whichever channel declared it.
+ */
+function resolveRegistered(
+  meta: RegisteredWidgetMeta,
+  hasPermission: (permission: string) => boolean
+): DashboardWidget | undefined {
+  if (meta.requiredPermission && !hasPermission(meta.requiredPermission)) {
+    return undefined;
+  }
+
+  return {
+    id: meta.id,
+    title: meta.title,
+    description: meta.description,
+    icon: meta.icon,
+    archetype: meta.archetype,
+    size: meta.defaultSize,
+    query: meta.query,
+    component: meta.component,
+    link: meta.link,
+  };
+}
+
+/**
+ * The visible widgets, each id appearing once: contributions in declaration
+ * order, then registrations.
+ *
+ * BOTH channels, because they are two ways into the same grid and neither
+ * subsumes the other. `contributes.admin.widgets` is declarative and travels
+ * with the plugin's config; `registerWidget` is the imperative API the widget
+ * registry exists for. Reading only the first left an app that used the public
+ * registration API invisible to the renderer built around that registry.
+ *
+ * Contributions FIRST, so an id declared in both keeps the card the dashboard
+ * already drew for it. An app that worked around the gap by declaring a
+ * registered widget twice therefore sees no change, and the registry only ever
+ * ADDS what was previously missing.
+ */
 export function resolveDashboardWidgets(
   plugins: PluginMetadata[] | undefined,
+  registered: RegisteredWidgetMeta[] | undefined,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget[] {
-  // Widget ids are plugin-local, so two plugins can ship the same one. The id
-  // is what keys a batch result back to its card, so a duplicate would hand
-  // both widgets the same slot -- one of them showing the other's number, with
-  // nothing visibly wrong. First declaration wins and the rest are dropped.
+  // Widget ids are plugin-local, so two plugins can ship the same one -- and a
+  // registration can collide with a contribution. The id is what keys a batch
+  // result back to its card, so a duplicate would hand both widgets the same
+  // slot -- one of them showing the other's number, with nothing visibly wrong.
+  // First declaration wins and the rest are dropped.
   const seen = new Set<string>();
 
-  return declaredWidgets(plugins).flatMap(meta => {
-    if (seen.has(meta.id)) return [];
-    const widget = resolveOne(meta, hasPermission);
+  const take = (
+    id: string,
+    resolve: () => DashboardWidget | undefined
+  ): DashboardWidget[] => {
+    if (seen.has(id)) return [];
+    const widget = resolve();
     if (!widget) return [];
-    seen.add(meta.id);
+    seen.add(id);
     return [widget];
-  });
+  };
+
+  return [
+    ...declaredWidgets(plugins).flatMap(meta =>
+      take(meta.id, () => resolveOne(meta, hasPermission))
+    ),
+    ...(registered ?? []).flatMap(meta =>
+      take(meta.id, () => resolveRegistered(meta, hasPermission))
+    ),
+  ];
 }

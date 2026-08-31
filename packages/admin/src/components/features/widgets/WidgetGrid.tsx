@@ -63,8 +63,16 @@ export function WidgetGrid() {
   const branding = useBranding();
   const { hasPermission } = useCurrentUserPermissions();
 
+  // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
+  // and the registry `registerWidget` writes to. Reading only the first made the
+  // registry invisible to the renderer built around it.
   const widgets = useMemo(
-    () => resolveDashboardWidgets(branding?.plugins, hasPermission),
+    () =>
+      resolveDashboardWidgets(
+        branding?.plugins,
+        branding?.widgets,
+        hasPermission
+      ),
     [branding, hasPermission]
   );
 

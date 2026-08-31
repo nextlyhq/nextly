@@ -87,6 +87,7 @@ import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { publishableWidgets } from "./domains/widgets/publish";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -1462,6 +1463,26 @@ async function buildAdminMeta(): Promise<{
     if (publicPlugins.length > 0) {
       branding.pluginClientConfigs = publicPlugins;
     }
+  }
+
+  // The widget REGISTRY, beside the contributions above. The two are different
+  // channels to the same grid and neither subsumes the other: a contribution is
+  // DECLARED in `contributes.admin.widgets` and travels with the plugin's
+  // config, while a registration is an imperative `registerWidget` call made
+  // during boot. Serializing only the first left an app that used the public
+  // registration API invisible to the renderer built around that registry --
+  // its card never drew and its query never entered the batch.
+  //
+  // Only this half of the payload can carry it. The registry is populated
+  // during boot, and `handleAdminMetaWorkspaceRequest` is the caller that
+  // awaits `ensureServicesInitialized()` first; the public branding route is
+  // served without it and would answer from an empty store. That the workspace
+  // half already describes the RUNNING installation rather than the configured
+  // one -- `showBuilder` from the live resolver, `customGroups` from the
+  // database -- is the same property this relies on.
+  const registered = publishableWidgets();
+  if (registered.length > 0) {
+    workspace.widgets = registered;
   }
 
   // Override config branding with DB values when available

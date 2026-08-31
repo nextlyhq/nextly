@@ -47,6 +47,14 @@ function brandingWith(widgets: unknown[]): AdminBranding {
   } as unknown as AdminBranding;
 }
 
+/** Branding carrying REGISTERED widgets and no plugin contribution at all. */
+function brandingWithRegistered(widgets: unknown[]): AdminBranding {
+  return {
+    plugins: [{ name: "@acme", collections: [] }],
+    widgets,
+  } as unknown as AdminBranding;
+}
+
 beforeEach(() => {
   granted = [];
   vi.clearAllMocks();
@@ -145,6 +153,116 @@ describe("WidgetGrid — collection and gating", () => {
     expect(screen.getAllByTestId("widget-cell-shared")).toHaveLength(1);
     expect(screen.getByText("first body")).toBeInTheDocument();
     expect(screen.queryByText("second body")).not.toBeInTheDocument();
+  });
+
+  it("renders a widget the app only REGISTERED, with no contribution beside it", () => {
+    // The registry is what `registerWidget` writes to, and it is the store this
+    // whole system is built around. A widget that reached it without also being
+    // declared under `contributes.admin.widgets` was invisible to the grid.
+    mockBranding = brandingWithRegistered([
+      {
+        id: "acme/revenue",
+        title: "Revenue",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:orders", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 42 } }],
+    });
+
+    renderGrid();
+    return waitFor(() => {
+      expect(screen.getByTestId("widget-cell-acme/revenue")).toHaveTextContent(
+        "42"
+      );
+    });
+  });
+
+  it("puts a registered widget's query in the same batch as a contributed one", async () => {
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [
+            {
+              id: "contributed",
+              archetype: "metric",
+              title: "Contributed",
+              query: { source: "collection:posts", op: "count" },
+            },
+          ],
+        },
+      ],
+      widgets: [
+        {
+          id: "acme/registered",
+          title: "Registered",
+          archetype: "metric",
+          defaultSize: "sm",
+          query: { source: "collection:orders", op: "count" },
+        },
+      ],
+    } as unknown as AdminBranding;
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: true, result: { op: "count", total: 1 } },
+        { ok: true, result: { op: "count", total: 2 } },
+      ],
+    });
+
+    renderGrid();
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [
+        { source: "collection:posts", op: "count" },
+        { source: "collection:orders", op: "count" },
+      ],
+    });
+  });
+
+  it("gates a registered widget on its permission like any other", () => {
+    mockBranding = brandingWithRegistered([
+      {
+        id: "acme/secret",
+        title: "Secret",
+        archetype: "metric",
+        defaultSize: "sm",
+        requiredPermission: "read-secrets",
+        query: { source: "collection:secrets", op: "count" },
+      },
+    ]);
+    const { container } = renderGrid();
+    expect(container).toBeEmptyDOMElement();
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("keeps one cell when a widget is both contributed and registered", () => {
+    registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [{ id: "shared", component: "@acme/admin#Panel" }],
+        },
+      ],
+      widgets: [
+        {
+          id: "shared",
+          title: "Shared",
+          archetype: "metric",
+          defaultSize: "sm",
+          query: { source: "collection:posts", op: "count" },
+        },
+      ],
+    } as unknown as AdminBranding;
+    renderGrid();
+    expect(screen.getAllByTestId("widget-cell-shared")).toHaveLength(1);
+    // The contribution is what the dashboard already drew, so it keeps winning.
+    expect(screen.getByText("panel body")).toBeInTheDocument();
   });
 
   it("shows a widget that declares no permission at all", () => {
