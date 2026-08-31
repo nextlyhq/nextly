@@ -134,7 +134,27 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
   // locale — each of which yields a perfectly valid Date at an instant the
   // author never chose, and a release publishes at it. The shape is checked
   // first so only genuine ISO 8601 reaches the parser.
-  if (!ISO_INSTANT.test(raw)) {
+  // The match is KEPT, not discarded, because the offset it captured is what
+  // the day check below runs on.
+  //
+  // That check used to take the offset itself, from a FIXED INDEX, which broke
+  // on the commonest input there is — `toISOString()` always emits
+  // milliseconds, so `slice(19)` read ".000Z", `Number("Z")` was NaN, and the
+  // route answered 500 for every schedule the admin sent. It also read
+  // ".000+02:00" as a zero offset via `Number("+0")`, which did not throw: it
+  // quietly compared against the wrong calendar day.
+  //
+  // Reading it here, from the pattern that DEFINES the accepted shape, is what
+  // stops that returning in another costume. A private parser in the day check
+  // would be the same defect one step removed: two readings of one format,
+  // agreeing until the format changes and only one is updated.
+  // Capture 1 is the offset: every inner group in the pattern is deliberately
+  // non-capturing so the index cannot drift as the shape gains optional parts.
+  // A NAMED group would read better and is not available here — the playground
+  // compiles this source under a target that predates them, which a
+  // package-local `tsc` does not see and the repo-wide `check-types` does.
+  const shape = ISO_INSTANT.exec(raw);
+  if (shape === null) {
     throw badRequest(
       `\`${key}\` must be an ISO 8601 instant, for example 2026-09-01T09:00:00Z.`,
       { value: raw }
@@ -149,7 +169,7 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
   // never against the UTC rendering: `2026-09-01T00:30:00+02:00` is August 31
   // in UTC and perfectly valid, so comparing to `toISOString()` would refuse a
   // legitimate instant for every caller east of Greenwich.
-  if (!statesTheSameDay(raw, at)) {
+  if (!statesTheSameDay(raw, at, shape[1] ?? "Z")) {
     throw badRequest(`\`${key}\` names a date that does not exist.`, {
       value: raw,
     });
@@ -164,11 +184,19 @@ function requireInstant(body: Record<string, unknown>, key: string): Date {
  * offset before reading its date parts. An impossible date normalises to a
  * different day and is caught; a real one at an offset boundary is not, because
  * its UTC rendering is irrelevant to what the author wrote.
+ *
+ * `offset` is HANDED IN, from the same match that validated the shape, rather
+ * than found again here. This function previously took it from a fixed index,
+ * which broke on every string carrying milliseconds; the repair after that was
+ * a second regex, which would have been the same defect one step removed — a
+ * private parser of a format declared elsewhere, silently defaulting to UTC
+ * whenever the two disagreed.
  */
-function statesTheSameDay(raw: string, at: Date): boolean {
-  const offset = raw.slice(19);
+function statesTheSameDay(raw: string, at: Date, offset: string): boolean {
+  // `Z` and `±HH:MM` are the only two forms the caller's pattern admits, so
+  // there is nothing else to handle here.
   const minutes =
-    offset === "" || offset === "Z"
+    offset === "Z"
       ? 0
       : (offset.startsWith("-") ? -1 : 1) *
         (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
@@ -185,7 +213,7 @@ function statesTheSameDay(raw: string, at: Date): boolean {
  * instant ambiguous.
  */
 const ISO_INSTANT =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * A timezone the platform can actually format in.

@@ -219,7 +219,17 @@ export function AddToReleaseButton({
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+      {/* EXPLICITLY not a submit. This control is rendered inside the editor's
+          own `<form>`, and a `<button>` without a type defaults to `submit` —
+          so opening this dialog would also save the document, publishing dirty
+          fields before anybody had chosen a release. The trigger says what it
+          is rather than relying on where it happens to be mounted. */}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen(true)}
+      >
         <CalendarClock className="mr-1.5 size-4" aria-hidden />
         Add to release
       </Button>

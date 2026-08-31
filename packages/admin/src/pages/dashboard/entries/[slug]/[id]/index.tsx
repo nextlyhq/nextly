@@ -547,30 +547,27 @@ export default function EditEntryPage({
           document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
           onDefaultLocale={!isNonDefaultLocale}
         />
-        {/* Above the form, in the same measure as the editor, because the
-            question it asks is about this document as a whole rather than about
-            any field in it. Bounded here for the reason the injection slots are:
-            under the measured frame a direct child of the grid is placed in the
-            content column only if it generates an element box. */}
-        <div
-          className="mx-auto flex w-full justify-end"
-          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-        >
-          <AddToReleaseButton
-            scopeKind="collection"
-            scopeSlug={slug}
-            entryId={id}
-            // The same flag the editor's own publish controls read. A release
-            // member performs a publish or unpublish, and the route refuses a
-            // collection whose schema declares no lifecycle.
-            lifecycleEnabled={collection.status === true}
-            onDefaultLocale={!isNonDefaultLocale}
-          />
-        </div>
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
           mode="edit"
+          /* WITH the form's own actions, not in a bar above it. Adding a
+             document to a release is the same kind of act as publishing it, so
+             it belongs in the same cluster — and a full-width bar here ran
+             underneath the sticky side panel, which took both the click and the
+             hover. */
+          documentActions={
+            <AddToReleaseButton
+              scopeKind="collection"
+              scopeSlug={slug}
+              entryId={id}
+              // The same flag the editor's own publish controls read. A release
+              // member performs a publish or unpublish, and the route refuses a
+              // collection whose schema declares no lifecycle.
+              lifecycleEnabled={collection.status === true}
+              onDefaultLocale={!isNonDefaultLocale}
+            />
+          }
           locale={locale}
           onLocaleChange={changeLocale}
           {...(seedFromLocale === undefined ? {} : { seedFromLocale })}

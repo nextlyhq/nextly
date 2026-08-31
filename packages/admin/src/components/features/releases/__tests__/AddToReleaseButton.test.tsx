@@ -12,7 +12,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
 import { AddToReleaseButton } from "../AddToReleaseButton";
 
@@ -118,5 +118,39 @@ describe("the protected queries", () => {
     for (const call of listReleases.mock.calls) {
       expect(call[1], "enabled").toBe(false);
     }
+  });
+});
+
+describe("mounted inside the editor's form", () => {
+  it("opens the dialog WITHOUT submitting the document", async () => {
+    // The control moved into the form's action cluster, which put it inside the
+    // editor's `<form>`. A `<button>` with no `type` defaults to `submit`, so
+    // the trigger would have saved the document — publishing dirty fields —
+    // before anybody had chosen a release, while still opening the dialog and
+    // therefore looking entirely correct.
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    render(
+      <form onSubmit={onSubmit}>
+        <AddToReleaseButton {...PROPS} />
+      </form>
+    );
+
+    const trigger = button();
+    expect(trigger).not.toBeNull();
+    fireEvent.click(trigger as HTMLElement);
+
+    // The dialog opened...
+    expect(screen.queryByRole("dialog")).not.toBeNull();
+    // ...and the document was NOT saved on the way.
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("says so on the element rather than relying on where it is mounted", async () => {
+    // The property is `type="button"` on the trigger itself. Asserted directly
+    // as well as through the form above, because a future wrapper that happens
+    // to swallow submits would make the behavioural case pass while leaving the
+    // control unsafe anywhere else it is used.
+    renderButton();
+    expect(button()?.getAttribute("type")).toBe("button");
   });
 });

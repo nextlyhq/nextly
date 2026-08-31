@@ -131,6 +131,15 @@ export interface SingleDocumentData {
 }
 
 export interface SingleFormProps {
+  /**
+   * Document-level actions the PAGE owns, rendered with the form's own actions.
+   *
+   * Matches the collection editor: a release membership is a fact about this
+   * document, so its control belongs beside Save and Publish rather than in a
+   * bar of its own spanning the full measure — which ran underneath the sticky
+   * side panel and took the click and the hover meant for it.
+   */
+  documentActions?: React.ReactNode;
   /** Single schema with field definitions */
   schema: SingleSchema;
   /** Current document data */
@@ -251,6 +260,7 @@ export function SingleForm({
   translation,
   sourceValues,
   className,
+  documentActions,
 }: SingleFormProps) {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -698,10 +708,13 @@ export function SingleForm({
                            button. */
                             {...previewPane.toggle}
                             toolbarSlot={
-                              <EntryFormToolbarSlots
-                                context="single"
-                                controllerField={controllerNames[0]}
-                              />
+                              <>
+                                {documentActions}
+                                <EntryFormToolbarSlots
+                                  context="single"
+                                  controllerField={controllerNames[0]}
+                                />
+                              </>
                             }
                             onSaveDraft={() => {
                               void handleSubmit(undefined, "save-draft");
