@@ -70,7 +70,25 @@ const templateAttachmentSchema = z.object({
   mimeType: z.string().optional(),
 });
 
-export const templateSchema = z.object({
+/**
+ * A LAYOUT row has no subject, and the built-in default layout is seeded with
+ * an empty one. Requiring a subject of every row therefore makes the shipped
+ * default layout permanently unsaveable — and silently, because the layout
+ * editor has no subject field to attach the message to.
+ *
+ * A factory rather than one schema with a conditional: the caller already knows
+ * which kind it is editing, and a `superRefine` that reads a `kind` field the
+ * form does not carry would be inventing one to interrogate.
+ */
+export function templateSchemaFor(isLayoutRow: boolean) {
+  return templateSchema.extend({
+    subject: isLayoutRow
+      ? z.string().max(500)
+      : z.string().min(1, "Email subject is required").max(500),
+  });
+}
+
+const templateSchema = z.object({
   name: z.string().min(1, "Template name is required").max(255),
   slug: z
     .string()

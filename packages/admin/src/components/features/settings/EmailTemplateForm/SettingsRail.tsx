@@ -128,6 +128,22 @@ function AttachmentsField({
   );
 }
 
+/**
+ * What the settings surface needs, named once.
+ *
+ * The inspector wraps this rail and takes the same six values, so a second
+ * spelling of the shape is a second thing to keep in step — and the two drift
+ * silently, because both compile.
+ */
+export interface TemplateSettingsProps {
+  control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
+  isEdit: boolean;
+  isPending: boolean;
+  isLayoutRow: boolean;
+  providers: { id: string; name: string; isDefault?: boolean }[];
+  layouts: { id: string; name: string; slug: string }[];
+}
+
 export function SettingsRail({
   control,
   isEdit,
@@ -135,14 +151,7 @@ export function SettingsRail({
   isLayoutRow,
   providers,
   layouts,
-}: {
-  control: ReturnType<typeof useForm<TemplateFormValues>>["control"];
-  isEdit: boolean;
-  isPending: boolean;
-  isLayoutRow: boolean;
-  providers: { id: string; name: string; isDefault?: boolean }[];
-  layouts: { id: string; name: string; slug: string }[];
-}) {
+}: TemplateSettingsProps) {
   return (
     <div className="space-y-5">
       {isLayoutRow && (
@@ -181,32 +190,6 @@ export function SettingsRail({
       {!isLayoutRow && (
         <FormField
           control={control}
-          name="preheader"
-          render={({ field }) => (
-            <FormItem className="space-y-1.5">
-              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Preheader
-              </FormLabel>
-              <FormControl>
-                <Input
-                  placeholder="Preview line shown after the subject"
-                  className="h-8 text-sm"
-                  disabled={isPending}
-                  {...field}
-                />
-              </FormControl>
-              <p className="text-xs text-muted-foreground">
-                The inbox preview snippet. Supports {"{{variables}}"}.
-              </p>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      )}
-
-      {!isLayoutRow && (
-        <FormField
-          control={control}
           name="providerId"
           render={({ field }) => (
             <FormItem className="space-y-1.5">
@@ -240,55 +223,6 @@ export function SettingsRail({
               <p className="text-xs text-muted-foreground">
                 Override the default sending provider for this template.
               </p>
-            </FormItem>
-          )}
-        />
-      )}
-
-      {!isLayoutRow && (
-        <FormField
-          control={control}
-          name="fromOverride"
-          render={({ field }) => (
-            <FormItem className="space-y-1.5">
-              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                From override
-              </FormLabel>
-              <FormControl>
-                <Input
-                  placeholder="Support &lt;help@example.com&gt;"
-                  className="h-8 text-sm"
-                  disabled={isPending}
-                  {...field}
-                />
-              </FormControl>
-              <p className="text-xs text-muted-foreground">
-                Leave blank to use the provider&apos;s From address.
-              </p>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-      )}
-
-      {!isLayoutRow && (
-        <FormField
-          control={control}
-          name="replyTo"
-          render={({ field }) => (
-            <FormItem className="space-y-1.5">
-              <FormLabel className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Reply-To
-              </FormLabel>
-              <FormControl>
-                <Input
-                  placeholder="replies@example.com"
-                  className="h-8 text-sm"
-                  disabled={isPending}
-                  {...field}
-                />
-              </FormControl>
-              <FormMessage />
             </FormItem>
           )}
         />
