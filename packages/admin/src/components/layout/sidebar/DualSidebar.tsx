@@ -26,6 +26,8 @@ import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
 
+import { useSuppressedChrome } from "../ChromeSuppression";
+
 import { hasPluginsSection } from "./lib/has-plugins-section";
 import { isSubSidebarCategory, isSubSidebarOpen } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
@@ -360,10 +362,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const hasSubSidebarCategory = (id: string) =>
     isSubSidebarCategory(id, isFolderTreeVisible);
 
+  const suppressed = useSuppressedChrome();
   const hasSubSidebar = isSubSidebarOpen(
     selectedMain,
     visibleMenuItems.map(item => item.id),
-    isFolderTreeVisible
+    isFolderTreeVisible,
+    suppressed
   );
 
   // The Settings icon lands on the first subpage the user can actually OPEN —
