@@ -131,9 +131,24 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           }
         },
         readBytes: async storagePath => {
+          /*
+           * The SAME cap on both routes, because which one runs is a property
+           * of the adapter rather than of the request.
+           *
+           * This branch is taken whenever the adapter implements `read`, and
+           * which adapters do has changed underneath this code before: the
+           * cloud adapters had no `read`, so every one of them fell through to
+           * the bounded fetch below, and implementing it moved them onto a path
+           * that buffered the whole object first and checked its size after.
+           * Passing the limit down means the branch cannot decide whether the
+           * limit applies.
+           */
+          const readLimits = getAttachmentLimits();
           // 1. Try native read() (local disk, S3, etc.)
           if (typeof storage.read === "function") {
-            const buffer = await storage.read(storagePath);
+            const buffer = await storage.read(storagePath, {
+              maxBytes: readLimits.maxTotalBytes,
+            });
             if (buffer) return buffer;
           }
           // 2. Fallback: fetch via URL.

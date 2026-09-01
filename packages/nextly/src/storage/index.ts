@@ -127,6 +127,7 @@ export type {
 // ============================================================
 
 export { fetchStoredBytes } from "./fetch-stored-bytes";
+export type { StorageReadOptions } from "./types";
 export { isTransientError, withRetry, createRetryable } from "./retry";
 
 export type { RetryOptions } from "./retry";

@@ -62,7 +62,9 @@ import {
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { NextlyError } from "nextly/errors";
 import type {
+  StorageReadOptions,
   IStorageAdapter,
   UploadOptions,
   UploadResult,
@@ -436,7 +438,10 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @param filePath - Storage path/key
    * @returns The object's bytes, or `null` when no such key exists
    */
-  async read(filePath: string): Promise<Buffer | null> {
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
     try {
       const command = new GetObjectCommand({
         Bucket: this.resolvedConfig.bucket,
@@ -451,8 +456,26 @@ export class S3StorageAdapter implements IStorageAdapter {
        * and a caller deleting "missing" keys would then delete a real one.
        */
       if (response.Body === undefined) return Buffer.alloc(0);
+
+      /*
+       * Refused on the LENGTH the store reports, before the body is pulled
+       * down. `transformToByteArray` buffers the whole object, so a caller that
+       * knows its own limit has to be able to stop an oversized read rather
+       * than discover the size after paying for it — which is what an
+       * attachment path does when it checks a size only after buffering.
+       */
+      this.refuseOverCap(filePath, response.ContentLength, options?.maxBytes);
       return Buffer.from(await response.Body.transformToByteArray());
     } catch (error: unknown) {
+      /*
+       * Only an OBJECT-level absence becomes `null`. `isNotFoundError` treats
+       * any 404 as missing, and `NoSuchBucket` is a 404 — so a bucket that was
+       * deleted, renamed or mistyped would report every key in it as absent,
+       * which is the configuration failure this method's contract exists to
+       * tell apart from an ordinary miss. Named explicitly rather than by
+       * status, because the status cannot separate them.
+       */
+      if (error instanceof Error && error.name === "NoSuchBucket") throw error;
       if (this.isNotFoundError(error)) {
         return null;
       }
@@ -571,6 +594,36 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @param error - Error to check
    * @returns true if error indicates file not found
    */
+  /**
+   * Refuse a read whose object is already known to exceed the caller's cap.
+   *
+   * Its own method rather than three conditions inside `read`, because the
+   * decision has nothing to do with the surrounding error handling and reads
+   * as noise there — and because `read`'s branching is the part a reviewer has
+   * to hold in their head to check the absent-versus-unavailable distinction.
+   *
+   * Both `undefined` cases mean "no opinion" and pass: a caller that named no
+   * cap has none, and a store that reported no length gives nothing to compare.
+   * The second is deliberately permissive — refusing an unmeasured object would
+   * reject valid reads whenever S3 omits the header.
+   */
+  private refuseOverCap(
+    filePath: string,
+    declared: number | undefined,
+    cap: number | undefined
+  ): void {
+    if (cap === undefined || declared === undefined || declared <= cap) return;
+    throw NextlyError.internal({
+      logContext: {
+        service: "S3",
+        path: filePath,
+        reason: "response-too-large",
+        size: declared,
+        max: cap,
+      },
+    });
+  }
+
   private isNotFoundError(error: unknown): boolean {
     if (error && typeof error === "object") {
       const e = error as {

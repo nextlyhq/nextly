@@ -7,9 +7,20 @@
  * way matters more than it looks: each step below is a place where the obvious
  * shortcut reports the wrong thing to a caller who may act on it.
  *
+ * Built on {@link safeFetch} rather than on a bare `fetch`, because "read a
+ * remote object into memory" already has an implementation here that caps the
+ * body, bounds the request and refuses an address that resolves somewhere
+ * private. A second capped fetch beside it would be two answers to one
+ * question, and the two would drift the first time either learned something.
+ * Measured: it costs an adapter package about 80K, against the 1MB the whole
+ * storage barrel costs.
+ *
  * @module storage/fetch-stored-bytes
  */
 import { NextlyError } from "../errors/nextly-error";
+import { safeFetch } from "../utils/validate-external-url";
+
+import type { StorageReadOptions } from "./types";
 
 /**
  * Fetch a stored object's bytes from the URL its service issued.
@@ -37,14 +48,30 @@ import { NextlyError } from "../errors/nextly-error";
  * @param url - The address the storage service reported for this object
  * @param context - What is being read, for the error message: usually the key
  * @param label - The service's name, so a failure says which store answered
+ * @param options - Bounds for the read; see {@link StorageReadOptions}
  * @returns The object's bytes, or `null` when the store answers 404
  */
 export async function fetchStoredBytes(
   url: string,
   context: string,
-  label: string
+  label: string,
+  options?: StorageReadOptions
 ): Promise<Buffer | null> {
-  const response = await fetch(url);
+  /*
+   * Bounds are PASSED THROUGH rather than defaulted here. `safeFetch` already
+   * holds the defaults — 10 MiB and 30 seconds — so restating them would put a
+   * second set of numbers in the tree that agree today and drift later. A
+   * caller with a configured limit of its own, such as the email attachment
+   * path, hands its number down instead of being overridden by ours.
+   */
+  const response = await safeFetch(url, {
+    ...(options?.maxBytes === undefined
+      ? {}
+      : { maxResponseBytes: options.maxBytes }),
+    ...(options?.timeoutMs === undefined
+      ? {}
+      : { timeoutMs: options.timeoutMs }),
+  });
   /*
    * Checked BEFORE the general failure branch, because 404 is the one non-OK
    * status that is an answer rather than a fault.

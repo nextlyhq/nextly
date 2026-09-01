@@ -20,6 +20,7 @@ import type {
   UploadOptions,
   UploadResult,
   BulkDeleteResult,
+  StorageReadOptions,
 } from "nextly/storage";
 import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 import { UTApi } from "uploadthing/server";
@@ -148,7 +149,10 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
    * @param filePath - File key
    * @returns The file's bytes, or `null` when no such key exists
    */
-  async read(filePath: string): Promise<Buffer | null> {
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
     /*
      * NOT wrapped in a catch. This is a batch lookup, so a key that is not
      * there comes back as an EMPTY `data` array — the branch below — rather
@@ -176,7 +180,7 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
      * and reporting it as absence would let a caller treat a live file as
      * deleted.
      */
-    return await fetchStoredBytes(target, filePath, "UploadThing");
+    return await fetchStoredBytes(target, filePath, "UploadThing", options);
   }
 
   /**

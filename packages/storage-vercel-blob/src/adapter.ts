@@ -37,6 +37,7 @@ import type {
   ClientUploadData,
   FileMetadata,
   BulkDeleteResult,
+  StorageReadOptions,
 } from "nextly/storage";
 import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 
@@ -261,7 +262,10 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @param filePath - Blob path/key
    * @returns The blob's bytes, or `null` when it does not exist
    */
-  async read(filePath: string): Promise<Buffer | null> {
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
     let target: string;
     try {
       const meta = await head(filePath, { token: this.resolvedConfig.token });
@@ -289,7 +293,7 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
      * rather than an absence, and folding it into `null` would report a
      * network outage as a deleted file.
      */
-    return await fetchStoredBytes(target, filePath, "Vercel Blob");
+    return await fetchStoredBytes(target, filePath, "Vercel Blob", options);
   }
 
   /**

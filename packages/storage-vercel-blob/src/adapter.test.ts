@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { head, BlobNotFoundError, BlobAccessError } from "@vercel/blob";
+import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 
 import { NextlyError } from "nextly/errors";
 
 import { VercelBlobStorageAdapter } from "./adapter";
+
+vi.mock("nextly/storage/fetch-stored-bytes", () => ({
+  fetchStoredBytes: vi.fn(),
+}));
 
 vi.mock("@vercel/blob", () => {
   /*
@@ -106,123 +111,75 @@ describe("VercelBlobStorageAdapter — reading bytes back", () => {
     collections: { media: true },
   });
 
-  /** The found case: `head` resolves and the CDN serves the bytes. */
-  function blobExists(body: string): void {
+  /*
+   * The HELPER is mocked here, and the HTTP answers it turns into `null`, bytes
+   * or an error are asserted in its own suite under `packages/nextly`. What is
+   * only true at this layer is what a LOOKUP failure means and whether the
+   * caller's bounds survive the trip — so those are what this asserts.
+   */
+  function found(): void {
     vi.mocked(head).mockResolvedValueOnce({
       url: "https://test.public.blob.vercel-storage.com/f.woff2",
       downloadUrl: "https://test.public.blob.vercel-storage.com/f.woff2?dl=1",
     } as unknown as Awaited<ReturnType<typeof head>>);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(body, { status: 200 }))
-    );
   }
 
   afterEach(() => {
-    vi.unstubAllGlobals();
     vi.mocked(head).mockReset();
+    vi.mocked(fetchStoredBytes).mockReset();
   });
 
-  it("returns the stored bytes", async () => {
-    blobExists("hello");
-    const bytes = await adapter.read("f.woff2");
-    expect(bytes?.toString("utf8")).toBe("hello");
+  it("returns what the helper read", async () => {
+    found();
+    vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("hello"));
+    expect((await adapter.read("f.woff2"))?.toString("utf8")).toBe("hello");
   });
 
   it("answers null for a blob that is not there", async () => {
     /*
-     * Arranged explicitly with the NOT-FOUND class, which is what the service
-     * rejects with for a missing key. No `fetch` is stubbed, so a version that
-     * skipped the lookup and fetched anyway would fail here rather than pass
-     * quietly.
+     * Arranged with the NOT-FOUND class, which is what the service rejects
+     * with for a missing key.
      *
-     * ITS CONTROL IS "returns the stored bytes" ABOVE, and this case is not
-     * evidence without it: measured, a `read` that returns `null` for every
-     * input satisfies this assertion exactly. The positive case is what proves
-     * `null` here means "not found" rather than "this method never answers".
-     * Declared rather than left to adjacency, so deleting that case cannot
-     * quietly make this one meaningless.
+     * ITS CONTROL IS "returns what the helper read" ABOVE, and this case is not
+     * evidence without it: measured, a `read` returning `null` for every input
+     * satisfies this assertion exactly. Declared rather than left to adjacency,
+     * so deleting that case cannot quietly make this one meaningless.
      */
     vi.mocked(head).mockRejectedValueOnce(new BlobNotFoundError());
     expect(await adapter.read("gone.woff2")).toBeNull();
+    // And the helper was never reached, so `null` came from the lookup.
+    expect(vi.mocked(fetchStoredBytes)).not.toHaveBeenCalled();
   });
 
   it("THROWS a lookup failure that is not a missing blob", async () => {
     /*
-     * The distinction the not-found case cannot make on its own. `head` also
-     * rejects for an expired token, a suspended store and a dropped
-     * connection, and none of those says the blob was deleted — so folding
-     * every rejection into `null` reports an outage as an absence, which a
-     * caller may answer by writing a replacement over a file still sitting
-     * there.
-     *
-     * Paired with the case below it deliberately: together they say the
-     * adapter keys on the CLASS rather than on the mere fact of a rejection.
+     * The distinction the case above cannot make alone. `head` also rejects for
+     * an expired token, a suspended store and a dropped connection, and none of
+     * those says the blob was deleted — so folding every rejection into `null`
+     * reports an outage as an absence, which a caller may answer by writing a
+     * replacement over a file still sitting there.
      */
     vi.mocked(head).mockRejectedValueOnce(new BlobAccessError());
-
     const outcome = await adapter.read("f.woff2").then(
       value => value,
       (error: unknown) => error
     );
     expect(outcome).toBeInstanceOf(BlobAccessError);
-    expect(outcome).not.toBeNull();
   });
 
-  it("answers null when the blob disappears between lookup and fetch", async () => {
+  it("hands the caller's bounds to the helper", async () => {
     /*
-     * These stores are remote and concurrent, so a blob can be deleted after
-     * its address resolves and before the CDN is asked for it. That is an
-     * ordinary race with an ordinary answer — the object is not there — and
-     * reporting it as a server failure would make a caller handle an error for
-     * something its own contract already has a value for.
+     * Asserted on the ARGUMENT rather than the result, because the result is
+     * identical whether or not the bounds were forwarded — which is precisely
+     * how this regresses unnoticed. The email attachment path depends on it:
+     * before these bounds existed, implementing `read` moved that path off a
+     * capped fetch onto one that buffered the whole object first.
      */
-    vi.mocked(head).mockResolvedValueOnce({
-      url: "https://test.public.blob.vercel-storage.com/f.woff2",
-      downloadUrl: "https://test.public.blob.vercel-storage.com/f.woff2?dl=1",
-    } as unknown as Awaited<ReturnType<typeof head>>);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("", { status: 404 }))
-    );
-
-    expect(await adapter.read("f.woff2")).toBeNull();
-  });
-
-  it("THROWS when the fetch fails after the blob resolved", async () => {
-    /*
-     * The property that separates absence from a transport failure, and the
-     * reason the fetch sits outside the not-found catch. A dropped connection
-     * to a blob whose metadata just resolved is not a deletion — reporting it
-     * as `null` invites a caller to treat a live file as gone and write a
-     * replacement over it.
-     */
-    vi.mocked(head).mockResolvedValueOnce({
-      url: "https://test.public.blob.vercel-storage.com/f.woff2",
-      downloadUrl: "https://test.public.blob.vercel-storage.com/f.woff2?dl=1",
-    } as unknown as Awaited<ReturnType<typeof head>>);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("nope", { status: 500 }))
-    );
-
-    /*
-     * Asserted on the error's CODE rather than its text. The status and the key
-     * deliberately do not reach the public message — they are the things that
-     * must not travel to whoever asked for the file — so matching on prose
-     * would either fail here or pressure that message into leaking them back.
-     */
-    const failure = await adapter.read("f.woff2").then(
-      value => value,
-      (error: unknown) => error
-    );
-    expect(failure).toBeInstanceOf(NextlyError);
-    expect((failure as NextlyError).code).toBe("INTERNAL_ERROR");
-    /*
-     * And explicitly NOT the absence answer, which is the whole point: a
-     * `toThrow` alone passes on any rejection, while returning `null` here is
-     * the specific wrong behaviour this case exists to rule out.
-     */
-    expect(failure).not.toBeNull();
+    found();
+    vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("x"));
+    await adapter.read("f.woff2", { maxBytes: 4242 });
+    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[3]).toMatchObject({
+      maxBytes: 4242,
+    });
   });
 });
