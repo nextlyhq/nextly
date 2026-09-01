@@ -23,7 +23,6 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   validateNumberDecimalDimensionsShared,
   type BaseValidationError,
@@ -427,17 +426,10 @@ export class DynamicCollectionSchemaService {
 
     const columns = mainFields
       .map(f => {
-        // Skip junction-backed fields: their links live in a junction table, not on this row.
-        // Asked through the shared predicate so this and the descriptor cannot disagree about
-        // which fields those are — an `upload` is not one of them, whatever option it carries.
-        if (usesJunctionTable(f)) {
-          return null;
-        }
-
-        // Component fields store their data in a separate comp_{slug} table and
+        // Component and field-group fields store their data in separate tables and
         // are stripped from the parent row on write, so they get no parent
         // column (a NOT NULL one would break every insert).
-        if (f.type === STORAGE_FORMAT.fieldType) {
+        if (!fieldProducesColumn(f)) {
           return null;
         }
 
@@ -882,9 +874,9 @@ ${allColumnDefs.join(",\n")}
           continue;
         }
 
-        // Component fields store their data in a separate comp_{slug} table, so
+        // Component and field-group fields store their data in a separate table, so
         // adding one must not ADD COLUMN on the parent table.
-        if (field.type === STORAGE_FORMAT.fieldType) {
+        if (!fieldProducesColumn(field)) {
           continue;
         }
 

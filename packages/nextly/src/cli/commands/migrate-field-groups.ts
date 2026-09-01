@@ -190,7 +190,7 @@ function reportOutcome(
   logger.newline();
   logger.info(
     describeApplyCommand(outcome.direction) +
-      " Take a backup first, then confirm it exists with --backup-confirmed."
+    " Take a backup first, then confirm it exists with --backup-confirmed."
   );
 }
 

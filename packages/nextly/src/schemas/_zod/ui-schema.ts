@@ -46,6 +46,7 @@ export const UI_FIELD_TYPES = [
   "repeater",
   "group",
   "component",
+  "fieldGroup",
   "json",
   "chips",
 ] as const;
@@ -336,43 +337,60 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
           path: ["fields"],
         });
       }
-      // A component field references a component schema by slug: either a
-      // single `component`, or a `components[]` whitelist for a polymorphic
-      // slot. Exactly one form must be present, and every referenced slug
-      // must be a real slug — a blank or malformed reference points at no
-      // loadable component, so runtime writes to it would be silently dropped.
-      if (f.type === STORAGE_FORMAT.fieldType) {
-        const hasSingle = f.component !== undefined;
-        const hasMulti = f.components !== undefined;
+      // A component / field-group field references a schema by slug: either a
+      // single `component` / `fieldGroup`, or a `components[]` / `fieldGroups[]` whitelist
+      // for a polymorphic slot. Exactly one form must be present, and every referenced slug
+      // must be a real slug — a blank or malformed reference points at no loadable
+      // definition, so runtime writes to it would be silently dropped.
+      if (
+        f.type === STORAGE_FORMAT.fieldType ||
+        f.type === "fieldGroup" ||
+        f.type === "field-group"
+      ) {
+        const candidate = f as {
+          component?: unknown;
+          fieldGroup?: unknown;
+          components?: unknown;
+          fieldGroups?: unknown;
+        };
+        const singleRef = candidate.component ?? candidate.fieldGroup;
+        const multiRef = candidate.components ?? candidate.fieldGroups;
+        const hasSingle = singleRef !== undefined;
+        const hasMulti = multiRef !== undefined;
+        const singlePath =
+          candidate.fieldGroup !== undefined
+            ? "fieldGroup"
+            : STORAGE_FORMAT.refKeys.single;
+        const multiPath =
+          candidate.fieldGroups !== undefined
+            ? "fieldGroups"
+            : STORAGE_FORMAT.refKeys.many;
+
         if (hasSingle === hasMulti) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
               "component fields require either a `component` slug or a `components[]` list, but not both",
-            path: [
-              hasSingle
-                ? STORAGE_FORMAT.refKeys.many
-                : STORAGE_FORMAT.refKeys.single,
-            ],
+            path: [hasSingle ? multiPath : singlePath],
           });
         } else if (hasSingle) {
-          if (typeof f.component !== "string" || !SLUG_RE.test(f.component)) {
+          if (typeof singleRef !== "string" || !SLUG_RE.test(singleRef)) {
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               message: "component must be a valid component slug",
-              path: [STORAGE_FORMAT.refKeys.single],
+              path: [singlePath],
             });
           }
         } else if (
-          !Array.isArray(f.components) ||
-          f.components.length === 0 ||
-          !f.components.every(s => typeof s === "string" && SLUG_RE.test(s))
+          !Array.isArray(multiRef) ||
+          multiRef.length === 0 ||
+          !multiRef.every(s => typeof s === "string" && SLUG_RE.test(s))
         ) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message:
               "components must be a non-empty list of valid component slugs",
-            path: [STORAGE_FORMAT.refKeys.many],
+            path: [multiPath],
           });
         }
       }

@@ -32,11 +32,14 @@
  * ```
  */
 
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../../domains/field-groups/storage/field-group-field-type";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
   sanitizeConfig,
@@ -78,21 +81,20 @@ function collectComponentRefs(
   fields: {
     type?: string;
     component?: string;
+    fieldGroup?: string;
     components?: string[];
+    fieldGroups?: string[];
     fields?: unknown[];
   }[],
   refs: string[]
 ): void {
   for (const field of fields) {
-    if (field.type === STORAGE_FORMAT.fieldType) {
-      if (typeof field.component === "string") {
-        refs.push(field.component);
-      }
-      if (Array.isArray(field.components)) {
-        for (const slug of field.components) {
-          if (typeof slug === "string") {
-            refs.push(slug);
-          }
+    if (isFieldGroupType(field.type)) {
+      const { single, many } = extractFieldGroupReferences(field);
+      if (single) refs.push(single);
+      if (many) {
+        for (const slug of many) {
+          refs.push(slug);
         }
       }
     }
@@ -102,7 +104,9 @@ function collectComponentRefs(
         field.fields as {
           type?: string;
           component?: string;
+          fieldGroup?: string;
           components?: string[];
+          fieldGroups?: string[];
           fields?: unknown[];
         }[],
         refs

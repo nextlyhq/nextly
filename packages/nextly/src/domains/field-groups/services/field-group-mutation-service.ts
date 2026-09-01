@@ -37,6 +37,7 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { isFieldGroupType } from "../storage/field-group-field-type";
 import {
   currentFieldGroupTypeKey,
   readFieldGroupType,
@@ -98,7 +99,7 @@ export interface DeleteComponentDataParams {
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
-  return field.type === STORAGE_FORMAT.fieldType;
+  return isFieldGroupType(field.type);
 }
 
 /**

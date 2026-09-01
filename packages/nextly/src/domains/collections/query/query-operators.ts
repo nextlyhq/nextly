@@ -34,7 +34,7 @@ import type {
   WhereOperator,
 } from "@nextlyhq/adapter-drizzle/types";
 
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { isFieldGroupType } from "../../field-groups/storage/field-group-field-type";
 import { isFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
 import type { GeoFilter } from "./geo-utils";
@@ -546,9 +546,11 @@ export interface ExtractComponentFiltersResult {
  */
 interface ComponentFieldDefinition {
   name: string;
-  type: typeof STORAGE_FORMAT.fieldType;
+  type: string;
   component?: string;
+  fieldGroup?: string;
   components?: string[];
+  fieldGroups?: string[];
 }
 
 /**
@@ -558,7 +560,7 @@ function isComponentFieldDef(field: {
   name: string;
   type: string;
 }): field is ComponentFieldDefinition {
-  return field.type === STORAGE_FORMAT.fieldType;
+  return isFieldGroupType(field.type);
 }
 
 /**
