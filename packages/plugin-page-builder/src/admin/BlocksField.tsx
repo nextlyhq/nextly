@@ -145,8 +145,12 @@ import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+/* The save state, which the status pill cannot carry: it renders nothing on a
+   collection with no publish lifecycle, and took the only reading of unsaved
+   work down with it. */
 import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
+import { UnsavedChangesPill } from "./UnsavedChangesPill";
 import { useShown } from "./use-shown";
 
 export interface BlocksFieldProps<
@@ -1424,7 +1428,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const entryFields = useEntryFieldsPanel(name);
 
-  const documentDirty = useDocumentDirty(control, editor.undoDepth > 0);
+  /*
+   * `hasUnsavedWork` rather than `undoDepth` alone, so an inline edit that is
+   * OPEN counts. Until it commits, the typed value lives in the DOM and neither
+   * the editor's history nor the form's dirty fields have moved — so a reading
+   * built on those two says "nothing outstanding" while an author is midway
+   * through a paragraph.
+   *
+   * The same answer the navigation guard reports, asked once here. The guard
+   * keeps reporting only the EDITOR's half, because it tells the form about
+   * work the form's own values do not contain; this composes that half with the
+   * form's own dirtiness, which is what a reading of the whole document needs.
+   */
+  const documentDirty = useDocumentDirty(
+    control,
+    hasUnsavedWork(editor, inline)
+  );
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -2038,6 +2057,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         topBar={
           <>
             <DocumentStatusPill isDirty={documentDirty} />
+            {/* Beside the publish state, not folded into it. The two answer
+                different questions and one of them has no answer where a
+                collection declares no lifecycle. */}
+            <UnsavedChangesPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the
