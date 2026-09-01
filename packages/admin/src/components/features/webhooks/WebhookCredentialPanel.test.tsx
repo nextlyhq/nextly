@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { WebhookSecretInfo } from "@admin/types/webhooks";
 
+import { EditWebhookLayout } from "./EditWebhookLayout";
 import { WebhookCredentialPanel } from "./WebhookCredentialPanel";
 
 afterEach(cleanup);
@@ -49,29 +50,59 @@ function panel(
 }
 
 describe("the credential panel comes before the configuration form", () => {
-  it("precedes the form in document order", () => {
+  /*
+   * Asserted through `EditWebhookLayout` — the component the page actually
+   * renders — rather than through a fixture arranged here. A test that lays out
+   * its own regions cannot fail when the PAGE puts them back the other way
+   * round, which is the regression worth catching: it would report the ordering
+   * as covered while the production order was free to move.
+   */
+  it("precedes the form in document order, as the page composes it", () => {
     render(
-      <div>
-        {panel()}
-        <form data-testid="config-form">
-          <input aria-label="Name" />
-        </form>
-      </div>
+      <EditWebhookLayout
+        credential={panel()}
+        configuration={
+          <form data-testid="config-form">
+            <input aria-label="Name" />
+          </form>
+        }
+      />
     );
 
     const credential = screen.getByTestId("webhook-credential-panel");
     const form = screen.getByTestId("config-form");
 
-    /*
-     * DOCUMENT_POSITION_FOLLOWING means `form` comes after `credential`. The
-     * inverse constant is what the old layout would satisfy, so this assertion
-     * separates the two arrangements rather than merely observing that both
-     * elements exist.
-     */
     expect(
       credential.compareDocumentPosition(form) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it("puts the irreversible act last", () => {
+    render(
+      <EditWebhookLayout
+        credential={panel()}
+        configuration={<form data-testid="config-form" />}
+        dangerZone={<button type="button">Delete endpoint</button>}
+      />
+    );
+
+    const form = screen.getByTestId("region-configuration");
+    const danger = screen.getByTestId("region-danger");
+    expect(
+      form.compareDocumentPosition(danger) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  /*
+   * The create page has no secret to show, so the region must be absent rather
+   * than an empty box asking the author to ignore it.
+   */
+  it("omits the credential region entirely when there is none", () => {
+    render(
+      <EditWebhookLayout configuration={<form data-testid="config-form" />} />
+    );
+    expect(screen.queryByTestId("region-credential")).toBeNull();
   });
 
   it("carries the three acts a person needs on the secret", () => {

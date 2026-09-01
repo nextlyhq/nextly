@@ -6,6 +6,7 @@ import { useCallback } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { DeleteWebhookDialog } from "@admin/components/features/webhooks/DeleteWebhookDialog";
+import { EditWebhookLayout } from "@admin/components/features/webhooks/EditWebhookLayout";
 import { RotateSecretDialog } from "@admin/components/features/webhooks/RotateSecretDialog";
 import { WebhookCredentialPanel } from "@admin/components/features/webhooks/WebhookCredentialPanel";
 import { WebhookForm } from "@admin/components/features/webhooks/WebhookForm";
@@ -44,7 +45,8 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const { data: webhook, isLoading, isError, error } = useWebhook(id);
   const { mutate: doUpdate, isPending } = useUpdateWebhook();
   const secretActions = useWebhookSecretActions(id);
-  const deletion = useWebhookDeletion(id, webhook?.name ?? "");
+  // `null` while the document is loading — the hook refuses to delete on it.
+  const deletion = useWebhookDeletion(id, webhook?.name ?? null);
 
   // Reaching this page requires update-webhooks (registry-gated). Delete is a
   // separate grant, but `update-webhooks` is the management umbrella that
@@ -97,50 +99,52 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   return (
     <>
       {/*
-       * Above the form deliberately. The secret is what a person copies when
-       * WIRING UP the endpoint, which is the first thing they need and was
-       * previously reachable only by scrolling past every configuration field.
+       * The ORDER is the layout's, not this page's. Stated there once so a
+       * later edit here cannot quietly put the secret back below the form —
+       * moving these props around changes nothing about where they render.
        */}
-      <WebhookCredentialPanel
-        secrets={webhook.secrets}
-        canManage={canManageWebhooks}
-        onReveal={secretActions.reveal}
-        isRevealing={secretActions.isRevealing}
-        onRotate={() => secretActions.setConfirmingRotate(true)}
-        isRotating={secretActions.isRotating}
-        onExpireOld={secretActions.expireOld}
-        isExpiring={secretActions.isExpiring}
-        deliveriesHref={buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, { id })}
-      />
-
-      <WebhookForm
-        defaultValues={toFormValues(webhook)}
-        existingHeaderNames={
-          webhook.headers ? Object.keys(webhook.headers) : []
+      <EditWebhookLayout
+        credential={
+          <WebhookCredentialPanel
+            secrets={webhook.secrets}
+            canManage={canManageWebhooks}
+            onReveal={secretActions.reveal}
+            isRevealing={secretActions.isRevealing}
+            onRotate={() => secretActions.setConfirmingRotate(true)}
+            isRotating={secretActions.isRotating}
+            onExpireOld={secretActions.expireOld}
+            isExpiring={secretActions.isExpiring}
+            deliveriesHref={buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, {
+              id,
+            })}
+          />
         }
-        onSubmit={handleSubmit}
-        isPending={isPending}
-        submitLabel="Save changes"
-        pendingLabel="Saving…"
+        configuration={
+          <WebhookForm
+            defaultValues={toFormValues(webhook)}
+            existingHeaderNames={
+              webhook.headers ? Object.keys(webhook.headers) : []
+            }
+            onSubmit={handleSubmit}
+            isPending={isPending}
+            submitLabel="Save changes"
+            pendingLabel="Saving…"
+          />
+        }
+        dangerZone={
+          canDelete ? (
+            <div className="mt-6 flex justify-end">
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => deletion.setConfirming(true)}
+              >
+                Delete endpoint
+              </Button>
+            </div>
+          ) : undefined
+        }
       />
-
-      {/*
-       * Deletion stays BELOW, and after the form. It is the one act here that
-       * cannot be undone, and a destructive control at the top of a page is
-       * reached by accident far more often than on purpose.
-       */}
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div />
-        {canDelete && (
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => deletion.setConfirming(true)}
-          >
-            Delete endpoint
-          </Button>
-        )}
-      </div>
 
       <WebhookSecretModal
         open={secretActions.revealed !== null}

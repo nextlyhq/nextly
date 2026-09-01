@@ -31,12 +31,30 @@ export interface WebhookDeletion {
 /**
  * `name` is captured for the success message BEFORE the row is gone, which is
  * why it is a parameter rather than read from a document the delete invalidates.
+ *
+ * NULLABLE on purpose, and it is the readiness signal rather than a nicety. A
+ * caller mounts this hook while the endpoint is still loading — hooks cannot be
+ * called conditionally — so there is a window in which the document does not
+ * exist yet. Passing `null` for it says so, and `confirm` refuses rather than
+ * deleting a row whose name it would then report as an empty string.
+ *
+ * A default of `""` would type-check and read as harmless, which is what makes
+ * it the wrong shape: it turns "not loaded yet" into a legal value and leaves
+ * the guard to whichever caller remembers it. Today only the confirmation
+ * dialog stands between that window and a destructive write, and a guard that
+ * depends on the current call graph is one the call graph is free to remove.
  */
-export function useWebhookDeletion(id: string, name: string): WebhookDeletion {
+export function useWebhookDeletion(
+  id: string,
+  name: string | null
+): WebhookDeletion {
   const { mutate: doDelete, isPending: isDeleting } = useDeleteWebhook();
   const [confirming, setConfirming] = useState(false);
 
   const confirm = useCallback(() => {
+    // Refuses rather than proceeding: the endpoint is not loaded, so there is
+    // nothing to confirm the deletion OF.
+    if (name === null) return;
     doDelete(id, {
       onSuccess: () => {
         toast.success("Endpoint deleted", {
