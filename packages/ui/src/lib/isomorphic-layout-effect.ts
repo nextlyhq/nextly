@@ -14,7 +14,10 @@ import * as React from "react";
  *
  * Published rather than kept beside its first caller, because a second one
  * arrived: two spellings of this choice would drift the first time either
- * learned something about a new environment.
+ * learned something about a new environment. A third now lives in another
+ * package, which is why it leaves this one through the barrel.
+ *
+ * @experimental
  */
 export const useIsomorphicLayoutEffect =
   typeof document === "undefined" ? React.useEffect : React.useLayoutEffect;

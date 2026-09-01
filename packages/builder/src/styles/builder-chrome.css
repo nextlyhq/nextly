@@ -70,13 +70,18 @@
  * few pixels wider than the geometry that reserved room for them.
  *
  * Confined to the shell's subtree, so it stays a statement about the editor
- * rather than about the host's page.
+ * rather than about the host's page — and to any token scope hoisted out of it,
+ * which is the same subtree by a different route.
  */
 @layer base {
   .nx-builder-chrome,
   .nx-builder-chrome *,
   .nx-builder-chrome *::before,
-  .nx-builder-chrome *::after {
+  .nx-builder-chrome *::after,
+  .nx-builder-tokens,
+  .nx-builder-tokens *,
+  .nx-builder-tokens *::before,
+  .nx-builder-tokens *::after {
     box-sizing: border-box;
   }
 }
@@ -101,6 +106,22 @@
  * F7 primitive list was the wrong home for it.
  */
 
+/*
+ * DECLARING the tokens and BEING the chrome root are two jobs, and they are
+ * spelled separately because a surface can need the first without the second.
+ *
+ * `.nx-builder-chrome` identifies the editor's root: the empty-slot selector
+ * keys off it, and it is what carries the shell's own state attributes. A
+ * surface mounted OUTSIDE that root still has to resolve `--nx-builder-*`,
+ * because custom properties inherit down and never across — and giving it the
+ * chrome class to get them would put a second chrome root in the document, so
+ * every selector and every query that means "the editor" would match whichever
+ * came first.
+ *
+ * `.nx-builder-tokens` is that scope on its own. One declaration block serves
+ * both, so the two cannot drift apart; only the painting below is the chrome's.
+ */
+.nx-builder-tokens,
 .nx-builder-chrome {
   /* The frame behind rail, panels and bars. Deliberately not `--nx-background`:
      the canvas uses that, and the frame must read as a layer behind it. */
@@ -112,7 +133,9 @@
   /* The rail's selected item, and the only accent the chrome spends. */
   --nx-builder-accent: var(--nx-primary);
   --nx-builder-accent-text: var(--nx-primary-foreground);
+}
 
+.nx-builder-chrome {
   background-color: var(--nx-builder-surface);
   color: var(--nx-builder-text);
 }
@@ -126,6 +149,14 @@
  * quiet, and quiet is exactly what fails at higher contrast needs.
  */
 @media (prefers-contrast: more) {
+  /*
+   * Both scopes, for the reason the split exists. A surface hoisted out of the
+   * chrome takes its tokens from `.nx-builder-tokens`, so an override written
+   * only against the chrome silently hands it the resting values — and the
+   * surface that moved out is the failure region, which is the last thing that
+   * should be quiet when someone has asked for more contrast.
+   */
+  .nx-builder-tokens,
   .nx-builder-chrome {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);

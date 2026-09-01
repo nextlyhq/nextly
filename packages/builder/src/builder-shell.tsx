@@ -36,8 +36,10 @@ import {
 import type { CanvasZoom } from "./canvas-zoom";
 import { CanvasZoomControl } from "./canvas-zoom-control";
 import { devWarnOnce } from "./dev-warn";
+import { ShellActiveContext, useShellIsActive } from "./shell-active";
 import {
   BUILDER_CHROME_CLASS,
+  BUILDER_TOKENS_CLASS,
   DEFAULT_PREFERENCES,
   EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
@@ -332,28 +334,12 @@ function useFitsFullShell(): [(node: HTMLElement | null) => void, boolean] {
 }
 
 /**
- * Whether the shell around this subtree is currently interactive.
+ * Re-exported from the leaf that declares it, so the shell stays the name callers reach for.
  *
- * Defaults to `true`, which covers both callers outside a shell entirely and the server render,
- * where the width is unknowable — the same assumption {@link useFitsFullShell} makes and for the
- * same reason.
+ * The declaration moved out because `builder-notices` consumes it and the shell imports
+ * `builder-notices`, which would make the two import each other.
  */
-const ShellActiveContext = React.createContext(true);
-
-/**
- * Whether the surrounding shell is interactive, for content that has to answer for itself.
- *
- * The shell hides its slots behind `hidden` and `inert` below {@link MIN_SHELL_WIDTH}, which is
- * enough for anything rendering in place. It is NOT enough for anything that portals to the
- * document body — a dialog escapes the wrapper and would sit over the narrow-screen notice, fully
- * interactive. Such a component reads this instead of re-deriving the width, so one media query
- * decides both and they cannot disagree.
- *
- * @experimental
- */
-export function useShellIsActive(): boolean {
-  return React.useContext(ShellActiveContext);
-}
+export { useShellIsActive };
 
 /**
  * What the newest completed read of a preference store left behind.
@@ -762,7 +748,6 @@ function useSeparatorRegionEscape(
 }
 
 function ShellRegions({
-  notices,
   appliedScale = 1,
   onZoomPick,
   renderPanel,
@@ -779,14 +764,6 @@ function ShellRegions({
   active,
   loadCount,
 }: Omit<BuilderShellProps, "store"> & {
-  /**
-   * The shell's notice region, rendered inside the chrome.
-   *
-   * Passed in rather than built here so this component keeps owning LAYOUT and
-   * nothing else — and so the queue behind it stays with the shell, which is
-   * what outlives every per-node key below it.
-   */
-  notices?: React.ReactNode;
   /** The zoom picker, or absent where the host wired none. */
   onZoomPick: ((next: CanvasZoom) => void) | undefined;
   preferences: ShellPreferences;
@@ -887,11 +864,6 @@ function ShellRegions({
         ? {}
         : { [EMPTY_ELEMENTS_ATTRIBUTE]: "hidden" })}
     >
-      {/* First child of the chrome, so it inherits the `--nx-builder-*`
-          tokens declared on this element. It is `position: fixed`, so being
-          inside a `flex` column that clips adds nothing to the layout and the
-          overflow rule cannot cut it off. */}
-      {notices}
       <header
         className="border-[color:var(--nx-builder-border)] flex h-12 shrink-0 items-center gap-2 border-b px-2"
         aria-label="Editor actions"
@@ -939,19 +911,50 @@ function ShellRegions({
          * VISIBILITY affordance, and one an author cannot read at a glance
          * would repeat the exact failure this feature exists to fix.
          */}
-        <Label
-          htmlFor={emptyElementsToggleId}
-          className="text-[color:var(--nx-builder-text-muted)] shrink-0"
-        >
-          Show empty containers
-          <Switch
-            id={emptyElementsToggleId}
-            checked={preferences.showEmptyElements}
-            onCheckedChange={checked =>
-              update(current => ({ ...current, showEmptyElements: checked }))
-            }
-          />
-        </Label>
+        <Tooltip>
+          <Label
+            htmlFor={emptyElementsToggleId}
+            className="text-[color:var(--nx-builder-text-muted)] shrink-0"
+          >
+            Show empty containers
+            {/*
+             * The SWITCH is the trigger, not the label around it.
+             *
+             * A label is not focusable, so a tooltip anchored to it is a
+             * pointer-only affordance — and this control is reached by keyboard
+             * like any other. Anchored here, hovering and focusing both reveal
+             * it, and Radix points the control's `aria-describedby` at the
+             * content while it is open.
+             */}
+            <TooltipTrigger asChild>
+              <Switch
+                id={emptyElementsToggleId}
+                checked={preferences.showEmptyElements}
+                onCheckedChange={checked =>
+                  update(current => ({
+                    ...current,
+                    showEmptyElements: checked,
+                  }))
+                }
+              />
+            </TooltipTrigger>
+          </Label>
+          {/*
+           * What the label cannot say in the width a toolbar has.
+           *
+           * "Show empty containers" names the action and not the subject: a
+           * container an author has just added holds nothing, so it renders at
+           * zero height and is invisible on the canvas — which reads as the
+           * block never having been added. The word for that state is what the
+           * control is missing, so the description gives the CONSEQUENCE of
+           * each position rather than restating the label.
+           */}
+          <TooltipContent side="bottom">
+            A container holding no blocks has no height of its own, so it cannot
+            be seen or selected on the canvas. Showing them draws a placeholder
+            in its place.
+          </TooltipContent>
+        </Tooltip>
         {/*
           Rendered by the shell, not handed to the host as a slot, because the
           shell owns preferences and this control edits one. A host drawing its
@@ -1416,6 +1419,45 @@ export function BuilderShell({
           ref={measureShell}
           className={cn("h-full w-full", props.className)}
         >
+          {/*
+           * The notice surface, mounted OUTSIDE the wrapper the shell makes
+           * `hidden` and `inert`, and mounted unconditionally.
+           *
+           * Both properties are load-bearing and they fix different failures.
+           *
+           * Outside, because inert content is excluded from the accessibility
+           * tree and `hidden` takes it out of paint — so a region inside the
+           * wrapper is unreachable by eye AND by screen reader exactly when the
+           * narrow-width notice is up. A refusal that arrives while an author
+           * is narrowing the window has to land somewhere they can still read.
+           *
+           * Unconditionally, rather than switched between the two branches
+           * below, because a live region has to EXIST before the text is put
+           * into it: a region inserted and populated together is routinely
+           * missed, and one that remounts every time the width crosses the
+           * threshold is inserted at the worst possible moment. A single
+           * permanent mount also keeps there being exactly one — two live
+           * regions interfere and some messages are announced by neither.
+           *
+           * The token scope is what the old placement inside the chrome was
+           * for: `--nx-builder-*` inherit down and never across, so a surface
+           * outside the chrome needs them declared on an ancestor of its own.
+           * It takes the TOKEN class rather than the chrome class, because the
+           * chrome class also identifies the editor's root — a second element
+           * carrying it would be matched by every selector and query that means
+           * "the editor", the empty-slot selector among them.
+           *
+           * `display: contents` declares the tokens while generating no box, so
+           * nothing is added to the layout the branches below measure — and the
+           * region is `position: fixed` regardless, since nothing here creates
+           * a containing block.
+           */}
+          <div className={cn(BUILDER_TOKENS_CLASS, "contents")}>
+            <BuilderNoticeRegion
+              notices={notices.notices}
+              onDismiss={notices.dismiss}
+            />
+          </div>
           {!shellFits ? (
             <div
               // No caller `className` here: the wrapper above owns the host's
@@ -1545,21 +1587,6 @@ export function BuilderShell({
                     wherever the host created them. */}
                 <NoticeSinkProvider raise={notices.raise}>
                   <ShellRegions
-                    /*
-                     * Failures raised by a control that has since been
-                     * unmounted. Handed to the regions rather than rendered
-                     * beside them, so it lands INSIDE the element carrying the
-                     * builder's chrome: every `--nx-builder-*` token is
-                     * declared there, and custom properties inherit down but
-                     * never across. It is taken out of flow once inside, so it
-                     * adds no box to the layout the regions measure.
-                     */
-                    notices={
-                      <BuilderNoticeRegion
-                        notices={notices.notices}
-                        onDismiss={notices.dismiss}
-                      />
-                    }
                     appliedScale={appliedScale}
                     onZoomPick={onZoomPick}
                     {...props}
