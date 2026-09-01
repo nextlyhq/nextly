@@ -3706,65 +3706,6 @@ export class CollectionMutationService extends BaseService {
    *
    * Returns the prior status of each language the sweep genuinely moved.
    */
-  /**
-   * Release the pending edit held for every OTHER language before a sweep.
-   *
-   * A localized draft-split collection keeps one working draft per language
-   * ({@link workingDraftLocale} returns the locale for a localized document),
-   * and the main write promotes only the one it is writing. A wildcard resolves
-   * to the default language, so without this the sweep marks every translation
-   * published while each other language keeps serving its pre-edit values and
-   * its draft stays pending — the release reporting success over content nobody
-   * released.
-   *
-   * Only the TRANSLATED half is applied here: the untranslated columns belong to
-   * the document, and the write locale's own promotion has already decided them.
-   * Taking them from another language's snapshot as well would let an older copy
-   * of a shared field land last.
-   */
-  private async promoteOtherLocaleWorkingDrafts(
-    tx: TransactionContext,
-    args: {
-      collectionName: string;
-      entryId: string;
-      /** The language the main write already promoted. */
-      skipLocale: string | null;
-    }
-  ): Promise<void> {
-    const repo = new VersionsRepository(tx);
-    const ref = {
-      scopeKind: "collection" as const,
-      scopeSlug: args.collectionName,
-      entryId: args.entryId,
-    };
-    const drafts = await repo.findAllWorkingDrafts(ref);
-    for (const draft of drafts) {
-      if (draft.locale === null || draft.locale === args.skipLocale) continue;
-      const snapshot = { ...(draft.snapshot as Record<string, unknown>) };
-      // The pending edit carries no lifecycle of its own; the sweep that follows
-      // decides every language's status, and letting the snapshot's own status
-      // through here would have it overwrite that.
-      delete snapshot.status;
-      const split = await this.splitLocalizedWriteData(
-        args.collectionName,
-        snapshot,
-        draft.locale,
-        false,
-        tx.getDrizzle()
-      );
-      if (split && Object.keys(split.companionData).length > 0) {
-        await upsertCompanionRow(
-          companionWriteVia(tx, this.dialect),
-          split.companionTableName,
-          args.entryId,
-          draft.locale,
-          split.companionData
-        );
-      }
-      await repo.deleteWorkingDraft(ref, draft.locale);
-    }
-  }
-
   private async sweepCompanionLifecycle(
     tx: TransactionContext,
     args: {
@@ -5948,6 +5889,53 @@ export class CollectionMutationService extends BaseService {
         requestLocale: params.locale ?? null,
         defaultLocale: this.localization?.defaultLocale ?? null,
       });
+
+      // A wildcard must not decide the fate of work somebody saved and has not
+      // released yet.
+      //
+      // Another language may be holding a pending edit, and moving the whole
+      // document's lifecycle would publish that language while its edit stayed
+      // unreleased — marking a translation live against values its author had
+      // already replaced. Releasing those edits here instead is not the smaller
+      // problem it looks: a pending edit stores the whole document as it looked
+      // when it was saved, not the fields its author actually touched, so two
+      // languages' edits cannot be merged without inventing a rule for which
+      // shared value wins — and every such rule silently discards somebody's
+      // work in some ordering.
+      //
+      // So this refuses, naming the languages that are holding work. A
+      // scheduled release then stops where an operator can see it, which is
+      // recoverable; guessing is not.
+      if (
+        sweepAllLocales &&
+        (collection as { versions?: { drafts?: { enabled?: boolean } } })
+          .versions?.drafts?.enabled === true
+      ) {
+        const heldBy = (
+          await new VersionsRepository(this.adapter).findAllWorkingDrafts({
+            scopeKind: "collection",
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          })
+        )
+          .map(draft => draft.locale)
+          .filter(
+            (locale): locale is string =>
+              locale !== null && locale !== draftLocaleKey
+          );
+        if (heldBy.length > 0) {
+          return {
+            success: false,
+            statusCode: 409,
+            message:
+              `This document has unpublished changes in ${heldBy.join(", ")}. ` +
+              `Publish or discard them first, or publish each language on its ` +
+              `own — locale '${EVERY_LOCALE}' moves every language's status and ` +
+              `will not decide what happens to work that has not been released.`,
+            data: null,
+          };
+        }
+      }
       // The component schemas reachable from this collection, resolved once off
       // the transaction (registry reads on the pooled connection, the same reason
       // as `webhookFields` below) and reused by the promote path. Skipped when a
@@ -6756,11 +6744,6 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate.hasStatus &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
-            await this.promoteOtherLocaleWorkingDrafts(tx, {
-              collectionName: params.collectionName,
-              entryId: params.entryId,
-              skipLocale: draftLocaleKey,
-            });
             sweptLocaleTransitions = await this.sweepCompanionLifecycle(tx, {
               collectionName: params.collectionName,
               companionTableName: localizedUpdate.companionTableName,

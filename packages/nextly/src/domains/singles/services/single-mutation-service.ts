@@ -129,7 +129,6 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { promoteAllPendingChanges } from "./promote-all-pending-changes";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -473,6 +472,53 @@ export class SingleMutationService extends BaseService {
       });
       if (accessDenied) {
         return accessDenied;
+      }
+
+      // A wildcard must not decide the fate of work somebody saved and has not
+      // released yet. Same rule, same reasoning, as the collection path: a
+      // pending edit stores the whole document as it looked when it was saved
+      // rather than the fields its author touched, so two languages' edits
+      // cannot be merged without inventing a rule for which shared value wins —
+      // and every such rule silently discards somebody's work in some ordering.
+      //
+      // The write locale is derived through the shared resolver rather than
+      // restated here, so this and the promotion that runs later cannot disagree
+      // about which language the write already covers.
+      if (
+        sweepAllLocales &&
+        existingDoc !== null &&
+        singleMeta.versions?.drafts?.enabled === true
+      ) {
+        const writeDraftLocale = workingDraftLocale({
+          documentLocalized: singleMeta.localized === true,
+          // A wildcard carries no request locale by the time it reaches here:
+          // it was resolved away so the body never sees it as a language.
+          requestLocale: null,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        });
+        const heldBy = (
+          await new VersionsRepository(this.adapter).findAllWorkingDrafts({
+            scopeKind: "single",
+            scopeSlug: slug,
+            entryId: existingDoc.id,
+          })
+        )
+          .map(draft => draft.locale)
+          .filter(
+            (locale): locale is string =>
+              locale !== null && locale !== writeDraftLocale
+          );
+        if (heldBy.length > 0) {
+          return {
+            success: false,
+            statusCode: 409,
+            message:
+              `This Single has unpublished changes in ${heldBy.join(", ")}. ` +
+              `Publish or discard them first, or publish each language on its ` +
+              `own — locale '${EVERY_LOCALE}' moves every language's status and ` +
+              `will not decide what happens to work that has not been released.`,
+          };
+        }
       }
 
       // 2. Resolve the document to write against. When the Single has never been
@@ -1794,55 +1840,6 @@ export class SingleMutationService extends BaseService {
                   row[f.column] = companionData[f.column];
                 }
               }
-            }
-
-            // {@link EVERY_LOCALE}: release every language's pending change
-            // before the statuses move.
-            //
-            // The promotion above reaches ONE language's working draft — the
-            // write locale's. A wildcard publish that stopped there would mark
-            // every translation published while serving the values each author
-            // was still holding: the document would report itself fully live and
-            // show none of the work being published. Ordered before the status
-            // sweep for the reason the publish-all route orders it the same way,
-            // so no reader sees a language published ahead of its content.
-            //
-            // Safe to run over a draft the single-locale promotion has already
-            // folded in, because the wildcard admits a status-only patch: there
-            // is no caller field value for a re-applied draft to overwrite.
-            // Only a publish releases pending work; a takedown must leave each
-            // author's unreleased edit exactly where it is.
-            if (
-              sweepAllLocales &&
-              !holdEdit &&
-              companionStatus === "published"
-            ) {
-              await promoteAllPendingChanges({
-                tx,
-                dialect: this.adapter.dialect,
-                slug,
-                tableName: singleMeta.tableName,
-                entryId: existingDoc.id,
-                companion:
-                  companion && companionPhysicallyExists ? companion : null,
-                draftsEnabled: singleMeta.versions?.drafts?.enabled === true,
-                now: new Date(),
-              });
-
-              // Re-read the committed row, because promotion may have written
-              // SHARED columns after the update above returned.
-              //
-              // A non-default language's pending edit can carry an untranslated
-              // field, and everything downstream — the version snapshot, the
-              // outbox payload, the after-change hooks and the response — reads
-              // the row returned by that earlier update. Leaving it stale would
-              // commit one value and report another, with the only pending copy
-              // already consumed, so nothing could reconcile them afterwards.
-              const promoted = await tx.selectOne<SingleDocument>(
-                singleMeta.tableName,
-                {}
-              );
-              if (promoted) rows[0] = promoted;
             }
 
             // {@link EVERY_LOCALE}: carry the lifecycle to the languages the

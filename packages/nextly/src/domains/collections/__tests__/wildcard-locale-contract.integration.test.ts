@@ -221,11 +221,13 @@ describe.each(getConfiguredTestDialects())(
       expect(after.de).toBe("published");
     });
 
-    it("releases EVERY language's pending change, not just the default one", async () => {
-      // A wildcard publish that moved the statuses without folding in each
-      // language's pending change would mark every translation live while
-      // serving the values their authors were still holding — the document
-      // reporting itself fully published and showing none of the work.
+    it("REFUSES rather than decide the fate of unreleased work (Single)", async () => {
+      // A pending edit records the whole document as it looked when it was
+      // saved, not the fields its author touched — so two languages' edits
+      // cannot be merged without inventing a rule for which shared value wins,
+      // and every such rule discards somebody's work in some ordering. The
+      // wildcard therefore refuses and names the languages holding work, so a
+      // scheduled release stops where an operator can see it.
       const t = await boot(dialect);
       const singles = singlesOf(t);
       await singles.update(
@@ -238,32 +240,55 @@ describe.each(getConfiguredTestDialects())(
         { siteName: "DE v1", status: "published" },
         { locale: "de", overrideAccess: true }
       );
-      // Status-less saves: held as each language's pending change.
-      await singles.update(
-        SINGLE_SLUG,
-        { siteName: "EN v2" },
-        { locale: "en", overrideAccess: true }
-      );
+      // A status-less save in the NON-write language is held as pending.
       await singles.update(
         SINGLE_SLUG,
         { siteName: "DE v2" },
         { locale: "de", overrideAccess: true }
       );
 
-      // Precondition: both edits are genuinely PENDING. Without this the
-      // assertion below is satisfied by a split that never held anything.
-      expect(await liveSiteName(t, "en")).toBe("EN v1");
+      // Precondition: the edit really is pending, not live.
       expect(await liveSiteName(t, "de")).toBe("DE v1");
 
-      const res = await singles.update(
+      const refused = await singles.update(
         SINGLE_SLUG,
         { status: "published" },
         { locale: "*", overrideAccess: true }
       );
-      expect(res.success).toBe(true);
 
-      expect(await liveSiteName(t, "en")).toBe("EN v2");
-      expect(await liveSiteName(t, "de")).toBe("DE v2");
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.message).toContain("de");
+      // Nothing moved: the refusal is a precondition, not a rollback.
+      expect(await liveSiteName(t, "de")).toBe("DE v1");
+    });
+
+    it("CONTROL: the wildcard still runs when nothing is being held", async () => {
+      // Without this, a wildcard that refused unconditionally would satisfy the
+      // case above while breaking every ordinary release.
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      await singles.update(
+        SINGLE_SLUG,
+        { siteName: "EN v1", status: "draft" },
+        { locale: "en", overrideAccess: true }
+      );
+      await singles.update(
+        SINGLE_SLUG,
+        { siteName: "DE v1", status: "draft" },
+        { locale: "de", overrideAccess: true }
+      );
+
+      const ok = await singles.update(
+        SINGLE_SLUG,
+        { status: "published" },
+        { locale: "*", overrideAccess: true }
+      );
+
+      expect(ok.success).toBe(true);
+      const after = await companionStatuses(t, `single_${SINGLE_SLUG}_locales`);
+      expect(after.en).toBe("published");
+      expect(after.de).toBe("published");
     });
 
     it("emits one lifecycle event per language the sweep moved", async () => {
@@ -389,10 +414,7 @@ describe.each(getConfiguredTestDialects())(
       expect(afterRow?.first_published_at ?? null).toBeNull();
     });
 
-    it("releases EVERY language's pending edit on a collection too", async () => {
-      // A localized draft-split collection keeps one pending edit per language.
-      // A wildcard that promoted only the default one would mark every
-      // translation published while the others kept serving pre-edit values.
+    it("REFUSES rather than decide the fate of unreleased work (collection)", async () => {
       const t = await boot(dialect);
       const created = await handlerOf(t).createEntry(
         { collectionName: DRAFTS_SLUG, overrideAccess: true },
@@ -409,11 +431,7 @@ describe.each(getConfiguredTestDialects())(
         },
         { title: "DE v1", status: "published" }
       );
-      // Status-less saves are held per language.
-      await handlerOf(t).updateEntry(
-        { collectionName: DRAFTS_SLUG, entryId: id, overrideAccess: true },
-        { title: "EN v2" }
-      );
+      // Held in the non-write language.
       await handlerOf(t).updateEntry(
         {
           collectionName: DRAFTS_SLUG,
@@ -431,10 +449,9 @@ describe.each(getConfiguredTestDialects())(
         );
         return row?.title;
       };
-      // Precondition: both edits are genuinely pending.
       expect(await liveTitle("de")).toBe("DE v1");
 
-      await handlerOf(t).updateEntry(
+      const refused = await handlerOf(t).updateEntry(
         {
           collectionName: DRAFTS_SLUG,
           entryId: id,
@@ -444,7 +461,10 @@ describe.each(getConfiguredTestDialects())(
         { status: "published" }
       );
 
-      expect(await liveTitle("de")).toBe("DE v2");
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.message).toContain("de");
+      expect(await liveTitle("de")).toBe("DE v1");
     });
 
     it("REFUSES the wildcard on a Single with no lifecycle to move", async () => {
