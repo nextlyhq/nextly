@@ -413,6 +413,54 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Read a stored object back as bytes, or `null` when it is not there.
+   *
+   * The contract declares this OPTIONAL and, until now, no adapter supplied
+   * it — so a caller reaching for `adapter.read` got `undefined` and fell
+   * through whatever branch followed. An optional member nothing implements is
+   * a contract that reads as a capability and behaves as an absence.
+   *
+   * BUFFERS rather than streams, because that is the declared return type and
+   * widening it here would make this adapter answer a different question from
+   * its siblings. That bounds what it should be used for: an asset the server
+   * must serve from its own origin — a font file, a small document — rather
+   * than arbitrarily large media, which belongs behind {@link getSignedUrl} or
+   * a public URL. A streaming variant is a separate contract member, not a
+   * quiet change to this one.
+   *
+   * `null` for a missing key rather than a throw, matching
+   * {@link getMetadata}: absence is an ordinary answer about the bucket, while
+   * a credential or network failure is not, so only the first is folded into
+   * the return value.
+   *
+   * @param filePath - Storage path/key
+   * @returns The object's bytes, or `null` when no such key exists
+   */
+  async read(filePath: string): Promise<Buffer | null> {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.resolvedConfig.bucket,
+        Key: filePath,
+      });
+
+      const response = await this.client.send(command);
+      /*
+       * An empty body is not a missing object, and the two must not collapse.
+       * `GetObject` on a zero-byte key succeeds with no stream to transform,
+       * so returning `null` here would report a stored empty file as absent —
+       * and a caller deleting "missing" keys would then delete a real one.
+       */
+      if (response.Body === undefined) return Buffer.alloc(0);
+      return Buffer.from(await response.Body.transformToByteArray());
+    } catch (error: unknown) {
+      if (this.isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Generate signed URL for temporary private file access.
    *
    * Creates a pre-signed GetObject URL that grants temporary read access

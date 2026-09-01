@@ -15,7 +15,7 @@
  * ```
  */
 
-import { BaseStorageAdapter } from "nextly/storage";
+import { BaseStorageAdapter, fetchStoredBytes } from "nextly/storage";
 import type {
   UploadOptions,
   UploadResult,
@@ -132,6 +132,40 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Read a stored file back as bytes, or `null` when it is not there.
+   *
+   * A NETWORK round trip for the same reason as the Vercel adapter: the bytes
+   * live on UploadThing's CDN. A caller serving these from its own origin has
+   * to cache, or it pays the fetch on every request.
+   *
+   * The URL comes from `getFileUrls` rather than being assembled, because the
+   * service owns the address and this adapter never chose it.
+   *
+   * @param filePath - File key
+   * @returns The file's bytes, or `null` when no such key exists
+   */
+  async read(filePath: string): Promise<Buffer | null> {
+    let target: string | undefined;
+    try {
+      const result = await this.utapi.getFileUrls([filePath], {
+        keyType: "fileKey",
+      });
+      target = Array.from(result.data)[0]?.url;
+    } catch {
+      return null;
+    }
+    if (target === undefined) return null;
+
+    /*
+     * Outside the catch, as in the Vercel adapter, and through the same shared
+     * helper: a fetch that fails after the key resolved is a transport failure,
+     * and reporting it as absence would let a caller treat a live file as
+     * deleted.
+     */
+    return await fetchStoredBytes(target, filePath, "UploadThing");
   }
 
   /**
