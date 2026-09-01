@@ -20,32 +20,26 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import type { ArchetypeBody } from "./types";
+import { asText, selectsNothing } from "./cell-text";
+import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** How many rows a card of this size can show without becoming a table. */
 const MAX_ROWS = 5;
 
 /**
- * One cell as text, or `undefined` when it is not something to print.
+ * A list needs to know which field heads each row, and only `select` says.
  *
- * Objects and arrays are DROPPED rather than stringified. `String({})` is
- * "[object Object]", which is not a defect a reader can act on — it looks like
- * data. A relationship, a repeater or a rich-text value all arrive here as
- * objects, and this widget cannot draw any of them; saying nothing is better
- * than saying that. The same reading `RecentEntriesWidget` had to be taught
- * when its titles came back as objects.
- *
- * `null` and `undefined` are absent values, not text. `0` and `false` ARE text:
- * a count of zero is a real answer and dropping it would make the row lie.
+ * Judged from the DECLARATION, before any request is made. The same refusal
+ * used to arrive only after the query had run: the grid batched the widget
+ * because its archetype had a renderer, the server performed an unprojected
+ * read and shipped whole documents to the browser, and the card then threw them
+ * away to print this sentence -- on every mount and every window focus.
  */
-function asText(value: unknown): string | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value === "string") return value.trim() === "" ? undefined : value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return undefined;
-}
+export const listAccepts: ArchetypeAccepts = definition => {
+  const select = definition.query?.select ?? [];
+  if (select.length > 0) return undefined;
+  return selectsNothing(definition.title, "list", "row");
+};
 
 export const listBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "list") {
@@ -58,10 +52,11 @@ export const listBody: ArchetypeBody = (result, definition) => {
   const select = definition.query?.select ?? [];
   const [labelField, detailField] = select;
   if (!labelField) {
-    return {
-      ok: false,
-      message: `"${definition.title}" is a list widget whose query selects no fields, so there is nothing to show in each row.`,
-    };
+    // Unreachable through the grid, which declines this declaration before it
+    // batches. Kept because a body must be safe to call on its own -- a test,
+    // or a future caller that has a result in hand -- and because the sentence
+    // is one thing said in one place.
+    return { ok: false, message: listAccepts(definition) ?? "" };
   }
 
   if (result.items.length === 0) {

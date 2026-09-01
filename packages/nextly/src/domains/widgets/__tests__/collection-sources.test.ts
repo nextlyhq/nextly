@@ -21,7 +21,7 @@ import {
 
 type Row = {
   slug: string;
-  fields: Array<{ name: string; type: string }>;
+  fields: Array<{ name: string; type: string; label?: string }>;
   timestamps?: boolean;
   status?: boolean;
 };
@@ -71,6 +71,46 @@ describe("refreshCollectionSources", () => {
     const source = getSource("collection:reports");
     expect(source?.kind).toBe("collection");
     expect(source?.fields.map(f => f.name)).toContain("title");
+  });
+
+  it("carries a field's human label onto the source", async () => {
+    // A table widget heads its columns with these. Without the label the admin
+    // has only the storage name, so a column reads `publishedAt` -- and the
+    // alternatives are worse: deriving prose from an identifier guesses at
+    // capitalisation and word breaks, and asking the widget author to declare
+    // headings puts a second answer beside `select`.
+    registryHolds([
+      {
+        slug: "reports",
+        fields: [{ name: "publishedAt", type: "date", label: "Published at" }],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const field = getSource("collection:reports")?.fields.find(
+      f => f.name === "publishedAt"
+    );
+    expect(field?.label).toBe("Published at");
+  });
+
+  it("omits a label that is blank rather than heading a column with nothing", async () => {
+    // `label` is optional on a field config, and a whitespace one is not a
+    // heading. The admin falls back to the name, which is at least true.
+    registryHolds([
+      {
+        slug: "reports",
+        fields: [{ name: "slug", type: "text", label: "   " }],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const field = getSource("collection:reports")?.fields.find(
+      f => f.name === "slug"
+    );
+    expect(field).toBeDefined();
+    expect(field?.label).toBeUndefined();
   });
 
   it("drops the source for a collection that has left the registry", async () => {

@@ -14,7 +14,10 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView, useListColumns } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  useTableColumns,
+} from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -254,25 +257,12 @@ export default function RoleTable() {
     ];
   }, []);
 
-  const toggleableColumns = useMemo(
-    () => allColumns.filter(col => !ALWAYS_VISIBLE.has(col.name)),
-    [allColumns]
-  );
-
-  /* The reader's column choice outlives the tab it was made in. */
-  const columnsControl = useListColumns({
+  // Resolves persisted column visibility while ensuring pinned role names remain visible.
+  const { columns, columnsControl } = useTableColumns({
     storageKey: "roles",
-    columns: toggleableColumns,
+    columns: allColumns,
+    alwaysVisible: ALWAYS_VISIBLE,
   });
-
-  const columns = useMemo(
-    () =>
-      allColumns.map(col => ({
-        ...col,
-        hidden: !columnsControl.isColumnVisible(col.name),
-      })),
-    [allColumns, columnsControl]
-  );
 
   const selection = useMemo<DataTableSelection<Role>>(
     () => ({

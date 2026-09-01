@@ -189,16 +189,24 @@ A widget is drawn one of two ways, and you pick by what you declare.
 Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
 runs the query for the signed-in user and renders the card.
 
-> **What the host draws today: `metric` and `list`.**
-> `table`, `text` and `actions` are accepted by the contract but have no renderer
-> yet, so a widget declaring one shows "the … archetype is not rendered yet" in its
-> card unless it also ships a `component` to draw the body itself. Declare those
-> archetypes only with a component fallback until this note says otherwise.
+> **What the host draws today: `metric`, `list` and `table`.**
+> `text` and `actions` are accepted by the contract but have no renderer yet, so a
+> widget declaring one shows "the … archetype is not rendered yet" in its card
+> unless it also ships a `component` to draw the body itself. Declare those two
+> only with a component fallback until this note says otherwise.
 >
 > A `list` widget draws one row per result. Its query's `select` decides what each
 > row shows, in order: the first field is the row's label and the second, if there
-> is one, is the muted line under it. A `list` that selects nothing says so rather
-> than guessing at a field.
+> is one, is the muted line under it.
+>
+> A `table` widget draws a column per selected field, headed by that field's label
+> from your collection — so a heading reads "Published at", not `publishedAt`. The
+> columns come from what the SERVER returned, not from `select`: a field carrying
+> an `access.read` rule that denies the viewer is absent from their rows, and its
+> column and heading are absent with it.
+>
+> A `list` or `table` that selects nothing says so rather than guessing at a field,
+> and says it without running a query.
 
 ```ts
 contributes: {
