@@ -201,6 +201,57 @@ export async function previewTemplate(
   );
 }
 
+/**
+ * The fields the draft-preview route renders, and nothing more.
+ *
+ * Mirrors the route's own zod schema rather than reusing a template payload
+ * type: a preview never writes, so sending a name, a slug or an id would hand
+ * the endpoint input it has no use for, and widening this later would widen
+ * what an unsaved draft can put on the wire.
+ */
+export interface DraftPreviewTemplate {
+  subject: string;
+  htmlContent: string;
+  plainTextContent: string | null;
+  preheader: string | null;
+  useLayout: boolean;
+  kind: EmailTemplateKind;
+  layoutId: string | null;
+}
+
+/**
+ * A rendered draft: the complete artifact, including the text part.
+ *
+ * Distinct from `EmailTemplatePreviewResult`, which carries no `text` because
+ * the saved-row preview predates the unified renderer. Narrowing this to match
+ * it would discard the one field that tells an author whether the plain-text
+ * alternative recipients receive is the one they wrote.
+ */
+export interface DraftPreviewResult {
+  subject: string;
+  html: string;
+  text: string;
+}
+
+/**
+ * Render UNSAVED template fields through the server's composition.
+ *
+ * The editor previews through this rather than interpolating in the browser:
+ * a second implementation of the render is a second answer to "what will they
+ * receive", and the two drifted on the preheader, on a layout's own chrome and
+ * on the derived text part before this existed.
+ */
+export async function previewDraft(
+  template: DraftPreviewTemplate,
+  data: Record<string, unknown>
+): Promise<DraftPreviewResult> {
+  return fetcher<DraftPreviewResult>(
+    "/email-templates/preview",
+    { method: "POST", body: JSON.stringify({ template, data }) },
+    true
+  );
+}
+
 export interface SendTestEmailResult {
   success: boolean;
   messageId?: string;
@@ -232,5 +283,6 @@ export const emailTemplateApi = {
   updateTemplate,
   deleteTemplate,
   previewTemplate,
+  previewDraft,
   sendTestEmail,
 } as const;

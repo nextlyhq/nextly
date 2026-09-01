@@ -1730,6 +1730,7 @@ function parseEmailProviderRoutes(
  * - GET /api/email-templates/[id] → get template by id
  * - PATCH /api/email-templates/[id] → update template
  * - DELETE /api/email-templates/[id] → delete template
+ * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
  */
 function parseEmailTemplateRoutes(
@@ -1754,6 +1755,27 @@ function parseEmailTemplateRoutes(
       service: "emailTemplates",
       operation: "create",
       method: "createTemplate",
+      routeParams,
+    };
+  }
+
+  // POST /api/email-templates/preview → render UNSAVED fields
+  //
+  // Ahead of every `[id]` branch because this segment is a ROUTE, not an id.
+  // Read as an id it matches no POST operation at all, so the mounted admin's
+  // live preview answered not-found on every keystroke while the standalone
+  // route module worked in isolation — the catch-all is what a generated app
+  // actually mounts.
+  //
+  // `single` matches its id-addressed sibling below: both are non-CRUD reads
+  // returning one rendered artifact. The operation does not select the
+  // permission here — that comes from the HTTP method — so POST resolves to
+  // create-or-manage on email-templates either way.
+  if (id === "preview" && !subresource && httpMethod === "POST") {
+    return {
+      service: "emailTemplates",
+      operation: "single",
+      method: "previewDraft",
       routeParams,
     };
   }

@@ -1,6 +1,12 @@
 // ============================================================
-// Client-side interpolation (mirrors the core {{var}} engine)
+// Template-source inspection (NOT rendering)
 // ============================================================
+//
+// What remains here reads the template SOURCE: which variables it names, and
+// how to escape a value for the preview frame's own chrome. Rendering left —
+// `POST /api/email-templates/preview` composes a draft through the same
+// function the transport uses, and a browser-side second implementation of it
+// is a second answer to what a recipient receives.
 
 const TEMPLATE_VAR_RE = /{{\s*([\w.]+)\s*}}/g;
 
@@ -11,38 +17,6 @@ export function escapeHtmlValue(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function resolvePath(data: Record<string, unknown>, path: string): unknown {
-  return path
-    .split(".")
-    .reduce<unknown>(
-      (acc, key) =>
-        acc && typeof acc === "object"
-          ? (acc as Record<string, unknown>)[key]
-          : undefined,
-      data
-    );
-}
-
-export function interpolate(
-  template: string,
-  data: Record<string, unknown>,
-  escape = true
-): string {
-  return template.replace(TEMPLATE_VAR_RE, (_m, path: string) => {
-    const value = resolvePath(data, path);
-    if (value === undefined || value === null) return "";
-    const str =
-      typeof value === "string"
-        ? value
-        : typeof value === "number" ||
-            typeof value === "boolean" ||
-            typeof value === "bigint"
-          ? String(value)
-          : (JSON.stringify(value) ?? "");
-    return escape ? escapeHtmlValue(str) : str;
-  });
 }
 
 export function collectVariableNames(source: string): string[] {

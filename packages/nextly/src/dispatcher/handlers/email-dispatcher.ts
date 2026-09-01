@@ -14,6 +14,8 @@
  * plus synthetic pagination meta.
  */
 
+import { z } from "zod";
+
 import {
   SKIP_DATE_FORMATTING_HEADER,
   respondAction,
@@ -21,6 +23,8 @@ import {
   respondDoc,
   respondMutation,
 } from "../../api/response-shapes";
+import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
@@ -212,6 +216,31 @@ const EMAIL_TEMPLATE_METHODS: Record<
       return respondAction("Email template deleted.", {
         templateId: p.templateId,
       });
+    },
+  },
+  previewDraft: {
+    /*
+     * Renders fields that may never have been saved, for the editor's live
+     * preview. Validated against the SAME schema the standalone route module
+     * uses: two transports reach this behaviour, and a body accepted by one
+     * and refused by the other is a difference nobody can see from the client.
+     *
+     * Returns `{ subject, html, text }` — the whole artifact, including the
+     * text part, which is the field the browser-side preview used to guess at.
+     */
+    execute: async (svc, _p, body) => {
+      let validated: z.infer<typeof draftPreviewSchema>;
+      try {
+        validated = draftPreviewSchema.parse(body);
+      } catch (err) {
+        if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+        throw err;
+      }
+      const preview = await svc.templateService.previewDraft(
+        validated.template,
+        validated.data
+      );
+      return respondData(preview);
     },
   },
   previewTemplate: {
