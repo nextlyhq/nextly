@@ -85,6 +85,7 @@ import {
   companionRowExists,
   populateCompanionFields,
   readCompanionLocaleStatus,
+  readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
@@ -128,6 +129,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { promoteAllPendingChanges } from "./promote-all-pending-changes";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -1026,7 +1028,13 @@ export class SingleMutationService extends BaseService {
                   lockedCompanionStatus,
                   companionNextStatus
                 ) === transitionGuard.op;
-              if (firesOnMainRow || firesOnCompanion) {
+              // The sweep moves companion rows NEITHER test above can see, so a
+              // wildcard write is judged as the lifecycle move it is,
+              // unconditionally — the same reasoning, and the same hole, as the
+              // collection path. With the main row and the default translation
+              // already at the target status both tests answer no, while the
+              // sweep still takes every other language there.
+              if (firesOnMainRow || firesOnCompanion || sweepAllLocales) {
                 // Permission first (pre-resolved, no DB read): a caller lacking
                 // publish-<slug>/unpublish-<slug> is denied regardless of the row.
                 if (transitionGuard.permissionDenied) {
@@ -1165,10 +1173,47 @@ export class SingleMutationService extends BaseService {
             // row's own flag is what governs a main-row column.
             const mainStatusWritten = (mainPayload as Record<string, unknown>)
               .status;
+            // {@link EVERY_LOCALE}: a document already reachable in ANY language
+            // is not being published for the first time.
+            //
+            // The main row can be draft beside a translation that has been live
+            // since before this column existed, and the main row's own
+            // transition then reads as a first publication for a document the
+            // public could already see. Such a row carries null precisely
+            // because its history was never captured, so dating it today would
+            // record a publication that never happened. Asked only for a
+            // wildcard write, which is the only one that moves languages the
+            // main row says nothing about.
+            let anotherLanguageWasAlreadyLive = false;
+            if (
+              sweepAllLocales &&
+              companion &&
+              companionPhysicallyExists &&
+              companion.hasStatus
+            ) {
+              const priorStatuses = await readCompanionLocaleStatusAll(
+                tx.getDrizzle<
+                  Parameters<typeof readCompanionLocaleStatusAll>[0]
+                >(),
+                companion.table,
+                existingDoc.id,
+                // READ inside the transaction, never resolved: resolving issues
+                // a query, and a query against a missing relation aborts the
+                // whole transaction on PostgreSQL.
+                cachedCompanionReadiness(
+                  this.adapter,
+                  companion.companionTableName
+                )
+              );
+              anotherLanguageWasAlreadyLive = [...priorStatuses.values()].some(
+                status => status === "published"
+              );
+            }
             if (
               (singleMeta as { status?: boolean }).status === true &&
               mainStatusWritten === "published" &&
               preRowMainStatus !== "published" &&
+              !anotherLanguageWasAlreadyLive &&
               (preRow as { first_published_at?: unknown } | undefined)
                 ?.first_published_at == null
             ) {
@@ -1724,6 +1769,40 @@ export class SingleMutationService extends BaseService {
                   row[f.column] = companionData[f.column];
                 }
               }
+            }
+
+            // {@link EVERY_LOCALE}: release every language's pending change
+            // before the statuses move.
+            //
+            // The promotion above reaches ONE language's working draft — the
+            // write locale's. A wildcard publish that stopped there would mark
+            // every translation published while serving the values each author
+            // was still holding: the document would report itself fully live and
+            // show none of the work being published. Ordered before the status
+            // sweep for the reason the publish-all route orders it the same way,
+            // so no reader sees a language published ahead of its content.
+            //
+            // Safe to run over a draft the single-locale promotion has already
+            // folded in, because the wildcard admits a status-only patch: there
+            // is no caller field value for a re-applied draft to overwrite.
+            // Only a publish releases pending work; a takedown must leave each
+            // author's unreleased edit exactly where it is.
+            if (
+              sweepAllLocales &&
+              !holdEdit &&
+              companionStatus === "published"
+            ) {
+              await promoteAllPendingChanges({
+                tx,
+                dialect: this.adapter.dialect,
+                slug,
+                tableName: singleMeta.tableName,
+                entryId: existingDoc.id,
+                companion:
+                  companion && companionPhysicallyExists ? companion : null,
+                draftsEnabled: singleMeta.versions?.drafts?.enabled === true,
+                now: new Date(),
+              });
             }
 
             // {@link EVERY_LOCALE}: carry the lifecycle to the languages the

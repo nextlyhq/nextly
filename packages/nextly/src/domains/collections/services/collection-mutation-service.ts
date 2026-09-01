@@ -3694,6 +3694,138 @@ export class CollectionMutationService extends BaseService {
    * move the source past every target and report the whole site as needing
    * review for an action that changed not one word.
    */
+  /**
+   * Move every stored translation's lifecycle, and report which ones moved.
+   *
+   * The prior statuses are read INSIDE the caller's transaction and before the
+   * write, because "which languages did this actually change" cannot be
+   * recovered afterwards — once the sweep lands, a language that was already at
+   * the target status is indistinguishable from one this write moved. The
+   * answer is what the caller needs to emit one event per real transition
+   * rather than one per row it happened to touch.
+   *
+   * Returns the prior status of each language the sweep genuinely moved.
+   */
+  private async sweepCompanionLifecycle(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      companionTableName: string;
+      entryId: string;
+      status: string;
+    }
+  ): Promise<Map<string, string | null>> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      args.collectionName,
+      tx.getDrizzle()
+    );
+    const priorStatuses = companion
+      ? await readCompanionLocaleStatusAll(
+          tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+          companion.table,
+          args.entryId,
+          cachedCompanionReadiness(this.adapter, args.companionTableName)
+        )
+      : new Map<string, string | null>();
+
+    await this.writeCompanionStatus(tx, {
+      companionTableName: args.companionTableName,
+      parentId: args.entryId,
+      status: args.status,
+      locale: EVERY_LOCALE,
+    });
+
+    const moved = new Map<string, string | null>();
+    for (const [locale, prior] of priorStatuses) {
+      if (prior !== args.status) moved.set(locale, prior);
+    }
+    return moved;
+  }
+
+  /**
+   * One lifecycle event per language a wildcard write moved.
+   *
+   * Without this a scheduled German publish produces no `locale`-tagged event,
+   * so webhook-driven indexing and workflow listeners never learn the
+   * translation went live and go stale while the release reports success. The
+   * write locale is excluded because the ordinary path has already emitted it.
+   *
+   * Each event carries THAT language's own values rather than the main row's:
+   * a payload tagged `locale: de` holding English text is worse than no
+   * payload, because a consumer cannot tell it is wrong.
+   *
+   * Per locale rather than one document event, which is what a reader arriving
+   * from Strapi expects — its document service fires lifecycle hooks once per
+   * locale for exactly this operation, and Payload carries an open defect for
+   * firing only on the active one.
+   */
+  private async recordSweptLocaleStatusEvents(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      moved: Map<string, string | null>;
+      status: string;
+      skipLocale: string | undefined;
+      document: Record<string, unknown>;
+      previous: Record<string, unknown> | null;
+      fields: readonly SensitiveFieldSource[];
+      actor: RequestActor | null;
+    }
+  ): Promise<{
+    recorded: boolean;
+    transitions: {
+      locale: string;
+      from: string | null;
+      data: Record<string, unknown>;
+    }[];
+  }> {
+    // A locale the app no longer configures still has rows, and an event tagged
+    // with one that normal reads and writes reject would mislead a
+    // locale-routed consumer.
+    const configured = new Set(
+      this.localization?.locales.map(l => l.code) ?? []
+    );
+    let recorded = false;
+    const transitions: {
+      locale: string;
+      from: string | null;
+      data: Record<string, unknown>;
+    }[] = [];
+    for (const [locale, prior] of args.moved) {
+      if (locale === args.skipLocale) continue;
+      if (configured.size > 0 && !configured.has(locale)) continue;
+      const localeValues = await this.readCompanionLocalizedValues(
+        tx,
+        args.collectionName,
+        args.entryId,
+        locale
+      );
+      const localeDocument = {
+        ...args.document,
+        ...localeValues,
+        status: args.status,
+      };
+      const did = await this.recordStatusEvents(tx, {
+        collection: args.collectionName,
+        id: args.entryId,
+        locale,
+        from: prior,
+        to: args.status,
+        isCreate: false,
+        data: localeDocument,
+        previous: args.previous,
+        fields: args.fields,
+        actor: args.actor,
+      });
+      recorded = recorded || did;
+      // Carried out so the post-commit replay reaches in-process workflow
+      // subscribers with THIS language's document, without reading it twice.
+      transitions.push({ locale, from: prior, data: localeDocument });
+    }
+    return { recorded, transitions };
+  }
+
   private async writeCompanionStatus(
     tx: TransactionContext,
     args: {
@@ -5246,6 +5378,17 @@ export class CollectionMutationService extends BaseService {
     // no longer identifies the sentinel after the throw, but this result stays
     // correct regardless of how the error is wrapped.
     let transitionDeniedResult: CollectionServiceResult | undefined;
+    // Which languages a wildcard sweep actually moved, and what each moved FROM.
+    // Captured at the write because it is unrecoverable afterwards, and read at
+    // the event step so each real transition is reported once.
+    let sweptLocaleTransitions: Map<string, string | null> | undefined;
+    // The same languages, carried past the commit so in-process workflow
+    // subscribers observe each published translation and not only the main row.
+    let sweptLocaleReplays: {
+      locale: string;
+      from: string | null;
+      data: Record<string, unknown>;
+    }[] = [];
     try {
       // reject an unknown write locale before doing anything else.
       const badLocale = this.rejectInvalidWriteLocale(params.locale);
@@ -5623,6 +5766,29 @@ export class CollectionMutationService extends BaseService {
       // here would let `status: 0`/`false` slip an unpublish past the gate.
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
+
+      // The wildcard moves a LIFECYCLE, so a collection that has none has
+      // nothing for it to move, and the write must not proceed as an ordinary
+      // one. This is the flag on the config, not the presence of a `status`
+      // COLUMN: a collection carrying an ordinary user field called `status` has
+      // the column and no lifecycle, and letting the wildcard through there
+      // would write that field on the default locale — a field write, which is
+      // exactly what the wildcard contract refuses.
+      //
+      // Refused rather than answered as a no-op success. A no-op would let a
+      // scheduled release report itself applied having moved nothing, which is
+      // the failure mode this whole change exists to remove.
+      if (sweepAllLocales && !collectionHasStatus) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `Collection '${params.collectionName}' has no draft/published ` +
+            `lifecycle, so locale '${EVERY_LOCALE}' has no publication status ` +
+            `to move across its languages.`,
+          data: null,
+        };
+      }
       // The guard carries the pre-resolved PERMISSION denial (document-
       // independent) plus, when the op's stored rule is document-dependent
       // (owner-only/custom), the rules to re-evaluate against the ROW-LOCKED
@@ -6169,7 +6335,20 @@ export class CollectionMutationService extends BaseService {
                 committedLocaleStatus,
                 companionNextStatus
               ) === transitionGuard.op;
-            if (firesOnMainRow || firesOnCompanion) {
+            // The sweep moves companion rows NEITHER test above can see, so a
+            // wildcard write must be judged as the lifecycle move it is,
+            // unconditionally. Both tests ask whether THIS write transitions the
+            // main row or the write locale's companion; with the main row and the
+            // default translation already at the target status, both answer no
+            // while the sweep still takes every other language there. A caller
+            // holding `update` but not `unpublish` could then take a published
+            // German translation down through a gate that never fired.
+            //
+            // This is the same reasoning the all-locales lifecycle states for
+            // itself: it is unconditionally a publish (or an unpublish) and asks
+            // for that permission directly rather than inferring one from a
+            // transition, because it moves locales the main row says nothing about.
+            if (firesOnMainRow || firesOnCompanion || sweepAllLocales) {
               // Permission first (pre-resolved, no DB read): a caller lacking
               // publish-<slug>/unpublish-<slug> is denied regardless of the row.
               if (transitionGuard.permissionDenied) {
@@ -6507,11 +6686,11 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate.hasStatus &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
-            await this.writeCompanionStatus(tx, {
+            sweptLocaleTransitions = await this.sweepCompanionLifecycle(tx, {
+              collectionName: params.collectionName,
               companionTableName: localizedUpdate.companionTableName,
-              parentId: params.entryId,
+              entryId: params.entryId,
               status: localizedUpdate.companionData._status,
-              locale: EVERY_LOCALE,
             });
           }
 
@@ -7000,8 +7179,33 @@ export class CollectionMutationService extends BaseService {
                   actor,
                 });
               }
+              // {@link EVERY_LOCALE}: the languages the sweep moved that the
+              // write locale's event does not cover.
+              let sweptRecorded = false;
+              if (
+                collectionHasStatusLifecycle &&
+                sweptLocaleTransitions !== undefined &&
+                typeof companionNext === "string"
+              ) {
+                const swept = await this.recordSweptLocaleStatusEvents(tx, {
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  moved: sweptLocaleTransitions,
+                  status: companionNext,
+                  skipLocale: localizedUpdate?.writeLocale,
+                  document: updatedDocument,
+                  previous: previousDocument,
+                  fields: webhookFields,
+                  actor,
+                });
+                sweptRecorded = swept.recorded;
+                sweptLocaleReplays = swept.transitions;
+              }
               recorded =
-                recorded || mainStatusRecorded || localizedStatusRecorded;
+                recorded ||
+                mainStatusRecorded ||
+                localizedStatusRecorded ||
+                sweptRecorded;
 
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
@@ -7198,6 +7402,23 @@ export class CollectionMutationService extends BaseService {
           status: localizedNextStatus,
           emitStatusChanged: true,
           locale: localizedUpdate.writeLocale,
+        });
+      }
+
+      // {@link EVERY_LOCALE}: every other language the sweep moved, replayed
+      // with its own `locale` — mirroring the block above, so a workflow
+      // listening for a publish observes the German one too rather than only
+      // the language the write happened to name.
+      for (const replay of sweptLocaleReplays) {
+        this.transitionStatus({
+          collection: params.collectionName,
+          id: (updated as { id?: unknown }).id,
+          data: replay.data,
+          user: params.user,
+          previousStatus: replay.from,
+          status: replay.data.status as string,
+          emitStatusChanged: true,
+          locale: replay.locale,
         });
       }
 

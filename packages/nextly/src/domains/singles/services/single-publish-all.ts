@@ -56,7 +56,6 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
-import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { recordMutationEvent } from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
@@ -68,11 +67,8 @@ import type {
   UserContext,
 } from "../types";
 
-import {
-  splitPendingChange,
-  writeCompanionValues,
-} from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { promoteAllPendingChanges } from "./promote-all-pending-changes";
 import { checkSingleAccess } from "./single-query-service";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
@@ -669,51 +665,18 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     publishNow: Date
   ): Promise<void> {
-    const { slug, singleMeta, existingDoc, companion } = plan;
-    if (singleMeta.versions?.drafts?.enabled !== true) return;
-
-    const repo = new VersionsRepository(tx);
-    const ref = {
-      scopeKind: "single" as const,
-      scopeSlug: slug,
-      entryId: existingDoc.id,
-    };
-    const pending = await repo.findAllWorkingDrafts(ref);
-    if (pending.length === 0) return;
-
-    for (const draft of pending) {
-      // The pending change carries no lifecycle of its own; the statuses this
-      // publish writes are the ones that count.
-      const { main, companion: companionValues } = splitPendingChange(
-        draft.snapshot,
-        companion
-      );
-      delete main.status;
-
-      if (Object.keys(main).length > 0) {
-        await tx.update(
-          singleMeta.tableName,
-          { ...main, updated_at: publishNow },
-          this.whereEq("id", existingDoc.id)
-        );
-      }
-      if (
-        companion &&
-        draft.locale &&
-        Object.keys(companionValues).length > 0
-      ) {
-        await writeCompanionValues({
-          tx,
-          dialect: this.adapter.dialect,
-          companionTableName: companion.companionTableName,
-          entryId: existingDoc.id,
-          locale: draft.locale,
-          values: companionValues,
-        });
-      }
-    }
-
-    await repo.deleteAllWorkingDrafts(ref);
+    // Delegated: a wildcard-locale write owes the same debt, and one of the two
+    // was written without it. See the module note.
+    await promoteAllPendingChanges({
+      tx,
+      dialect: this.adapter.dialect,
+      slug: plan.slug,
+      tableName: plan.singleMeta.tableName,
+      entryId: plan.existingDoc.id,
+      companion: plan.companion,
+      draftsEnabled: plan.singleMeta.versions?.drafts?.enabled === true,
+      now: publishNow,
+    });
   }
 
   /**
