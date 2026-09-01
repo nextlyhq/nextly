@@ -2,31 +2,26 @@
 
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 
 import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { DeleteWebhookDialog } from "@admin/components/features/webhooks/DeleteWebhookDialog";
+import { EditWebhookLayout } from "@admin/components/features/webhooks/EditWebhookLayout";
 import { RotateSecretDialog } from "@admin/components/features/webhooks/RotateSecretDialog";
-import { SecretLifecycle } from "@admin/components/features/webhooks/SecretLifecycle";
+import { WebhookCredentialPanel } from "@admin/components/features/webhooks/WebhookCredentialPanel";
 import { WebhookForm } from "@admin/components/features/webhooks/WebhookForm";
 import { WebhookSecretModal } from "@admin/components/features/webhooks/WebhookSecretModal";
-import { Eye, List, Loader2, RefreshCw } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import {
-  useDeleteWebhook,
-  useExpireOldSecrets,
-  useRevealSecret,
-  useRotateSecret,
-  useUpdateWebhook,
-  useWebhook,
-} from "@admin/hooks/queries/useWebhooks";
+import { useUpdateWebhook, useWebhook } from "@admin/hooks/queries/useWebhooks";
 import { useCan } from "@admin/hooks/useCan";
 import { useRouter } from "@admin/hooks/useRouter";
+import { useWebhookDeletion } from "@admin/hooks/useWebhookDeletion";
+import { useWebhookSecretActions } from "@admin/hooks/useWebhookSecretActions";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import {
@@ -49,16 +44,9 @@ const WEBHOOK_PAGE = {
 const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
   const { data: webhook, isLoading, isError, error } = useWebhook(id);
   const { mutate: doUpdate, isPending } = useUpdateWebhook();
-  const { mutate: doReveal, isPending: isRevealing } = useRevealSecret();
-  const { mutate: doRotate, isPending: isRotating } = useRotateSecret();
-  const { mutate: doExpireOld, isPending: isExpiring } = useExpireOldSecrets();
-  const { mutate: doDelete, isPending: isDeleting } = useDeleteWebhook();
-
-  const [secrets, setSecrets] = useState<string[] | null>(null);
-  // The one-time secret minted by a rotation, shown once in its own modal.
-  const [rotatedSecret, setRotatedSecret] = useState<string | null>(null);
-  const [confirmRotate, setConfirmRotate] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const secretActions = useWebhookSecretActions(id);
+  // `null` while the document is loading — the hook refuses to delete on it.
+  const deletion = useWebhookDeletion(id, webhook?.name ?? null);
 
   // Reaching this page requires update-webhooks (registry-gated). Delete is a
   // separate grant, but `update-webhooks` is the management umbrella that
@@ -96,76 +84,6 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
     [doUpdate, id, webhook]
   );
 
-  const handleReveal = useCallback(() => {
-    doReveal(id, {
-      onSuccess: setSecrets,
-      onError: (err: Error) => {
-        toast.error("Could not reveal the secret", {
-          description: apiErrorMessage(err),
-        });
-      },
-    });
-  }, [doReveal, id]);
-
-  const handleRotate = useCallback(
-    (overlapSeconds: number) => {
-      doRotate(
-        { id, input: { overlapSeconds } },
-        {
-          onSuccess: result => {
-            setConfirmRotate(false);
-            // The fresh secret is shown once here; the reveal action can return
-            // it again later while it remains the primary.
-            setRotatedSecret(result.secret);
-            toast.success("Signing secret rotated", {
-              description:
-                overlapSeconds > 0
-                  ? "The previous secret keeps working until the overlap window ends."
-                  : "The previous secret was retired immediately.",
-            });
-          },
-          onError: (err: Error) => {
-            toast.error("Could not rotate the secret", {
-              description: apiErrorMessage(err),
-            });
-          },
-        }
-      );
-    },
-    [doRotate, id]
-  );
-
-  const handleExpireOld = useCallback(() => {
-    doExpireOld(id, {
-      onSuccess: () => {
-        toast.success("Old signing secret expired", {
-          description: "Only the current secret can sign deliveries now.",
-        });
-      },
-      onError: (err: Error) => {
-        toast.error("Could not expire the old secret", {
-          description: apiErrorMessage(err),
-        });
-      },
-    });
-  }, [doExpireOld, id]);
-
-  const handleConfirmDelete = useCallback(() => {
-    if (!webhook) return;
-    const name = webhook.name;
-    doDelete(id, {
-      onSuccess: () => {
-        toast.success("Endpoint deleted", {
-          description: `"${name}" will no longer receive events.`,
-        });
-        navigateTo(ROUTES.SETTINGS_WEBHOOKS);
-      },
-      onError: (err: Error) => {
-        toast.error("Delete failed", { description: apiErrorMessage(err) });
-      },
-    });
-  }, [doDelete, id, webhook]);
-
   if (isError) {
     return (
       <PageErrorFallback
@@ -180,108 +98,85 @@ const EditWebhookContent: React.FC<{ id: string }> = ({ id }) => {
 
   return (
     <>
-      <WebhookForm
-        defaultValues={toFormValues(webhook)}
-        existingHeaderNames={
-          webhook.headers ? Object.keys(webhook.headers) : []
+      {/*
+       * The ORDER is the layout's, not this page's. Stated there once so a
+       * later edit here cannot quietly put the secret back below the form —
+       * moving these props around changes nothing about where they render.
+       */}
+      <EditWebhookLayout
+        credential={
+          <WebhookCredentialPanel
+            secrets={webhook.secrets}
+            canManage={canManageWebhooks}
+            onReveal={secretActions.reveal}
+            isRevealing={secretActions.isRevealing}
+            onRotate={() => secretActions.setConfirmingRotate(true)}
+            isRotating={secretActions.isRotating}
+            onExpireOld={secretActions.expireOld}
+            isExpiring={secretActions.isExpiring}
+            deliveriesHref={buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, {
+              id,
+            })}
+          />
         }
-        onSubmit={handleSubmit}
-        isPending={isPending}
-        submitLabel="Save changes"
-        pendingLabel="Saving…"
+        configuration={
+          <WebhookForm
+            defaultValues={toFormValues(webhook)}
+            existingHeaderNames={
+              webhook.headers ? Object.keys(webhook.headers) : []
+            }
+            onSubmit={handleSubmit}
+            isPending={isPending}
+            submitLabel="Save changes"
+            pendingLabel="Saving…"
+          />
+        }
+        dangerZone={
+          canDelete ? (
+            <div className="mt-6 flex justify-end">
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => deletion.setConfirming(true)}
+              >
+                Delete endpoint
+              </Button>
+            </div>
+          ) : undefined
+        }
       />
 
-      <div className="mt-8 border-t border-border pt-6">
-        <SecretLifecycle
-          secrets={webhook.secrets}
-          canManage={canManageWebhooks}
-          onExpireOld={handleExpireOld}
-          isExpiring={isExpiring}
-        />
-      </div>
-
-      <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleReveal}
-            disabled={isRevealing}
-          >
-            {isRevealing ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Eye className="h-4 w-4" />
-            )}
-            Reveal signing secret
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setConfirmRotate(true)}
-            disabled={isRotating}
-          >
-            {isRotating ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-            Rotate signing secret
-          </Button>
-
-          <Link href={buildRoute(ROUTES.SETTINGS_WEBHOOKS_DELIVERIES, { id })}>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full sm:w-auto"
-            >
-              <List className="h-4 w-4" />
-              View deliveries
-            </Button>
-          </Link>
-        </div>
-
-        {canDelete && (
-          <Button
-            type="button"
-            variant="destructive"
-            onClick={() => setConfirmDelete(true)}
-          >
-            Delete endpoint
-          </Button>
-        )}
-      </div>
-
       <WebhookSecretModal
-        open={secrets !== null}
-        secrets={secrets}
+        open={secretActions.revealed !== null}
+        secrets={secretActions.revealed}
         oneTime={false}
-        onClose={() => setSecrets(null)}
+        onClose={secretActions.dismissRevealed}
       />
 
       <WebhookSecretModal
-        open={rotatedSecret !== null}
-        secrets={rotatedSecret !== null ? [rotatedSecret] : null}
+        open={secretActions.rotated !== null}
+        secrets={
+          secretActions.rotated !== null ? [secretActions.rotated] : null
+        }
         oneTime
         canRevealLater
-        onClose={() => setRotatedSecret(null)}
+        onClose={secretActions.dismissRotated}
       />
 
       <RotateSecretDialog
-        open={confirmRotate}
-        onOpenChange={setConfirmRotate}
+        open={secretActions.confirmingRotate}
+        onOpenChange={secretActions.setConfirmingRotate}
         webhookName={webhook.name}
-        onConfirm={handleRotate}
-        isPending={isRotating}
+        onConfirm={secretActions.rotate}
+        isPending={secretActions.isRotating}
       />
 
       <DeleteWebhookDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
+        open={deletion.confirming}
+        onOpenChange={deletion.setConfirming}
         webhook={webhook}
-        onConfirm={handleConfirmDelete}
-        isPending={isDeleting}
+        onConfirm={deletion.confirm}
+        isPending={deletion.isDeleting}
       />
     </>
   );
