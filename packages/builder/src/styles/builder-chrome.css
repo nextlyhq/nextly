@@ -948,6 +948,24 @@
 .nx-canvas {
   position: relative;
   /*
+   * The page's own surface.
+   *
+   * The frame is `--nx-builder-surface`, a shade off the background so it
+   * recedes behind the canvas. With no surface of its own the canvas INHERITS
+   * that frame, so the page being composed is drawn on the editor's grey — and
+   * a block declares no background, so the grey shows through the document
+   * itself. What an author edits then looks nothing like what a visitor loads,
+   * which is the one thing this canvas exists to show.
+   *
+   * The token rather than a literal, so a host re-theming the admin moves the
+   * page with it, exactly as the frame already does.
+   *
+   * The frame only becomes visible BESIDE the page where the canvas is
+   * bounded: at full width the page is the region, and there are no edges to
+   * frame. A narrower tier, or zooming out, reveals it.
+   */
+  background-color: var(--nx-builder-surface-raised);
+  /*
    * Fills the region rather than stopping at its content.
    *
    * Without this the canvas is exactly as tall as the blocks in it, so the area
