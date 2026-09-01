@@ -55,33 +55,65 @@ describe("refusalWording", () => {
     expect(headline).toBe("This slot does not take an Image.");
   });
 
-  it("turns a refusal into an instruction by naming what is permitted", () => {
-    const { takes } = refusalWording(
-      refusal("wrong-parent", ["core/heading", "core/paragraph"]),
+  it("says what a SLOT admits, because that is what its list means", () => {
+    // `canHoldInSlot` returns the slot's allow-list, so "Takes" is a true
+    // statement about the region here and only here.
+    const { remedy } = refusalWording(
+      refusal("not-allowed-in-slot", ["core/heading", "core/paragraph"]),
       "core/image",
       "core/accordion"
     );
-    expect(takes).toBe("Takes Heading and Paragraph");
+    expect(remedy).toBe("Takes Heading and Paragraph");
   });
 
-  it("reads as prose for three or more permitted types", () => {
-    const { takes } = refusalWording(
-      refusal("wrong-parent", ["core/heading", "core/paragraph", "core/list"]),
+  it("does NOT claim the region accepts a moving block's valid parents", () => {
+    /*
+     * The separating case. For `wrong-parent`, `canNest` returns
+     * `restrictionFor(childType)` — the containers the MOVING block may sit
+     * inside — not anything the refusing region accepts. Wording it as "Takes"
+     * produces "Accordion does not take a Column. Takes Columns", which asserts
+     * the accordion admits columns. Nothing measured that.
+     */
+    const { remedy } = refusalWording(
+      refusal("wrong-parent", ["core/columns"]),
+      "core/column",
+      "core/accordion"
+    );
+    expect(remedy).toBe("Column goes inside Columns");
+    expect(remedy).not.toContain("Takes");
+  });
+
+  it("offers a parent list as alternatives to choose between", () => {
+    const { remedy } = refusalWording(
+      refusal("restricted-at-root", ["core/accordion", "core/columns"]),
+      "core/accordion-item",
+      undefined
+    );
+    expect(remedy).toBe("Accordion item goes inside Accordion or Columns");
+  });
+
+  it("reads as prose for three or more admitted types", () => {
+    const { remedy } = refusalWording(
+      refusal("not-allowed-in-slot", [
+        "core/heading",
+        "core/paragraph",
+        "core/list",
+      ]),
       "core/image",
       "core/accordion"
     );
-    expect(takes).toBe("Takes Heading, Paragraph and List");
+    expect(remedy).toBe("Takes Heading, Paragraph and List");
   });
 
   it("omits the second line entirely when nothing is permitted", () => {
-    // Rendering "Takes " with an empty list reads as a sentence that was cut
-    // off, which is worse than saying nothing about what the region accepts.
-    const { takes } = refusalWording(
+    // Rendering the lead-in with an empty list reads as a sentence that was cut
+    // off, which is worse than saying nothing about the remedy at all.
+    const { remedy } = refusalWording(
       refusal("wrong-parent", []),
       "core/image",
       "core/accordion"
     );
-    expect(takes).toBeNull();
+    expect(remedy).toBeNull();
   });
 
   it("chooses the article from the LABEL, not from the block type", () => {
@@ -99,13 +131,13 @@ describe("refusalWording", () => {
     // The registry is empty at rest, and blockLabel humanises an unregistered
     // type rather than failing. A test that opened the editor first would pass
     // while a cold load rendered raw identities at the author.
-    const { headline, takes } = refusalWording(
+    const { headline, remedy } = refusalWording(
       refusal("wrong-parent", ["acme/rich-text"]),
       "acme/hero-banner",
       "acme/tab-set"
     );
     expect(headline).toBe("Tab set does not take a Hero banner.");
-    expect(takes).toBe("Takes Rich text");
+    expect(remedy).toBe("Hero banner goes inside Rich text");
   });
 
   it("does not name a container it was not given", () => {

@@ -40,13 +40,20 @@ export interface RefusalWording {
   /** Why the drop will not happen, in one sentence. */
   readonly headline: string;
   /**
-   * What the region does take, or null when the engine named nothing.
+   * What the author can do about it, or null when the engine named nothing.
+   *
+   * Named for the job rather than for one of its sentences, because
+   * `permitted` does NOT mean the same thing for every reason and the wording
+   * has to follow that. A slot refusal names what the SLOT admits; the other
+   * two name the containers the MOVING BLOCK is allowed to sit inside. Calling
+   * both "takes" asserts something about the region that the second kind never
+   * said — "Accordion does not take a Column. Takes Columns" reads as the
+   * accordion accepting columns, which is not what was measured.
    *
    * Null rather than an empty string: a caller rendering it unconditionally
-   * would draw "Takes" with nothing after it, which reads as a sentence that
-   * was cut off rather than as an absent fact.
+   * would draw a sentence that was cut off rather than an absent fact.
    */
-  readonly takes: string | null;
+  readonly remedy: string | null;
 }
 
 /**
@@ -72,11 +79,11 @@ function article(label: string): string {
  * rather than a delimiter. Two members join without a comma; three or more take
  * commas up to the last.
  */
-function asList(labels: readonly string[]): string {
+function asList(labels: readonly string[], joiner: string): string {
   if (labels.length === 1) return labels[0] ?? "";
-  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  if (labels.length === 2) return `${labels[0]} ${joiner} ${labels[1]}`;
   const last = labels[labels.length - 1];
-  return `${labels.slice(0, -1).join(", ")} and ${last}`;
+  return `${labels.slice(0, -1).join(", ")} ${joiner} ${last}`;
 }
 
 /**
@@ -114,9 +121,23 @@ export function refusalWording(
     }
   })();
 
+  /*
+   * The second line follows the REASON, because `permitted` is two different
+   * facts wearing one field name.
+   *
+   * `not-allowed-in-slot` carries the slot's allow-list — types the region
+   * admits — so "Takes" is a true statement about the region. The other two
+   * carry `parentsOf(movingType)`: the containers the block being dragged may
+   * sit inside, which says nothing about what the refusing region accepts.
+   *
+   * "or" rather than "and" for the parent list, because they are alternatives
+   * an author picks between; the slot's list is an enumeration of what it holds.
+   */
   const permitted = refusal.permitted.map(blockLabel);
-  return {
-    headline,
-    takes: permitted.length === 0 ? null : `Takes ${asList(permitted)}`,
-  };
+  if (permitted.length === 0) return { headline, remedy: null };
+  const remedy =
+    refusal.reason === "not-allowed-in-slot"
+      ? `Takes ${asList(permitted, "and")}`
+      : `${moving} goes inside ${asList(permitted, "or")}`;
+  return { headline, remedy };
 }
