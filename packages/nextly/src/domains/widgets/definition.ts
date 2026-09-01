@@ -346,16 +346,41 @@ export function actionProblem(action: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Why a queryless archetype may not carry this `query`, or `undefined`.
+ *
+ * The non-throwing half of a rule {@link validateQuery} also enforces, exported
+ * for the same reason {@link actionProblem} is: the CONTRIBUTIONS channel needs
+ * the identical answer without a throw, and one rule spelled twice is exactly
+ * how the two channels came to disagree. The registry refused a query on an
+ * `actions` widget while a contributed one carrying the same query passed boot
+ * -- and since core draws `actions` from the declaration, the admin then issued
+ * a batched read on every mount and refetch whose result the declared renderer
+ * never looks at.
+ *
+ * Takes the two values rather than a definition, so both a validated
+ * `WidgetDefinition` and a decoded JSON object can ask it without either side
+ * casting to the other's shape.
+ */
+export function querylessQueryProblem(
+  archetype: unknown,
+  query: unknown
+): string | undefined {
+  if (typeof archetype !== "string") return undefined;
+  if (!QUERYLESS_ARCHETYPE_SET.has(archetype as WidgetArchetype)) {
+    return undefined;
+  }
+  if (query === undefined) return undefined;
+  return `query is only valid for a data archetype or "custom", not "${archetype}"`;
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
   }
-  if (QUERYLESS_ARCHETYPE_SET.has(archetype) && d.query !== undefined) {
-    fail(
-      `${d.id}: query is only valid for a data archetype or "custom", not "${d.archetype}"`
-    );
-  }
+  const problem = querylessQueryProblem(archetype, d.query);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 /** Throws with a named reason if `def` is not a usable definition. */
