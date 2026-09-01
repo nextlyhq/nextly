@@ -25,6 +25,7 @@
 import { z } from "zod";
 
 import { container } from "../di";
+import { draftPreviewSchema } from "../domains/email/draft-preview-request";
 import { getCachedNextly } from "../init";
 import type { EmailTemplateService } from "../services/email/email-template-service";
 
@@ -38,25 +39,6 @@ async function getEmailTemplateService(): Promise<EmailTemplateService> {
   await getCachedNextly();
   return container.get<EmailTemplateService>("emailTemplateService");
 }
-
-/**
- * The fields a render needs, and nothing else.
- *
- * Deliberately not the full template shape: a preview never writes, so
- * accepting a name, a slug or an id would take input it has no use for.
- */
-const draftPreviewSchema = z.object({
-  template: z.object({
-    subject: z.string(),
-    htmlContent: z.string(),
-    plainTextContent: z.string().nullable().default(null),
-    preheader: z.string().nullable().default(null),
-    useLayout: z.boolean(),
-    kind: z.enum(["template", "layout", "partial"]),
-    layoutId: z.string().nullable().default(null),
-  }),
-  data: z.record(z.string(), z.unknown()),
-});
 
 /**
  * POST handler for previewing unsaved email template fields.

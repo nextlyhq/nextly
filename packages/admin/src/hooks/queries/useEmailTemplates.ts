@@ -257,9 +257,20 @@ export function useDraftEmailTemplatePreview(
     queryFn: () => previewDraft(template, data),
     enabled: options?.enabled ?? true,
     placeholderData: keepPreviousData,
-    // A render is deterministic in its key, so a cached entry never goes
-    // stale: the only thing that can change the answer is a different key.
-    staleTime: Infinity,
+    /*
+     * BOUNDED, not infinite. The render is not a pure function of this key
+     * whenever `useLayout` is set: the server resolves the wrapping layout
+     * from the database, so the same draft fields and sample data can render
+     * differently after someone edits that layout in another tab or another
+     * session. Held forever, an author would be shown an obsolete wrapper as
+     * the current email with no way to notice — a remount and a window focus
+     * would both keep serving it.
+     *
+     * Edits made HERE already invalidate this: the mutation hooks above
+     * invalidate `emailTemplateKeys.all()`, and this key sits beneath it.
+     * The window is for the edits this session cannot see.
+     */
+    staleTime: 30_000,
     retry: false,
   });
 }

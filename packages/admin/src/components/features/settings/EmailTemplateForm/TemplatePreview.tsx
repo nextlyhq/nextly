@@ -259,23 +259,27 @@ export function PreviewPane({
       {/* `overflow-hidden` because a frame wider than this box is drawn inside
           it and scaled down; without clipping its untransformed corners paint
           over the border. */}
-      <div
-        ref={viewport}
-        className="min-h-0 flex-1 overflow-hidden bg-muted/40 p-4"
-      >
-        <iframe
-          // Remount on format/theme change so the sandboxed srcDoc always
-          // re-renders (some browsers don't reload srcDoc in place).
-          key={`${format}-${theme}`}
-          title="Email preview"
-          sandbox=""
-          srcDoc={srcDoc}
-          // No backdrop class: srcDoc always paints its own body background for
-          // the simulated mail client, so a fixed white here would only ever
-          // show as a flash of the wrong color in a dark admin.
-          className="h-full w-full rounded-md border border-border"
-          style={previewFrameStyle(fit)}
-        />
+      <div className="min-h-0 flex-1 overflow-hidden bg-muted/40 p-4">
+        {/* The measured box is INSIDE the padding. Measuring the padded
+            element reports 32px more than the iframe can occupy, so the fit
+            scales it to overrun its own container and `overflow-hidden` clips
+            the right edge of the email — worst exactly when the pane is
+            narrow, which is when the scaling matters. */}
+        <div ref={viewport} className="h-full w-full">
+          <iframe
+            // Remount on format/theme change so the sandboxed srcDoc always
+            // re-renders (some browsers don't reload srcDoc in place).
+            key={`${format}-${theme}`}
+            title="Email preview"
+            sandbox=""
+            srcDoc={srcDoc}
+            // No backdrop class: srcDoc always paints its own body background for
+            // the simulated mail client, so a fixed white here would only ever
+            // show as a flash of the wrong color in a dark admin.
+            className="h-full w-full rounded-md border border-border"
+            style={previewFrameStyle(fit)}
+          />
+        </div>
       </div>
     </div>
   );

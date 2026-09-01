@@ -49,6 +49,7 @@ type TemplateService = {
   updateTemplate: ReturnType<typeof vi.fn>;
   deleteTemplate: ReturnType<typeof vi.fn>;
   previewTemplate: ReturnType<typeof vi.fn>;
+  previewDraft: ReturnType<typeof vi.fn>;
 };
 
 function makeProviderService(
@@ -76,6 +77,7 @@ function makeTemplateService(
     updateTemplate: vi.fn(),
     deleteTemplate: vi.fn(),
     previewTemplate: vi.fn(),
+    previewDraft: vi.fn(),
     ...overrides,
   };
 }
@@ -314,6 +316,70 @@ describe("dispatchEmailTemplates, non-paginated reads (respondData)", () => {
     const body = await response.json();
     expect(body).toEqual(fakePreview);
     expect(body).not.toHaveProperty("data");
+  });
+
+  /*
+   * The editor's live preview reaches this through the catch-all a generated
+   * app mounts, not through the standalone route module. Asserted here because
+   * the two are separate wirings and only one of them is what consumers get.
+   */
+  it("previewDraft renders unsaved fields and returns the text part", async () => {
+    const rendered = {
+      subject: "Welcome, Alice",
+      html: "<p>Hello Alice</p>",
+      text: "Hello Alice",
+    };
+    const previewDraft = vi.fn().mockResolvedValue(rendered);
+    wireTemplates(makeTemplateService({ previewDraft }));
+
+    const result = await dispatchEmailTemplates(
+      "previewDraft",
+      {},
+      {
+        template: {
+          subject: "Welcome, {{name}}",
+          htmlContent: "<p>Hello {{name}}</p>",
+          plainTextContent: null,
+          preheader: null,
+          useLayout: false,
+          kind: "template",
+          layoutId: null,
+        },
+        data: { name: "Alice" },
+      }
+    );
+
+    const response = result as Response;
+    expect(response.status).toBe(200);
+    // `text` is the field the deleted browser-side render could only guess at.
+    expect(await response.json()).toEqual(rendered);
+    // Addressed by FIELDS, never by a row id — an unsaved draft has none.
+    expect(previewDraft.mock.calls[0][0]).toMatchObject({
+      subject: "Welcome, {{name}}",
+    });
+  });
+
+  it("previewDraft refuses a body that is not the contract", async () => {
+    const previewDraft = vi.fn();
+    wireTemplates(makeTemplateService({ previewDraft }));
+
+    // `useLayout` missing: the schema requires it, and a render that guessed
+    // would silently preview the wrong composition.
+    await expect(
+      dispatchEmailTemplates(
+        "previewDraft",
+        {},
+        {
+          template: {
+            subject: "s",
+            htmlContent: "<p>x</p>",
+            kind: "template",
+          },
+          data: {},
+        }
+      )
+    ).rejects.toThrow();
+    expect(previewDraft).not.toHaveBeenCalled();
   });
 });
 
