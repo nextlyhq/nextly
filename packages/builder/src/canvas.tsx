@@ -30,6 +30,7 @@
  */
 
 import {
+  findNode,
   PAGE_ROOT_CLASS,
   previewContainerName,
   previewStateClass,
@@ -49,9 +50,11 @@ import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { CanvasDragHandlers } from "./canvas-drag";
+import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
+import { refusalWording } from "./drag-refusal";
+import { canvasContentRect } from "./geometry-dom";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -78,6 +81,38 @@ export { CANVAS_ROOT_CLASS };
  * no compiler behind it.
  */
 export const SELECTED_ATTRIBUTE = "data-nx-selected";
+
+/**
+ * Marks every element drawing the block currently being dragged.
+ *
+ * EVERY element rather than one: a node id is unique in a document and not in
+ * the tree drawn from it, so a repeating block is many elements for one id and
+ * a mark that stopped at the first would dim one copy of a block that is
+ * wholly in flight.
+ *
+ * Boolean by presence, for the reason {@link SELECTED_ATTRIBUTE} is: the
+ * element already states its id.
+ */
+export const DRAG_SOURCE_ATTRIBUTE = "data-nx-drag-source";
+
+/**
+ * Marks the container a drop would land in.
+ *
+ * The line says WHERE among siblings; this says WHICH container, and the two
+ * are different questions. They come apart exactly where the line alone is
+ * ambiguous — the coordinate at the bottom edge of one container is also the
+ * top edge of the next, and only this mark separates them.
+ */
+export const DROP_PARENT_ATTRIBUTE = "data-nx-drop-parent";
+
+/**
+ * Marks the container that will not take the block being dragged.
+ *
+ * Mutually exclusive with {@link DROP_PARENT_ATTRIBUTE} by construction: the
+ * engine answers with a target or a refusal, never both, so an element carrying
+ * the two at once is drawing a state that cannot exist.
+ */
+export const DROP_REFUSED_ATTRIBUTE = "data-nx-drop-refused";
 
 /**
  * Marks editor chrome drawn over the page, which is not part of the page.
@@ -706,13 +741,24 @@ function useCanvasSurface(
  * a re-render replaces the elements, and an effect keyed on the selection alone
  * would leave the new tree carrying none at all.
  */
-function useSelectionMarkers(
+function useCanvasMarkers(
   box: React.RefObject<HTMLElement | null>,
   marked: readonly string[],
   selectedId: string | null,
   page: React.ReactNode,
-  forcedState: StyleState | undefined
+  forcedState: StyleState | undefined,
+  drag: CanvasDragState | undefined
 ): void {
+  /*
+   * The drag's three marks are read into plain ids here rather than inside the
+   * walk, so the effect depends on the VALUES that change the answer instead of
+   * on the drag object's identity. `useCanvasDrag` returns a fresh object on
+   * every pointer move, and an effect keyed on it would re-walk the whole tree
+   * per frame while writing nothing new.
+   */
+  const sourceId = drag?.draggingId ?? null;
+  const parentId = drag?.target?.at.parentId ?? null;
+  const refusedId = drag?.refusal?.parentId ?? null;
   useEffect(() => {
     const container = box.current;
     if (container === null) return;
@@ -785,6 +831,36 @@ function useSelectionMarkers(
         const value = id === selectedId ? "primary" : "";
         if (element.getAttribute(SELECTED_ATTRIBUTE) !== value) {
           element.setAttribute(SELECTED_ATTRIBUTE, value);
+        }
+      });
+
+      /*
+       * The drag's marks, in the SAME walk and over the SAME set, for the
+       * reason the forced state below is: all of them answer "what is marked on
+       * this element right now", and two walks over one question drift — one
+       * runs on a change the other does not.
+       *
+       * Over `touched` rather than a fresh query, so an element that has just
+       * LOST the node id is visited and cleared. Left out, a block that stopped
+       * being the drag source keeps the mark and stays dimmed after the drop.
+       */
+      const dragMarks: ReadonlyArray<readonly [string, string | null]> = [
+        [DRAG_SOURCE_ATTRIBUTE, sourceId],
+        [DROP_PARENT_ATTRIBUTE, parentId],
+        [DROP_REFUSED_ATTRIBUTE, refusedId],
+      ];
+      touched.forEach(element => {
+        const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+        for (const [attribute, wanted] of dragMarks) {
+          // Compared before writing, for the reason the selection attribute
+          // above is: `setAttribute` queues a mutation record even when the
+          // value it writes is the value already there, the appender observes
+          // this subtree, and a drag writes on every pointer move — so an
+          // unguarded mark is a re-measure per frame rather than per drop.
+          const should = id !== null && id === wanted;
+          if (should === element.hasAttribute(attribute)) continue;
+          if (should) element.setAttribute(attribute, "");
+          else element.removeAttribute(attribute);
         }
       });
 
@@ -887,7 +963,16 @@ function useSelectionMarkers(
     // there. Writing the markers cannot re-enter this: what counts as the tree
     // changing excludes every attribute `mark` writes.
     return observeRenderedTree(container, mark);
-  }, [box, selectedId, marked, page, forcedState]);
+  }, [
+    box,
+    selectedId,
+    marked,
+    page,
+    forcedState,
+    sourceId,
+    parentId,
+    refusedId,
+  ]);
 }
 
 /**
@@ -1377,6 +1462,25 @@ export interface CanvasProps {
    */
   dragHandlers?: CanvasDragHandlers;
   /**
+   * What the pointer currently means, or absent when nothing is being dragged.
+   *
+   * ONE object rather than separate `draggingId`, `target` and `refusal` props,
+   * for the reason {@link CanvasProps.dragHandlers} and
+   * {@link CanvasProps.preview} are each one: a set spread across several
+   * optional props can be PARTIALLY wired, and every partial wiring here fails
+   * silently. A host passing the refusal without the moving id explains a
+   * refusal while dimming nothing; one passing the id without the refusal is
+   * precisely the state this prop exists to end.
+   *
+   * It is the shape `useCanvasDrag` already returns, so a host forwards what it
+   * holds and restates none of it. Deriving a narrower view here would be a
+   * second answer to a question the hook has already answered.
+   *
+   * Drawing only. Nothing here decides where a block may land — `resolveDrop`
+   * does that, and this canvas draws whatever it was told.
+   */
+  drag?: CanvasDragState;
+  /**
    * The layout scale this canvas applies to the page it lays out.
    *
    * Defaults to fitting, so a host that offers no zoom control never has to
@@ -1425,6 +1529,70 @@ export interface CanvasProps {
  * breaks the moment a sibling is inserted above it — silently, by pointing at a
  * different block rather than at nothing.
  */
+/**
+ * The sentence a refused drop draws, over the container that refused it.
+ *
+ * Anchored to the CONTAINER rather than to the pointer. The drag state carries
+ * no pointer coordinate — reading one back would mean a second answer to a
+ * question `useCanvasDrag` already owns — and a message pinned to the region is
+ * steadier to read than one that moves with the hand.
+ *
+ * Measured in the canvas's own CONTENT coordinates, the space the drop
+ * indicator and the block toolbar are already positioned in, so the three agree
+ * at any scroll offset and under zoom.
+ *
+ * Keyed on the region and the reason rather than on the refusal OBJECT: the
+ * drag hook returns a fresh object every pointer move, and re-measuring per
+ * frame would cost a layout read for an answer that changes only when the
+ * pointer crosses into a different container.
+ */
+function DropRefusalNotice({
+  refusal,
+  movingType,
+  regionType,
+}: {
+  refusal: NonNullable<CanvasDragState["refusal"]>;
+  movingType: string;
+  regionType: string | undefined;
+}): React.JSX.Element {
+  const notice = useRef<HTMLDivElement | null>(null);
+  const [at, setAt] = useState<{ x: number; y: number } | null>(null);
+  const { parentId, reason } = refusal;
+
+  useEffect(() => {
+    const element = notice.current;
+    const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
+    if (!(root instanceof HTMLElement)) return;
+    // The root itself when the refusal is at the page level: there is no
+    // container node to point at, which is the whole of what
+    // `restricted-at-root` means.
+    const region = parentId === undefined ? root : nodeElement(root, parentId);
+    if (region === null) return;
+    const rect = canvasContentRect(region, root);
+    setAt({ x: rect.x, y: rect.y });
+  }, [parentId, reason]);
+
+  const { headline, takes } = refusalWording(refusal, movingType, regionType);
+  return (
+    <div
+      ref={notice}
+      className="nx-drop-refusal"
+      // Chrome drawn over the page rather than part of it, so hit-testing and
+      // the style inspector both skip it.
+      {...{ [CHROME_ATTRIBUTE]: "" }}
+      style={at === null ? undefined : { left: at.x, top: at.y }}
+      // Announced, because this is the one thing in a drag that a sighted
+      // author learns from the cursor and everyone else learns from nothing.
+      role="status"
+    >
+      <span className="nx-drop-refusal__why">{headline}</span>
+      {takes === null ? null : (
+        <span className="nx-drop-refusal__takes">{takes}</span>
+      )}
+    </div>
+  );
+}
+
 export function Canvas({
   document,
   rootRef,
@@ -1437,6 +1605,7 @@ export function Canvas({
   render,
   className,
   dragHandlers,
+  drag,
   zoom = FIT_ZOOM,
   onScale,
   onDoubleClick,
@@ -1519,7 +1688,7 @@ export function Canvas({
     [rendered, document, sheet]
   );
 
-  useSelectionMarkers(root, marked, selectedId, page, forcedState);
+  useCanvasMarkers(root, marked, selectedId, page, forcedState, drag);
 
   return (
     <div
@@ -1536,6 +1705,24 @@ export function Canvas({
       // a single name meaning both is the kind of thing that reads correctly
       // right up until someone writes a selector against the wrong one.
       data-nx-selected-id={selectedId ?? undefined}
+      /*
+       * What the pointer means, for the cursor.
+       *
+       * On the ROOT rather than per block, because a cursor during a drag is a
+       * property of the gesture and not of whatever happens to be under the
+       * pointer — and pointer capture means the events keep arriving here
+       * however far the hand travels.
+       *
+       * Absent when nothing is dragging, so the hover cursor on a block is not
+       * competing with a state that does not exist.
+       */
+      data-nx-dragging={
+        drag?.draggingBlockName == null
+          ? undefined
+          : drag.refusal === null
+            ? ""
+            : "refused"
+      }
       onClick={pointer.onClick}
       onDoubleClick={pointer.onDoubleClick}
       onContextMenu={pointer.onContextMenu}
@@ -1547,6 +1734,23 @@ export function Canvas({
     >
       {page}
       {overlay}
+      {drag?.refusal == null ? null : (
+        <DropRefusalNotice
+          refusal={drag.refusal}
+          movingType={drag.draggingBlockName ?? ""}
+          /*
+           * The container's TYPE, resolved from the document the canvas is
+           * already drawing. The refusal names the node; what an author reads
+           * is the block's name, and the document is the only place that
+           * mapping exists.
+           */
+          regionType={
+            drag.refusal.parentId === undefined
+              ? undefined
+              : findNode(document.nodes, drag.refusal.parentId)?.type
+          }
+        />
+      )}
     </div>
   );
 }

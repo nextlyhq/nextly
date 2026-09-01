@@ -176,6 +176,21 @@ export interface DropTarget {
  */
 export interface DropRefusal {
   readonly regionId: string;
+  /**
+   * The container node the refusing region belongs to, absent at the root.
+   *
+   * Carried for the same reason `permitted` is: a surface explaining the
+   * refusal needs it, and this is the only place it is still known. A region is
+   * identified by `"<parentId>::<slot>"`, so recovering the node from
+   * {@link DropRefusal.regionId} means splitting a composite string — reading a
+   * value back out of a spelling this module chose, which stops being correct
+   * the moment the spelling does.
+   *
+   * Absent rather than a sentinel at the root, because "there is no container"
+   * is the fact that separates a refusal an author can fix by aiming elsewhere
+   * from one that needs a container to exist first.
+   */
+  readonly parentId?: string;
   readonly reason: NestingRefusal;
   readonly permitted: readonly string[];
 }
@@ -512,6 +527,9 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
       kind: "refused",
       refusal: {
         regionId: region.id,
+        // Taken from the region rather than parsed back out of its id: the
+        // region is the richer value and it is already in hand here.
+        parentId: region.parentId,
         reason: verdict.reason,
         permitted: verdict.permitted,
       },

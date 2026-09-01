@@ -49,10 +49,14 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   CANVAS_ROOT_CLASS,
   Canvas,
+  DRAG_SOURCE_ATTRIBUTE,
+  DROP_PARENT_ATTRIBUTE,
+  DROP_REFUSED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   canvasScale,
   nodeIdFromEvent,
 } from "./canvas";
+import type { CanvasDragState } from "./canvas-drag";
 import type { CanvasZoom } from "./canvas-zoom";
 
 // Explicit because this package does not enable vitest globals, and without
@@ -2506,5 +2510,188 @@ describe("forcing a state onto a tree React commits over time", () => {
     expect(second.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
     expect(first.getAttribute(SELECTED_ATTRIBUTE)).toBeNull();
     expect(first.className).not.toContain(previewStateClass("hover"));
+  });
+});
+
+describe("the drag in flight is drawn on the canvas", () => {
+  /*
+   * A container plus the repeating block, because the two marks answer
+   * different questions and one fixture cannot exercise both: the source mark
+   * is about one node drawn many times, and the region marks are about a
+   * container node named by a drop.
+   */
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+        {
+          // Draws its own child twice, which is what makes one node id many
+          // elements — the shape `core/collection-loop` has in the library.
+          name: "acme/twice",
+          version: 1,
+          description: "A block that repeats its child.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                key: "one",
+                [NODE_ID_ATTRIBUTE]: "child",
+              }),
+              createElement("div", { key: "two", [NODE_ID_ATTRIBUTE]: "child" })
+            ),
+        },
+        {
+          name: "acme/box",
+          version: 1,
+          description: "A container.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-drag-marks-test" }
+    );
+  });
+  afterAll(clearBlocks);
+
+  const PAGE = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      { id: "box", type: "acme/box", version: 1, props: {} },
+      { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+    ],
+  };
+
+  const LOOP = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "loop", type: "acme/twice", version: 1, props: {} }],
+  };
+
+  function draw(drag: CanvasDragState | undefined, page: unknown = PAGE) {
+    return render(
+      <Canvas
+        document={page as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        drag={drag}
+      />
+    );
+  }
+
+  const dragging = (over: Partial<CanvasDragState>): CanvasDragState => ({
+    draggingId: null,
+    draggingBlockName: "acme/leaf",
+    target: null,
+    refusal: null,
+    ...over,
+  });
+
+  it("marks EVERY rendering of the node in flight, not the first one found", async () => {
+    // A node id is unique in a document and not in the tree drawn from it, so a
+    // walk stopping at the first match dims one copy of a repeated block and
+    // leaves the rest at full opacity.
+    const { container } = draw(dragging({ draggingId: "child" }), LOOP);
+    await act(async () => undefined);
+
+    expect(
+      container.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
+    ).toHaveLength(2);
+  });
+
+  it("marks the container a drop would land in", async () => {
+    const { container } = draw(
+      dragging({
+        draggingId: "leaf",
+        target: {
+          id: "t",
+          regionId: "box::children",
+          at: { parentId: "box", slot: "children", index: 0 },
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    const parent = container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`);
+    expect(parent?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+    // The two region marks are mutually exclusive: `DropResolution` is a union,
+    // so a canvas showing both at once is drawing a state the engine cannot be in.
+    expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("marks the container that refuses, and says why and what it takes", async () => {
+    const { container, getByText } = draw(
+      dragging({
+        draggingId: "leaf",
+        refusal: {
+          regionId: "box::children",
+          parentId: "box",
+          reason: "wrong-parent",
+          permitted: ["acme/twice"],
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    const refused = container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`);
+    expect(refused?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+    expect(container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)).toBeNull();
+
+    // The whole point of the row: the reason the engine computed reaches the
+    // author, in words, naming the container and what it would accept.
+    expect(getByText("Box does not take a Leaf.")).toBeTruthy();
+    expect(getByText("Takes Twice")).toBeTruthy();
+  });
+
+  it("draws no drag marks at all when no drag is supplied", async () => {
+    // The back-compat control: every host that has not been wired yet omits
+    // this prop, and must get exactly the canvas it had before.
+    const { container } = draw(undefined);
+    await act(async () => undefined);
+
+    expect(container.querySelector(`[${DRAG_SOURCE_ATTRIBUTE}]`)).toBeNull();
+    expect(container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)).toBeNull();
+    expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("does not rewrite a mark whose value has not changed", async () => {
+    /*
+     * The spacing overlay observes this subtree with a MutationObserver, and
+     * `setAttribute` queues a record even when the value written is the value
+     * already there. Unguarded, a mark rewritten on every pointermove is a
+     * re-measure per frame — which reads as jank rather than as a defect, so
+     * nothing else in the suite would catch it.
+     */
+    const state = dragging({ draggingId: "child" });
+    const { container, rerender } = draw(state, LOOP);
+    await act(async () => undefined);
+
+    const seen: MutationRecord[] = [];
+    const observer = new MutationObserver(records => seen.push(...records));
+    observer.observe(container, { attributes: true, subtree: true });
+
+    rerender(
+      <Canvas
+        document={LOOP as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        drag={state}
+      />
+    );
+    await act(async () => undefined);
+    observer.disconnect();
+
+    expect(
+      seen.filter(record => record.attributeName === DRAG_SOURCE_ATTRIBUTE)
+    ).toHaveLength(0);
   });
 });
