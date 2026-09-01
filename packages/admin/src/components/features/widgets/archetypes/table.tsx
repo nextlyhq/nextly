@@ -109,7 +109,12 @@ export const tableBody: ArchetypeBody = (result, definition) => {
                 // there is no state for a wrong key to strand.
                 key={index}
                 data-testid="widget-table-row"
-                className="border-b border-border/50 last:border-0"
+                /* Full-strength `border-border`, matching this table's own
+                   header rule above. A row separator delimits the data rather
+                   than decorating it, so it has to meet the 3:1 that WCAG asks
+                   of a meaningful boundary; at half alpha it measured 1.11:1
+                   against the page surface. */
+                className="border-b border-border last:border-0"
               >
                 {columns.map(column => (
                   <td

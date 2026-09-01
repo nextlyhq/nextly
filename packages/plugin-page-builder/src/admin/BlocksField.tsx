@@ -1428,7 +1428,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const entryFields = useEntryFieldsPanel(name);
 
-  const documentDirty = useDocumentDirty(control, editor.undoDepth > 0);
+  /*
+   * `hasUnsavedWork` rather than `undoDepth` alone, so an inline edit that is
+   * OPEN counts. Until it commits, the typed value lives in the DOM and neither
+   * the editor's history nor the form's dirty fields have moved — so a reading
+   * built on those two says "nothing outstanding" while an author is midway
+   * through a paragraph.
+   *
+   * The same answer the navigation guard reports, asked once here. The guard
+   * keeps reporting only the EDITOR's half, because it tells the form about
+   * work the form's own values do not contain; this composes that half with the
+   * form's own dirtiness, which is what a reading of the whole document needs.
+   */
+  const documentDirty = useDocumentDirty(
+    control,
+    hasUnsavedWork(editor, inline)
+  );
 
   /*
    * The getting-started card, and the host's switch for it.
