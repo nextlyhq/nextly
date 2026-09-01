@@ -16,6 +16,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+
 vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
 }));
@@ -82,7 +84,12 @@ describe("widget-registry reset at boot", () => {
     // before the later failure, not by `registerServices` having finished.
     expect(getSource("plugin:stripe/revenue")).toBeUndefined();
     expect(listSources()).toHaveLength(0);
-    expect(listWidgets()).toHaveLength(0);
+    // The previous boot's widget is gone; core's own cards are what boot
+    // itself writes, so the store is not empty afterwards and asserting that
+    // it was would only have held while core declared no widget.
+    const ids = listWidgets().map(widget => widget.id);
+    expect(ids).not.toContain("stripe/revenue");
+    expect(ids).toEqual(CORE_WIDGETS.map(widget => widget.id));
   });
 
   it("does not publish a collection source from the boot config", async () => {

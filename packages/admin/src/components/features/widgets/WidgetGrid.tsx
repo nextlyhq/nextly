@@ -30,10 +30,16 @@ import {
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
+import { registerCoreWidgetComponents } from "./core-components";
 import { coreDraws, resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
 import { WidgetRenderer } from "./WidgetRenderer";
+
+// At module scope, before any render. `PluginSlot` resolves a path DURING
+// render, so registering from an effect would land after the first paint and
+// every core card would show its unresolved fallback once on the way in.
+registerCoreWidgetComponents();
 
 /**
  * What the grid says once a batch settles, or `null` for a state not worth
@@ -187,7 +193,21 @@ export function WidgetGrid() {
           // CSS rather than asking the component to declare its own emptiness:
           // a declaration is a second statement of what the render already
           // decided, and the two drift.
-          className={cn(widgetSpanClass(widget.size), "empty:hidden")}
+          className={cn(
+            widgetSpanClass(widget.size),
+            "empty:hidden",
+            // An unframed widget is a SECTION, and sections on this page have
+            // always been 48px apart -- the `space-y-12` the dashboard used
+            // before these became widgets. The grid's own `gap-6` is a card
+            // rhythm and right for cards, so the extra 12px above and below
+            // belongs to the widgets that are not cards rather than to the
+            // grid: two adjacent sections come back to 48px, and a framed card
+            // beside one keeps its own spacing.
+            //
+            // Margins, not padding: a hidden cell contributes neither, but
+            // padding would also inset a body that draws its own background.
+            widget.chrome === "none" && "my-3"
+          )}
         >
           <WidgetRenderer
             definition={widget}

@@ -217,6 +217,7 @@ export type {
   WidgetAction,
   WidgetHeight,
   WidgetSize,
+  WidgetChrome,
 } from "./domains/widgets/definition";
 export type { WidgetQuery } from "./domains/widgets/query";
 // A VALUE, and the only one in this block. The admin batches a dashboard's

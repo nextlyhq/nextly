@@ -23,20 +23,29 @@
  * and explains why. What is left here is the one thing boot genuinely owns:
  * the store starts empty.
  *
- * `clearWidgets()` runs here too even though no core widget definition is
- * registered yet. The widget registry is `globalThis`-pinned exactly as the
- * source registry is, so it needs the same reset at the same choke point; a
- * clear wired only once the first definition exists would be a second boot
- * seam to find, and the reset that keeps a hot reload from colliding would be
- * missing for however long that took.
+ * `clearWidgets()` then core's OWN cards land here, in that order and in this
+ * one function, which is what makes a hot reload safe: the previous boot's rows
+ * are gone before these are written, so re-registering the same four ids never
+ * collides with itself -- while a genuine duplicate within one boot still fails
+ * loudly, since nothing clears the store between two registrations in one pass.
+ *
+ * Registered rather than special-cased into `publishableWidgets`, so they are
+ * ordinary rows a plugin can `extendWidget` or `overrideWidget` like any other.
+ * Core going through the same door as a plugin is the whole reason the door is
+ * worth trusting.
  *
  * @module di/registrations/register-widgets
  */
 
-import { clearWidgets } from "../../domains/widgets/registry";
+import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
 
 export function resetWidgetRegistries(): void {
   clearWidgets();
   clearSources();
+
+  for (const definition of CORE_WIDGETS) {
+    registerWidget(definition);
+  }
 }

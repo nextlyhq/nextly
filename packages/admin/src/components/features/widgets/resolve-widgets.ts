@@ -16,6 +16,7 @@ import type {
   WidgetArchetype,
   WidgetQuery,
   WidgetSize,
+  WidgetChrome,
 } from "nextly/config";
 
 import type {
@@ -90,6 +91,8 @@ export interface ReadableWidgetDeclaration {
   component?: string;
   actions?: WidgetAction[];
   link?: { label: string; href: string };
+  defaultOrder?: number;
+  chrome?: WidgetChrome;
 }
 
 /**

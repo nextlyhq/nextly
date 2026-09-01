@@ -1,4 +1,5 @@
 import type {
+  WidgetChrome,
   DataWidgetArchetype,
   WidgetAction,
   QuerylessWidgetArchetype,
@@ -176,6 +177,15 @@ interface PluginAdminWidgetBase {
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
   link?: { label: string; href: string };
+  /**
+   * Where this widget sits by default, ascending; omitted means "after
+   * everything that states one".
+   *
+   * On the BASE because position is not an archetype's business -- any widget
+   * may state one, and a plugin that could not would sit wherever the
+   * resolver's channel ordering happened to leave it.
+   */
+  defaultOrder?: number;
 }
 
 /**
@@ -195,6 +205,16 @@ export interface PluginAdminCustomWidget extends PluginAdminWidgetBase {
   archetype?: WidgetArchetype;
   /** Still executed server-side, and handed to the component as its slot. */
   query?: WidgetQuery;
+  /**
+   * Whether the host frames this widget. Defaults to `"card"`.
+   *
+   * On the CUSTOM arm alone, mirroring `validateWidgetDefinition`: only a
+   * widget supplying its own component can replace the frame, and for every
+   * archetype core draws the card IS the surface the body is composed against.
+   * Declared here so the illegal combination cannot be WRITTEN, rather than
+   * compiling and being refused at boot.
+   */
+  chrome?: WidgetChrome;
 }
 
 /**

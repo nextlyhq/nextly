@@ -484,7 +484,10 @@ describe("WidgetRenderer — chrome", () => {
     // saying "Team", one inside the other.
     registerComponent("@t/x#Section", Section);
     render(
-      <WidgetRenderer definition={{ ...bare, component: "@t/x#Section" }} />
+      <WidgetRenderer
+        definition={{ ...bare, component: "@t/x#Section" }}
+        slot={undefined}
+      />
     );
 
     expect(screen.getByRole("heading", { name: "Team" })).toBeInTheDocument();
@@ -503,6 +506,7 @@ describe("WidgetRenderer — chrome", () => {
           component: "@t/x#Section",
           chrome: undefined,
         }}
+        slot={undefined}
       />
     );
 
@@ -515,7 +519,10 @@ describe("WidgetRenderer — chrome", () => {
     // that core's self-hiding sections never produced before they were widgets.
     registerComponent("@t/x#Nothing", () => null);
     const { container } = render(
-      <WidgetRenderer definition={{ ...bare, component: "@t/x#Nothing" }} />
+      <WidgetRenderer
+        definition={{ ...bare, component: "@t/x#Nothing" }}
+        slot={undefined}
+      />
     );
 
     expect(container).toBeEmptyDOMElement();
