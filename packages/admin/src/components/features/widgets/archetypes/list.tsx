@@ -20,32 +20,11 @@
  * @module components/features/widgets/archetypes/list
  */
 
+import { asText, selectsNothing } from "./cell-text";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** How many rows a card of this size can show without becoming a table. */
 const MAX_ROWS = 5;
-
-/**
- * One cell as text, or `undefined` when it is not something to print.
- *
- * Objects and arrays are DROPPED rather than stringified. `String({})` is
- * "[object Object]", which is not a defect a reader can act on — it looks like
- * data. A relationship, a repeater or a rich-text value all arrive here as
- * objects, and this widget cannot draw any of them; saying nothing is better
- * than saying that. The same reading `RecentEntriesWidget` had to be taught
- * when its titles came back as objects.
- *
- * `null` and `undefined` are absent values, not text. `0` and `false` ARE text:
- * a count of zero is a real answer and dropping it would make the row lie.
- */
-function asText(value: unknown): string | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value === "string") return value.trim() === "" ? undefined : value;
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  return undefined;
-}
 
 /**
  * A list needs to know which field heads each row, and only `select` says.
@@ -59,8 +38,7 @@ function asText(value: unknown): string | undefined {
 export const listAccepts: ArchetypeAccepts = definition => {
   const select = definition.query?.select ?? [];
   if (select.length > 0) return undefined;
-  const name = definition.title ?? "This list widget";
-  return `"${name}" is a list widget whose query selects no fields, so there is nothing to show in each row.`;
+  return selectsNothing(definition.title, "list", "row");
 };
 
 export const listBody: ArchetypeBody = (result, definition) => {

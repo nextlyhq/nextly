@@ -451,6 +451,55 @@ describe("WidgetGrid — collection and gating", () => {
     });
   });
 
+  it("draws a TABLE end to end, headed by the columns the server described", async () => {
+    // The whole path for the third host-drawn archetype: a declaration with no
+    // component, its query batched, the `list` arm validated with its column
+    // descriptions intact, and the headings taken from those rather than from
+    // `select` -- which is what keeps a field the reader may not see out of the
+    // header row.
+    mockBranding = brandingWith([
+      {
+        id: "acme/posts",
+        title: "Recent posts",
+        archetype: "table",
+        defaultSize: "lg",
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "publishedAt"],
+          limit: 5,
+        },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ title: "First post", publishedAt: "yesterday" }],
+            fields: [
+              { name: "title", label: "Title" },
+              { name: "publishedAt", label: "Published at" },
+            ],
+          },
+        },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-table")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Published at")).toBeInTheDocument();
+    expect(screen.getByText("First post")).toBeInTheDocument();
+    // The label reached the browser through the batch parser, which rebuilds a
+    // list result from the fields it names -- so this also proves the
+    // descriptions survive that boundary.
+    expect(screen.queryByText("publishedAt")).not.toBeInTheDocument();
+  });
+
   it("puts a registered widget's query in the same batch as a contributed one", async () => {
     mockBranding = {
       plugins: [
