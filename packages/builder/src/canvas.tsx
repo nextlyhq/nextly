@@ -1585,6 +1585,22 @@ export interface CanvasProps {
  * different block rather than at nothing.
  */
 /**
+ * The element drawing a node, restricted to the canvas that owns it.
+ *
+ * {@link nodeElement} answers with the first match anywhere beneath the root,
+ * which is the wrong question once a block can render a canvas of its own: node
+ * ids are unique within a DOCUMENT, so an inner document may legitimately carry
+ * the same id and appear earlier in tree order.
+ */
+function ownedNodeElement(root: HTMLElement, id: string): Element | null {
+  for (const candidate of nodeElements(root)) {
+    if (candidate.getAttribute(NODE_ID_ATTRIBUTE) !== id) continue;
+    if (ownedByCanvas(candidate, root)) return candidate;
+  }
+  return null;
+}
+
+/**
  * The refusal a canvas should DRAW, which is not every refusal it is given.
  *
  * `useCanvasDrag` holds the committed target across a short crossing so the
@@ -1653,43 +1669,73 @@ function DropRefusalNotice({
     if (element === null) return;
     const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
     if (!(root instanceof HTMLElement)) return;
-    // The root itself when the refusal is at the page level: there is no
-    // container node to point at, which is the whole of what
-    // `restricted-at-root` means.
-    const region = parentId === undefined ? root : nodeElement(root, parentId);
-    if (region === null) return;
-    const rect = canvasContentRect(region, root);
+    const measure = (): void => {
+      // The root itself when the refusal is at the page level: there is no
+      // container node to point at, which is the whole of what
+      // `restricted-at-root` means.
+      /*
+       * Resolved within THIS canvas, for the reason the marks are: a node id is
+       * unique in a document and not across documents, so a block rendering a
+       * second canvas can put a matching id earlier in the tree — and the message
+       * would then be anchored over a block belonging to another document.
+       */
+      const region =
+        parentId === undefined ? root : ownedNodeElement(root, parentId);
+      if (region === null) return;
+      const rect = canvasContentRect(region, root);
+
+      /*
+       * Clamped into the part of the canvas the author can actually see.
+       *
+       * The anchor alone is not enough. A root refusal has no container to point
+       * at, so it resolves to the canvas itself and lands at the page origin —
+       * which on a long page is several screens above someone dragging near the
+       * bottom, so the explanation for what just refused them is drawn where they
+       * are not looking. A very tall container scrolled past does the same.
+       *
+       * The scroller defines "visible": the shell scrolls an ancestor rather than
+       * the canvas, and its rectangle measured in this canvas's own content
+       * coordinates is exactly the band on screen.
+       */
+      const within = scrollableAncestor(root);
+      if (within === null) {
+        setAt({ x: rect.x, y: rect.y });
+        return;
+      }
+      const band = canvasContentRect(within, root);
+      const inset = 12;
+      const lowest = band.y + band.height - inset - element.offsetHeight;
+      const top = band.y + inset;
+      // A band shorter than the message puts `lowest` above its own top, which
+      // makes the range inverted rather than narrow. Taking the top there keeps
+      // the message on screen instead of pinning it to a bound derived from a
+      // height that does not fit.
+      setAt({
+        x: rect.x,
+        y: lowest < top ? top : Math.max(top, Math.min(rect.y, lowest)),
+      });
+    };
+
+    measure();
 
     /*
-     * Clamped into the part of the canvas the author can actually see.
+     * Re-measured while the canvas scrolls under a stationary pointer.
      *
-     * The anchor alone is not enough. A root refusal has no container to point
-     * at, so it resolves to the canvas itself and lands at the page origin —
-     * which on a long page is several screens above someone dragging near the
-     * bottom, so the explanation for what just refused them is drawn where they
-     * are not looking. A very tall container scrolled past does the same.
+     * Autoscroll is the case that makes this necessary rather than tidy: a drag
+     * held near an edge keeps scrolling without the pointer moving, so the
+     * refusal does not change and nothing in this effect's inputs does either —
+     * while the band the message was clamped into travels away from it. The
+     * explanation would sit still and the page would leave.
      *
-     * The scroller defines "visible": the shell scrolls an ancestor rather than
-     * the canvas, and its rectangle measured in this canvas's own content
-     * coordinates is exactly the band on screen.
+     * Passive, because this only reads geometry, and on the SCROLLER rather
+     * than the canvas: the canvas does not scroll, its ancestor does.
      */
     const scroller = scrollableAncestor(root);
-    if (scroller === null) {
-      setAt({ x: rect.x, y: rect.y });
-      return;
-    }
-    const band = canvasContentRect(scroller, root);
-    const inset = 12;
-    const lowest = band.y + band.height - inset - element.offsetHeight;
-    const top = band.y + inset;
-    // A band shorter than the message puts `lowest` above its own top, which
-    // makes the range inverted rather than narrow. Taking the top there keeps
-    // the message on screen instead of pinning it to a bound derived from a
-    // height that does not fit.
-    setAt({
-      x: rect.x,
-      y: lowest < top ? top : Math.max(top, Math.min(rect.y, lowest)),
-    });
+    if (scroller === null) return;
+    scroller.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", measure);
+    };
   }, [parentId, reason]);
 
   const { headline, remedy } = refusalWording(refusal, movingType, regionType);
@@ -1702,19 +1748,20 @@ function DropRefusalNotice({
       {...{ [CHROME_ATTRIBUTE]: "" }}
       style={at === null ? undefined : { left: at.x, top: at.y }}
       /*
-       * NOT announced, and that matches {@link DropIndicator} rather than
-       * differing from it.
+       * NOT announced, matching {@link DropIndicator} rather than differing
+       * from it: this describes a POINTER gesture, and a live region here
+       * would speak to someone who is not the one dragging.
        *
-       * This describes a POINTER gesture, and the equivalent keyboard move
-       * reports its own outcome through the editor's single live region. A
-       * second region describing the same act is read alongside the first, so
-       * an author performing one move hears it twice — which is why nothing
-       * else in this drag announces either.
+       * What must NOT be claimed is that the keyboard path covers it.
+       * `keyboardMovePosition` is purely positional and never asks the nesting
+       * question, so an `alt+Arrow` move is refused by the STORE rather than by
+       * the rule, and `keyboard-actions` returns silently — its own test pins
+       * that. So the nesting reason this message carries currently has no
+       * spoken counterpart anywhere.
        *
-       * The accessible route to this information is not missing, it is
-       * elsewhere: a block is selected by clicking and moved with `alt+Arrow`,
-       * and a refused keyboard move is announced there. Adding a live region
-       * here would speak to someone who is not the one dragging.
+       * That gap is real and it is not this element's to close. Announcing a
+       * pointer drag would put the sentence on the wrong gesture; the fix
+       * belongs where the keyboard move is refused.
        */
       aria-hidden="true"
     >
@@ -1879,7 +1926,7 @@ export function Canvas({
       data-nx-dragging={
         drag?.draggingBlockName == null
           ? undefined
-          : drag.refusal === null
+          : refusalDrawn === null
             ? ""
             : "refused"
       }

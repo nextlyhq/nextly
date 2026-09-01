@@ -41,8 +41,13 @@ receive the block is outlined, which the line alone cannot say when the same
 coordinate is the bottom edge of one container and the top edge of the next.
 
 And a refusal explains itself. Dropping a block into a container that will not
-take it shows a "no drop" cursor, outlines that container, and names both the
-reason and what the container does accept — so "no" arrives as an instruction
-rather than as nothing happening. The three reasons a drop can be refused each
-get their own wording, because they need different things from an author: aim at
-a different container, put the block inside one, or use a different slot.
+take it shows a "no drop" cursor, outlines that container, gives the reason, and
+follows it with the remedy — so "no" arrives as an instruction rather than as
+nothing happening.
+
+The three reasons a drop can be refused each get their own wording, because they
+need different things from an author. A slot that admits only certain blocks
+says what it takes. The other two say where the block you are holding is allowed
+to go, which is a different fact and the one you can act on: a block refused by
+a container has not learned anything about that container's appetite, it has
+learned which containers will have it.

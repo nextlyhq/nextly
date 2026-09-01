@@ -87,6 +87,24 @@ function asList(labels: readonly string[], joiner: string): string {
 }
 
 /**
+ * One entry of a permitted list, as an author reads it.
+ *
+ * A slot may admit a whole NAMESPACE rather than named types — `nesting.ts`
+ * matches an entry ending `/*` as a prefix — and such an entry is not a block
+ * name. Sending it through {@link blockLabel} humanises it into the bare
+ * `"*"`, so a slot admitting everything core would announce "Takes *".
+ *
+ * The group is named instead. It is deliberately lower case where a block label
+ * is not: "any core block" is a description of a set, and capitalising it would
+ * dress it as the name of a block that does not exist.
+ */
+function permittedLabel(entry: string): string {
+  if (!entry.endsWith("/*")) return blockLabel(entry);
+  const namespace = entry.slice(0, -2);
+  return namespace === "" ? "any block" : `any ${namespace} block`;
+}
+
+/**
  * Why this drop will not happen, and what would.
  *
  * `regionType` is optional because one reason has no region to name —
@@ -133,7 +151,7 @@ export function refusalWording(
    * "or" rather than "and" for the parent list, because they are alternatives
    * an author picks between; the slot's list is an enumeration of what it holds.
    */
-  const permitted = refusal.permitted.map(blockLabel);
+  const permitted = refusal.permitted.map(permittedLabel);
   if (permitted.length === 0) return { headline, remedy: null };
   const remedy =
     refusal.reason === "not-allowed-in-slot"

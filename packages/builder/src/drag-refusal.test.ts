@@ -105,6 +105,28 @@ describe("refusalWording", () => {
     expect(remedy).toBe("Takes Heading, Paragraph and List");
   });
 
+  it("names a namespace wildcard as a group, not as a block called *", () => {
+    // `nesting.ts` matches an allow entry ending "/*" as a prefix, so a slot
+    // can admit a whole namespace. Humanising that as a block name yields the
+    // bare "*", and the slot would announce "Takes *".
+    const { remedy } = refusalWording(
+      refusal("not-allowed-in-slot", ["core/*"]),
+      "acme/widget",
+      "core/columns"
+    );
+    expect(remedy).toBe("Takes any core block");
+    expect(remedy).not.toContain("*");
+  });
+
+  it("mixes a wildcard with named types in one list", () => {
+    const { remedy } = refusalWording(
+      refusal("not-allowed-in-slot", ["core/heading", "acme/*"]),
+      "core/image",
+      "core/columns"
+    );
+    expect(remedy).toBe("Takes Heading and any acme block");
+  });
+
   it("omits the second line entirely when nothing is permitted", () => {
     // Rendering the lead-in with an empty list reads as a sentence that was cut
     // off, which is worse than saying nothing about the remedy at all.
