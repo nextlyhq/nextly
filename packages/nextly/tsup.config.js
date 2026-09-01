@@ -40,6 +40,7 @@ const serverEntries = [
   "src/api/versions-diff.ts",
   "src/api/email-providers.ts",
   "src/api/email-provider-types.ts",
+  "src/api/email-template-preview-types.ts",
   "src/api/email-providers-detail.ts",
   "src/api/email-providers-test.ts",
   "src/api/email-providers-default.ts",
