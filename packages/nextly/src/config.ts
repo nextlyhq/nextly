@@ -191,7 +191,10 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // byte to the config entry point's bundle.
 export type {
   ComponentPath,
+  DeclarativeWidgetArchetype,
   HeaderButtonId,
+  PluginAdminCustomWidget,
+  PluginAdminDeclarativeWidget,
   PluginAdminWidget,
 } from "./plugins/admin-contributions";
 //

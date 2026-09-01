@@ -11,15 +11,54 @@
  * @module components/features/widgets/resolve-widgets
  */
 
+import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
+
 import type {
   PluginMetadata,
-  PluginWidgetMeta,
   RegisteredWidgetMeta,
 } from "@admin/types/branding";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { coreDrawsArchetype } from "./outcome";
 import { legacySizeToWidgetSize } from "./sizes";
+
+/**
+ * A contributed widget as this file READS it, which is deliberately not how a
+ * plugin author WRITES it.
+ *
+ * `PluginWidgetMeta` is a union: either a component-bearing widget or an
+ * archetype-and-query one. That union is an authoring contract — it exists so a
+ * plugin author cannot declare a widget describing no body, and so the mistake
+ * is a compile error at the point it is made.
+ *
+ * A reader wants the opposite. Nothing here branches on which arm a declaration
+ * came from; every field is read, each is handled when absent, and the values
+ * arrive over the wire from a server that may be a different version and from
+ * plugins that may not be TypeScript at all. Reading through the union would
+ * mean narrowing at every access to recover facts this code does not use, and
+ * `mergeCollision` cannot satisfy either arm at the type level anyway: it
+ * composes a registration and a contribution, and only the two together are
+ * known to describe a body.
+ *
+ * Strict to write, permissive to read, with the boot check and the resolver
+ * below as the things that actually refuse a declaration that says nothing.
+ */
+export interface ReadableWidgetDeclaration {
+  id: string;
+  size?: "full" | "half";
+  requiredPermission?: string;
+  title?: string;
+  description?: string;
+  icon?: string;
+  category?: string;
+  archetype?: WidgetArchetype;
+  defaultSize?: WidgetSize;
+  minSize?: WidgetSize;
+  maxSize?: WidgetSize;
+  query?: WidgetQuery;
+  component?: string;
+  link?: { label: string; href: string };
+}
 
 /**
  * The archetype a declaration means, or `undefined` when it means nothing
@@ -49,7 +88,7 @@ import { legacySizeToWidgetSize } from "./sizes";
  * the fallback stops applying on its own the day core learns to draw one.
  */
 function resolveArchetype(
-  meta: PluginWidgetMeta
+  meta: ReadableWidgetDeclaration
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
     const undrawable = !meta.query || !coreDrawsArchetype(meta.archetype);
@@ -86,7 +125,7 @@ function resolveTitle(title: string | undefined, id: string): string {
  */
 function declaredWidgets(
   plugins: PluginMetadata[] | undefined
-): PluginWidgetMeta[] {
+): ReadableWidgetDeclaration[] {
   return (plugins ?? []).flatMap(plugin => plugin.widgets ?? []);
 }
 
@@ -101,7 +140,7 @@ function declaredWidgets(
  * mounted must not cause a request on the user's behalf.
  */
 function resolveOne(
-  meta: PluginWidgetMeta,
+  meta: ReadableWidgetDeclaration,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
   if (meta.requiredPermission && !hasPermission(meta.requiredPermission)) {
@@ -188,9 +227,9 @@ function resolveRegistered(
  * code in both paths rather than a second copy that can drift.
  */
 function mergeCollision(
-  contribution: PluginWidgetMeta,
+  contribution: ReadableWidgetDeclaration,
   registration: RegisteredWidgetMeta
-): PluginWidgetMeta {
+): ReadableWidgetDeclaration {
   return {
     id: registration.id,
     // Named field by field rather than spread. `{ ...contribution,

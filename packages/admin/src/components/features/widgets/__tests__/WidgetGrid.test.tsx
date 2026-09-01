@@ -186,6 +186,38 @@ describe("WidgetGrid — collection and gating", () => {
     });
   });
 
+  it("draws a contributed widget that ships NO component at all", async () => {
+    // Tier 1 end to end, and the thing the contract change exists for: the
+    // plugin declares an archetype and a query, ships no UI code, and the host
+    // draws the card. `component` was required on every contributed widget
+    // until now, so this declaration could not be written -- an author had to
+    // name a component core would never resolve.
+    mockBranding = brandingWith([
+      {
+        id: "acme/posts",
+        title: "Published posts",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:posts", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 42 } }],
+    });
+
+    renderGrid();
+
+    // The card, drawn by core from the query result -- not a plugin component,
+    // and not the "archetype is not rendered yet" refusal.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("42")
+    );
+    expect(screen.getByText("Published posts")).toBeInTheDocument();
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [{ source: "collection:posts", op: "count" }],
+    });
+  });
+
   it("puts a registered widget's query in the same batch as a contributed one", async () => {
     mockBranding = {
       plugins: [

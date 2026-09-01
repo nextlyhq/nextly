@@ -142,37 +142,17 @@ export interface PluginAdminPage {
 }
 
 /**
- * @experimental A plugin-contributed dashboard widget.
+ * The archetypes core draws ITSELF, from a validated query result.
  *
- * `component` is REQUIRED, and that is the honest shape rather than a
- * conservative one. `PluginWidgetGrid` -- the only consumer -- renders
- * `PluginSlot path={widget.component}` and sizes the cell from `widget.size`.
- * There is no archetype-driven grid yet, so a widget declaring an archetype
- * and no component reaches `PluginSlot` with `path === undefined` and draws an
- * empty cell: accepted at every layer, rendering nothing, reporting nothing.
- * Requiring the one field that can render is what makes that unrepresentable.
- *
- * The declarative fields (`title`, `archetype`, `defaultSize`, `query`, the
- * size bounds) are therefore OPTIONAL. They are published so the SERVER can
- * describe and execute a widget's query today, and so the archetype grid can
- * read them when it lands; making them required would break every existing
- * `{ id, component, size }` declaration at the type level in exchange for
- * fields nothing renders from yet. When that grid exists and can draw a widget
- * from its archetype alone, `component` becomes conditional -- and that is a
- * change with a consumer behind it rather than ahead of it.
- *
- * `size` is not deprecated: it is the ONLY sizing the current grid reads.
- * `defaultSize` is read by nothing yet, and nothing anywhere maps one onto the
- * other.
- *
- * `requiredPermission` decides whether the CARD renders. It does NOT constrain
- * the rows a widget's query returns -- the query executor enforces that, and
- * it is not optional there.
+ * `custom` is excluded by definition: it is the archetype that means "the
+ * plugin draws its own body", so it is the one that cannot describe a
+ * host-drawn card.
  */
-export interface PluginAdminWidget {
+export type DeclarativeWidgetArchetype = Exclude<WidgetArchetype, "custom">;
+
+/** Everything a contributed widget may carry whichever way it is drawn. */
+interface PluginAdminWidgetBase {
   id: string;
-  /** Component rendered for this widget. The grid draws nothing else. */
-  component: ComponentPath;
   /** Column span the current grid honours: `half` spans 6 of 12, `full` spans 12. */
   size?: "full" | "half";
   requiredPermission?: PermissionSlug;
@@ -180,15 +160,86 @@ export interface PluginAdminWidget {
   description?: string;
   icon?: string;
   category?: string;
-  archetype?: WidgetArchetype;
-  /** Read by the archetype grid when it exists; the current grid reads `size`. */
   defaultSize?: WidgetSize;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
-  /** The widget's data request, validated and executed server-side. */
-  query?: WidgetQuery;
   link?: { label: string; href: string };
 }
+
+/**
+ * @experimental A widget the PLUGIN draws, by shipping a component.
+ *
+ * The archetype is optional here and unconstrained: a widget may ship a
+ * component AND name a data archetype, which is how it supplies a body for an
+ * archetype this admin release cannot draw yet. `WidgetDefinition` forbids that
+ * pairing on the registry side and this contract deliberately allows it -- a
+ * registered definition is complete by construction, while a contribution
+ * crosses a version boundary and may be describing a card for a core that has
+ * not shipped the renderer.
+ */
+export interface PluginAdminCustomWidget extends PluginAdminWidgetBase {
+  /** Component rendered for this widget. */
+  component: ComponentPath;
+  archetype?: WidgetArchetype;
+  /** Still executed server-side, and handed to the component as its slot. */
+  query?: WidgetQuery;
+}
+
+/**
+ * @experimental A widget the HOST draws, from an archetype and a query.
+ *
+ * No component, and that is the point. The pair is the unit: core draws every
+ * archetype but `custom` FROM A QUERY RESULT, so an archetype without a query
+ * describes a card core can never fill, and a query without an archetype
+ * describes data with nothing to draw it as.
+ */
+export interface PluginAdminDeclarativeWidget extends PluginAdminWidgetBase {
+  archetype: DeclarativeWidgetArchetype;
+  /** The widget's data request, validated and executed server-side. */
+  query: WidgetQuery;
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * @experimental A plugin-contributed dashboard widget, drawn one of two ways.
+ *
+ * A union rather than one interface with everything optional, because "either a
+ * component, or an archetype and a query" is the actual rule and an interface
+ * cannot say it. Spelling it as optional fields would accept `{ id }` -- a
+ * widget describing no body at all -- at the type level and leave the boot
+ * check as the only thing that ever said so.
+ *
+ * `component` was REQUIRED on every widget until this release, and the reason
+ * it was is worth recording because it stopped being true rather than being
+ * wrong. `PluginWidgetGrid` was the only consumer, it rendered
+ * `PluginSlot path={widget.component}` and nothing else, so a widget declaring
+ * an archetype and no component drew an empty cell: accepted everywhere,
+ * rendering nothing, reporting nothing. This contract said the requirement
+ * would become conditional "when that grid exists and can draw a widget from
+ * its archetype alone". `WidgetGrid` now does exactly that, draws `metric` from
+ * a query, and names any archetype it cannot draw yet -- and nothing mounts
+ * `PluginWidgetGrid` any longer. The consumer is behind the change rather than
+ * ahead of it.
+ *
+ * Both arms allow `component`, so every existing `{ id, component, size }`
+ * declaration keeps compiling untouched. What the union adds is the second
+ * route, not a constraint on the first.
+ *
+ * `size` is the sizing the grid reads when a widget declares no `defaultSize`;
+ * `defaultSize` is the enum and wins where both appear, because a plugin that
+ * adopted the newer field meant it.
+ *
+ * `requiredPermission` decides whether the CARD renders. It does NOT constrain
+ * the rows a widget's query returns -- the query executor enforces that, and
+ * it is not optional there.
+ */
+export type PluginAdminWidget =
+  | PluginAdminCustomWidget
+  | PluginAdminDeclarativeWidget;
 
 /**
  * @public Per-collection admin view overrides + injection points,
