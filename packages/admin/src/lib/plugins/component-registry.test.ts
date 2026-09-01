@@ -141,3 +141,31 @@ describe("the privileged writer is not on the published subpath", () => {
     expect(publicSurface).toHaveProperty("getComponent");
   });
 });
+
+describe("bulk clearing cannot take core's components with it", () => {
+  const Card = () => null;
+
+  it("leaves a reserved entry standing", () => {
+    // The third route into the same map. Registration and unregistration both
+    // refuse `core#`, so a plugin able to call `clearRegistry` could still
+    // remove what it could not touch directly -- and core registers once, when
+    // the grid's module is evaluated, so nothing puts them back.
+    registerCoreComponent("core#TeamSummary", Card);
+    registerComponent("@acme/p/admin#Card", Card);
+
+    clearRegistry();
+
+    expect(hasComponent("core#TeamSummary")).toBe(true);
+  });
+
+  it("still clears everything else", () => {
+    // The control. A clear that preserved everything would satisfy the
+    // assertion above while breaking every test that relies on a clean map.
+    registerCoreComponent("core#TeamSummary", Card);
+    registerComponent("@acme/p/admin#Card", Card);
+
+    clearRegistry();
+
+    expect(hasComponent("@acme/p/admin#Card")).toBe(false);
+  });
+});

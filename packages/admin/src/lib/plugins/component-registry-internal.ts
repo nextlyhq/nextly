@@ -9,9 +9,9 @@
  * `core#TeamSummary` outright.
  *
  * This module is not in the package's `exports` map, so the bypass is
- * unreachable from outside the admin. That makes the reservation a boundary
- * rather than a check — the property `AGENTS.md` asks for, and the reason the
- * guard is worth having at all.
+ * unreachable from outside the admin. That is what makes the reservation a
+ * boundary rather than a check: a guard with a published way around it
+ * constrains nobody, and the way around is the more discoverable of the two.
  *
  * @module lib/plugins/component-registry-internal
  */

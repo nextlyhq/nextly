@@ -79,8 +79,9 @@ function settledAnnouncement(
  * Its own component because the distinction is not the grid's job: the grid
  * draws widgets, and "there are none", "we have not been told yet" and "we
  * could not find out" are a separate question with a separate answer each.
- * Folded into the grid they were three branches inside a function whose
- * complexity the hygiene gate had already flagged.
+ * Separate also because the grid's own body is already long: dispatching
+ * widgets and choosing between three fallbacks are different jobs, and folding
+ * them together put three more branches in a function that draws.
  *
  * The distinction itself is the branding provider's to make, not this
  * component's: `isUnavailable` means admin-meta never produced an answer, while

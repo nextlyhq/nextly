@@ -261,7 +261,19 @@ export function getRegisteredPaths(): ComponentPath[] {
  * Primarily used for testing.
  */
 export function clearRegistry(): void {
-  componentRegistry.clear();
+  // Reserved entries survive, because this is the third route into the same
+  // map and the other two already refuse them. Core registers its components
+  // once, when the grid's module is evaluated, so a plugin clearing them wholesale
+  // could not be recovered from -- every core card would resolve to nothing for
+  // the life of the page, with no error anywhere.
+  //
+  // Cleared by ITERATION rather than `Map.clear()` for that reason: the bulk
+  // call cannot express an exception, so reaching for it here would have been
+  // choosing convenience over the guarantee the other two writers make.
+  for (const path of componentRegistry.keys()) {
+    if (path.startsWith(CORE_COMPONENT_PREFIX)) continue;
+    componentRegistry.delete(path);
+  }
 }
 
 /**

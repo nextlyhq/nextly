@@ -416,6 +416,60 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
+  it("refuses a defaultOrder this channel cannot sort by", () => {
+    // The registry refuses a non-finite order; this channel had no check at
+    // all. `NaN` compares false against every value, so a widget carrying one
+    // sorted as equal to whatever it met and the explicit orders around it
+    // stopped holding -- intermittently, depending on the order the array
+    // happened to arrive in, which is the worst way for it to fail.
+    for (const defaultOrder of ["soon", Number.NaN, null, {}]) {
+      expect(() =>
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/shortcuts",
+            archetype: "actions",
+            actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+            defaultOrder,
+          }),
+        ])
+      ).toThrow(NextlyError);
+    }
+  });
+
+  it("accepts a finite order", () => {
+    // The control. A gate refusing every order would satisfy the assertion
+    // above while making the field undeclarable.
+    for (const defaultOrder of [0, -1, 2.5]) {
+      expect(() =>
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/shortcuts",
+            archetype: "actions",
+            actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+            defaultOrder,
+          }),
+        ])
+      ).not.toThrow();
+    }
+  });
+
+  it("accepts a widget that states no order at all", () => {
+    // OMITTED, not `defaultOrder: undefined`. An explicitly undefined value is
+    // refused on every field here, `description` and `icon` included, because
+    // it does not survive the JSON round trip this gate runs -- so writing the
+    // absent case that way would assert the serialization rule rather than
+    // this one.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a contributed actions widget whose shortcuts are complete", () => {
     // The control. A gate that refused every actions widget would satisfy the
     // assertions above while making the archetype undeclarable.

@@ -199,23 +199,35 @@ interface PluginAdminWidgetBase {
  * crosses a version boundary and may be describing a card for a core that has
  * not shipped the renderer.
  */
-export interface PluginAdminCustomWidget extends PluginAdminWidgetBase {
+interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
   /** Component rendered for this widget. */
   component: ComponentPath;
-  archetype?: WidgetArchetype;
   /** Still executed server-side, and handed to the component as its slot. */
   query?: WidgetQuery;
-  /**
-   * Whether the host frames this widget. Defaults to `"card"`.
-   *
-   * On the CUSTOM arm alone, mirroring `validateWidgetDefinition`: only a
-   * widget supplying its own component can replace the frame, and for every
-   * archetype core draws the card IS the surface the body is composed against.
-   * Declared here so the illegal combination cannot be WRITTEN, rather than
-   * compiling and being refused at boot.
-   */
-  chrome?: WidgetChrome;
 }
+
+/**
+ * @experimental A widget that ships its own component.
+ *
+ * `archetype` stays open because a component is also the FALLBACK body for an
+ * archetype this admin release cannot draw -- `{ component, archetype: "metric" }`
+ * with no query is a real declaration, and core reports that card as undrawable
+ * so the component is what renders.
+ *
+ * `chrome` is the part that cannot stay open. It is split across two
+ * alternatives so `"none"` is only WRITABLE where it is legal: a widget that
+ * declines the frame must supply the surface itself, and for every archetype
+ * core draws the card IS the surface the body is composed against -- it owns
+ * the title, the footer and the busy state. Expressed as a constraint rather
+ * than left to `validateChrome`, which still refuses the pair at boot: a type
+ * that permits it makes the runtime refusal the FIRST time an author learns,
+ * after the plugin ships.
+ */
+export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
+  (
+    | { archetype?: "custom"; chrome?: WidgetChrome }
+    | { archetype: Exclude<WidgetArchetype, "custom">; chrome?: never }
+  );
 
 /**
  * @experimental A widget the HOST draws from a query result.

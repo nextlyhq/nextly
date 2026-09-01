@@ -449,11 +449,35 @@ function validateChrome(d: Partial<WidgetDefinition>): void {
   }
 }
 
-function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
-  if (d.defaultOrder === undefined) return;
-  if (typeof d.defaultOrder !== "number" || !Number.isFinite(d.defaultOrder)) {
-    fail(`${d.id}: defaultOrder must be a finite number`);
+/**
+ * Why this value cannot serve as a `defaultOrder`, or `undefined`.
+ *
+ * Non-throwing and exported for the same reason {@link actionProblem} and
+ * {@link querylessQueryProblem} are: the CONTRIBUTIONS channel needs the same
+ * answer without a throw. That channel had no order check at all, so a
+ * JavaScript plugin could publish `defaultOrder: "soon"`, and the admin's
+ * comparator turned it into `NaN` -- which compares false against everything,
+ * so the widget sorted as equal to whatever it met and every explicit order
+ * around it stopped meaning anything. Silently, and only sometimes, depending
+ * on the order the array happened to arrive in.
+ *
+ * `Number.isFinite` rather than a `typeof` check alone, and it is reachable
+ * rather than defensive: `1e400` is valid JSON that parses to `Infinity`, so a
+ * decoded manifest carries one without any code having written it. The sort
+ * uses infinity as its "stated nothing" sentinel, so an infinite ORDER would
+ * tie with every widget that declared none.
+ */
+export function defaultOrderProblem(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "defaultOrder must be a finite number";
   }
+  return undefined;
+}
+
+function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
+  const problem = defaultOrderProblem(d.defaultOrder);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 function validateQuery(d: Partial<WidgetDefinition>): void {
