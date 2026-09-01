@@ -2728,4 +2728,42 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(notice?.getAttribute("role")).toBeNull();
     expect(notice?.getAttribute("aria-live")).toBeNull();
   });
+
+  it("clears a drag mark from an element that has LOST its node id", async () => {
+    /*
+     * The stale-mark case, driven at the DOM the way its selection neighbour is.
+     * A render can move a node id from one existing element to another without
+     * touching the child list — an async block committing its resolved root
+     * mid-drag is one way — and the element left behind then matches nothing
+     * selected by node id.
+     *
+     * If the walk only ever visits elements carrying an id, that element keeps
+     * whatever it was last given: a block dimmed to 0.4 with nothing left that
+     * will ever clear it. The selection attribute is in the walk's selector list
+     * for exactly this reason; these have to be too.
+     */
+    draw(dragging({ draggingId: "child" }), LOOP);
+    await act(async () => undefined);
+
+    // `Array.from` rather than a spread: a `NodeList` is only iterable under a
+    // lib that declares its iterator, and this package compiles without one.
+    const marked = Array.from(
+      document.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
+    );
+    // Control: two copies must be found first, or the assertion below is
+    // satisfied by there having been nothing to strand.
+    expect(marked).toHaveLength(2);
+
+    const orphan = marked[0];
+    await act(async () => {
+      orphan?.removeAttribute(NODE_ID_ATTRIBUTE);
+    });
+
+    expect(orphan?.hasAttribute(DRAG_SOURCE_ATTRIBUTE)).toBe(false);
+    // The copy that kept its id keeps its mark, so this separates "cleared the
+    // orphan" from "cleared everything".
+    expect(
+      document.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
+    ).toHaveLength(1);
+  });
 });

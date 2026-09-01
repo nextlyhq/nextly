@@ -802,6 +802,14 @@ function useCanvasMarkers(
             `.${PAGE_ROOT_CLASS}`,
             `[${NODE_ID_ATTRIBUTE}]`,
             `[${SELECTED_ATTRIBUTE}]`,
+            // The drag marks belong here for the reason the selection attribute
+            // does, and the case is the same one: an element that LOSES its node
+            // id matches nothing selected by node id, so leaving these out
+            // strands whatever they were last given. A block that stopped being
+            // the drag source would stay dimmed with nothing left to clear it.
+            `[${DRAG_SOURCE_ATTRIBUTE}]`,
+            `[${DROP_PARENT_ATTRIBUTE}]`,
+            `[${DROP_REFUSED_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
