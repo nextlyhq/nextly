@@ -128,7 +128,9 @@ describe("where a pane exists, it leads and the rest follow", () => {
     // replaces, so the count is the assertion.
     expect(buttons).toHaveLength(2);
     expect(buttons[0]).toHaveAttribute("data-preview-lead", "pane");
-    expect(buttons[1]).toHaveAttribute("aria-label", "Preview options");
+    // Named after the press it belongs to, not fixed: the chevron carries no
+    // visible text, so its label IS its name.
+    expect(buttons[1]).toHaveAttribute("aria-label", "Show preview options");
   });
 
   it("reports the pane's state on the press, which a menu item cannot", () => {
@@ -150,7 +152,9 @@ describe("where a pane exists, it leads and the rest follow", () => {
     const user = userEvent.setup();
     render(<PreviewActions {...withPane} />);
 
-    await user.click(screen.getByRole("button", { name: "Preview options" }));
+    await user.click(
+      screen.getByRole("button", { name: "Show preview options" })
+    );
 
     // "Open in new tab" rather than "Preview": a menu item repeating the press's
     // word would give an author two ways to preview and no way to tell them
@@ -172,5 +176,78 @@ describe("where a pane exists, it leads and the rest follow", () => {
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(1);
     expect(buttons[0]).toHaveAttribute("data-preview-lead", "pane");
+  });
+});
+
+describe("the control keeps saying who it is, and what it is doing", () => {
+  it("names the chevron after a label the collection declared", () => {
+    /*
+     * A fixed `aria-label` overrides the visible text. A collection naming its
+     * preview "View page" renders that word, so a voice-control user saying
+     * what they can see addresses nothing, and a screen reader announces a name
+     * the screen does not show.
+     */
+    render(
+      <PreviewActions
+        previewLabel="View page"
+        onTogglePreviewPane={vi.fn()}
+        isLinkAvailable
+        onCopyLink={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "View page options" })
+    ).toBeInTheDocument();
+  });
+
+  it("names the menu trigger after its own visible text", () => {
+    // The other surface with the same defect: this one HAS visible text, so a
+    // fixed name is a direct contradiction of what is on screen.
+    render(
+      <PreviewActions
+        previewLabel="View page"
+        isPreviewAvailable
+        onPreview={vi.fn()}
+        isLinkAvailable
+        onCopyLink={vi.fn()}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: "View page options" })
+    ).toBeInTheDocument();
+  });
+
+  it("shows copying on the control that STAYS after the menu closes", () => {
+    /*
+     * Choosing "Copy shareable link" closes the menu, so the item that carried
+     * the spinner is gone the instant it would start spinning. Without this a
+     * slow mint looks like nothing happened.
+     */
+    const { container } = render(
+      <PreviewActions
+        onTogglePreviewPane={vi.fn()}
+        isLinkAvailable
+        onCopyLink={vi.fn()}
+        isCopyingLink
+      />
+    );
+
+    expect(container.querySelector(".animate-spin")).not.toBeNull();
+  });
+
+  it("shows nothing spinning when no link is being minted", () => {
+    // The control: a spinner rendered unconditionally would satisfy the case
+    // above while telling every author something is always in flight.
+    const { container } = render(
+      <PreviewActions
+        onTogglePreviewPane={vi.fn()}
+        isLinkAvailable
+        onCopyLink={vi.fn()}
+      />
+    );
+
+    expect(container.querySelector(".animate-spin")).toBeNull();
   });
 });
