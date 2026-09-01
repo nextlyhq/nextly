@@ -267,7 +267,20 @@ export class SafeFetchError extends NextlyError {
     message: string,
     public readonly url: string,
     /** Discriminates the failure so callers branch without string-matching. */
-    public readonly reason: "response-too-large" | "timeout" | "decode-failed"
+    public readonly reason: "response-too-large" | "timeout" | "decode-failed",
+    /**
+     * The status the server sent, where one arrived before the failure.
+     *
+     * A body can exceed the cap on a FAILED response — a 500 page, an error
+     * document — and the reason alone cannot separate that from an oversized
+     * object. A caller translating "too large" into a size refusal would then
+     * report a backend outage as the user's file being too big, which is a
+     * confident wrong diagnosis rather than a missing one.
+     *
+     * `undefined` where the failure happened before any status arrived, such as
+     * a timeout, so absence means "not known" rather than "not a failure".
+     */
+    public readonly status?: number
   ) {
     super({
       code: "EXTERNAL_REQUEST_FAILED",
@@ -478,7 +491,8 @@ async function pinnedFetch(
                 new SafeFetchError(
                   `Response body exceeded ${init.maxResponseBytes} bytes`,
                   url.href,
-                  "response-too-large"
+                  "response-too-large",
+                  res.statusCode
                 )
               )
             );

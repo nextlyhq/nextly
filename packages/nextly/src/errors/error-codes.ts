@@ -37,6 +37,11 @@ export const NEXTLY_ERROR_STATUS = {
   MIME_BLOCKED: 415,
   MIME_NOT_ALLOWED: 415,
   SIZE_EXCEEDED: 413,
+  // A stored object exceeded the cap a READ was given, which is a different
+  // question from SIZE_EXCEEDED above: that one refuses an upload the caller
+  // is sending, this one refuses to buffer an object already stored. Kept
+  // apart so a caller discriminating on the code cannot match both.
+  STORAGE_READ_TOO_LARGE: 413,
   MAGIC_BYTE_MISMATCH: 400,
   SVG_SANITIZATION_FAILED: 400,
   UNSUPPORTED_FOR_BACKEND: 415,

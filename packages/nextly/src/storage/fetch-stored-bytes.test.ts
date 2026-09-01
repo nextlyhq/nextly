@@ -89,7 +89,7 @@ describe("reading a stored object over HTTP", () => {
      * anything else as an opaque storage failure.
      */
     vi.mocked(safeFetch).mockRejectedValueOnce(
-      new SafeFetchError("too large", URL_, "response-too-large")
+      new SafeFetchError("too large", URL_, "response-too-large", 200)
     );
     const outcome = await fetchStoredBytes(URL_, "f.woff2", "Test", {
       maxBytes: 10,
@@ -98,6 +98,45 @@ describe("reading a stored object over HTTP", () => {
       (error: unknown) => error
     );
     expect(isStorageReadTooLarge(outcome)).toBe(true);
+  });
+
+  it("does NOT call a failed response oversized, however big its body", async () => {
+    /*
+     * A 500 page or an error document can itself exceed the cap, and
+     * `safeFetch` refuses while buffering — before this code sees any status.
+     * Translating on the reason alone reported a backend outage as "your file
+     * is too big", which is worse than an opaque failure: it names a cause the
+     * author would act on, wrongly.
+     */
+    vi.mocked(safeFetch).mockRejectedValueOnce(
+      new SafeFetchError("too large", URL_, "response-too-large", 500)
+    );
+    const outcome = await fetchStoredBytes(URL_, "f.woff2", "Test", {
+      maxBytes: 10,
+    }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(false);
+    expect(outcome).toBeInstanceOf(SafeFetchError);
+  });
+
+  it("does not translate when no status arrived at all", async () => {
+    /*
+     * Absence means "not known", never "was a success". A failure that happened
+     * before any status — a dropped connection mid-buffer — says nothing about
+     * whether the object was oversized, so it stays untranslated.
+     */
+    vi.mocked(safeFetch).mockRejectedValueOnce(
+      new SafeFetchError("too large", URL_, "response-too-large")
+    );
+    const outcome = await fetchStoredBytes(URL_, "f.woff2", "Test", {
+      maxBytes: 10,
+    }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(false);
   });
 
   it("passes a NON-cap fetch failure through untranslated", async () => {

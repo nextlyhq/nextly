@@ -167,6 +167,38 @@ describe("VercelBlobStorageAdapter — reading bytes back", () => {
     expect(outcome).toBeInstanceOf(BlobAccessError);
   });
 
+  it("starts ONE deadline before the lookup and shares it with the fetch", async () => {
+    /*
+     * `head` runs first and can stall exactly as the fetch can. A deadline that
+     * begins only at the fetch leaves the lookup unbounded, so a read outlives
+     * what the caller was promised — by roughly double, since each phase would
+     * get its own full budget.
+     *
+     * Asserted as the SAME object reaching both, which is the property: two
+     * signals would satisfy "a signal was passed" while restarting the clock.
+     */
+    found();
+    vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("x"));
+    await adapter.read("f.woff2", { timeoutMs: 1234 });
+
+    const lookupSignal = (
+      vi.mocked(head).mock.calls[0]?.[1] as { abortSignal?: AbortSignal }
+    )?.abortSignal;
+    const fetchSignal = vi.mocked(fetchStoredBytes).mock.calls[0]?.[4];
+
+    expect(lookupSignal).toBeInstanceOf(AbortSignal);
+    expect(fetchSignal).toBe(lookupSignal);
+  });
+
+  it("passes no signal when the caller named no deadline", async () => {
+    // The control: an adapter that always made a signal would satisfy the case
+    // above while ignoring what the caller actually asked for.
+    found();
+    vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("x"));
+    await adapter.read("f.woff2");
+    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBeUndefined();
+  });
+
   it("hands the caller's bounds to the helper", async () => {
     /*
      * Asserted on the ARGUMENT rather than the result, because the result is

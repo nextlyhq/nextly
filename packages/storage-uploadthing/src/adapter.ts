@@ -168,8 +168,18 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
      * error instead of a false "deleted" — which is why the uncertainty is
      * resolved toward propagating rather than toward swallowing.
      */
+    /*
+     * ONE deadline for both phases, started before the lookup — the key lookup
+     * can stall as readily as the fetch, and it runs first.
+     */
+    const deadline =
+      options?.timeoutMs === undefined
+        ? undefined
+        : AbortSignal.timeout(options.timeoutMs);
+
     const result = await this.utapi.getFileUrls([filePath], {
       keyType: "fileKey",
+      ...(deadline === undefined ? {} : { signal: deadline }),
     });
     const target = Array.from(result.data)[0]?.url;
     if (target === undefined) return null;
@@ -180,7 +190,13 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
      * and reporting it as absence would let a caller treat a live file as
      * deleted.
      */
-    return await fetchStoredBytes(target, filePath, "UploadThing", options);
+    return await fetchStoredBytes(
+      target,
+      filePath,
+      "UploadThing",
+      options,
+      deadline
+    );
   }
 
   /**

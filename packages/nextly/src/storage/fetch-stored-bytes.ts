@@ -50,13 +50,15 @@ import type { StorageReadOptions } from "./types";
  * @param context - What is being read, for the error message: usually the key
  * @param label - The service's name, so a failure says which store answered
  * @param options - Bounds for the read; see {@link StorageReadOptions}
+ * @param signal - A deadline ALREADY RUNNING, covering an earlier phase too
  * @returns The object's bytes, or `null` when the store answers 404
  */
 export async function fetchStoredBytes(
   url: string,
   context: string,
   label: string,
-  options?: StorageReadOptions
+  options?: StorageReadOptions,
+  signal?: AbortSignal
 ): Promise<Buffer | null> {
   /*
    * Bounds are PASSED THROUGH rather than defaulted here. `safeFetch` already
@@ -71,9 +73,20 @@ export async function fetchStoredBytes(
       ...(options?.maxBytes === undefined
         ? {}
         : { maxResponseBytes: options.maxBytes }),
-      ...(options?.timeoutMs === undefined
-        ? {}
-        : { timeoutMs: options.timeoutMs }),
+      /*
+       * A caller's signal REPLACES the deadline rather than joining it.
+       *
+       * These adapters look the object's address up before fetching it, and
+       * that lookup can stall too. Starting a fresh timer here would give the
+       * fetch its own full budget on top of however long the lookup took, so a
+       * read could outlive the deadline the caller was told applied — by
+       * roughly double. One signal begun before the lookup governs both phases.
+       */
+      ...(signal !== undefined
+        ? { signal }
+        : options?.timeoutMs === undefined
+          ? {}
+          : { timeoutMs: options.timeoutMs }),
     });
   } catch (error: unknown) {
     /*
@@ -83,11 +96,26 @@ export async function fetchStoredBytes(
      * answered. The contract that introduced `maxBytes` owns what exceeding it
      * looks like, so both routes raise the same refusal.
      */
-    if (
+    /*
+     * Only an oversized SUCCESSFUL response is an over-cap read.
+     *
+     * A body can exceed the cap on a failed response too — a 500 page, an error
+     * document — and `safeFetch` refuses while buffering, before this code ever
+     * sees a status. Translating on the reason alone therefore reported a
+     * backend outage as "your file is too big", which is worse than an opaque
+     * failure: it names a cause the author would act on, wrongly.
+     *
+     * An unknown status does NOT translate. It means the failure arrived before
+     * any status did, so nothing here can say the object was oversized.
+     */
+    const oversizedObject =
       error instanceof SafeFetchError &&
       error.reason === "response-too-large" &&
-      options?.maxBytes !== undefined
-    ) {
+      error.status !== undefined &&
+      error.status >= 200 &&
+      error.status < 300;
+
+    if (oversizedObject && options?.maxBytes !== undefined) {
       throw new StorageReadTooLargeError(context, options.maxBytes);
     }
     throw error;

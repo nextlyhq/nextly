@@ -266,9 +266,25 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
     filePath: string,
     options?: StorageReadOptions
   ): Promise<Buffer | null> {
+    /*
+     * ONE deadline for both phases, started before the lookup.
+     *
+     * `head` can stall exactly as the fetch can, and it runs first — so a
+     * deadline that begins only at the fetch leaves the lookup unbounded and
+     * the read can outlive what the caller was promised. Created here and
+     * handed to both.
+     */
+    const deadline =
+      options?.timeoutMs === undefined
+        ? undefined
+        : AbortSignal.timeout(options.timeoutMs);
+
     let target: string;
     try {
-      const meta = await head(filePath, { token: this.resolvedConfig.token });
+      const meta = await head(filePath, {
+        token: this.resolvedConfig.token,
+        ...(deadline === undefined ? {} : { abortSignal: deadline }),
+      });
       target = meta.downloadUrl ?? meta.url;
     } catch (error: unknown) {
       /*
@@ -293,7 +309,13 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
      * rather than an absence, and folding it into `null` would report a
      * network outage as a deleted file.
      */
-    return await fetchStoredBytes(target, filePath, "Vercel Blob", options);
+    return await fetchStoredBytes(
+      target,
+      filePath,
+      "Vercel Blob",
+      options,
+      deadline
+    );
   }
 
   /**
