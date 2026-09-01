@@ -187,6 +187,37 @@ describe("WidgetRenderer — an archetype named off Object.prototype", () => {
   });
 });
 
+describe("WidgetRenderer — an archetype drawn without data", () => {
+  // `text` and `actions` are queryless by core's contract -- the registry
+  // validator refuses a query on them -- so they never enter the batch and no
+  // slot ever arrives. The outcome resolver used to read that absence as
+  // "drawn from a query, and this widget declares none", which would have made
+  // the FIRST body registered for one fail on every render, permanently.
+  const shortcuts: DashboardWidget = {
+    id: "core/shortcuts",
+    title: "Shortcuts",
+    archetype: "actions",
+    size: "sm",
+    actions: [{ label: "New post", href: "/admin/posts/new" }],
+  };
+
+  it("draws with NO slot, rather than reporting a missing query", () => {
+    render(<WidgetRenderer definition={shortcuts} slot={undefined} />);
+    expect(screen.getByTestId("widget-action")).toHaveTextContent("New post");
+    expect(screen.queryByTestId("widget-card-error")).not.toBeInTheDocument();
+  });
+
+  it("never waits on a request that is not coming", () => {
+    // The other half: absent must not read as "in flight" either, or the card
+    // sits loading for the life of the page with nothing saying why.
+    render(<WidgetRenderer definition={shortcuts} slot={undefined} />);
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "false"
+    );
+  });
+});
+
 describe("WidgetRenderer — custom", () => {
   const custom: DashboardWidget = {
     id: "acme/panel",

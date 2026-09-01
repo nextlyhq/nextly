@@ -12,7 +12,7 @@
  * @module components/features/widgets/archetypes/metric
  */
 
-import type { ArchetypeBody } from "./types";
+import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
  * Renders a `count` result, and REFUSES anything else.
@@ -23,6 +23,23 @@ import type { ArchetypeBody } from "./types";
  * thousand, which is not wrong-looking in any way the reader could detect. A
  * mismatch is a declaration bug in the widget, and it has to look like one.
  */
+/**
+ * A metric is a number from a query, so it needs one.
+ *
+ * Stated here rather than inferred from `query` being absent at the call site,
+ * because drawability has to be ONE question. `resolve-widgets` used to ask two
+ * -- "does it declare a query" and "can core draw this archetype" -- and the
+ * first is wrong for an archetype that is drawn WITHOUT a query: `actions` is
+ * queryless by design, so the query test declared it undrawable and handed
+ * every actions widget with a component fallback to that component, bypassing
+ * the host renderer and its per-item permission gating.
+ */
+export const metricAccepts: ArchetypeAccepts = definition => {
+  if (definition.query) return undefined;
+  const name = definition.title ?? "This metric widget";
+  return `"${name}" is drawn from a query, and this widget declares none.`;
+};
+
 export const metricBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "count") {
     return {

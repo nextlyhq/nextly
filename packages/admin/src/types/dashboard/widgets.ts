@@ -21,7 +21,12 @@
  * @module types/dashboard/widgets
  */
 
-import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
+import type {
+  WidgetAction,
+  WidgetArchetype,
+  WidgetQuery,
+  WidgetSize,
+} from "nextly/config";
 
 /**
  * One executed query's payload, as `POST /api/dashboard/query` sends it.
@@ -83,5 +88,11 @@ export interface DashboardWidget {
   query?: WidgetQuery;
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
+  /**
+   * Present for `actions`, already filtered to the shortcuts this reader may
+   * use — `resolve-widgets` drops the rest, so the renderer never sees one it
+   * must hide.
+   */
+  actions?: WidgetAction[];
   link?: { label: string; href: string };
 }

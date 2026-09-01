@@ -95,9 +95,15 @@ expectTypeOf<{ id: string }>().not.toMatchTypeOf<PluginWidgetMeta>();
 //
 // Only the reader's own field names are checked. Core growing a field the
 // resolver ignores is fine and expected; core losing one it reads is not.
+// Distributes over the union's ARMS. `keyof (A | B)` is only what A and B have
+// in COMMON, so a field declared on one arm -- `actions`, which only an
+// `actions` widget carries -- reads as a key core does not declare and trips
+// this guard for the wrong reason.
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
+
 type UnreadableKeys = Exclude<
   keyof ReadableWidgetDeclaration,
-  keyof PluginAdminCustomWidget | keyof PluginAdminDeclarativeWidget
+  KeysOfUnion<PluginAdminCustomWidget | PluginAdminDeclarativeWidget>
 >;
 expectTypeOf<UnreadableKeys>().toBeNever();
 

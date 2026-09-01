@@ -18,6 +18,7 @@
  */
 
 import {
+  actionProblem,
   DATA_ARCHETYPES,
   QUERYLESS_ARCHETYPES,
   WIDGET_ARCHETYPES,
@@ -61,6 +62,42 @@ const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
 );
 
 /**
+ * Why core cannot draw a QUERYLESS widget from its declaration, or `undefined`.
+ *
+ * Its own function rather than a branch inside {@link describesDrawableBody},
+ * because two callers ask it: that one, deciding whether a body exists at all,
+ * and {@link undrawableReason}, holding the declaration to its shape even when
+ * a component is supplied beside it. One question, one implementation -- the
+ * two would otherwise agree today and drift silently.
+ *
+ * `actions` IS its shortcuts, so an empty one describes an empty card. Every
+ * item goes through the SAME rule the registry applies: checking only that the
+ * array was non-empty let a JavaScript plugin publish `actions: [{}]`, which
+ * the admin drew as a blank link with an undefined destination -- while a
+ * registered widget carrying that shortcut was refused. One contract, two
+ * channels, one rule.
+ *
+ * The other queryless archetypes are drawn from the declaration alone and need
+ * nothing further here.
+ */
+function querylessProblem(widget: Record<string, unknown>): string | undefined {
+  if (widget.archetype !== "actions") return undefined;
+
+  if (!Array.isArray(widget.actions) || widget.actions.length === 0) {
+    return 'names the "actions" archetype, which IS its shortcuts, and declares none';
+  }
+
+  for (const [index, action] of widget.actions.entries()) {
+    const problem = actionProblem(action);
+    if (problem !== undefined) {
+      return `declares an unusable shortcut at #${index}: ${problem}`;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Whether this widget describes a body CORE can draw without the plugin.
  *
  * DERIVED from core's two vocabularies rather than restated. Restating it is
@@ -87,7 +124,9 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
   const archetype = widget.archetype;
   if (typeof archetype !== "string" || archetype === "custom") return false;
 
-  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) return true;
+  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) {
+    return querylessProblem(widget) === undefined;
+  }
 
   if (DATA_ARCHETYPE_SET.has(archetype)) {
     return typeof widget.query === "object" && widget.query !== null;
@@ -199,7 +238,8 @@ function warnUnknownArchetype(
  * is the tier the whole widget query contract exists for, and which this gate
  * previously made unreachable by requiring `component` on every widget.
  *
- * That requirement was justified on `PluginWidgetGrid` being "the only
+ * That requirement was justified on `PluginWidgetGrid` (since deleted) being
+ * "the only
  * consumer", and it renders `PluginSlot path={widget.component}`, so a widget
  * with no component drew an empty cell. `WidgetGrid` replaced it and nothing
  * mounts `PluginWidgetGrid` any more: the current grid draws a `metric` from
@@ -225,6 +265,26 @@ function undrawableReason(widget: Record<string, unknown>): string | undefined {
   // second is worth refusing.
   if (widget.component !== undefined && !isUsableText(widget.component)) {
     return 'supplies a "component" that is empty or not a string';
+  }
+
+  // A QUERYLESS archetype is drawn from its declaration ALONE, so a component
+  // beside it is a fallback for an admin too old to draw the archetype -- never
+  // a substitute for a well-formed declaration. A current admin prefers the
+  // host renderer and reads this same declaration, so checking the shortcuts
+  // only as the ALTERNATIVE to a component meant naming one skipped the rule
+  // entirely, and `actions: [{}]` beside a component reached the grid as
+  // exactly the blank link that rule exists to prevent.
+  //
+  // The queryless half only. A DATA archetype missing its query is a card core
+  // genuinely cannot fill, so the admin reports it as undrawable and the
+  // component fallback is what renders -- refusing that here would reject a
+  // widget which draws correctly today.
+  if (
+    typeof widget.archetype === "string" &&
+    QUERYLESS_ARCHETYPE_SET.has(widget.archetype)
+  ) {
+    const problem = querylessProblem(widget);
+    if (problem !== undefined) return problem;
   }
 
   if (isUsableText(widget.component)) return undefined;

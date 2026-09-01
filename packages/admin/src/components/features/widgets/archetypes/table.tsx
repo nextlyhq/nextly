@@ -109,11 +109,21 @@ export const tableBody: ArchetypeBody = (result, definition) => {
                 // there is no state for a wrong key to strand.
                 key={index}
                 data-testid="widget-table-row"
-                /* Full-strength `border-border`, matching this table's own
-                   header rule above. A row separator delimits the data rather
-                   than decorating it, so it has to meet the 3:1 that WCAG asks
-                   of a meaningful boundary; at half alpha it measured 1.11:1
-                   against the page surface. */
+                // Full-strength `border-border`, matching this table's own
+                // header rule above and the resting edge every other admin
+                // surface draws. The half-alpha variant measured 1.11:1 against
+                // the card, which is not a lighter separator but an absent one.
+                //
+                // NOT a 3:1 claim, and the earlier wording here saying a row
+                // rule "has to meet" that floor was wrong on this repository's
+                // own reading of the standard. `styles/contrast/pairings.ts`
+                // excludes this token deliberately: 1.4.11 scopes its 3:1
+                // minimum to information required to IDENTIFY a component, and
+                // a table whose rows are identified by their content and
+                // spacing needs no rule to be operable. Measured from
+                // `theme.css`, the token sits at ~1.27:1 light and ~1.28:1
+                // dark, so a comment promising 3:1 would send the next reader
+                // to darken one table out of step with all 189 files using it.
                 className="border-b border-border last:border-0"
               >
                 {columns.map(column => (

@@ -11,7 +11,12 @@
  * @module components/features/widgets/resolve-widgets
  */
 
-import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
+import type {
+  WidgetAction,
+  WidgetArchetype,
+  WidgetQuery,
+  WidgetSize,
+} from "nextly/config";
 
 import type {
   PluginMetadata,
@@ -21,6 +26,32 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { coreDraws } from "./outcome";
 import { legacySizeToWidgetSize } from "./sizes";
+
+/**
+ * A widget's shortcuts, less the ones this reader may not use.
+ *
+ * Gated HERE because this is the one place holding `hasPermission`, and the
+ * same place the card's own `requiredPermission` is judged -- two gates for one
+ * question drift, and the renderer would need the predicate threaded through
+ * its signature to ask again.
+ *
+ * The two gates answer different questions and both are needed. The card's
+ * permission decides whether the widget appears at all; an item's decides
+ * whether that shortcut does. A card of five shortcuts where the reader may use
+ * two should show two, not disappear -- and a shortcut to something they may
+ * not do is worse than no shortcut, because it advertises a capability, costs a
+ * click, and answers with a refusal screen.
+ */
+function readableActions(
+  actions: WidgetAction[] | undefined,
+  hasPermission: (permission: string) => boolean
+): WidgetAction[] | undefined {
+  if (!actions) return undefined;
+  return actions.filter(
+    action =>
+      !action.requiredPermission || hasPermission(action.requiredPermission)
+  );
+}
 
 /**
  * A contributed widget as this file READS it, which is deliberately not how a
@@ -57,6 +88,7 @@ export interface ReadableWidgetDeclaration {
   maxSize?: WidgetSize;
   query?: WidgetQuery;
   component?: string;
+  actions?: WidgetAction[];
   link?: { label: string; href: string };
 }
 
@@ -101,7 +133,14 @@ function resolveArchetype(
   meta: ReadableWidgetDeclaration
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
-    const undrawable = !meta.query || !coreDraws(meta);
+    // ONE question, asked once. This used to be `!meta.query || !coreDraws(meta)`,
+    // and the first half was wrong the moment an archetype was drawn WITHOUT a
+    // query: `actions` is queryless by design, so the query test called every
+    // actions widget undrawable and handed one carrying a component fallback to
+    // that component -- bypassing the host renderer and its per-item permission
+    // gating. Each archetype states its own precondition now, so `coreDraws`
+    // already knows a metric needs a query and an actions card does not.
+    const undrawable = !coreDraws(meta);
     if (meta.archetype !== "custom" && undrawable && meta.component) {
       return "custom";
     }
@@ -171,6 +210,7 @@ function resolveOne(
     size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
     query: meta.query,
     component: meta.component,
+    actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
   };
 }
@@ -211,6 +251,7 @@ function resolveRegistered(
     size: meta.defaultSize,
     query: meta.query,
     component: meta.component,
+    actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
   };
 }
@@ -261,6 +302,7 @@ function mergeCollision(
     query: registration.query,
     link: registration.link ?? contribution.link,
     component: registration.component ?? contribution.component,
+    actions: registration.actions ?? contribution.actions,
   };
 }
 

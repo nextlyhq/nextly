@@ -31,8 +31,9 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { actionsBody } from "./archetypes/actions";
 import { listAccepts, listBody } from "./archetypes/list";
-import { metricBody } from "./archetypes/metric";
+import { metricAccepts, metricBody } from "./archetypes/metric";
 import { tableAccepts, tableBody } from "./archetypes/table";
 import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
 
@@ -44,9 +45,10 @@ import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
  * is deliberately absent — it is not drawn from a result at all.
  */
 const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
-  metric: { body: metricBody },
+  metric: { accepts: metricAccepts, body: metricBody },
   list: { accepts: listAccepts, body: listBody },
   table: { accepts: tableAccepts, body: tableBody },
+  actions: { declared: actionsBody },
 };
 
 /**
@@ -148,6 +150,28 @@ export function resolveWidgetOutcome(
   // archetype means the table held a renderer. Narrowing rather than asserting,
   // so a future archetype that answers differently cannot walk past this.
   if (!renderer) {
+    return {
+      state: "failed",
+      message: `The "${definition.archetype}" widget archetype is not rendered yet.`,
+    };
+  }
+
+  // A DECLARED archetype is drawn before the slot logic is reached, because no
+  // slot is ever coming for it. `text` and `actions` are queryless by core's
+  // own contract -- the registry validator refuses a query on them -- so they
+  // never enter the batch. Reading that absence below as "in flight" or as
+  // "drawn from a query and declaring none" is right for every data archetype
+  // and would have been permanently wrong for these two: the first body
+  // registered for one would have failed on every render.
+  if (renderer.declared) {
+    const drawn = renderer.declared(definition);
+    return drawn.ok
+      ? { state: "ready", node: drawn.node }
+      : { state: "failed", message: drawn.message };
+  }
+
+  if (!renderer.body) {
+    // A renderer with neither kind of body is a table entry nobody finished.
     return {
       state: "failed",
       message: `The "${definition.archetype}" widget archetype is not rendered yet.`,

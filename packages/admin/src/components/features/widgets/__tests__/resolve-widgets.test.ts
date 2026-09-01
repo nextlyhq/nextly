@@ -171,6 +171,63 @@ describe("resolveDashboardWidgets", () => {
     expect(widgets).toEqual([]);
   });
 
+  it("drops a shortcut this reader may not use, keeping the card", () => {
+    // The two gates answer different questions and both are needed. The card's
+    // own permission decides whether the widget appears; an item's decides
+    // whether that shortcut does. A card of shortcuts where the reader may use
+    // one should show one, not disappear -- and a shortcut to something they
+    // cannot do advertises a capability, costs a click, and answers with a
+    // refusal screen.
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "core/shortcuts",
+          title: "Shortcuts",
+          archetype: "actions",
+          actions: [
+            { label: "New post", href: "/admin/posts/new" },
+            {
+              label: "Invite user",
+              href: "/admin/users/new",
+              requiredPermission: "create-users",
+            },
+          ],
+        },
+      ]),
+      undefined,
+      permission => permission !== "create-users"
+    );
+
+    expect(widgets).toHaveLength(1);
+    expect(widgets[0].actions?.map(a => a.label)).toEqual(["New post"]);
+  });
+
+  it("keeps every shortcut when the reader may use them all", () => {
+    // The positive control. A filter that dropped everything would satisfy the
+    // assertion above.
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        {
+          id: "core/shortcuts",
+          title: "Shortcuts",
+          archetype: "actions",
+          actions: [
+            { label: "New post", href: "/admin/posts/new" },
+            {
+              label: "Invite user",
+              href: "/admin/users/new",
+              requiredPermission: "create-users",
+            },
+          ],
+        },
+      ]),
+      undefined,
+      allow
+    );
+
+    expect(widgets[0].actions).toHaveLength(2);
+  });
+
   it("still renders a contribution the registry knows nothing about", () => {
     const widgets = resolveDashboardWidgets(
       contributing([

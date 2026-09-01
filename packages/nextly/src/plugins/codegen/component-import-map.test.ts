@@ -463,32 +463,26 @@ describe("parity with the admin-meta surface", () => {
       expect(collected.has(path)).toBe(true);
     }
 
-    // Widget components are excluded from the STATIC import map, and this
-    // records the exclusion rather than explaining it away.
+    // Widget components ARE collected now, and this records why the exclusion
+    // ended rather than only that it did.
     //
-    // What pages, settings and fieldTypes get is a pre-bundled entry in this
-    // generated map, and that entry is what registers their string path; the
-    // registry `PluginSlot` reads is otherwise empty for that path and it
-    // renders its fallback. So a widget component is not "resolved through the
-    // same registry, just not pre-bundled" -- being pre-bundled is what puts
-    // it in the registry. A widget component reaches `PluginSlot` only if the
-    // plugin registers it ITSELF from its admin entry, the way
-    // `plugin-page-builder` calls `registerComponents` for its own.
-    //
-    // Asserted rather than left to a fixture that happens to declare no
-    // widgets, so whoever wires codegen to emit them sees this go red.
+    // Being pre-bundled by this map is what puts a component in the registry
+    // `PluginSlot` reads -- the registry's runtime fallback cannot resolve a
+    // bare package specifier in a bundled browser. So while widgets were
+    // excluded, a `custom` widget drew its card and then nothing inside it
+    // unless the plugin called `registerComponents` itself from its admin
+    // entry, which the documented contract never asked it to do.
     expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
 
-    // And a DECLARATIVE widget contributes no path whatsoever. The fixture
-    // above declares two widgets and only one names a component: the host
-    // draws the other from its archetype and query, so there is nothing for
-    // any import map -- static or otherwise -- to carry for it. Without this
-    // the single-entry assertion above could be read as "widgets contribute
-    // one path each", which stopped being true when `component` became
-    // conditional.
+    // A DECLARATIVE widget still contributes no path whatsoever. The fixture
+    // declares two widgets and only one names a component: the host draws the
+    // other from its archetype and query, so there is nothing for any import
+    // map to carry for it. Without this the assertion above could be read as
+    // "widgets contribute one path each", which stopped being true when
+    // `component` became conditional.
     expect(meta.widgets).toHaveLength(2);
     expect(exposed.widgets).toHaveLength(1);
-    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
+    expect(collected.has("@acme/x/admin#StatsWidget")).toBe(true);
 
     // `clientConfig` is plugin data. A colour is not a component path, and
     // reading it as one would demand an import for a module named `#0ea5e9`.
