@@ -2203,6 +2203,7 @@ function parseReleaseRoutes(
 }
 
 /**
+ * GET /api/jobs → list the most recently touched jobs.
  * GET or POST /api/jobs/run → run one background job pass.
  *
  * `run` is the only path under `jobs`, and it is an operation rather than an
@@ -2216,6 +2217,19 @@ function parseJobRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // GET /api/jobs → the recent-runs read. Ahead of the `run` branch because it
+  // is the only shape with no id at all, and a reader must not fall through to
+  // a trigger: this route is a read, and running the queue is a side effect
+  // nobody asked for by listing it.
+  if (id === undefined && !subresource && httpMethod === "GET") {
+    return {
+      service: "jobs",
+      operation: "list",
+      method: "listJobs",
+      routeParams,
+    };
+  }
+
   if (id !== "run" || subresource) return null;
   if (httpMethod !== "POST" && httpMethod !== "GET") return null;
   // Running the queue is not a CRUD OperationType, but the dispatch guard

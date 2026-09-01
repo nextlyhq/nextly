@@ -278,6 +278,43 @@ export class JobsRepository {
    * `nextly_webhook_deliveries` selects its due rows the same way, for the same
    * reason.
    */
+  /**
+   * The most recently touched jobs, for somebody watching the queue.
+   *
+   * Ordered by `updatedAt` rather than `createdAt`: what an operator wants to
+   * see first is what most recently HAPPENED, and a job enqueued days ago that
+   * failed a minute ago is the row that matters. Creation order would bury it
+   * under newer work that has not run.
+   *
+   * Bounded by `limit` with no total alongside it, deliberately. The seam this
+   * repository is written against offers no count, and a second query to
+   * produce one would be a page-count that can disagree with the page it
+   * labels. A caller that needs "the last N" is served; a caller that needs
+   * true pagination should say so and get an offset-based method with a count
+   * the same query produced.
+   *
+   * Terminal rows are pruned on a retention window — seven days by default —
+   * so this is a recent-history view by construction rather than an archive.
+   * A caller must not read an absent job as one that never ran.
+   */
+  async listRecent(input: {
+    limit: number;
+    /** Restrict to these states. Omitted means every state. */
+    states?: readonly JobState[];
+  }): Promise<JobRow[]> {
+    return this.db.select<JobRow>(JOBS, {
+      ...(input.states === undefined || input.states.length === 0
+        ? {}
+        : {
+            where: {
+              and: [{ column: "state", op: "IN", value: [...input.states] }],
+            },
+          }),
+      orderBy: [{ column: "updatedAt", direction: "desc" }],
+      limit: input.limit,
+    });
+  }
+
   async findDue(input: { now: Date; limit: number }): Promise<JobRow[]> {
     return this.db.select<JobRow>(JOBS, {
       where: {

@@ -54,6 +54,7 @@ import {
   updateImageSize,
   deleteImageSize,
 } from "./api/image-sizes";
+import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
@@ -1042,7 +1043,10 @@ async function handleServiceRequest(
   // Beside the webhook drain and for the same reason: the handler owns its own
   // authorization, and it must stay above the shared body read below.
   if (service === "jobs") {
-    return runJobsRoute(req);
+    // Branch on the parsed method rather than the HTTP verb: the trigger
+    // accepts GET as well, so a verb test would send a list request to the
+    // runner and drain the queue as a side effect of reading it.
+    return method === "listJobs" ? listJobsRoute(req) : runJobsRoute(req);
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================
