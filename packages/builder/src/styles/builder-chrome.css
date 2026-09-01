@@ -1169,7 +1169,7 @@
  * palette tile has said this since it shipped; the canvas is the half that
  * never did.
  */
-.nx-canvas [data-nx-node]:not([data-nx-locked]) {
+.nx-canvas [data-nx-node] {
   cursor: grab;
 }
 
@@ -1180,6 +1180,12 @@
  * as movable promises something that can never happen and leaves an author
  * pressing repeatedly at a block that will not move. Since the whole element is
  * the grab surface here, the cursor is the only place that promise is made.
+ *
+ * Withdrawn by SPECIFICITY rather than by excluding it from the rule above: a
+ * negation there would have to name every reason a block might not be
+ * draggable, and each new reason would edit a selector that means "a block"
+ * into one that means "a block, except". Two rules keep the general statement
+ * general and let the exception say what it is.
  */
 .nx-canvas [data-nx-node][data-nx-locked] {
   cursor: default;
