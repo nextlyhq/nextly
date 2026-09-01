@@ -190,6 +190,10 @@
     "./api/email-provider-types": {
       "types": "./dist/api/email-provider-types.d.ts",
       "import": "./dist/api/email-provider-types.mjs"
+    },
+    "./api/email-template-preview-types": {
+      "types": "./dist/api/email-template-preview-types.d.ts",
+      "import": "./dist/api/email-template-preview-types.mjs"
     }
   },
   "files": [

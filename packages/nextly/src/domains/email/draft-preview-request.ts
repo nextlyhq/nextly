@@ -34,4 +34,21 @@ export const draftPreviewSchema = z.object({
   data: z.record(z.string(), z.unknown()),
 });
 
-export type DraftPreviewRequest = z.infer<typeof draftPreviewSchema>;
+/**
+ * What a CALLER sends — the schema's input, not its output.
+ *
+ * `z.infer` describes the value after parsing, where every `.default(null)`
+ * field has been filled in and is therefore required. Publishing that as the
+ * request contract rejects payloads the server accepts: omitting
+ * `plainTextContent` is valid on the wire and a compile error against the
+ * output type. The two differ precisely BECAUSE the schema has defaults, so
+ * the distinction is load-bearing rather than stylistic.
+ */
+export type DraftPreviewRequest = z.input<typeof draftPreviewSchema>;
+
+/**
+ * What the SERVER holds once the body has been parsed: defaults applied, so
+ * every field is present. Named separately because a handler reading
+ * `template.preheader` needs the guarantee that the caller's type cannot give.
+ */
+export type DraftPreviewParsed = z.output<typeof draftPreviewSchema>;
