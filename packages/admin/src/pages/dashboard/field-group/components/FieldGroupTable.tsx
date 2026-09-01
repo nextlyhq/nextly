@@ -353,6 +353,7 @@ export default function FieldGroupTable() {
           );
         },
       },
+      // fallow-ignore-next-line code-duplication
       {
         name: "source",
         header: "SOURCE",
