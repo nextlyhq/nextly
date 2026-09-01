@@ -9,9 +9,10 @@
  * The session is the one precondition replaced, because it needs a signed
  * cookie and a database and has nothing to do with the property under test.
  * Service initialisation is deliberately NOT replaced: it runs
- * `resetWidgetRegistries()`, so a widget registered before the first request
- * would be cleared by the boot that request triggers, and a test that mocked
- * boot away would pass while the real dashboard showed nothing. Warming boot
+ * `resetWidgetRegistries()`, which both clears the registry and writes core's
+ * own dashboard cards into it -- so a widget registered before the first
+ * request would be cleared by the boot that request triggers, and a test that
+ * mocked boot away would pass while the real dashboard showed nothing. Warming boot
  * first and registering after it is the order a plugin's own registration
  * happens in.
  */
@@ -26,6 +27,7 @@ import {
   vi,
 } from "vitest";
 
+import { CORE_WIDGETS } from "../domains/widgets/core-widgets";
 import { clearWidgets, registerWidget } from "../domains/widgets/registry";
 import { createDynamicHandlers } from "../routeHandler";
 import { sanitizeConfig } from "../shared/types/config";
@@ -84,20 +86,37 @@ describe("the widget registry over /api/admin-meta/workspace", () => {
       { source: "@acme/stripe" }
     );
 
-    expect(await workspaceBody()).toMatchObject({
-      widgets: [
-        {
-          id: "acme/revenue",
-          title: "Revenue",
-          archetype: "metric",
-          defaultSize: "sm",
-          query: { source: "collection:orders", op: "count" },
-        },
-      ],
-    });
+    const body = await workspaceBody();
+    const widgets = body.widgets as { id: string }[];
+
+    // By MEMBERSHIP, not by whole-array equality. Boot registers core's own
+    // dashboard cards into the same registry, so the payload legitimately
+    // carries those too and an exact-array assertion would break every time
+    // core adds or removes one -- while saying nothing about the property under
+    // test, which is that an app's own registration survives to the wire.
+    expect(widgets).toContainEqual(
+      expect.objectContaining({
+        id: "acme/revenue",
+        title: "Revenue",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:orders", op: "count" },
+      })
+    );
+
+    // And core's cards travel by the same route, which is what makes the
+    // dashboard's own sections manageable rather than hardcoded above the grid.
+    expect(widgets.map(widget => widget.id)).toEqual(
+      expect.arrayContaining(CORE_WIDGETS.map(widget => widget.id))
+    );
   });
 
   it("omits the key entirely when nothing is registered", async () => {
+    // Reachable only through the `afterEach` clear above, now that boot
+    // registers core's cards -- a running app always has those. Kept because
+    // the omit-when-empty branch is still the right behaviour and nothing else
+    // covers it; noted so the next reader does not take it as evidence that a
+    // real workspace response can arrive without widgets.
     expect(await workspaceBody()).not.toHaveProperty("widgets");
   });
 });
