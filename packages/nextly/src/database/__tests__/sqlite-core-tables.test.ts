@@ -20,8 +20,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
+import { nextlyJobsSqlite } from "../../schemas/jobs/sqlite";
 import { generateSqliteCoreTableStatements } from "../sqlite-core-tables";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -130,6 +132,31 @@ describe("the SQLite bootstrap DDL", () => {
         "query against them fails. Add the DDL, or add the table to " +
         "NOT_BOOTSTRAPPED with the reason."
     ).toEqual([]);
+  });
+
+  /*
+   * Indexes, for `nextly_jobs` only.
+   *
+   * The column comparison above cannot see an index: a missing one breaks no
+   * insert, it makes a query slow, which is why `nextly_jobs_recent_idx` was
+   * declared on all three dialects and created on none. Scoped to this table
+   * rather than generalized because the same probe reports ten pre-existing
+   * omissions on `dynamic_collections` and `dynamic_components`, and deciding
+   * what those should be is a separate change from asserting this one.
+   */
+  it("creates every index the jobs schema declares", () => {
+    const statements = generateSqliteCoreTableStatements().join("\n");
+    const declared = getTableConfig(nextlyJobsSqlite).indexes.map(
+      index => index.config.name
+    );
+    const missing = declared.filter(name => !statements.includes(`"${name}"`));
+    expect(
+      missing,
+      `nextly_jobs: the bootstrap DDL never creates ${missing.join(", ")}, so ` +
+        "the declaration is decorative on every SQLite database built from it"
+    ).toEqual([]);
+    // The premise: this compared real index names rather than an empty list.
+    expect(declared.length).toBeGreaterThan(1);
   });
 
   it("does not carry exclusions for tables that no longer exist", () => {

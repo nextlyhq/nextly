@@ -127,14 +127,38 @@ export interface JobRow {
 }
 
 /**
- * A job as a monitor needs it: every column except `input`.
+ * The columns {@link JobsRepository.listRecent} actually selects.
  *
- * Derived from {@link JobRow} rather than restated, so a column added there is
- * carried here and one REMOVED is a compile error rather than a silent gap.
- * `input` is omitted because it is arbitrary caller data of unbounded size that
- * no list consumer reads.
+ * The single source for both the query's projection and the type it returns.
+ * They were two lists before — `Omit<JobRow, "input">` beside a projection that
+ * also left out `runAsUserId`, `dedupeKey` and `lockedBy` — so the type promised
+ * three non-optional fields the query never returns, and a caller reading one
+ * got `undefined` from a property the compiler said was a `string`. Adding a
+ * column here now widens both at once; there is no second list to forget.
  */
-export type JobSummaryRow = Omit<JobRow, "input">;
+const SUMMARY_COLUMNS = [
+  "id",
+  "slug",
+  "state",
+  "attemptCount",
+  "runAt",
+  "nextAttemptAt",
+  "lockedUntil",
+  "lastError",
+  "createdAt",
+  "updatedAt",
+] as const satisfies readonly (keyof JobRow)[];
+
+/**
+ * A job as a monitor needs it: exactly the columns the summary query selects.
+ *
+ * Projected from {@link JobRow} through {@link SUMMARY_COLUMNS}, so a column
+ * renamed or removed there is a compile error rather than a field that quietly
+ * arrives undefined. `input` is excluded because it is arbitrary caller data of
+ * unbounded size that no list consumer reads; the other absentees are identity
+ * and lease-holder columns a monitor has no use for.
+ */
+export type JobSummaryRow = Pick<JobRow, (typeof SUMMARY_COLUMNS)[number]>;
 
 export interface NewJob {
   slug: string;
@@ -317,18 +341,7 @@ export class JobsRepository {
     // anyone opening a monitor pull up to `limit` complete payloads out of the
     // database and into memory for nothing.
     return this.db.select<JobSummaryRow>(JOBS, {
-      columns: [
-        "id",
-        "slug",
-        "state",
-        "attemptCount",
-        "runAt",
-        "nextAttemptAt",
-        "lockedUntil",
-        "lastError",
-        "createdAt",
-        "updatedAt",
-      ],
+      columns: [...SUMMARY_COLUMNS],
       ...(input.states === undefined || input.states.length === 0
         ? {}
         : {

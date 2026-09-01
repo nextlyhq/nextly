@@ -94,6 +94,17 @@ export const nextlyJobsPg = pgTable(
     // scan and sort on every monitoring request, and it degrades with queue
     // volume rather than staying bounded — the due index above cannot serve it,
     // because its leading column is `state`.
+    //
+    // A DECLARATION IS NOT AN UPGRADE PATH. A fresh install gets this index
+    // when the table is pushed; an existing one does not, because
+    // `drizzleTableToTableSpec` records only names and columns, so index-only
+    // drift produces no operations and `reconcileCore` returns early before the
+    // push that would create it. SQLite is repaired by the hand-written core
+    // DDL in `database/sqlite-core-tables.ts`, which re-runs idempotently;
+    // PostgreSQL and MySQL need a general core index-repair step in
+    // `nextly upgrade`, which is filed rather than built here — see
+    // `schemas/nextly-i18n-archive/ddl.ts` for the same problem solved for one
+    // table.
     index("nextly_jobs_recent_idx").on(table.updatedAt),
     uniqueIndex("nextly_jobs_dedupe_idx").on(table.dedupeKey),
   ]

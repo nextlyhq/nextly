@@ -285,6 +285,12 @@ export function generateSqliteCoreTableStatements(): string[] {
     // into it would never appear on a database built by an earlier boot.
     `CREATE INDEX IF NOT EXISTS "nextly_jobs_due_idx"
       ON "nextly_jobs" ("state", "run_at")`,
+    // The recent-jobs read sorts the whole table by `updated_at` before its
+    // small limit applies. The due index above cannot serve that sort — its
+    // leading column is `state` — so without this every monitoring request is
+    // a full scan and sort that degrades with queue volume.
+    `CREATE INDEX IF NOT EXISTS "nextly_jobs_recent_idx"
+      ON "nextly_jobs" ("updated_at")`,
     // Nullable and unique: SQLite treats NULL as distinct from NULL, so jobs
     // that name no dedupe key are never deduplicated, while a job that names
     // one can be enqueued exactly once. That is what makes duplicate

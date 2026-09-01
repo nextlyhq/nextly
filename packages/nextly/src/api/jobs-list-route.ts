@@ -29,6 +29,7 @@ import { container } from "../di";
 import { jobDisplayStatus } from "../domains/jobs/job-display-status";
 import type { JobsRepository } from "../domains/jobs/jobs-repository";
 import { getCachedNextly } from "../init";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
 import { respondList } from "./response-shapes";
@@ -81,7 +82,16 @@ export const listJobsRoute = withErrorHandler(async (request: Request) => {
   await getCachedNextly();
   const repository = container.get<JobsRepository>("jobsRepository");
   const limit = readLimit(request);
-  const rows = await repository.listRecent({ limit });
+  /*
+   * One row beyond the limit, as the versions window does. Its PRESENCE is what
+   * proves more exists; inferring truncation from a full page instead would
+   * claim more whenever the queue length is an exact multiple of the limit, and
+   * an operator reading "showing the most recent 50 of more" would go looking
+   * for jobs that are not there.
+   */
+  const window = await repository.listRecent({ limit: limit + 1 });
+  const hasNext = window.length > limit;
+  const rows = hasNext ? window.slice(0, limit) : window;
   const now = new Date();
 
   const items = rows.map(row => ({
@@ -108,6 +118,11 @@ export const listJobsRoute = withErrorHandler(async (request: Request) => {
    * a total that can disagree with the page beside it. A caller needing true
    * pagination should ask for it rather than infer it from a number that looks
    * like one.
+   *
+   * `hasNext` is the one field a probe row CAN answer honestly, and it is the
+   * one that matters here: without it a truncated monitor view is
+   * indistinguishable from a complete one, which is how an operator concludes
+   * that the failure they are looking for never happened.
    */
   return respondList(
     items,
@@ -116,12 +131,32 @@ export const listJobsRoute = withErrorHandler(async (request: Request) => {
       page: 1,
       limit,
       totalPages: 1,
-      hasNext: false,
+      hasNext,
       hasPrev: false,
     },
-    // Permission-scoped, and `lastError` is arbitrary internal text. Without
-    // this a browser or shared cache can replay the body after logout, or to
-    // another session, without authorization running again.
-    { headers: PRIVATE_NO_STORE_HEADERS }
+    {
+      headers: {
+        // Permission-scoped, and `lastError` is arbitrary internal text.
+        // Without this a browser or shared cache can replay the body after
+        // logout, or to another session, without authorization running again.
+        ...PRIVATE_NO_STORE_HEADERS,
+        /*
+         * Opt out of the global timezone rewrite, as the webhook delivery
+         * endpoints do for the same reason. That pass rewrites every
+         * date-looking STRING in a payload by value, and `lastError` is
+         * whatever a handler threw — a message quoting a timestamp is exactly
+         * the debugging record an operator is inspecting, and it must arrive
+         * as it was recorded rather than shifted into the installation's
+         * timezone.
+         *
+         * The cost is that this row's own timestamps arrive in UTC rather than
+         * pre-shifted, which is what the pass itself falls back to when no
+         * timezone is configured and what the webhook delivery endpoints
+         * already deliver. A client renders them in the viewer's zone; no
+         * client can recover an error string the server rewrote.
+         */
+        [SKIP_TIMEZONE_FORMAT_HEADER]: "1",
+      },
+    }
   );
 });

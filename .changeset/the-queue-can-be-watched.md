@@ -51,3 +51,24 @@ would change what preset roles grant as a side effect of adding an endpoint.
 
 Terminal rows are pruned on the retention window, seven days by default, so this
 is recent history by construction rather than an archive.
+
+`meta.hasNext` is answered by a probe row rather than stated. Reading one row
+beyond the limit is what proves more exists; a full page cannot, because a queue
+whose length is an exact multiple of the limit would then claim a next page that
+is empty. A monitor that reports itself complete while showing a slice is how an
+operator concludes the failure they are hunting never happened.
+
+`lastError` is delivered exactly as it was recorded. The response opts out of
+the global timezone rewrite, as the webhook delivery endpoints do: that pass
+rewrites every date-looking string in a payload by value, and a handler that
+surfaces a timestamp as its whole message would have had the debugging record
+altered. The row's own timestamps arrive in UTC, which is the same fallback the
+pass takes when no timezone is configured.
+
+The recent-jobs ordering index is now created on SQLite, not merely declared.
+A Drizzle index declaration reaches an existing database through nothing —
+core reconciliation compares names and columns only, so index-only drift
+produces no operations — and SQLite's core DDL, which re-runs idempotently, had
+no statement for it. PostgreSQL and MySQL create it on a fresh push; repairing
+an existing installation on those dialects needs a general core index step in
+`nextly upgrade`, which is filed rather than built here.

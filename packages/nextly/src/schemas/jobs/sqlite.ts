@@ -54,6 +54,8 @@ export const nextlyJobsSqlite = sqliteTable(
   },
   table => [
     index("nextly_jobs_due_idx").on(table.state, table.runAt),
+    // See `schemas/jobs/postgres.ts` for what this index is for and why a
+    // declaration alone does not put it on an existing database.
     index("nextly_jobs_recent_idx").on(table.updatedAt),
     uniqueIndex("nextly_jobs_dedupe_idx").on(table.dedupeKey),
   ]
