@@ -250,11 +250,13 @@ describe("every default the core library declares", () => {
       "core/card",
       "core/column",
       "core/columns",
+      "core/divider",
       "core/form",
       "core/gallery",
       "core/image",
       "core/list",
       "core/quote",
+      "core/spacer",
     ]);
   });
 

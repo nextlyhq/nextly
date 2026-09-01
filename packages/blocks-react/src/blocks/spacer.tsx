@@ -27,6 +27,23 @@ export function renderSpacer({
   return <div className={className} aria-hidden="true" />;
 }
 
+/**
+ * A starting height, so the block exists before it is styled.
+ *
+ * A spacer renders an empty `<div>`, which is zero-high with nothing declared —
+ * so inserting one produced no space and nothing to select, and the block read
+ * as broken rather than as unstyled. This is a DEFAULT rather than a fixed size:
+ * height stays a style, per this module's note on why it is not a prop, so any
+ * breakpoint may override it.
+ */
+const SPACER_BASE_STYLES = {
+  base: {
+    base: {
+      height: "2rem",
+    },
+  },
+} as const;
+
 // Defined against the ENGINE's `defineBlock`, not the plugin SDK's: the engine
 // declares the contract and the SDK re-exports it for third parties. The
 // context is named rather than augmented, so a block compiled against the
@@ -49,5 +66,6 @@ export const spacer = defineBlock<SpacerProps, PageContext>({
   defaultProps: {},
   example: { props: {} },
   supports: { dimensions: true, spacing: true },
+  baseStyles: SPACER_BASE_STYLES,
   render: renderSpacer,
 });
