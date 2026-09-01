@@ -27,6 +27,8 @@ afterEach(async () => {
 });
 
 const SLUG = "drafted";
+/** Localized title PLUS a shared field, so a draft can touch only the shared one. */
+const SHARED_SLUG = "sharedfield";
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
@@ -44,6 +46,24 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           unpublish: () => true,
         },
         fields: [text({ name: "title", localized: true })],
+      }),
+      defineCollection({
+        slug: SHARED_SLUG,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [
+          text({ name: "title", localized: true }),
+          // Shared across languages: a localized collection localizes every
+          // field unless one opts out, so this has to say so explicitly.
+          text({ name: "note", localized: false }),
+        ],
       }),
     ],
     localization: { locales: ["en", "de"], defaultLocale: "en" },
@@ -170,6 +190,64 @@ describe.each(getConfiguredTestDialects())(
       const readable = await readTitle(t, id, "en");
       const stillPending = (await pendingDrafts(t, id)).includes("EN pending");
       expect(readable === "EN pending" || stillPending).toBe(true);
+    });
+
+    it("creates no translation row when the promoted draft touches only shared fields", async () => {
+      // The exception exists for AUTHORED translation values. A draft that
+      // changed only a shared field carries none, so the language still has no
+      // translation and none may be invented for it — `_status` travelling in
+      // the companion payload is a structural key, not content.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: SHARED_SLUG, overrideAccess: true, locale: "de" },
+        { title: "DE live", note: "n1", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SHARED_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      const before = await t.adapter.select<{ _locale?: unknown }>(
+        `dc_${SHARED_SLUG}_locales`,
+        {}
+      );
+      expect(before.map(r => String(r._locale)).sort()).toEqual(["de"]);
+
+      // A status-less save of the SHARED field only, at the default locale.
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SHARED_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { note: "n2" }
+      );
+      expect(await pendingDrafts(t, id)).toContain("n2");
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SHARED_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      // No English row was manufactured for a language nobody translated.
+      const after = await t.adapter.select<{ _locale?: unknown }>(
+        `dc_${SHARED_SLUG}_locales`,
+        {}
+      );
+      expect(after.map(r => String(r._locale)).sort()).toEqual(["de"]);
     });
 
     it("CONTROL: the language that does have a translation is unaffected", async () => {

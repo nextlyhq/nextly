@@ -6801,7 +6801,20 @@ export class CollectionMutationService extends BaseService {
             // them, so writing the row records a translation rather than
             // inventing one. Without it the promotion still consumes the draft
             // and the edit reaches no read path at all.
-            (!sweepAllLocales || promotedDraft) &&
+            //
+            // Gated on TRANSLATED CONTENT the draft actually carries, not on
+            // `companionData` — which also holds the structural `_status` this
+            // write is setting — and not on the mere presence of localized
+            // keys. A working draft stores a whole-document snapshot, so a
+            // language with no translation still appears in it with every
+            // localized field null; counting keys would read those nulls as
+            // authorship and manufacture a published, contentless translation
+            // for a language nobody wrote.
+            (!sweepAllLocales ||
+              (promotedDraft &&
+                Object.values(localizedUpdate.localizedFieldValues).some(
+                  v => v !== null && v !== undefined
+                ))) &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
             await upsertCompanionRow(
