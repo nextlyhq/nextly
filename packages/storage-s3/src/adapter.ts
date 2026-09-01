@@ -62,7 +62,6 @@ import {
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { NextlyError } from "nextly/errors";
 import type {
   StorageReadOptions,
   IStorageAdapter,
@@ -73,6 +72,7 @@ import type {
   FileMetadata,
   BulkDeleteResult,
 } from "nextly/storage";
+import { StorageReadTooLargeError } from "nextly/storage/read-errors";
 
 import type { S3StorageConfig, ResolvedS3Config } from "./types";
 
@@ -86,6 +86,27 @@ import type { S3StorageConfig, ResolvedS3Config } from "./types";
  * Implements the IStorageAdapter interface for AWS S3 and S3-compatible services.
  * Provides full support for uploads, downloads, signed URLs, and client-side uploads.
  */
+/**
+ * The SDK request options carrying the caller's deadline, or none.
+ *
+ * A free function rather than a branch inside `read`, because it is the only
+ * part of that method with nothing to do with telling an absent key apart from
+ * an unreachable bucket — which is the distinction a reader has to hold in
+ * their head there.
+ *
+ * `AbortSignal.timeout` rather than a controller and a `setTimeout`: it needs no
+ * clearing, so it cannot leak a timer when the read resolves first. The signal
+ * covers the BODY as well as the request, because the SDK threads it through
+ * the response stream — and a backend that answers headers promptly and then
+ * stalls mid-transfer is exactly the case a request-only deadline misses.
+ */
+function abortAfter(options?: StorageReadOptions): {
+  abortSignal?: AbortSignal;
+} {
+  if (options?.timeoutMs === undefined) return {};
+  return { abortSignal: AbortSignal.timeout(options.timeoutMs) };
+}
+
 export class S3StorageAdapter implements IStorageAdapter {
   private client: S3Client;
   private resolvedConfig: ResolvedS3Config;
@@ -448,7 +469,20 @@ export class S3StorageAdapter implements IStorageAdapter {
         Key: filePath,
       });
 
-      const response = await this.client.send(command);
+      /*
+       * The caller's deadline reaches the SDK, or it is advertised and inert.
+       * `StorageReadOptions` promises a bound, and the URL-backed adapters keep
+       * it by handing `timeoutMs` to `safeFetch`; without this the same option
+       * does nothing here, so a stalled bucket holds the read open past a
+       * deadline the caller was told applied — the worst kind of option, one
+       * that validates and then has no effect.
+       *
+       * Aborting covers the BODY as well as the request. `transformToByteArray`
+       * pulls the stream after `send` resolves, and a backend that answers
+       * headers promptly and then stalls mid-transfer is exactly the case a
+       * request-only timeout misses.
+       */
+      const response = await this.client.send(command, abortAfter(options));
       /*
        * An empty body is not a missing object, and the two must not collapse.
        * `GetObject` on a zero-byte key succeeds with no stream to transform,
@@ -613,15 +647,14 @@ export class S3StorageAdapter implements IStorageAdapter {
     cap: number | undefined
   ): void {
     if (cap === undefined || declared === undefined || declared <= cap) return;
-    throw NextlyError.internal({
-      logContext: {
-        service: "S3",
-        path: filePath,
-        reason: "response-too-large",
-        size: declared,
-        max: cap,
-      },
-    });
+    /*
+     * The SHARED refusal rather than a generic internal error, because callers
+     * act on the difference. The email attachment path answers an over-cap read
+     * with a size error the author can do something about; anything else is
+     * wrapped as an opaque storage failure, so throwing `internal` here would
+     * turn a fixable refusal into one that tells them nothing.
+     */
+    throw new StorageReadTooLargeError(filePath, cap, declared);
   }
 
   private isNotFoundError(error: unknown): boolean {

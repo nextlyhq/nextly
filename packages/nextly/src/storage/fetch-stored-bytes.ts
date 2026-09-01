@@ -18,8 +18,9 @@
  * @module storage/fetch-stored-bytes
  */
 import { NextlyError } from "../errors/nextly-error";
-import { safeFetch } from "../utils/validate-external-url";
+import { safeFetch, SafeFetchError } from "../utils/validate-external-url";
 
+import { StorageReadTooLargeError } from "./read-errors";
 import type { StorageReadOptions } from "./types";
 
 /**
@@ -64,14 +65,33 @@ export async function fetchStoredBytes(
    * caller with a configured limit of its own, such as the email attachment
    * path, hands its number down instead of being overridden by ours.
    */
-  const response = await safeFetch(url, {
-    ...(options?.maxBytes === undefined
-      ? {}
-      : { maxResponseBytes: options.maxBytes }),
-    ...(options?.timeoutMs === undefined
-      ? {}
-      : { timeoutMs: options.timeoutMs }),
-  });
+  let response: Response;
+  try {
+    response = await safeFetch(url, {
+      ...(options?.maxBytes === undefined
+        ? {}
+        : { maxResponseBytes: options.maxBytes }),
+      ...(options?.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.timeoutMs }),
+    });
+  } catch (error: unknown) {
+    /*
+     * TRANSLATED, not passed through. `safeFetch` refuses an over-cap body in
+     * its own vocabulary, and S3 refuses in the SDK's — so a caller wanting to
+     * tell "too large" from "could not read" would have to know which adapter
+     * answered. The contract that introduced `maxBytes` owns what exceeding it
+     * looks like, so both routes raise the same refusal.
+     */
+    if (
+      error instanceof SafeFetchError &&
+      error.reason === "response-too-large" &&
+      options?.maxBytes !== undefined
+    ) {
+      throw new StorageReadTooLargeError(context, options.maxBytes);
+    }
+    throw error;
+  }
   /*
    * Checked BEFORE the general failure branch, because 404 is the one non-OK
    * status that is an answer rather than a fault.

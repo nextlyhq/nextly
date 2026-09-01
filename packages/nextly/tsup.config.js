@@ -104,6 +104,9 @@ const clientEntries = [
   // Measured on `@nextlyhq/storage-vercel-blob`: 240K over 6 files became 1.3M
   // over 16 the moment the barrel import landed, and every install pays it.
   "src/storage/fetch-stored-bytes.ts",
+  // The over-cap refusal, reachable by an adapter without the barrel for the
+  // same reason as the helper above.
+  "src/storage/read-errors.ts",
 ];
 
 // Shared config options

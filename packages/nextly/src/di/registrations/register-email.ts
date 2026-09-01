@@ -22,10 +22,51 @@ import { EmailService } from "../../services/email/email-service";
 import { EmailTemplateService } from "../../services/email/email-template-service";
 import type { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { SYSTEM_CONTEXT } from "../../shared/types";
+import { isStorageReadTooLarge } from "../../storage/read-errors";
 import { SafeFetchError, safeFetch } from "../../utils/validate-external-url";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
+
+/**
+ * A storage read failure, in the vocabulary the attachment path answers in.
+ *
+ * Named and exported rather than inlined in the reader, so the mapping can be
+ * asserted without standing up the whole DI container. That is not tidiness:
+ * this rule regressed silently once already — implementing `read` on the cloud
+ * adapters moved attachments off a capped fetch and NOTHING failed — and the
+ * reason nothing failed is that the rule lived in a closure inside a factory.
+ *
+ * An over-cap read becomes the SAME size error the URL-backed branch produces.
+ * `attachment-resolver` passes through only `VALIDATION_ERROR` and wraps
+ * everything else as an opaque storage failure, so an over-cap read arriving as
+ * anything else tells the author their storage broke — when what happened is
+ * that their attachment is too big and they can fix it by attaching something
+ * smaller. Which branch read the bytes must not change which error they see.
+ *
+ * Everything else is returned UNCHANGED for the resolver to wrap, because a
+ * timeout or a refused address says nothing an author can act on and its
+ * message must not reach them.
+ */
+export function asAttachmentReadError(
+  error: unknown,
+  maxBytes: number
+): unknown {
+  if (!isStorageReadTooLarge(error)) return error;
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "attachments",
+        code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+        message: "Attachment size exceeds the limit.",
+      },
+    ],
+    logContext: {
+      emailAttachmentCode: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+      max: maxBytes,
+    },
+  });
+}
 
 export function registerEmailServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, storage } = ctx;
@@ -146,9 +187,14 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           const readLimits = getAttachmentLimits();
           // 1. Try native read() (local disk, S3, etc.)
           if (typeof storage.read === "function") {
-            const buffer = await storage.read(storagePath, {
-              maxBytes: readLimits.maxTotalBytes,
-            });
+            let buffer: Buffer | null;
+            try {
+              buffer = await storage.read(storagePath, {
+                maxBytes: readLimits.maxTotalBytes,
+              });
+            } catch (err) {
+              throw asAttachmentReadError(err, readLimits.maxTotalBytes);
+            }
             if (buffer) return buffer;
           }
           // 2. Fallback: fetch via URL.

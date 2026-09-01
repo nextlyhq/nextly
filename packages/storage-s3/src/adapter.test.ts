@@ -13,6 +13,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { S3Client } from "@aws-sdk/client-s3";
 
+import {
+  isStorageReadTooLarge,
+  StorageReadTooLargeError,
+} from "nextly/storage/read-errors";
+
 import { S3StorageAdapter } from "./adapter";
 
 vi.mock("@aws-sdk/client-s3", () => {
@@ -125,7 +130,21 @@ describe("S3StorageAdapter.read", () => {
     const spy = vi.spyOn(stream, "transformToByteArray");
     send.mockResolvedValueOnce({ Body: stream, ContentLength: 50 });
 
-    await expect(adapter.read("big.woff2", { maxBytes: 10 })).rejects.toThrow();
+    /*
+     * Asserted on the REFUSAL'S IDENTITY, not merely that something threw.
+     * `rejects.toThrow()` alone is satisfied by any failure, so it cannot tell
+     * the intended over-cap refusal from a generic internal error — and the
+     * difference is load-bearing: the email attachment path answers this one
+     * with a size error the author can act on, and wraps anything else as an
+     * opaque storage failure.
+     */
+    const outcome = await adapter.read("big.woff2", { maxBytes: 10 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
+    expect((outcome as StorageReadTooLargeError).maxBytes).toBe(10);
+    expect((outcome as StorageReadTooLargeError).size).toBe(50);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -137,6 +156,40 @@ describe("S3StorageAdapter.read", () => {
     expect(
       (await adapter.read("ok.woff2", { maxBytes: 10 }))?.toString("utf8")
     ).toBe("small");
+  });
+
+  it("hands the caller's deadline to the SDK rather than ignoring it", async () => {
+    /*
+     * `StorageReadOptions` promises a bound and the URL-backed adapters keep it
+     * by forwarding `timeoutMs` to `safeFetch`. Read through the SDK there is
+     * no fetch to hand it to, so without this the same option is advertised and
+     * inert — the worst kind, one that validates and then does nothing, leaving
+     * a stalled bucket holding the read past a deadline the caller was told
+     * applied.
+     *
+     * Asserted on what `send` RECEIVED, because the resolved value is identical
+     * whether or not a signal was attached, which is exactly how this regresses
+     * unnoticed.
+     */
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("x"), ContentLength: 1 });
+    await adapter.read("f.woff2", { timeoutMs: 1234 });
+    const options = send.mock.calls[0]?.[1] as
+      | { abortSignal?: AbortSignal }
+      | undefined;
+    expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("attaches no signal when the caller named no deadline", async () => {
+    // The control for the case above: a `read` that always attached a signal
+    // would satisfy it while ignoring what the caller actually asked for.
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("x"), ContentLength: 1 });
+    await adapter.read("f.woff2");
+    const options = send.mock.calls[0]?.[1] as
+      | { abortSignal?: AbortSignal }
+      | undefined;
+    expect(options?.abortSignal).toBeUndefined();
   });
 
   it("answers an empty buffer for a zero-byte object, not null", async () => {
