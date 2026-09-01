@@ -47,6 +47,7 @@ import {
   sharedStyleInputs,
 } from "@nextlyhq/blocks-react";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
+import { useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -1559,7 +1560,19 @@ function DropRefusalNotice({
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
   const { parentId, reason } = refusal;
 
-  useEffect(() => {
+  /*
+   * Measured BEFORE the browser paints, not after.
+   *
+   * A plain effect runs after paint, so the message draws once at the canvas's
+   * top-left — where an unpositioned absolute box lands — and jumps to the
+   * container on the next frame. During a drag that is not a single flash: a
+   * refusal is re-entered every time the pointer crosses into a region that
+   * will not take the block, so the jump repeats.
+   *
+   * The isomorphic form rather than `useLayoutEffect` directly, because a
+   * client component is still server-rendered and the plain hook warns there.
+   */
+  useIsomorphicLayoutEffect(() => {
     const element = notice.current;
     const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
     if (!(root instanceof HTMLElement)) return;
