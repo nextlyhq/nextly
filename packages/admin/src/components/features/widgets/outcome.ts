@@ -33,6 +33,7 @@ import type {
 
 import { listAccepts, listBody } from "./archetypes/list";
 import { metricBody } from "./archetypes/metric";
+import { tableAccepts, tableBody } from "./archetypes/table";
 import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
 
 /**
@@ -45,6 +46,7 @@ import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
 const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
   metric: { body: metricBody },
   list: { accepts: listAccepts, body: listBody },
+  table: { accepts: tableAccepts, body: tableBody },
 };
 
 /**
