@@ -27,7 +27,9 @@ beforeEach(() => {
     kind: "collection",
     supports: ["count", "list"],
     fields: [
-      { name: "title", type: "string" },
+      // One labelled and one not, so both halves of the column description are
+      // exercised: a heading the source knows, and a field it has no prose for.
+      { name: "title", type: "string", label: "Title" },
       { name: "status", type: "string" },
     ],
   });
@@ -139,7 +141,112 @@ describe("executeWidgetQuery", () => {
     expect(result).toEqual({
       op: "list",
       items: [{ id: "1", title: "Hello" }],
+      // The selected columns travel with the rows, so a table widget can head
+      // them without a second round trip and without the endpoint growing a
+      // channel that would enumerate a source's fields.
+      fields: [{ name: "title", label: "Title" }],
     });
+  });
+
+  it("describes the selected fields, in the order they were selected", async () => {
+    // The rows carry both selected keys, which is what a read returns when
+    // neither field is denied -- the columns follow `select`, not the row's own
+    // key order.
+    find.mockResolvedValue({ items: [{ status: "draft", title: "Hello" }] });
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["status", "title"],
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    // `select` order, not the source's declaration order: the widget chose the
+    // columns and their sequence, and the admin renders what it is given.
+    expect(result).toMatchObject({
+      fields: [{ name: "status" }, { name: "title", label: "Title" }],
+    });
+  });
+
+  it("omits the label for a field the source has no prose for", async () => {
+    find.mockResolvedValue({ items: [{ status: "draft" }] });
+    // The other half of the pair above. A label is optional on a field config,
+    // so its absence is ordinary — the admin falls back to the name rather than
+    // heading a column with an empty string.
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["status"],
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).toMatchObject({ fields: [{ name: "status" }] });
+    const [column] = (result as { fields: { label?: string }[] }).fields;
+    expect(column.label).toBeUndefined();
+  });
+
+  it("describes only the columns that SURVIVED the read", async () => {
+    // A field can carry its own `access.read` rule, and the read strips a
+    // denied field from every row before selection runs. Describing the
+    // declared selection would advertise a column no row can fill AND disclose
+    // the human label of a field this caller may not read.
+    find.mockResolvedValue({ items: [{ title: "Hello" }] });
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["title", "status"],
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).toMatchObject({
+      fields: [{ name: "title", label: "Title" }],
+    });
+  });
+
+  it("collapses a field selected twice into one column", async () => {
+    // `select: ["title", "title"]` is a legal query whose Direct API projection
+    // is a single `{ title: true }`, so two descriptors would have a table draw
+    // two columns for one value.
+    find.mockResolvedValue({ items: [{ title: "Hello" }] });
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["title", "title"],
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).toMatchObject({ fields: [{ name: "title" }] });
+    expect((result as { fields: unknown[] }).fields).toHaveLength(1);
+  });
+
+  it("describes no columns when nothing came back", async () => {
+    // With no rows there is no evidence about which fields survived, and
+    // answering from the declaration would put the disclosure back on the empty
+    // case -- which is exactly what a caller denied every selected field sees.
+    find.mockResolvedValue({ items: [] });
+    const q = validateWidgetQuery({
+      source: "collection:posts",
+      op: "list",
+      select: ["title"],
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).not.toHaveProperty("fields");
+  });
+
+  it("says nothing about columns when the query selects nothing", async () => {
+    // Without `select` the rows carry whatever the collection holds, so there
+    // are no columns the widget chose — and answering with the source's whole
+    // field list would be the enumeration surface this endpoint avoids.
+    const q = validateWidgetQuery({ source: "collection:posts", op: "list" });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).not.toHaveProperty("fields");
   });
 
   it("NEVER issues a trusted read", async () => {

@@ -98,7 +98,7 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
  * field it shadows.
  */
 function exposedFields(
-  fields: Array<{ name: string; type: string }>
+  fields: Array<{ name: string; type: string; label?: string }>
 ): WidgetSourceField[] {
   const taken = new Set<string>();
   const exposed: WidgetSourceField[] = [];
@@ -106,7 +106,16 @@ function exposedFields(
     if (NEVER_EXPOSED_FIELD_TYPES.has(field.type)) continue;
     if (taken.has(field.name)) continue;
     taken.add(field.name);
-    exposed.push({ name: field.name, type: toSourceType(field.type) });
+    // The label travels with the field. This function REBUILDS each entry
+    // rather than passing it through -- `type` is mapped into the source
+    // vocabulary here -- so anything not named is dropped, which is how the
+    // label went missing between the collection registry and the source in the
+    // first place.
+    exposed.push({
+      name: field.name,
+      type: toSourceType(field.type),
+      ...(field.label !== undefined && { label: field.label }),
+    });
   }
   return exposed;
 }
@@ -114,7 +123,7 @@ function exposedFields(
 /** One collection, in the shape a widget source is built from. */
 export interface WidgetSourceCollection {
   slug: string;
-  fields: Array<{ name: string; type: string }>;
+  fields: Array<{ name: string; type: string; label?: string }>;
   /**
    * Whether the collection has `createdAt`/`updatedAt` columns. Absent means
    * ON, which is how `defineCollection` normalizes it and how the registry
