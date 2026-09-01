@@ -1169,8 +1169,20 @@
  * palette tile has said this since it shipped; the canvas is the half that
  * never did.
  */
-.nx-canvas [data-nx-node] {
+.nx-canvas [data-nx-node]:not([data-nx-locked]) {
   cursor: grab;
+}
+
+/*
+ * A locked block does not offer the grab.
+ *
+ * The drag engine returns before creating a gesture for one, so advertising it
+ * as movable promises something that can never happen and leaves an author
+ * pressing repeatedly at a block that will not move. Since the whole element is
+ * the grab surface here, the cursor is the only place that promise is made.
+ */
+.nx-canvas [data-nx-node][data-nx-locked] {
+  cursor: default;
 }
 
 /*
@@ -1190,6 +1202,29 @@
 }
 
 .nx-canvas[data-nx-dragging="refused"] {
+  cursor: no-drop;
+}
+
+/*
+ * The drag state has to WIN over the block's own cursor, not merely be
+ * inherited past it.
+ *
+ * `cursor` inherits, but a descendant that declares its own value is not
+ * inheriting anything — and every block declares `grab` above. Setting the drag
+ * state only on the root therefore changes the cursor over the gaps between
+ * blocks and leaves it reading `grab` over the blocks themselves, which is
+ * where the pointer spends a drag. These two selectors are the ones that
+ * actually reach it.
+ *
+ * The locked rule above is deliberately NOT re-stated here: once a drag is in
+ * flight the subject is the block being carried, and the cursor describes the
+ * gesture rather than whatever it happens to be passing over.
+ */
+.nx-canvas[data-nx-dragging] [data-nx-node] {
+  cursor: grabbing;
+}
+
+.nx-canvas[data-nx-dragging="refused"] [data-nx-node] {
   cursor: no-drop;
 }
 
