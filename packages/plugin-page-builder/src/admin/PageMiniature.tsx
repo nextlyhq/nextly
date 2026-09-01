@@ -26,10 +26,13 @@
  * participates in layout, and the canvas needs that: hit-testing, drag geometry
  * and the drop indicator are all positioned in the scaled box's own
  * coordinates. Nothing here is interactive, so participation buys nothing and
- * costs a reflow of the whole rendered tree on every resize. `transform` also
- * keeps the scaled content out of the flow entirely, which is what lets the
- * outer box own its own size rather than being pushed around by a page that
- * happens to be long.
+ * costs a reflow of the whole rendered tree on every resize.
+ *
+ * `transform` alone does NOT keep the scaled content out of the flow, which is
+ * the trap: it removes the element from painting and leaves it in layout, so a
+ * statically positioned child declared at the compose width stretches every
+ * ancestor to that width. The scaled element is absolutely positioned for that
+ * reason, and only then is the frame's measured width the column's width.
  *
  * ## An unmeasurable container renders UNSCALED
  *
@@ -115,6 +118,19 @@ export function PageMiniature({
     >
       <div
         data-slot="page-miniature-scaled"
+        /*
+         * ABSOLUTE, and this is load-bearing rather than cosmetic.
+         *
+         * `transform` takes an element out of the PAINTING flow and leaves it
+         * in the LAYOUT flow, so a statically positioned 1280px child still
+         * contributes 1280px of intrinsic width to its ancestors — measured:
+         * the frame's own `clientWidth` came back as 1280 rather than the
+         * column's width, the scale computed from it was therefore 1, and the
+         * page drew full-size and overflowed the form. Taking it out of flow is
+         * what makes the frame's width a property of the COLUMN, which is the
+         * width the scale has to be computed from.
+         */
+        className="absolute left-0 top-0"
         style={{
           width: `${renderWidth}px`,
           transform: `scale(${scale})`,

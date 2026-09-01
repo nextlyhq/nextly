@@ -28,6 +28,13 @@
  * from the other direction — a row shows title, subtitle and media, and the
  * type name belongs in the subtitle, never as the label.
  *
+ * ## It does not name itself
+ *
+ * The field's own label already says "Page Builder" directly above this, so a
+ * heading here would be the same fact in two places — the shape that produced a
+ * document title rendered from two sources and then disagreeing with itself.
+ * The icon carries the identity; the words carry the state.
+ *
  * ## One action, and only when there is one
  *
  * A single primary control, which is what the empty-state guidance in Carbon
@@ -133,7 +140,6 @@ export function PageBuilderCard({
             className="size-4 shrink-0 text-muted-foreground"
             aria-hidden="true"
           />
-          <span className="font-medium text-foreground">Page Builder</span>
           {empty ? (
             <span className="text-muted-foreground">
               Nothing here yet — lay this page out visually.

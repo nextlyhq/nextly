@@ -81,6 +81,28 @@ describe("PageMiniature", () => {
   });
 
   /*
+   * The property that makes the scale correct, and the one jsdom can still see.
+   *
+   * `transform` removes an element from painting and leaves it in LAYOUT, so a
+   * statically positioned child declared at the compose width stretches its
+   * ancestors to that width — measured in a browser, the frame's `clientWidth`
+   * came back as the compose width rather than the column's, the scale computed
+   * from it was 1, and the page drew full-size and overflowed the form. There
+   * is no layout here to reproduce that, so this asserts the structural cause
+   * instead: out of flow, anchored to the frame's origin.
+   */
+  it("takes the scaled page out of the layout flow", () => {
+    const { container } = render(
+      <PageMiniature document={doc} siteStyles={undefined} />
+    );
+    const scaled = container.querySelector<HTMLElement>(
+      '[data-slot="page-miniature-scaled"]'
+    );
+
+    expect(scaled?.className).toContain("absolute");
+  });
+
+  /*
    * jsdom reports every element as zero-width, which is the same reading a
    * container genuinely gives before layout. Scaling by the measured ratio
    * there would multiply the page by zero and draw nothing at all, so an
