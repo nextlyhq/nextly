@@ -184,16 +184,23 @@ export function registerEmailServices(ctx: RegistrationContext): void {
            * Passing the limit down means the branch cannot decide whether the
            * limit applies.
            */
-          const readLimits = getAttachmentLimits();
+          /*
+           * ONE snapshot for both branches. Reading the policy twice let the
+           * native read and the URL fallback enforce and report different caps
+           * — the environment backing it can change between the two calls, and
+           * a later normalisation would drift them silently — while the comment
+           * below promises the SAME cap. One read is what makes that true.
+           */
+          const limits = getAttachmentLimits();
           // 1. Try native read() (local disk, S3, etc.)
           if (typeof storage.read === "function") {
             let buffer: Buffer | null;
             try {
               buffer = await storage.read(storagePath, {
-                maxBytes: readLimits.maxTotalBytes,
+                maxBytes: limits.maxTotalBytes,
               });
             } catch (err) {
-              throw asAttachmentReadError(err, readLimits.maxTotalBytes);
+              throw asAttachmentReadError(err, limits.maxTotalBytes);
             }
             if (buffer) return buffer;
           }
@@ -207,7 +214,6 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           const url = storagePath.startsWith("http")
             ? storagePath
             : storage.getPublicUrl(storagePath);
-          const limits = getAttachmentLimits();
           // Cap the fetch at the attachment size limit so a valid large
           // attachment is not rejected by the smaller default safeFetch cap. A
           // body over the limit surfaces as the same size-exceeded validation

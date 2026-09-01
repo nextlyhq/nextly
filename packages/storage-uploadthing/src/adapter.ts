@@ -22,7 +22,11 @@ import type {
   BulkDeleteResult,
   StorageReadOptions,
 } from "nextly/storage";
-import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
+import {
+  fetchStoredBytes,
+  withDeadline,
+  DEFAULT_READ_TIMEOUT_MS,
+} from "nextly/storage/fetch-stored-bytes";
 import { UTApi } from "uploadthing/server";
 
 // ============================================================
@@ -172,15 +176,22 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
      * ONE deadline for both phases, started before the lookup — the key lookup
      * can stall as readily as the fetch, and it runs first.
      */
-    const deadline =
-      options?.timeoutMs === undefined
-        ? undefined
-        : AbortSignal.timeout(options.timeoutMs);
+    const deadline = AbortSignal.timeout(
+      options?.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS
+    );
 
-    const result = await this.utapi.getFileUrls([filePath], {
-      keyType: "fileKey",
-      ...(deadline === undefined ? {} : { signal: deadline }),
-    });
+    /*
+     * RACED rather than cancelled, because this SDK cannot be cancelled.
+     * UploadThing 7.7.4's `getFileUrls` reads only `keyType` and forwards no
+     * signal, so passing one bounds nothing — an option accepted and ignored,
+     * which reads as covered and behaves as absent. Racing at least returns
+     * within the deadline this method advertised; the request itself runs on in
+     * the background, which is the honest limit of what is available here.
+     */
+    const result = await withDeadline(
+      this.utapi.getFileUrls([filePath], { keyType: "fileKey" }),
+      deadline
+    );
     const target = Array.from(result.data)[0]?.url;
     if (target === undefined) return null;
 

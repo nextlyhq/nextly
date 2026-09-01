@@ -14,9 +14,17 @@ import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 
 import { UploadthingStorageAdapter } from "./adapter";
 
-vi.mock("nextly/storage/fetch-stored-bytes", () => ({
-  fetchStoredBytes: vi.fn(),
-}));
+vi.mock("nextly/storage/fetch-stored-bytes", async importOriginal => {
+  /*
+   * Only `fetchStoredBytes` is faked. `withDeadline` and the default timeout
+   * stay REAL: the racer is the mechanism one case below is about, and a stubbed
+   * default would make `AbortSignal.timeout` receive `undefined` — which throws,
+   * and would have these cases failing for a reason unrelated to the adapter.
+   */
+  const actual =
+    await importOriginal<typeof import("nextly/storage/fetch-stored-bytes")>();
+  return { ...actual, fetchStoredBytes: vi.fn() };
+});
 
 const getFileUrls = vi.fn();
 vi.mock("uploadthing/server", () => ({
@@ -91,20 +99,51 @@ describe("UploadthingStorageAdapter.read", () => {
     vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("x"));
     await adapter.read("f.woff2", { timeoutMs: 1234 });
 
-    const lookupSignal = (
-      getFileUrls.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined
-    )?.signal;
-    expect(lookupSignal).toBeInstanceOf(AbortSignal);
-    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBe(lookupSignal);
+    /*
+     * Asserted on the RACE, not on a signal handed to the SDK. UploadThing
+     * 7.7.4's `getFileUrls` reads only `keyType` and forwards no signal, so an
+     * earlier version of this case proved only that an IGNORED property had
+     * been supplied — a test that passes while the lookup stays unbounded.
+     *
+     * A lookup that never settles must therefore still reject, which is the
+     * property the racer actually provides.
+     */
+    expect(getFileUrls.mock.calls[0]?.[1]).toEqual({ keyType: "fileKey" });
+    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBeInstanceOf(
+      AbortSignal
+    );
   });
 
-  it("passes no signal when the caller named no deadline", async () => {
-    // The control: an adapter that always made a signal would satisfy the case
-    // above while ignoring what the caller actually asked for.
+  it("bounds the read even when the caller named NO deadline", async () => {
+    // Previously asserted the opposite, which locked in the defect: the fetch
+    // had `safeFetch`'s own default and the lookup had nothing.
     found();
     vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("x"));
     await adapter.read("f.woff2");
-    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBeUndefined();
+    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBeInstanceOf(
+      AbortSignal
+    );
+  });
+
+  it("REJECTS a lookup that never settles, once the deadline passes", async () => {
+    /*
+     * The property the racer actually provides, and the one an assertion about
+     * a passed option cannot reach: this SDK ignores the signal entirely, so
+     * without racing a stalled lookup holds `read` open forever.
+     *
+     * A never-resolving promise is the point — a slow-but-finite one would pass
+     * against an implementation that simply awaited it.
+     */
+    getFileUrls.mockReturnValueOnce(new Promise(() => {}));
+
+    const outcome = await adapter.read("f.woff2", { timeoutMs: 5 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(outcome).toBeInstanceOf(Error);
+    expect(outcome).not.toBeNull();
+    // And it never reached the fetch, because the lookup never produced a URL.
+    expect(vi.mocked(fetchStoredBytes)).not.toHaveBeenCalled();
   });
 
   it("hands the caller's bounds to the helper", async () => {

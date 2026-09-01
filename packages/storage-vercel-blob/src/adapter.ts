@@ -39,7 +39,10 @@ import type {
   BulkDeleteResult,
   StorageReadOptions,
 } from "nextly/storage";
-import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
+import {
+  fetchStoredBytes,
+  DEFAULT_READ_TIMEOUT_MS,
+} from "nextly/storage/fetch-stored-bytes";
 
 import type {
   VercelBlobStorageConfig,
@@ -273,17 +276,22 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
      * deadline that begins only at the fetch leaves the lookup unbounded and
      * the read can outlive what the caller was promised. Created here and
      * handed to both.
+     *
+     * ALWAYS, not only when the caller named a timeout. `safeFetch` applies a
+     * default deadline of its own, so a caller stating none was still bounded
+     * for the fetch and unbounded for the lookup — which is the commonest call,
+     * the email path among them, since it supplies only a byte cap. The default
+     * comes from the same constant `safeFetch` uses rather than being restated.
      */
-    const deadline =
-      options?.timeoutMs === undefined
-        ? undefined
-        : AbortSignal.timeout(options.timeoutMs);
+    const deadline = AbortSignal.timeout(
+      options?.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS
+    );
 
     let target: string;
     try {
       const meta = await head(filePath, {
         token: this.resolvedConfig.token,
-        ...(deadline === undefined ? {} : { abortSignal: deadline }),
+        abortSignal: deadline,
       });
       target = meta.downloadUrl ?? meta.url;
     } catch (error: unknown) {

@@ -238,7 +238,15 @@ export async function validateExternalUrl(
 /** Default response body cap: reject anything larger before buffering it all. */
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MiB
 /** Default overall deadline covering DNS + connect + TLS + response. */
-const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * How long a bounded external read may take, absent a caller's own limit.
+ *
+ * Exported so a caller that must begin the clock EARLIER — a storage adapter
+ * bounding a metadata lookup as well as the fetch that follows — uses this
+ * number rather than restating it. Two spellings of one default agree today and
+ * drift the first time either is tuned.
+ */
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
 export interface SafeFetchOptions extends ValidateExternalUrlOptions {
   /** HTTP method. Defaults to GET. */
@@ -506,7 +514,8 @@ async function pinnedFetch(
             res.headers["content-encoding"],
             zlib,
             init.maxResponseBytes,
-            url.href
+            url.href,
+            res.statusCode
           );
           if (decoded instanceof SafeFetchError) {
             settle(() => reject(decoded));
@@ -632,7 +641,15 @@ function decodeBody(
   encoding: string | undefined,
   zlib: ZlibSyncApi,
   cap: number,
-  url: string
+  url: string,
+  /*
+   * The status the response arrived with, so a refusal raised HERE carries it
+   * exactly as one raised while streaming does. A compressed body can fit the
+   * cap on the wire and exceed it decoded, and that is a real oversized object
+   * on a real 2xx — a caller told no status would treat it as an unclassifiable
+   * failure and report a storage error rather than a size one.
+   */
+  status?: number
 ): { body: Buffer; decoded: boolean } | SafeFetchError {
   if (!encoding) return { body: buf, decoded: false };
   // An empty body has nothing to decode; inflating zero bytes would throw and
@@ -677,7 +694,8 @@ function decodeBody(
           return new SafeFetchError(
             `Cannot fully decode content-encoding "${encoding}"`,
             url,
-            "decode-failed"
+            "decode-failed",
+            status
           );
         }
         return { body: buf, decoded: false };
@@ -696,7 +714,8 @@ function decodeBody(
         ? `Decoded ${encoding} response body exceeded the size cap`
         : `Failed to decode ${encoding} response body`,
       url,
-      tooLarge ? "response-too-large" : "decode-failed"
+      tooLarge ? "response-too-large" : "decode-failed",
+      status
     );
   }
 }

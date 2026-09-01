@@ -18,7 +18,11 @@
  * @module storage/fetch-stored-bytes
  */
 import { NextlyError } from "../errors/nextly-error";
-import { safeFetch, SafeFetchError } from "../utils/validate-external-url";
+import {
+  safeFetch,
+  SafeFetchError,
+  DEFAULT_TIMEOUT_MS,
+} from "../utils/validate-external-url";
 
 import { StorageReadTooLargeError } from "./read-errors";
 import type { StorageReadOptions } from "./types";
@@ -143,4 +147,41 @@ export async function fetchStoredBytes(
     });
   }
   return Buffer.from(await response.arrayBuffer());
+}
+
+/** The deadline a stored read runs under when the caller names none. */
+export const DEFAULT_READ_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+
+/**
+ * Stop waiting on a promise once the deadline fires.
+ *
+ * For a lookup whose SDK cannot be cancelled. UploadThing 7.7.4's
+ * `getFileUrls` reads only `keyType` and forwards no signal, so handing it one
+ * bounds nothing — the option is accepted and ignored, which reads as covered
+ * and behaves as absent.
+ *
+ * This RACES rather than cancels, and the difference is worth stating plainly:
+ * the underlying request keeps running to completion in the background. What it
+ * buys is that `read` returns within the deadline it advertised, instead of
+ * holding its caller for as long as a stalled backend feels like. That is the
+ * promise the contract actually makes; genuinely cancelling the work needs an
+ * SDK that accepts cancellation, and this one does not.
+ */
+export async function withDeadline<T>(
+  work: Promise<T>,
+  signal: AbortSignal | undefined
+): Promise<T> {
+  if (signal === undefined) return await work;
+  return await Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason as Error);
+        return;
+      }
+      signal.addEventListener("abort", () => reject(signal.reason as Error), {
+        once: true,
+      });
+    }),
+  ]);
 }

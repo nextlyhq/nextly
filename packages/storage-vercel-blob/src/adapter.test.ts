@@ -7,9 +7,17 @@ import { NextlyError } from "nextly/errors";
 
 import { VercelBlobStorageAdapter } from "./adapter";
 
-vi.mock("nextly/storage/fetch-stored-bytes", () => ({
-  fetchStoredBytes: vi.fn(),
-}));
+vi.mock("nextly/storage/fetch-stored-bytes", async importOriginal => {
+  /*
+   * Only `fetchStoredBytes` is faked. `withDeadline` and the default timeout
+   * stay REAL: the racer is the mechanism one case below is about, and a stubbed
+   * default would make `AbortSignal.timeout` receive `undefined` — which throws,
+   * and would have these cases failing for a reason unrelated to the adapter.
+   */
+  const actual =
+    await importOriginal<typeof import("nextly/storage/fetch-stored-bytes")>();
+  return { ...actual, fetchStoredBytes: vi.fn() };
+});
 
 vi.mock("@vercel/blob", () => {
   /*
@@ -190,13 +198,24 @@ describe("VercelBlobStorageAdapter — reading bytes back", () => {
     expect(fetchSignal).toBe(lookupSignal);
   });
 
-  it("passes no signal when the caller named no deadline", async () => {
-    // The control: an adapter that always made a signal would satisfy the case
-    // above while ignoring what the caller actually asked for.
+  it("bounds the lookup even when the caller named NO deadline", async () => {
+    /*
+     * This case previously asserted the opposite, and in doing so locked in the
+     * defect: `safeFetch` applies a default deadline of its own, so a caller
+     * stating none was bounded for the FETCH and unbounded for the LOOKUP. That
+     * is the commonest call — the email path supplies only a byte cap — so the
+     * default was exactly the path with no bound at all.
+     */
     found();
     vi.mocked(fetchStoredBytes).mockResolvedValueOnce(Buffer.from("x"));
     await adapter.read("f.woff2");
-    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBeUndefined();
+
+    const lookupSignal = (
+      vi.mocked(head).mock.calls[0]?.[1] as { abortSignal?: AbortSignal }
+    )?.abortSignal;
+    expect(lookupSignal).toBeInstanceOf(AbortSignal);
+    // And still ONE signal across both phases, not a fresh clock per phase.
+    expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[4]).toBe(lookupSignal);
   });
 
   it("hands the caller's bounds to the helper", async () => {
