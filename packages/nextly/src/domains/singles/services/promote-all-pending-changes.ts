@@ -71,25 +71,42 @@ export async function promoteAllPendingChanges(
   const pending = await repo.findAllWorkingDrafts(ref);
   if (pending.length === 0) return;
 
-  for (const draft of pending) {
-    // Split per language the same way an ordinary write is: a translated value
-    // belongs on that language's companion row, and folding it into the main
-    // row would write it to a table with no column for it.
-    const { main, companion: companionValues } = splitPendingChange(
+  // The SHARED half is written once, from the most recently updated draft.
+  //
+  // Every language's snapshot carries a full copy of the Single's untranslated
+  // fields, and `findAllWorkingDrafts` declares no order — so writing `main` once
+  // per draft lets an older language's copy land last and overwrite a newer
+  // edit, with which one wins decided by row order. The committed shared content
+  // would differ between two runs over identical data.
+  //
+  // Last edit wins, which is the rule the rest of the write path already
+  // applies: a later save supersedes an earlier one. Ties are broken by locale
+  // so the outcome is total rather than merely usually-stable.
+  const byRecency = [...pending].sort((a, b) => {
+    const delta = a.updatedAt.getTime() - b.updatedAt.getTime();
+    return delta !== 0 ? delta : (a.locale ?? "").localeCompare(b.locale ?? "");
+  });
+
+  const latest = byRecency[byRecency.length - 1];
+  const { main: sharedMain } = splitPendingChange(latest.snapshot, companion);
+  // The pending change carries no lifecycle of its own; the statuses the
+  // caller's publish writes are the ones that count.
+  delete sharedMain.status;
+  if (Object.keys(sharedMain).length > 0) {
+    await tx.update(
+      tableName,
+      { ...sharedMain, updated_at: now },
+      { and: [{ column: "id", op: "=", value: entryId }] }
+    );
+  }
+
+  // The TRANSLATED half is per language and cannot collide: each row belongs to
+  // one locale, so every draft's companion values are applied.
+  for (const draft of byRecency) {
+    const { companion: companionValues } = splitPendingChange(
       draft.snapshot,
       companion
     );
-    // The pending change carries no lifecycle of its own; the statuses the
-    // caller's publish writes are the ones that count.
-    delete main.status;
-
-    if (Object.keys(main).length > 0) {
-      await tx.update(
-        tableName,
-        { ...main, updated_at: now },
-        { and: [{ column: "id", op: "=", value: entryId }] }
-      );
-    }
     if (companion && draft.locale && Object.keys(companionValues).length > 0) {
       await writeCompanionValues({
         tx,

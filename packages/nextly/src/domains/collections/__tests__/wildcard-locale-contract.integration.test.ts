@@ -31,6 +31,8 @@ afterEach(async () => {
 const SLUG = "guarded";
 const NO_LIFECYCLE_SLUG = "plainrows";
 const SINGLE_SLUG = "prefs";
+const DRAFTS_SLUG = "drafted";
+const NO_LIFECYCLE_SINGLE = "plainprefs";
 
 /** An editor who may update, and may publish, but may NOT take anything down. */
 const EDITOR = { id: "editor-1", isActive: true };
@@ -53,6 +55,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "title", localized: true })],
       }),
       defineCollection({
+        slug: DRAFTS_SLUG,
+        localized: true,
+        status: true,
+        // The split: a status-less save is held as that language's pending edit.
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title", localized: true })],
+      }),
+      defineCollection({
         slug: NO_LIFECYCLE_SLUG,
         // No `status: true`, so no lifecycle — and an ordinary user field that
         // happens to be CALLED status, which is what makes the wildcard look
@@ -62,6 +78,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      defineSingle({
+        slug: NO_LIFECYCLE_SINGLE,
+        // No lifecycle, and an ordinary field named `status`.
+        access: { read: () => true, update: () => true },
+        fields: [text({ name: "status" })],
+      }),
       defineSingle({
         slug: SINGLE_SLUG,
         localized: true,
@@ -365,6 +387,121 @@ describe.each(getConfiguredTestDialects())(
         first_published_at?: unknown;
       }>(`single_${SINGLE_SLUG}`, {});
       expect(afterRow?.first_published_at ?? null).toBeNull();
+    });
+
+    it("releases EVERY language's pending edit on a collection too", async () => {
+      // A localized draft-split collection keeps one pending edit per language.
+      // A wildcard that promoted only the default one would mark every
+      // translation published while the others kept serving pre-edit values.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DRAFTS_SLUG, overrideAccess: true },
+        { title: "EN v1", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DRAFTS_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE v1", status: "published" }
+      );
+      // Status-less saves are held per language.
+      await handlerOf(t).updateEntry(
+        { collectionName: DRAFTS_SLUG, entryId: id, overrideAccess: true },
+        { title: "EN v2" }
+      );
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DRAFTS_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE v2" }
+      );
+
+      const liveTitle = async (locale: string): Promise<string | undefined> => {
+        const row = await t.adapter.selectOne<{ title?: string }>(
+          `dc_${DRAFTS_SLUG}_locales`,
+          { where: { and: [{ column: "_locale", op: "=", value: locale }] } }
+        );
+        return row?.title;
+      };
+      // Precondition: both edits are genuinely pending.
+      expect(await liveTitle("de")).toBe("DE v1");
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: DRAFTS_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      expect(await liveTitle("de")).toBe("DE v2");
+    });
+
+    it("REFUSES the wildcard on a Single with no lifecycle to move", async () => {
+      const t = await boot(dialect);
+      await singlesOf(t).update(
+        NO_LIFECYCLE_SINGLE,
+        { status: "keep me" },
+        { overrideAccess: true }
+      );
+
+      const refused = await singlesOf(t).update(
+        NO_LIFECYCLE_SINGLE,
+        { status: "overwritten" },
+        { locale: "*", overrideAccess: true }
+      );
+
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(400);
+      const row = await t.adapter.selectOne<{ status?: string }>(
+        `single_${NO_LIFECYCLE_SINGLE}`,
+        {}
+      );
+      expect(row?.status).toBe("keep me");
+    });
+
+    it("emits a lifecycle event for each Single language the sweep moved", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      await singles.update(
+        SINGLE_SLUG,
+        { siteName: "EN", status: "draft" },
+        { locale: "en", overrideAccess: true }
+      );
+      await singles.update(
+        SINGLE_SLUG,
+        { siteName: "DE", status: "draft" },
+        { locale: "de", overrideAccess: true }
+      );
+
+      await singles.update(
+        SINGLE_SLUG,
+        { status: "published" },
+        { locale: "*", overrideAccess: true }
+      );
+
+      const rows = await t.adapter.select<{ type?: string; payload?: unknown }>(
+        "nextly_events",
+        {}
+      );
+      expect(rows.length).toBeGreaterThan(0);
+      const german = rows.filter(r => {
+        const payload = (
+          typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload
+        ) as { resource?: Record<string, unknown> } | undefined;
+        return payload?.resource?.locale === "de";
+      });
+      expect(german.map(e => e.type)).toContain("single.published");
     });
 
     it("REFUSES the wildcard on a collection with no lifecycle to move", async () => {

@@ -3706,6 +3706,65 @@ export class CollectionMutationService extends BaseService {
    *
    * Returns the prior status of each language the sweep genuinely moved.
    */
+  /**
+   * Release the pending edit held for every OTHER language before a sweep.
+   *
+   * A localized draft-split collection keeps one working draft per language
+   * ({@link workingDraftLocale} returns the locale for a localized document),
+   * and the main write promotes only the one it is writing. A wildcard resolves
+   * to the default language, so without this the sweep marks every translation
+   * published while each other language keeps serving its pre-edit values and
+   * its draft stays pending — the release reporting success over content nobody
+   * released.
+   *
+   * Only the TRANSLATED half is applied here: the untranslated columns belong to
+   * the document, and the write locale's own promotion has already decided them.
+   * Taking them from another language's snapshot as well would let an older copy
+   * of a shared field land last.
+   */
+  private async promoteOtherLocaleWorkingDrafts(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      /** The language the main write already promoted. */
+      skipLocale: string | null;
+    }
+  ): Promise<void> {
+    const repo = new VersionsRepository(tx);
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: args.collectionName,
+      entryId: args.entryId,
+    };
+    const drafts = await repo.findAllWorkingDrafts(ref);
+    for (const draft of drafts) {
+      if (draft.locale === null || draft.locale === args.skipLocale) continue;
+      const snapshot = { ...(draft.snapshot as Record<string, unknown>) };
+      // The pending edit carries no lifecycle of its own; the sweep that follows
+      // decides every language's status, and letting the snapshot's own status
+      // through here would have it overwrite that.
+      delete snapshot.status;
+      const split = await this.splitLocalizedWriteData(
+        args.collectionName,
+        snapshot,
+        draft.locale,
+        false,
+        tx.getDrizzle()
+      );
+      if (split && Object.keys(split.companionData).length > 0) {
+        await upsertCompanionRow(
+          companionWriteVia(tx, this.dialect),
+          split.companionTableName,
+          args.entryId,
+          draft.locale,
+          split.companionData
+        );
+      }
+      await repo.deleteWorkingDraft(ref, draft.locale);
+    }
+  }
+
   private async sweepCompanionLifecycle(
     tx: TransactionContext,
     args: {
@@ -3768,7 +3827,6 @@ export class CollectionMutationService extends BaseService {
       status: string;
       skipLocale: string | undefined;
       document: Record<string, unknown>;
-      previous: Record<string, unknown> | null;
       fields: readonly SensitiveFieldSource[];
       actor: RequestActor | null;
     }
@@ -3806,6 +3864,18 @@ export class CollectionMutationService extends BaseService {
         ...localeValues,
         status: args.status,
       };
+      // BOTH sides built from this language, with the prior status overlaid.
+      //
+      // Passing the write locale's pre-image would describe a German transition
+      // with English fields and the English prior status: the envelope would say
+      // `from: draft` while `previous.status` read `published`, so a consumer
+      // diffing the two computes changed fields that never changed. A sweep
+      // moves status only, so this language's values are the same on both sides
+      // and the status is the whole of the difference.
+      const localePrevious = {
+        ...localeDocument,
+        status: prior,
+      };
       const did = await this.recordStatusEvents(tx, {
         collection: args.collectionName,
         id: args.entryId,
@@ -3814,7 +3884,7 @@ export class CollectionMutationService extends BaseService {
         to: args.status,
         isCreate: false,
         data: localeDocument,
-        previous: args.previous,
+        previous: localePrevious,
         fields: args.fields,
         actor: args.actor,
       });
@@ -6686,6 +6756,11 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate.hasStatus &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
+            await this.promoteOtherLocaleWorkingDrafts(tx, {
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              skipLocale: draftLocaleKey,
+            });
             sweptLocaleTransitions = await this.sweepCompanionLifecycle(tx, {
               collectionName: params.collectionName,
               companionTableName: localizedUpdate.companionTableName,
@@ -7194,7 +7269,6 @@ export class CollectionMutationService extends BaseService {
                   status: companionNext,
                   skipLocale: localizedUpdate?.writeLocale,
                   document: updatedDocument,
-                  previous: previousDocument,
                   fields: webhookFields,
                   actor,
                 });

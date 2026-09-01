@@ -410,6 +410,27 @@ export class SingleMutationService extends BaseService {
         };
       }
 
+      // 1.05. The wildcard moves a LIFECYCLE, so a Single that has none has
+      // nothing for it to move. Mirrors the collection path, and for the same
+      // reason: a Single carrying an ordinary user field named `status` has the
+      // column and no lifecycle, and letting the wildcard through would write
+      // that business field on one locale — a field write, which the wildcard
+      // contract refuses. Refused rather than answered as a no-op success, so a
+      // scheduled release cannot report itself applied having moved nothing.
+      if (
+        sweepAllLocales &&
+        (singleMeta as { status?: boolean }).status !== true
+      ) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `Single '${slug}' has no draft/published lifecycle, so locale ` +
+            `'${EVERY_LOCALE}' has no publication status to move across its ` +
+            `languages.`,
+        };
+      }
+
       // 1.1. reject an unknown write locale rather than silently writing the
       // translatable values into the DEFAULT companion row (which would overwrite real
       // default content). Mirrors the collection write path.
@@ -1173,6 +1194,7 @@ export class SingleMutationService extends BaseService {
             // row's own flag is what governs a main-row column.
             const mainStatusWritten = (mainPayload as Record<string, unknown>)
               .status;
+            let priorStatuses = new Map<string, string | null>();
             // {@link EVERY_LOCALE}: a document already reachable in ANY language
             // is not being published for the first time.
             //
@@ -1185,13 +1207,16 @@ export class SingleMutationService extends BaseService {
             // wildcard write, which is the only one that moves languages the
             // main row says nothing about.
             let anotherLanguageWasAlreadyLive = false;
+            // Kept for the event step: which language held which status BEFORE
+            // the sweep is unrecoverable once it lands, and it decides which
+            // transitions are real.
             if (
               sweepAllLocales &&
               companion &&
               companionPhysicallyExists &&
               companion.hasStatus
             ) {
-              const priorStatuses = await readCompanionLocaleStatusAll(
+              priorStatuses = await readCompanionLocaleStatusAll(
                 tx.getDrizzle<
                   Parameters<typeof readCompanionLocaleStatusAll>[0]
                 >(),
@@ -1803,6 +1828,21 @@ export class SingleMutationService extends BaseService {
                 draftsEnabled: singleMeta.versions?.drafts?.enabled === true,
                 now: new Date(),
               });
+
+              // Re-read the committed row, because promotion may have written
+              // SHARED columns after the update above returned.
+              //
+              // A non-default language's pending edit can carry an untranslated
+              // field, and everything downstream — the version snapshot, the
+              // outbox payload, the after-change hooks and the response — reads
+              // the row returned by that earlier update. Leaving it stale would
+              // commit one value and report another, with the only pending copy
+              // already consumed, so nothing could reconcile them afterwards.
+              const promoted = await tx.selectOne<SingleDocument>(
+                singleMeta.tableName,
+                {}
+              );
+              if (promoted) rows[0] = promoted;
             }
 
             // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
@@ -2403,6 +2443,55 @@ export class SingleMutationService extends BaseService {
                   fields: webhookFields,
                   actor,
                 });
+              }
+
+              // {@link EVERY_LOCALE}: the languages the sweep moved that the
+              // write locale's events above do not cover.
+              //
+              // Without this a scheduled German publish records nothing for
+              // German, so locale-routed consumers stay stale while the release
+              // reports success — the same gap the collection path had, and a
+              // Single reaches it through a different branch.
+              if (
+                sweepAllLocales &&
+                singleHasStatus &&
+                writtenStatus !== undefined &&
+                companion &&
+                companionPhysicallyExists
+              ) {
+                for (const [locale, prior] of priorStatuses) {
+                  if (locale === eventLocale) continue;
+                  const nowPublished = dataLocaleStatus === "published";
+                  const wasPublished = prior === "published";
+                  if (nowPublished === wasPublished) continue;
+                  const localeValues = await readCompanionLocaleValues(
+                    this.adapter,
+                    tx,
+                    companion,
+                    existingDoc.id,
+                    locale
+                  );
+                  // THIS language on both sides, with only the status differing:
+                  // a payload tagged `de` carrying the default language's text
+                  // would be worse than none, because a consumer cannot tell it
+                  // is wrong.
+                  const localeDoc = { ...dataDoc, ...localeValues };
+                  await recordMutationEvent(tx, {
+                    type: nowPublished
+                      ? "single.published"
+                      : "single.unpublished",
+                    resource: {
+                      kind: "single",
+                      slug,
+                      id: existingDoc.id,
+                      locale,
+                    },
+                    data: localeDoc,
+                    previous: { ...localeDoc, status: prior },
+                    fields: webhookFields,
+                    actor,
+                  });
+                }
               }
             }
 
