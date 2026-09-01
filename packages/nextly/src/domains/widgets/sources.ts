@@ -42,6 +42,22 @@ export type WidgetSourceFieldType = (typeof WIDGET_SOURCE_FIELD_TYPES)[number];
 export interface WidgetSourceField {
   name: string;
   type: WidgetSourceFieldType;
+  /**
+   * What a human calls this field, when the source knows.
+   *
+   * A widget that draws a TABLE needs a column heading, and the only honest
+   * one is the label the field already carries -- the same string the entry
+   * form puts above it. Without this the admin has nothing but the storage
+   * name, so a column reads `publishedAt`, and the alternatives are both
+   * worse: deriving prose from an identifier guesses at capitalisation and
+   * word breaks it cannot know, and asking the widget author to declare
+   * headings puts a second answer beside `select`, free to disagree with it.
+   *
+   * Optional because a source is not obliged to have one. A field declared
+   * without a label, and every field of a source that is not a collection,
+   * simply says nothing here and the admin falls back to the name.
+   */
+  label?: string;
 }
 
 export interface WidgetSource {
