@@ -109,7 +109,16 @@ export const tableBody: ArchetypeBody = (result, definition) => {
                 // there is no state for a wrong key to strand.
                 key={index}
                 data-testid="widget-table-row"
-                className="border-b border-border/50 last:border-0"
+                // The border token at FULL strength. A half-alpha variant of it
+                // measured 1.11:1 against the card surface where 3:1 is the
+                // floor, and a separator nobody can see is not a lighter
+                // separator but an absent one -- the alpha bought nothing and
+                // cost the readers who most needed the row boundary.
+                //
+                // Written without naming that utility, because the contrast
+                // gate scans SOURCE TEXT: a comment quoting the class it warns
+                // about fails the same check as using it.
+                className="border-b border-border last:border-0"
               >
                 {columns.map(column => (
                   <td
