@@ -948,6 +948,65 @@
 .nx-canvas {
   position: relative;
   /*
+   * The page's own surface.
+   *
+   * The frame is `--nx-builder-surface`, a shade off the background so it
+   * recedes behind the canvas. With no surface of its own the canvas INHERITS
+   * that frame, so the page being composed is drawn on the editor's grey — and
+   * a block declares no background, so the grey shows through the document
+   * itself. What an author edits then looks nothing like what a visitor loads,
+   * which is the one thing this canvas exists to show.
+   *
+   * The token rather than a literal, so a host re-theming the admin moves the
+   * page with it, exactly as the frame already does.
+   *
+   * The frame only becomes visible BESIDE the page where the canvas is
+   * bounded: at full width the page is the region, and there are no edges to
+   * frame. A narrower tier, or zooming out, reveals it.
+   */
+  background-color: var(--nx-builder-surface-raised);
+  /*
+   * A SHEET, not a region that happens to be a different colour.
+   *
+   * The surface alone separates the page from the frame only where the two
+   * tones differ enough to read, and they deliberately do not: the frame is one
+   * step off the background so it recedes. A border states the page's edge at
+   * any tone, in either mode — `--nx-builder-border` is 0.92 against a 0.99
+   * page in light and 0.26 against a 0.00 page in dark, so the edge survives
+   * the palette inverting while the two surfaces swap which of them is lighter.
+   *
+   * The shadow is the secondary cue and is allowed to be nearly invisible in
+   * dark, where a cast shadow has almost nothing to darken. Carrying the
+   * separation on the BORDER rather than the shadow is what keeps both modes
+   * equally legible instead of tuning one and checking the other.
+   *
+   * No radius, deliberately. The drop indicator and the selection chrome are
+   * positioned in this element's own content coordinates and are not clipped by
+   * it; rounding the corners without clipping leaves a block's own background
+   * squaring them off, and clipping to fix that would cut the drag chrome the
+   * canvas exists to draw.
+   *
+   * Stated on the PAGE rather than on the region around it, so the page is a
+   * self-contained sheet: several of them side by side — one per breakpoint —
+   * would each carry their own edge with nothing about this rule to revisit.
+   *
+   * An OUTLINE rather than a border, and that is a correctness requirement
+   * rather than a preference. This element carries three things at once: the
+   * width a tier is previewed at, `container-type: inline-size`, and this edge.
+   * Container queries resolve against the CONTENT box, and the shell resets its
+   * whole subtree to `box-sizing: border-box` — so a border here is subtracted
+   * from the width the page is being previewed at. Two pixels is enough to
+   * decide a tier: a 992px request lays out 990px of content, the widest
+   * `max-width: 991px` rule stays active, and the unconditional tier becomes
+   * unreachable from the switcher. The `ResizeObserver` reads `contentRect` and
+   * reports the same narrowed width, so the tier readout agrees with the wrong
+   * answer. An outline is painted outside the border box and takes part in no
+   * layout, so the page keeps exactly the width it was asked for. It has room
+   * to paint because the region around it is padded.
+   */
+  outline: 1px solid var(--nx-builder-border);
+  box-shadow: var(--shadow-md);
+  /*
    * Fills the region rather than stopping at its content.
    *
    * Without this the canvas is exactly as tall as the blocks in it, so the area

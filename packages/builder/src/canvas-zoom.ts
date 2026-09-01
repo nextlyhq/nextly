@@ -101,13 +101,23 @@ export function writeZoom(zoom: CanvasZoom): "fit" | number {
  * From FIT it steps off the scale the fit produced, so the first press moves
  * from what the author is looking at rather than jumping to an end of the
  * list. That needs the fit scale passed in, because only the canvas knows it.
+ *
+ * A scale the canvas cannot paint steps from the fit scale as well, for the
+ * same reason and by the rule {@link usableScale} states: a host can construct
+ * `{ kind: "fixed", scale }` with any number the type admits, and the canvas
+ * already falls back to fit when it cannot use one. Stepping from the raw value
+ * instead makes every comparison against `NaN` false, so both directions return
+ * the zoom unchanged — leaving a stepper that cannot move off an unusable
+ * scale, while the canvas is meanwhile painting the fit the steps would come
+ * from.
  */
 export function steppedZoom(
   zoom: CanvasZoom,
   fitScale: number,
   direction: "in" | "out"
 ): CanvasZoom {
-  const from = zoom.kind === "fit" ? fitScale : zoom.scale;
+  const from =
+    zoom.kind === "fit" ? fitScale : (usableScale(zoom.scale) ?? fitScale);
   const candidates =
     direction === "in"
       ? ZOOM_STEPS.filter(step => step > from + 1e-9)

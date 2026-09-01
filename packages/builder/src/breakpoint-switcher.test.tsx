@@ -692,3 +692,68 @@ describe("where focus goes when the keyboard moves the selection", () => {
     expect(document.activeElement).toBe(before);
   });
 });
+
+describe("telling two tiers apart", () => {
+  /*
+   * A site whose narrow tiers land in the same width class.
+   *
+   * The glyph comes from the bound, so both of these draw the same picture —
+   * which is the case that decides whether a name is reachable before the
+   * canvas has already changed.
+   */
+  const narrowTiers = (): BreakpointSet => ({
+    viewport: [
+      { id: "wide-phone", label: "Wide phone", maxWidth: 480 },
+      { id: "phone", label: "Phone", maxWidth: 375 },
+    ],
+    container: [],
+  });
+
+  it("names every option, not only the selected one", () => {
+    render(
+      <BreakpointSwitcher
+        breakpoints={narrowTiers()}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    /*
+     * Asserted on the two that COLLIDE rather than on the whole group, so the
+     * unconditional option — which keeps its word on screen and would satisfy
+     * a blanket assertion — cannot answer for them.
+     */
+    const titles = options()
+      .map(option => option.getAttribute("title"))
+      .filter((title): title is string => title !== null);
+
+    expect(titles).toContain("Phone, up to 375 pixels");
+    expect(titles).toContain("Wide phone, up to 480 pixels");
+  });
+
+  it("carries the width in the accessible name as well as the tooltip", () => {
+    /*
+     * A tooltip is a pointer affordance and reaches neither a screen reader nor
+     * a keyboard. The two names are asserted separately because they are
+     * separate mechanisms: dropping the accessible name leaves this control
+     * usable with a mouse and unusable without one, and nothing about the
+     * rendered output would look wrong.
+     */
+    render(
+      <BreakpointSwitcher
+        breakpoints={narrowTiers()}
+        width={undefined}
+        onSelect={vi.fn()}
+        status="ready"
+      />
+    );
+
+    expect(
+      screen.getByRole("radio", { name: "Phone, up to 375 pixels" })
+    ).toBeDefined();
+    expect(
+      screen.getByRole("radio", { name: "Wide phone, up to 480 pixels" })
+    ).toBeDefined();
+  });
+});

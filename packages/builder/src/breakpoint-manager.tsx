@@ -168,14 +168,23 @@ export function BreakpointManager({
         }
         title={
           ready
-            ? undefined
+            ? `Breakpoints: ${count} defined`
             : status === "loading"
               ? "Available once the site's saved styles have loaded."
               : "Your site's saved styles could not be read, so editing them here could overwrite them."
         }
       >
+        {/*
+          The glyph carries the control and the word is dropped: the trigger
+          opens a dialog that names itself, and "Breakpoints" beside a count
+          spent more of the bar than the two facts an author reads from here —
+          that this is where tiers are managed, and how many exist.
+
+          The accessible name below is unchanged and still says both, so
+          nothing is lost to a reader who cannot see the glyph; the title makes
+          the same sentence reachable by pointer.
+        */}
         <MonitorSmartphone className="size-4" />
-        <span>Breakpoints</span>
         {ready && count > 0 ? (
           <span
             className="text-muted-foreground tabular-nums"
