@@ -8,10 +8,10 @@
  * host the site does not load from, a document repaired under caps the site
  * never chose.
  *
- * They were derived in the editor and not at all on the entry screen, which is
- * a second implementation of one question with one of them empty. Six separate
- * review findings came out of that single gap. So the derivation lives here and
- * both surfaces ask it, rather than each assembling its own bundle correctly.
+ * Derived once here and asked by both, rather than assembled separately at each
+ * call site. Two derivations of one question agree on the day they are written
+ * and drift silently afterwards — and the drift is invisible, because a surface
+ * missing an input renders a page that looks entirely reasonable.
  *
  * ## What is NOT here
  *

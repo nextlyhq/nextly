@@ -50,7 +50,7 @@ import {
   previewContainerStyle,
   type PageRendererProps,
 } from "@nextlyhq/blocks-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { entryBlockResolver } from "./entry-block-resolver";
 import type { PageRenderInputs } from "./page-render-inputs";
@@ -124,6 +124,32 @@ export function PageMiniature({
     return () => observer.disconnect();
   }, [renderWidth]);
 
+  /*
+   * Held apart from the measured scale, which changes on every frame of a
+   * resize.
+   *
+   * Rebuilt inline, each observer callback would rerun the whole render beneath
+   * it — sanitisation, migration, every block, and the stylesheet compile — for
+   * a page whose content did not change and whose wrapper only needed a new
+   * transform. On a large document that is visible jank, and it re-enters any
+   * asynchronous block resolver the page has. The canvas holds its page the
+   * same way and for the same reason.
+   */
+  const page = useMemo(
+    () => (
+      <PageRenderer
+        // Spread rather than listed field by field: the bundle owns which
+        // inputs describe this site's rendering, and a surface restating them
+        // here would silently stop forwarding one it never heard of.
+        {...render}
+        document={document}
+        blocks={entryBlockResolver()}
+        siteStyles={siteStyles}
+      />
+    ),
+    [render, document, siteStyles]
+  );
+
   return (
     <div
       ref={frame}
@@ -165,15 +191,7 @@ export function PageMiniature({
         }}
       >
         <div data-slot="page-miniature-surface" inert aria-hidden="true">
-          <PageRenderer
-            // Spread rather than listed field by field: the bundle owns which
-            // inputs describe this site's rendering, and a surface restating
-            // them here would silently stop forwarding one it never heard of.
-            {...render}
-            document={document}
-            blocks={entryBlockResolver()}
-            siteStyles={siteStyles}
-          />
+          {page}
         </div>
       </div>
     </div>
