@@ -6,6 +6,7 @@ import { Monitor, Moon, Smartphone, Sun } from "@admin/components/icons";
 import {
   previewFrameFit,
   previewFrameStyle,
+  type PreviewFit,
 } from "@admin/components/shared/preview/previewFrameFit";
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 
@@ -59,6 +60,104 @@ const DEVICE_WIDTH = { desktop: 600, mobile: 375 } as const;
 type PreviewDevice = "desktop" | "mobile";
 type PreviewTheme = "light" | "dark";
 export type PreviewFormat = "html" | "text";
+
+/**
+ * The strip above the frame: what is being shown, at what size, and in which
+ * simulated client.
+ *
+ * Separated from `PreviewPane` because it answers a different question. The
+ * pane owns the render and the frame; this owns the reading of it, and folding
+ * both into one component put the pane over the complexity gate the moment a
+ * scale readout and a pending state were added to it.
+ */
+function PreviewToolbar({
+  format,
+  fit,
+  isPending,
+  device,
+  onDeviceChange,
+  theme,
+  onThemeChange,
+}: {
+  format: PreviewFormat;
+  fit: PreviewFit;
+  isPending: boolean;
+  device: PreviewDevice;
+  onDeviceChange: (value: PreviewDevice) => void;
+  theme: PreviewTheme;
+  onThemeChange: (value: PreviewTheme) => void;
+}) {
+  return (
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Preview
+      </span>
+      <span className="rounded-sm border border-input px-2 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
+        {format === "text" ? "Plain text" : "HTML"}
+      </span>
+      {/* The width the email is being rendered AT, and — only when the pane
+          cannot give it — how far it had to be shrunk to fit. Without this
+          an author reads a scaled frame as the true size and mis-judges
+          every type size in it. */}
+      {fit.kind === "exact" || fit.kind === "scaled" ? (
+        <span
+          data-testid="preview-scale"
+          className="font-mono text-xs text-muted-foreground"
+          title={
+            fit.kind === "scaled"
+              ? "Too narrow to show at full size; drawn smaller."
+              : "Shown at full size."
+          }
+        >
+          {fit.width}px
+          {fit.kind === "scaled" ? ` · ${Math.round(fit.scale * 100)}%` : null}
+        </span>
+      ) : null}
+      {isPending ? (
+        <span
+          data-testid="preview-pending"
+          className="text-xs text-muted-foreground"
+        >
+          Rendering…
+        </span>
+      ) : null}
+      <div className="ml-auto flex items-center gap-2">
+        <Segmented<PreviewDevice>
+          value={device}
+          onChange={onDeviceChange}
+          options={[
+            {
+              value: "desktop",
+              icon: <Monitor className="h-3.5 w-3.5" />,
+              title: "Desktop width",
+            },
+            {
+              value: "mobile",
+              icon: <Smartphone className="h-3.5 w-3.5" />,
+              title: "Mobile width",
+            },
+          ]}
+        />
+        <Segmented<PreviewTheme>
+          value={theme}
+          onChange={onThemeChange}
+          options={[
+            {
+              value: "light",
+              icon: <Sun className="h-3.5 w-3.5" />,
+              title: "Light client",
+            },
+            {
+              value: "dark",
+              icon: <Moon className="h-3.5 w-3.5" />,
+              title: "Dark client",
+            },
+          ]}
+        />
+      </div>
+    </div>
+  );
+}
 
 export function PreviewPane({
   html,
@@ -125,76 +224,15 @@ export function PreviewPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Preview
-        </span>
-        <span className="rounded-sm border border-input px-2 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
-          {format === "text" ? "Plain text" : "HTML"}
-        </span>
-        {/* The width the email is being rendered AT, and — only when the pane
-            cannot give it — how far it had to be shrunk to fit. Without this
-            an author reads a scaled frame as the true size and mis-judges
-            every type size in it. */}
-        {fit.kind === "exact" || fit.kind === "scaled" ? (
-          <span
-            data-testid="preview-scale"
-            className="font-mono text-xs text-muted-foreground"
-            title={
-              fit.kind === "scaled"
-                ? "Too narrow to show at full size; drawn smaller."
-                : "Shown at full size."
-            }
-          >
-            {fit.width}px
-            {fit.kind === "scaled"
-              ? ` · ${Math.round(fit.scale * 100)}%`
-              : null}
-          </span>
-        ) : null}
-        {isPending ? (
-          <span
-            data-testid="preview-pending"
-            className="text-xs text-muted-foreground"
-          >
-            Rendering…
-          </span>
-        ) : null}
-        <div className="ml-auto flex items-center gap-2">
-          <Segmented<PreviewDevice>
-            value={device}
-            onChange={setDevice}
-            options={[
-              {
-                value: "desktop",
-                icon: <Monitor className="h-3.5 w-3.5" />,
-                title: "Desktop width",
-              },
-              {
-                value: "mobile",
-                icon: <Smartphone className="h-3.5 w-3.5" />,
-                title: "Mobile width",
-              },
-            ]}
-          />
-          <Segmented<PreviewTheme>
-            value={theme}
-            onChange={setTheme}
-            options={[
-              {
-                value: "light",
-                icon: <Sun className="h-3.5 w-3.5" />,
-                title: "Light client",
-              },
-              {
-                value: "dark",
-                icon: <Moon className="h-3.5 w-3.5" />,
-                title: "Dark client",
-              },
-            ]}
-          />
-        </div>
-      </div>
+      <PreviewToolbar
+        format={format}
+        fit={fit}
+        isPending={isPending}
+        device={device}
+        onDeviceChange={setDevice}
+        theme={theme}
+        onThemeChange={setTheme}
+      />
 
       <div className="shrink-0 border-b border-border px-3 py-2 text-xs">
         <span className="text-muted-foreground">Subject: </span>
