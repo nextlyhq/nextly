@@ -1131,6 +1131,153 @@
 }
 
 /*
+ * The line gets a terminal, so it reads as an insertion point.
+ *
+ * A bare 2px rule spanning a region is ambiguous with a border belonging to the
+ * block below it — which is exactly the reading to avoid, because a border says
+ * "this block" and the line means "between these blocks". A dot at the leading
+ * end is the convention every editor that draws this uses, and it costs no
+ * layout: the indicator is already absolutely positioned and takes part in no
+ * flow.
+ */
+.nx-drop-indicator::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--nx-primary);
+}
+
+.nx-drop-indicator[data-axis="y"]::before {
+  left: -4px;
+  top: -3px;
+}
+
+.nx-drop-indicator[data-axis="x"]::before {
+  top: -4px;
+  left: -3px;
+}
+
+/*
+ * A block on the canvas says it can be picked up.
+ *
+ * Blocks here have no drag handle: the whole element is the grab surface. That
+ * is a deliberate choice and it carries an obligation — with no handle to point
+ * at, the cursor is the ONLY thing that says the element can be moved, so its
+ * absence leaves the gesture undiscoverable rather than merely unadorned. The
+ * palette tile has said this since it shipped; the canvas is the half that
+ * never did.
+ */
+.nx-canvas [data-nx-node] {
+  cursor: grab;
+}
+
+/*
+ * Held, and refused.
+ *
+ * Both are reachable because this drag is built on POINTER events with pointer
+ * capture rather than on the HTML5 drag-and-drop API, where the cursor is taken
+ * over by the drop effect for the duration of the gesture and neither of these
+ * can be shown.
+ *
+ * On the ROOT rather than per block: pointer capture means the events keep
+ * arriving at the canvas however far the hand travels, so a cursor set on
+ * whatever happens to be underneath would flicker as the pointer crossed gaps.
+ */
+.nx-canvas[data-nx-dragging] {
+  cursor: grabbing;
+}
+
+.nx-canvas[data-nx-dragging="refused"] {
+  cursor: no-drop;
+}
+
+/*
+ * What is being held, dimmed where it sits.
+ *
+ * The block STAYS in place rather than being replaced by a preview that follows
+ * the pointer. On a canvas the block is the rendered artefact at its real size,
+ * so a simplified preview would show strictly less than is already on screen —
+ * the opposite of a list, where a row is a summary and the preview is the only
+ * thing carrying what is in flight.
+ */
+.nx-canvas [data-nx-drag-source] {
+  opacity: 0.4;
+}
+
+/*
+ * WHICH container, which the line cannot say.
+ *
+ * The line answers "between which two siblings"; this answers "inside which
+ * container", and the two come apart exactly where the line alone is ambiguous:
+ * the coordinate at the bottom edge of one container is also the top edge of
+ * the next, and only this separates them.
+ *
+ * DASHED and OUTSIDE, where the selection is solid and inset. They are both
+ * outlines in the same colour and they mean different things, so the shape has
+ * to carry the difference — a second solid outline would read as a second
+ * selection.
+ *
+ * An outline rather than a border, for the reason `.nx-canvas` documents: a
+ * container may carry `container-type: inline-size`, and a border is subtracted
+ * from the content box its queries resolve against, so a highlight drawn with
+ * one would change the layout it is describing.
+ */
+.nx-canvas [data-nx-drop-parent] {
+  outline: 2px dashed var(--nx-primary);
+  outline-offset: 2px;
+}
+
+.nx-canvas [data-nx-drop-refused] {
+  outline: 2px solid var(--nx-destructive);
+  outline-offset: 2px;
+}
+
+/*
+ * The sentence a refusal draws, over the container that refused.
+ *
+ * Positioned in the canvas's own content coordinates, the space the drop
+ * indicator and the block toolbar already use, so all three agree at any scroll
+ * offset and under zoom.
+ *
+ * Never a drop target itself: it sits over the region the pointer is aiming at
+ * by construction, so a hit-test that could land on it would resolve the drag
+ * to the message rather than to the container beneath.
+ */
+.nx-drop-refusal {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-width: 18rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: var(--radius);
+  background: var(--nx-destructive);
+  color: var(--nx-destructive-foreground);
+  box-shadow: var(--shadow-md);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.nx-drop-refusal__why {
+  font-weight: 600;
+}
+
+/*
+ * The remedy, quieter than the refusal itself.
+ *
+ * Deliberately not hidden on a narrow canvas: naming what the region DOES take
+ * is what makes this an instruction rather than a wall, and it is the half an
+ * author acts on.
+ */
+.nx-drop-refusal__takes {
+  opacity: 0.9;
+}
+
+/*
  * The layers panel: a search field above a tree that takes the rest of the
  * height.
  *
