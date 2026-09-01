@@ -112,9 +112,11 @@ import {
   COMPANION_STATUS_COLUMN,
 } from "../../i18n/companion-columns";
 import {
+  companionRowExists,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   readCompanionLocaleStatusAll,
+  isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
@@ -6782,6 +6784,30 @@ export class CollectionMutationService extends BaseService {
             );
           }
 
+          // Whether the promoted locale already HAS a row decides what the
+          // promotion is allowed to do with it. Read before the upsert, because
+          // the upsert is what would change the answer.
+          const promotedLocaleCompanion =
+            sweepAllLocales && promotedDraft && localizedUpdate
+              ? await this.fileManager.loadCompanionSchema(
+                  params.collectionName,
+                  tx.getDrizzle()
+                )
+              : null;
+          const promotedLocaleRowExists =
+            promotedLocaleCompanion && localizedUpdate
+              ? await companionRowExists(
+                  tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
+                  promotedLocaleCompanion.table,
+                  params.entryId,
+                  localizedUpdate.writeLocale,
+                  cachedCompanionReadiness(
+                    this.adapter,
+                    promotedLocaleCompanion.companionTableName
+                  )
+                )
+              : false;
+
           // i18n M5: upsert the translatable values into the companion row for the write's locale
           // (same transaction). Only the provided localized columns are touched.
           if (
@@ -6796,7 +6822,33 @@ export class CollectionMutationService extends BaseService {
             // companion row has no translation, and inventing one manufactures
             // the record whose absence was the fact. The sweep below moves every
             // row that genuinely exists, which is the whole of what was asked.
-            !sweepAllLocales &&
+            // A PROMOTED draft is the exception the paragraph above does not
+            // cover: an author wrote those values and this write is publishing
+            // them, so writing the row records a translation rather than
+            // inventing one. Without it the promotion still consumes the draft
+            // and the edit reaches no read path at all.
+            //
+            // Gated on TRANSLATED CONTENT the draft actually carries, not on
+            // `companionData` — which also holds the structural `_status` this
+            // write is setting — and not on the mere presence of localized
+            // keys. A working draft stores a whole-document snapshot, so a
+            // language with no translation still appears in it with every
+            // localized field null; counting keys would read those nulls as
+            // authorship and manufacture a published, contentless translation
+            // for a language nobody wrote.
+            (!sweepAllLocales ||
+              (promotedDraft &&
+                // An EXISTING row takes its authored write unconditionally,
+                // clears included: refusing one leaves the old translation live
+                // while the promotion deletes the draft that asked for it.
+                // An ABSENT row is only brought into being by content that is
+                // genuinely translated — `isBlank` is the shared definition of
+                // that, and an empty string means "not translated" under it, so
+                // clearing a translation that never existed creates nothing.
+                (promotedLocaleRowExists ||
+                  Object.values(localizedUpdate.localizedFieldValues).some(
+                    v => !isBlank(v)
+                  )))) &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
             await upsertCompanionRow(
