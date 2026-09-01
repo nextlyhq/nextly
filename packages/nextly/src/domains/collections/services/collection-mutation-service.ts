@@ -115,6 +115,7 @@ import {
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   readCompanionLocaleStatusAll,
+  isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
@@ -1860,6 +1861,32 @@ export class CollectionMutationService extends BaseService {
    * the companion `_locales` table is not in the Drizzle schema, and the CRUD
    * helpers camelCase result keys, which would rename `_status`.
    */
+  /**
+   * Whether this locale has a companion row at all.
+   *
+   * Distinct from {@link readCompanionStatus}, which answers `null` both for an
+   * absent row and for a present row whose `_status` is not a string. The
+   * difference decides whether a promoted write may clear a translation or
+   * would be inventing one, so the two questions cannot share an answer.
+   */
+  private async companionRowExists(
+    tx: TransactionContext,
+    companionTableName: string,
+    entryId: string,
+    locale: string
+  ): Promise<boolean> {
+    const isMysqlDialect = this.dialect === "mysql";
+    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
+    const placeholder = (i: number) =>
+      this.dialect === "postgresql" ? `$${i}` : "?";
+    const rows = await tx.execute(
+      `SELECT 1 FROM ${quote(companionTableName)} ` +
+        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
+      [entryId, locale]
+    );
+    return rows.length > 0;
+  }
+
   private async readCompanionStatus(
     tx: TransactionContext,
     companionTableName: string,
@@ -6782,6 +6809,19 @@ export class CollectionMutationService extends BaseService {
             );
           }
 
+          // Whether the promoted locale already HAS a row decides what the
+          // promotion is allowed to do with it. Read before the upsert, because
+          // the upsert is what would change the answer.
+          const promotedLocaleRowExists =
+            sweepAllLocales && promotedDraft && localizedUpdate
+              ? await this.companionRowExists(
+                  tx,
+                  localizedUpdate.companionTableName,
+                  params.entryId,
+                  localizedUpdate.writeLocale
+                )
+              : false;
+
           // i18n M5: upsert the translatable values into the companion row for the write's locale
           // (same transaction). Only the provided localized columns are touched.
           if (
@@ -6812,9 +6852,17 @@ export class CollectionMutationService extends BaseService {
             // for a language nobody wrote.
             (!sweepAllLocales ||
               (promotedDraft &&
-                Object.values(localizedUpdate.localizedFieldValues).some(
-                  v => v !== null && v !== undefined
-                ))) &&
+                // An EXISTING row takes its authored write unconditionally,
+                // clears included: refusing one leaves the old translation live
+                // while the promotion deletes the draft that asked for it.
+                // An ABSENT row is only brought into being by content that is
+                // genuinely translated — `isBlank` is the shared definition of
+                // that, and an empty string means "not translated" under it, so
+                // clearing a translation that never existed creates nothing.
+                (promotedLocaleRowExists ||
+                  Object.values(localizedUpdate.localizedFieldValues).some(
+                    v => !isBlank(v)
+                  )))) &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
             await upsertCompanionRow(

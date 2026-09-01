@@ -1847,6 +1847,33 @@ export class SingleMutationService extends BaseService {
             // status still reaches here, and upserting `_status` into a table that does not exist
             // fails inside the transaction and rolls back the very write the fallback exists to
             // let through.
+            // Whether the promoted locale already HAS a row decides what the
+            // promotion may do with it. Read before the upsert, since the
+            // upsert is what would change the answer. `readCompanionLocaleStatusAll`
+            // keys by locale, so membership is the existence test.
+            const promotedLocaleRowExists =
+              sweepAllLocales &&
+              promotedDraft &&
+              companion &&
+              companionPhysicallyExists &&
+              writeLocale !== undefined
+                ? (
+                    await readCompanionLocaleStatusAll(
+                      tx.getDrizzle<
+                        Parameters<typeof readCompanionLocaleStatusAll>[0]
+                      >(),
+                      companion.table,
+                      existingDoc.id,
+                      // Resolved, never left to the query: an unresolved
+                      // relation aborts the whole transaction on PostgreSQL.
+                      cachedCompanionReadiness(
+                        this.adapter,
+                        companion.companionTableName
+                      )
+                    )
+                  ).has(writeLocale)
+                : false;
+
             if (
               // A held edit writes no companion row: the translation stored
               // there IS live content, so writing it would publish the
@@ -1860,7 +1887,15 @@ export class SingleMutationService extends BaseService {
               // land. Without the exception the promotion below still consumes
               // the draft, and the edit reaches no read path at all.
               (!sweepAllLocales ||
-                (promotedDraft && Object.keys(companionData).length > 0)) &&
+                (promotedDraft &&
+                  // An EXISTING row takes its authored write unconditionally,
+                  // clears included: refusing one leaves the old translation
+                  // live while the promotion deletes the draft that asked for
+                  // it. An ABSENT row is only brought into being by content
+                  // that is genuinely translated, which `isBlank` defines —
+                  // an empty string means "not translated" under it.
+                  (promotedLocaleRowExists ||
+                    Object.values(companionData).some(v => !isBlank(v))))) &&
               companion &&
               companionPhysicallyExists &&
               writeLocale !== undefined &&

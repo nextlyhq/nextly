@@ -250,6 +250,89 @@ describe.each(getConfiguredTestDialects())(
       expect(after.map(r => String(r._locale)).sort()).toEqual(["de"]);
     });
 
+    it("creates no translation row for a blank promoted value", async () => {
+      // `isBlank` is the shared definition of "not translated", and an empty
+      // string is blank under it. Clearing a translation that never existed
+      // asks for nothing, so nothing may be brought into being.
+      const t = await boot(dialect);
+      const id = await germanOnlyAndPublished(t);
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: "" }
+      );
+      const after0 = await t.adapter.select<{ _locale?: unknown }>(
+        `dc_${SLUG}_locales`,
+        {}
+      );
+      expect(after0.map(r => String(r._locale)).sort()).toEqual(["de"]);
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      const after = await t.adapter.select<{ _locale?: unknown }>(
+        `dc_${SLUG}_locales`,
+        {}
+      );
+      expect(after.map(r => String(r._locale)).sort()).toEqual(["de"]);
+    });
+
+    it("persists a clear an author made to a translation that exists", async () => {
+      // The mirror of the blank rule: where the row IS there, a blank is an
+      // authored instruction to empty it. Declining the write would leave the
+      // old translation live while the promotion deletes the draft that asked
+      // for the change — the same silent loss, arriving from the other side.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: SLUG, overrideAccess: true, locale: "en" },
+        { title: "EN live", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+
+      // The row exists and carries content — the precondition being tested.
+      expect(await readTitle(t, id, "en")).toBe("EN live");
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "en",
+        },
+        { title: null }
+      );
+      expect(await pendingDrafts(t, id)).not.toBe("[]");
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      // The clear either landed or is still pending; what it may not do is
+      // vanish while the old value goes on being served.
+      const readable = await readTitle(t, id, "en");
+      const stillPending = (await pendingDrafts(t, id)) !== "[]";
+      expect(readable !== "EN live" || stillPending).toBe(true);
+    });
+
     it("CONTROL: the language that does have a translation is unaffected", async () => {
       const t = await boot(dialect);
       const id = await germanOnlyAndPublished(t);
