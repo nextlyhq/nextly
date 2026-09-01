@@ -29,10 +29,25 @@
  * Passing the locale through is what keeps a one-language release from
  * publishing every language.
  *
+ * ## Why a document-wide member sends the wildcard
+ *
+ * A member that names NO language means the document — all of it. Sending
+ * `undefined` said something quieter and wrong: "use the default language",
+ * which moved the main row and the default translation and left every other
+ * translation where it was. A scheduled takedown therefore pulled a page down
+ * and went on serving its German version, which is worse than not scheduling
+ * it, because the release reported success.
+ *
+ * {@link EVERY_LOCALE} says the thing that was meant. It rides the ordinary
+ * mutation like any other locale, so this module keeps its one job of mapping a
+ * decision onto a call — the sweep is the write path's business, and lives
+ * beside the write that has to be atomic with it.
+ *
  * @module domains/releases/release-mutations
  */
 
 import type { UserContext } from "../collections/services/collection-types";
+import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
 
@@ -59,7 +74,9 @@ export function createReleaseMutations(deps: {
     status: string
   ): Promise<void> => {
     const content = createJobContentApi(user, deps.contentApi);
-    const locale = ref.locale ?? undefined;
+    // A member that names no language means the whole document; see the module
+    // note. `undefined` would mean "the default language" and leave the rest live.
+    const locale = ref.locale ?? EVERY_LOCALE;
 
     if (ref.scopeKind === "single") {
       await content.updateSingle({
