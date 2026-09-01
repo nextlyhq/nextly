@@ -29,26 +29,46 @@
  *
  * Only a failure with nowhere else to appear. A notice that duplicates a
  * message already on screen makes the author read the same sentence twice and
- * teaches them to ignore the region, so a control still mounted reports for
- * itself and stays silent here.
+ * teaches them to ignore the region, so a control that can still be READ
+ * reports for itself and stays silent here.
  *
- * ## It must render INSIDE the builder's chrome
+ * Read rather than merely mounted, and the difference is the whole of
+ * {@link useSurvivingReport}. Below its minimum width the shell puts its
+ * subtree behind `hidden` and `inert`, and neither unmounts anything: a control
+ * behind that notice still renders while being excluded from paint and from the
+ * accessibility tree, so "it is mounted, let it speak for itself" sends the
+ * message somewhere nobody can reach.
  *
- * Every `--nx-builder-*` token is defined on `.nx-builder-chrome`, which sits
- * on the shell's regions rather than on a common ancestor. Custom properties
- * inherit down, never across, so a region rendered as a SIBLING of the regions
- * resolves every border, background and text declaration to nothing — a
- * transparent box with host-default text, which in dark mode is a failure
- * message the author cannot read.
+ * ## Where it must render
  *
- * Taking the chrome class instead was the other way round and worse: that class
- * paints a background and a colour as well as declaring the tokens, so a
- * floating region claiming it is claiming the frame, and a styling class stops
- * identifying one element for anything that selects by it.
+ * Two constraints, and they pull in opposite directions.
+ *
+ * OUTSIDE the subtree the shell makes `hidden` and `inert`, because that is
+ * exactly when this surface is needed and an inert region is excluded from the
+ * accessibility tree. A region inside it is unreachable by eye and by screen
+ * reader at the same moment.
+ *
+ * INSIDE a scope that declares `--nx-builder-*`, because custom properties
+ * inherit down and never across: with neither ancestor supplying them, every
+ * border, background and text declaration resolves to nothing — a transparent
+ * box with host-default text, which in dark mode is a failure message the
+ * author cannot read.
+ *
+ * `.nx-builder-tokens` is what satisfies both. `.nx-builder-chrome` would not:
+ * it identifies the editor's ROOT as well as declaring the tokens, so a
+ * floating region claiming it puts a second root in the document and every
+ * selector meaning "the editor" matches whichever comes first — and it paints a
+ * background and a colour, so the region would also be claiming the frame.
+ *
+ * Mounted UNCONDITIONALLY rather than switched between the shell's two
+ * branches. A live region has to exist before text is put into it, and one
+ * remounted whenever the width crosses the threshold is created at the moment
+ * it is needed; one permanent mount also keeps there being exactly one, since
+ * two live regions interfere and some messages are announced by neither.
  *
  * @module builder-notices
  */
-import { Button } from "@nextlyhq/ui";
+import { Button, useIsomorphicLayoutEffect } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { useShellIsActive } from "./shell-active";
@@ -131,14 +151,30 @@ export function useSurvivingReport(): (
    * alone stores the message inline on a surface nobody can reach, and the
    * author leaves without learning the write was refused.
    *
-   * Tracked through a ref, and assigned during render rather than in an effect,
-   * because the callback below is invoked long after the render that created it
-   * — a value closed over at request time describes the shell as it was when
-   * the request STARTED, which is exactly the state that has since changed.
+   * Tracked through a ref, because the callback below is invoked long after the
+   * render that created it — a value closed over at request time describes the
+   * shell as it was when the request STARTED, which is exactly the state that
+   * has since changed.
+   *
+   * Synchronised from a COMMITTED-phase effect rather than assigned during
+   * render. A render can be abandoned: React may begin rendering a widening
+   * shell and drop that work while the hidden subtree is still the one on
+   * screen, and a render-time assignment would have already reported the shell
+   * as readable. The message would then be stored inline in the subtree the
+   * author still cannot see, which is the failure this whole hook exists to
+   * prevent, reached by a narrower door.
+   *
+   * Layout timing rather than passive, because passive effects flush after
+   * paint: between the commit that hides the shell and that flush, the ref
+   * would still describe the previous committed state. That window is small and
+   * it is the same window the rest of this file is about, so it is closed
+   * rather than reasoned about.
    */
   const shellIsActive = useShellIsActive();
   const active = React.useRef(shellIsActive);
-  active.current = shellIsActive;
+  useIsomorphicLayoutEffect(() => {
+    active.current = shellIsActive;
+  }, [shellIsActive]);
   return (reason, showInline) => {
     if (mounted.current && active.current && showInline()) return;
     raiseNotice(reason);

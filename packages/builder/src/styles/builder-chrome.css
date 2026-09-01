@@ -149,6 +149,14 @@
  * quiet, and quiet is exactly what fails at higher contrast needs.
  */
 @media (prefers-contrast: more) {
+  /*
+   * Both scopes, for the reason the split exists. A surface hoisted out of the
+   * chrome takes its tokens from `.nx-builder-tokens`, so an override written
+   * only against the chrome silently hands it the resting values — and the
+   * surface that moved out is the failure region, which is the last thing that
+   * should be quiet when someone has asked for more contrast.
+   */
+  .nx-builder-tokens,
   .nx-builder-chrome {
     --nx-builder-border: var(--nx-foreground);
     --nx-builder-text-muted: var(--nx-foreground);

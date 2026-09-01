@@ -217,10 +217,11 @@ describe("the queue", () => {
   }
 
   /*
-   * Where the region SITS is asserted in `builder-shell.test`, not here: it
-   * inherits the `--nx-builder-*` tokens by being rendered inside the chrome
-   * element, and that structure exists only in the shell. Asserting it against
-   * this file's own harness would have been asserting the harness.
+   * Where the region SITS is asserted in `builder-shell.test`, not here. Two
+   * things decide it — that it resolves `--nx-builder-*` from a token scope,
+   * and that it stays OUTSIDE the subtree the shell makes `hidden` and `inert`
+   * — and both are properties of the shell's structure rather than of this
+   * file's harness. Asserting them here would have been asserting the harness.
    */
 
   it("does not re-announce every notice when one is added", () => {
