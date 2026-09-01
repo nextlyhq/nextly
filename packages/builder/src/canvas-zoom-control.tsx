@@ -122,11 +122,16 @@ export function CanvasZoomControl({
    * top step `steppedZoom` returns the zoom it was given, and a disabled state
    * derived from the scale alone would have to restate the step list to know
    * that. One list decides both, and it is the one the button runs.
+   *
+   * `Object.is` rather than `!==`, because `writeZoom` returns the scale itself
+   * and a host may construct one the canvas cannot paint. `NaN !== NaN` is
+   * true, so an unchanged result would read as a step being available and both
+   * buttons would offer a press that emits the value they were already given.
    */
   const zoomOut = steppedZoom(zoom, appliedScale, "out");
   const zoomIn = steppedZoom(zoom, appliedScale, "in");
-  const canZoomOut = writeZoom(zoomOut) !== writeZoom(zoom);
-  const canZoomIn = writeZoom(zoomIn) !== writeZoom(zoom);
+  const canZoomOut = !Object.is(writeZoom(zoomOut), writeZoom(zoom));
+  const canZoomIn = !Object.is(writeZoom(zoomIn), writeZoom(zoom));
 
   return (
     <div className="nx-zoom-stepper flex items-center gap-0.5">

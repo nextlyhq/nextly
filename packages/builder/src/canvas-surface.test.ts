@@ -40,27 +40,50 @@ describe("the canvas as a sheet", () => {
   it("states its own edge, so the page is separable at any tone", () => {
     /*
      * The frame is deliberately one step off the background so it recedes, so
-     * the two surfaces alone are close by design. The border is what makes the
-     * page's edge readable regardless — and regardless of which of the two is
+     * the two surfaces alone are close by design. The edge is what makes the
+     * page separable regardless — and regardless of which of the two is
      * lighter, which the palette inverts between modes.
      */
     expect(canvasRule()).toContain(
-      "border: 1px solid var(--nx-builder-border)"
+      "outline: 1px solid var(--nx-builder-border)"
     );
   });
 
-  it("carries the separation on the BORDER, not only on a shadow", () => {
+  it("carries the separation on the EDGE, not only on a shadow", () => {
     /*
      * A shadow has almost nothing to darken on a dark page, so a sheet relying
      * on one is legible in light mode and flat in dark. The shadow may be
-     * present as a secondary cue; the border may not be missing.
+     * present as a secondary cue; the edge may not be missing.
      */
     const rule = canvasRule();
-    const hasBorder = rule.includes("border: 1px solid");
+    const hasEdge = rule.includes("outline: 1px solid");
     expect(
-      hasBorder,
+      hasEdge,
       "a shadow alone leaves the page edgeless wherever it cannot cast"
     ).toBe(true);
+  });
+
+  it("draws that edge OUTSIDE the width the page is previewed at", () => {
+    /*
+     * This element carries the previewed width, `container-type: inline-size`
+     * and the edge together, under the shell's `box-sizing: border-box`. A
+     * border is therefore subtracted from the content box the container queries
+     * resolve against, and two pixels decide a tier: at a 992px request the
+     * content box is 990px, so a `max-width: 991px` rule stays active and the
+     * unconditional tier cannot be previewed at all. An outline paints outside
+     * the box and takes part in no layout, which is why it is the one that may
+     * be used here.
+     *
+     * Matched as a property rather than as the shorthand, so `border-top` or
+     * `border-width` cannot reintroduce the same subtraction under another
+     * spelling. `--nx-builder-border` is not a match: the token is preceded by
+     * `-` rather than by whitespace, and is a value rather than a declaration.
+     */
+    const declaresBorder = /(?:^|\s)border(?:-[a-z]+)?\s*:/.test(canvasRule());
+    expect(
+      declaresBorder,
+      "a border here narrows the content box the previewed tier is decided by"
+    ).toBe(false);
   });
 });
 

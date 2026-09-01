@@ -42,8 +42,9 @@ import {
   EMPTY_ELEMENTS_ATTRIBUTE,
   browserStore,
   fitsFullShell,
+  CANVAS_GUTTER,
   LEFT_PANELS,
-  MIN_CANVAS_WIDTH,
+  MIN_CANVAS_PANEL_WIDTH,
   MIN_SHELL_WIDTH,
   PANEL_BOUNDS,
   panelAfterRailClick,
@@ -1104,7 +1105,7 @@ function ShellRegions({
             </>
           ) : null}
 
-          <ResizablePanel id="canvas" minSize={MIN_CANVAS_WIDTH}>
+          <ResizablePanel id="canvas" minSize={MIN_CANVAS_PANEL_WIDTH}>
             {/*
              * A named `section`, never `<main>`.
              *
@@ -1149,8 +1150,15 @@ function ShellRegions({
                  * into and the scale follows it. A padding the measurement
                  * could not see would size the page to the region and paint it
                  * over the gap.
+                 *
+                 * Taken from the constant the panel's own minimum is derived
+                 * from, rather than written as a utility class. The gap is
+                 * spent out of this panel, so a class here and a number there
+                 * would let the two drift and put the floor back inside the
+                 * editing surface.
                  */
-                className="h-full overflow-auto p-4"
+                style={{ padding: CANVAS_GUTTER }}
+                className="h-full overflow-auto"
               >
                 {children}
               </section>

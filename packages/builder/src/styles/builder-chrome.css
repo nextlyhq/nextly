@@ -989,8 +989,22 @@
    * Stated on the PAGE rather than on the region around it, so the page is a
    * self-contained sheet: several of them side by side — one per breakpoint —
    * would each carry their own edge with nothing about this rule to revisit.
+   *
+   * An OUTLINE rather than a border, and that is a correctness requirement
+   * rather than a preference. This element carries three things at once: the
+   * width a tier is previewed at, `container-type: inline-size`, and this edge.
+   * Container queries resolve against the CONTENT box, and the shell resets its
+   * whole subtree to `box-sizing: border-box` — so a border here is subtracted
+   * from the width the page is being previewed at. Two pixels is enough to
+   * decide a tier: a 992px request lays out 990px of content, the widest
+   * `max-width: 991px` rule stays active, and the unconditional tier becomes
+   * unreachable from the switcher. The `ResizeObserver` reads `contentRect` and
+   * reports the same narrowed width, so the tier readout agrees with the wrong
+   * answer. An outline is painted outside the border box and takes part in no
+   * layout, so the page keeps exactly the width it was asked for. It has room
+   * to paint because the region around it is padded.
    */
-  border: 1px solid var(--nx-builder-border);
+  outline: 1px solid var(--nx-builder-border);
   box-shadow: var(--shadow-md);
   /*
    * Fills the region rather than stopping at its content.

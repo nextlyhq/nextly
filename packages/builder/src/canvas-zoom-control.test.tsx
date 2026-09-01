@@ -93,6 +93,32 @@ describe("the zoom stepper", () => {
     expect((zoomOut as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("does not offer a step it cannot take from an unpaintable scale", () => {
+    /*
+     * `writeZoom` returns the scale itself, and a host may construct a fixed
+     * zoom the canvas cannot paint. `NaN !== NaN` is true, so an unchanged
+     * result reads as a step being available: both buttons render operable and
+     * a press emits the same unusable value back.
+     *
+     * The fit is pinned to the TOP step so the two directions must disagree.
+     * Stepping falls back to the fit, so out has 1.5 to go to while in has
+     * nowhere — and an assertion that both are disabled would also pass on an
+     * implementation that simply refuses every unusable zoom, which would take
+     * the stepper away from an author whose canvas is painting perfectly well.
+     */
+    render(
+      <CanvasZoomControl
+        zoom={{ kind: "fixed", scale: Number.NaN }}
+        appliedScale={2}
+        onChange={vi.fn()}
+      />
+    );
+    const zoomIn = screen.getByRole("button", { name: /zoom in/i });
+    const zoomOut = screen.getByRole("button", { name: /zoom out/i });
+    expect((zoomIn as HTMLButtonElement).disabled).toBe(true);
+    expect((zoomOut as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("steps from the scale a FIT is currently painting at", () => {
     // Fit is a mode, not a number, so stepping out of it starts from what it
     // resolved to — otherwise the first press jumps somewhere unrelated to

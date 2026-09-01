@@ -428,9 +428,19 @@ export function BreakpointSwitcher({
              * number is the whole content of the choice.
              */
             aria-label={ariaLabelFor(option)}
+            /*
+             * The same string as the accessible name, so a sighted pointer
+             * user can read what a glyph stands for without selecting it.
+             *
+             * A tier's glyph comes from its width, so two tiers a site defines
+             * close together — 375px and 480px, say — draw the SAME picture,
+             * and only the selected one shows a word. Without this the only
+             * way to tell those two apart is to click one and watch the canvas
+             * change, which is the tier being applied rather than named.
+             */
             title={
               ready
-                ? undefined
+                ? ariaLabelFor(option)
                 : status === "loading"
                   ? "Available once the site's saved styles have loaded."
                   : "Your site's saved styles could not be read, so the canvas cannot be sized against them."
@@ -451,11 +461,16 @@ export function BreakpointSwitcher({
               Icon-only throughout would take the tier's name off the screen
               entirely in the commonest state: the width readout beside this is
               deliberately empty while the selection already names the applying
-              tier, so with no label here nothing would name it. Two tiers can
-              also share a glyph — a site may define several narrow ones — and
-              then identical pictures would be the only thing to tell them
-              apart. Naming the selected one costs the width of one word and
-              answers both.
+              tier, so with no label here nothing would name it. Naming the
+              selected one costs the width of one word and answers that.
+
+              It does NOT answer the other half: two tiers can share a glyph —
+              a site may define several narrow ones — and neither being
+              selected, identical pictures are all there is to tell them apart.
+              The accessible name carries the width for assistive technology
+              and the `title` carries it for a pointer, so the word being
+              absent is a matter of density rather than of the name being
+              unavailable.
             */}
             {(() => {
               const Glyph = tierIcon(option.bound);

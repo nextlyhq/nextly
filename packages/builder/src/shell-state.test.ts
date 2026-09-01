@@ -9,10 +9,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CANVAS_GUTTER,
   DEFAULT_PREFERENCES,
   fitsFullShell,
   isLeftPanel,
   LEFT_PANELS,
+  MIN_CANVAS_PANEL_WIDTH,
   MIN_CANVAS_WIDTH,
   MIN_SHELL_WIDTH,
   panelAfterRailClick,
@@ -128,13 +130,31 @@ describe("the bounds the library is handed", () => {
 
     // So the floor is declared on the canvas itself, and the supported viewport
     // must be able to satisfy every minimum at once — otherwise the shell would
-    // hand the library a set of bounds with no solution.
+    // hand the library a set of bounds with no solution. The PANEL width is
+    // what the library is handed, so it is the term that has to fit.
     expect(
       RAIL_WIDTH +
         PANEL_BOUNDS.left.min +
         PANEL_BOUNDS.inspector.min +
-        MIN_CANVAS_WIDTH
+        MIN_CANVAS_PANEL_WIDTH
     ).toBeLessThanOrEqual(MIN_SHELL_WIDTH);
+  });
+
+  it("spends the gutters on top of the floor, not out of it", () => {
+    /*
+     * The floor is a statement about the EDITING SURFACE, and the panel is the
+     * only thing a resize bound can be expressed on. Bounding the panel at the
+     * surface's own number spends the gap out of the page: the drag would stop
+     * at 480px of panel holding 448px of canvas, which is past the floor that
+     * exists to stop it.
+     *
+     * Asserted as the subtraction the layout actually performs rather than as
+     * the sum the constant is defined by — restating `min + 2 * gutter` here
+     * would pass on any pair of numbers, including a gutter of zero that the
+     * region's padding contradicts.
+     */
+    expect(MIN_CANVAS_PANEL_WIDTH - CANVAS_GUTTER * 2).toBe(MIN_CANVAS_WIDTH);
+    expect(CANVAS_GUTTER).toBeGreaterThan(0);
   });
 });
 
