@@ -140,10 +140,11 @@ export interface SingleFormProps {
    * Publish and Duplicate — but releases are the page's concern, and a form that
    * imported them would have to import translations and every later one too.
    *
-   * It was a `ReactNode`, which could only ever be a button in one fixed spot:
-   * unable to sit in the overflow menu, unable to be ordered against the
-   * built-ins, and unable to say why it was unavailable — so it VANISHED where
-   * a permission withheld it, which reads as the feature not existing.
+   * Describing rather than rendering is what leaves the model free to place the
+   * action, order it against the built-ins, and disable it with a reason. A
+   * rendered node fixes all three at its call site, and the one that matters is
+   * the last: a control that cannot say why it is unavailable has to disappear,
+   * which an author cannot tell from a feature that does not exist.
    */
   documentActions?: readonly ContributedAction[];
   /** Single schema with field definitions */

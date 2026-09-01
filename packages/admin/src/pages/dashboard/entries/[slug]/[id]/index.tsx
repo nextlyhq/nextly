@@ -576,10 +576,9 @@ export default function EditEntryPage({
             navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
           }
           /* Contributed to the editor's action model, which places it in the
-             overflow menu beside Duplicate. Adding a document to a release is a
-             document-management act, not a leading one — and as a toolbar
-             button it also widened the action cluster, which is what pushed
-             Save under the version-history panel. */
+             overflow menu beside Duplicate: scheduling a release is a
+             document-management act rather than a leading one, and the toolbar
+             is reserved for the verbs an author reaches for while writing. */
           documentActions={
             release.contributed === null ? [] : [release.contributed]
           }

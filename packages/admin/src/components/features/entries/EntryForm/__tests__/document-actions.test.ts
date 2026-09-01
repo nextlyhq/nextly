@@ -358,6 +358,32 @@ describe("actions a host contributes", () => {
     expect(merged.map(a => a.id)).toContain("add-to-release");
   });
 
+  it("keeps only the FIRST of two contributions sharing an id", () => {
+    /*
+     * Not merely a repeated row. Bindings are keyed by id, so the second
+     * contribution's handler would overwrite the first — and both rows,
+     * including the one still showing the first contribution's label and
+     * destructive styling, would run the second one's operation.
+     */
+    const merged = withContributedActions(built, [
+      { id: "export", label: "Export", placement: "menu" },
+      { id: "export", label: "Export and delete", placement: "menu" },
+    ]);
+    const exports = merged.filter(a => a.id === "export");
+    expect(exports).toHaveLength(1);
+    expect(exports[0]?.label).toBe("Export");
+  });
+
+  it("still admits contributions with distinct ids", () => {
+    // The control: deduplicating on any repeat would satisfy the case above
+    // while dropping unrelated contributions.
+    const merged = withContributedActions(built, [
+      { id: "export", label: "Export", placement: "menu" },
+      { id: "archive", label: "Archive", placement: "menu" },
+    ]);
+    expect(merged.map(a => a.id).slice(-2)).toEqual(["export", "archive"]);
+  });
+
   it("changes nothing when there is nothing to contribute", () => {
     expect(withContributedActions(built, [])).toEqual(built);
   });

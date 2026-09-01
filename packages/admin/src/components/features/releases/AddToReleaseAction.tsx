@@ -169,8 +169,11 @@ export interface AddToReleaseProps {
    *
    * A member is whole-document: the service refuses a locale-scoped one
    * outright, so adding from a translation would schedule every locale while
-   * every other control on that screen acts on the one being edited. The
-   * control is withheld rather than silently widened.
+   * every other control on that screen acts on the one being edited.
+   *
+   * False therefore OFFERS the action carrying a reason, rather than widening
+   * the write or removing the control. The way out is something the author can
+   * act on — switch to the default locale — which an absent control cannot say.
    */
   onDefaultLocale: boolean;
 }
@@ -474,7 +477,23 @@ export function useAddToReleaseAction({
   // they learn is that it failed.
   const canPublishDocument = useCan(`publish-${scopeSlug}`);
   const canUnpublishDocument = useCan(`unpublish-${scopeSlug}`);
-  const [open, setOpen] = useState(false);
+  /*
+   * Which DOCUMENT the picker is open for, rather than whether it is open.
+   *
+   * This hook is called from the page, and the router renders the same page
+   * component for every entry of a route without a key — so navigating from one
+   * document to another keeps this state alive. A plain boolean would survive
+   * that move and the picker would reappear over a document nobody opened it
+   * for, aimed at the new one.
+   *
+   * Scoping the state to the document makes that unrepresentable rather than
+   * cleaning up after it: an identity from another document simply is not open,
+   * with no effect to fire and nothing to forget on a later route.
+   */
+  const documentKey = `${scopeKind}:${scopeSlug}:${entryId}`;
+  const [openFor, setOpenFor] = useState<string | null>(null);
+  const open = openFor === documentKey;
+  const setOpen = (next: boolean) => setOpenFor(next ? documentKey : null);
 
   /*
    * EXISTENCE is decided by authority over the feature; USABILITY by facts
@@ -506,15 +525,14 @@ export function useAddToReleaseAction({
 
   /*
    * A DESCRIPTION and the handler that runs it, for the editor's action model
-   * to place. There is no trigger element here any more: the model decides that
-   * this belongs in the overflow menu beside Duplicate rather than in the
-   * toolbar, and a component rendering its own button could not be told.
+   * to place. This module renders no trigger, which is what lets the model put
+   * the action in the overflow menu beside Duplicate; a component drawing its
+   * own button decides that itself and cannot be told otherwise.
    *
-   * That also retires a hazard rather than restating it. The old trigger sat
-   * inside the editor's own `<form>`, where a `<button>` with no `type`
-   * defaults to `submit` — so opening this dialog once saved the document and
-   * published dirty fields before anyone had chosen a release. A menu item is
-   * not inside the form and runs a callback, so the shape cannot recur.
+   * It also keeps the control out of the editor's `<form>`. A `<button>` with
+   * no `type` inside a form defaults to `submit`, so a trigger mounted there
+   * saves the document — publishing dirty fields — merely by being clicked. A
+   * menu item is outside the form and runs a callback.
    */
   const contributed: ContributedAction = {
     action: {

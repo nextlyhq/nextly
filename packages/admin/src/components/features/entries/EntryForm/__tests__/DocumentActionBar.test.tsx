@@ -298,6 +298,69 @@ describe("a menu action an author may not use", () => {
     expect(item.getAttribute("aria-description")).toMatch(/permission/i);
   });
 
+  it("shows the reason as TEXT, because a disabled row cannot be hovered", async () => {
+    /*
+     * The refusal has to be readable without hovering or focusing. A disabled
+     * Radix item carries `pointer-events-none` and is skipped by the menu's
+     * roving focus, so a `title` never opens and an `aria-description` on an
+     * unfocusable row reaches nobody — which would leave the author with a grey
+     * row and no way to find out what is wrong with it.
+     */
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "unpublish",
+            label: "Unpublish",
+            placement: "menu",
+            group: "danger",
+            destructive: true,
+            disabledReason: "You do not have permission to unpublish.",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          unpublish: { onSelect: vi.fn() },
+        }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /unpublish/i });
+    expect(item.textContent).toContain("You do not have permission");
+  });
+
+  it("keeps a usable action's row to its label alone", async () => {
+    // The control: rendering the reason unconditionally would put an empty or
+    // stray second line under every usable action in the menu.
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "duplicate",
+            label: "Duplicate",
+            placement: "menu",
+            group: "document",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          duplicate: { onSelect: vi.fn() },
+        }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /duplicate/i });
+    expect(item.textContent).toBe("Duplicate");
+  });
+
   it("leaves a usable menu action carrying no reason at all", async () => {
     // The control. Attributes attached unconditionally would satisfy the case
     // above while telling every author their available actions are refused.

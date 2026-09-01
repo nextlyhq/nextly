@@ -9,21 +9,20 @@
  * authority over the FEATURE decides whether the action exists, and facts about
  * THIS DOCUMENT decide whether it can be used, with a reason attached.
  *
- * Each case was originally found in review rather than by anything failing,
- * because a control that should not be there looks exactly like one that
- * should: nothing errors, and the refusal arrives only after an editor has
- * filled the dialog in.
+ * A control that should not be offered looks exactly like one that should:
+ * nothing errors, and the refusal arrives only after an editor has filled the
+ * dialog in. That is why each condition is asserted separately rather than
+ * through one "is it offered" case.
  *
- * TWO CASES WERE REMOVED as obsolete rather than repaired: "opens the dialog
- * WITHOUT submitting the document" and "says so on the element rather than
- * relying on where it is mounted". Both guarded a `type="button"` on a trigger
- * rendered inside the editor's own `<form>`, where a `<button>` with no type
- * defaults to `submit`. There is no trigger element any more — the action is a
- * description the editor renders as a menu item, outside the form — so the
- * hazard is retired by construction and there is nothing left to assert it on.
+ * Nothing here asserts that opening the picker does not submit the document.
+ * That hazard belonged to a trigger rendered inside the editor's own `<form>`,
+ * where a `<button>` with no type defaults to `submit`. This module renders no
+ * trigger: it describes an action the editor draws as a menu item, outside the
+ * form, so there is no element for such an assertion to sit on.
  *
  * @module components/features/releases/__tests__/AddToReleaseAction.test
  */
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
@@ -94,6 +93,13 @@ function Probe(over: Partial<AddToReleaseProps>) {
       <span data-testid="dialog">
         {release.dialog === null ? "no-dialog" : "dialog"}
       </span>
+      {/* The action as the editor would draw it, so a test opens the picker the
+          way an author does rather than by reaching into state. */}
+      {release.contributed === null ? null : (
+        <button type="button" onClick={release.contributed.binding.onSelect}>
+          {release.contributed.action.label}
+        </button>
+      )}
       {/* Mounted, as a page mounts it. The picker's protected queries live in
           the dialog, so a probe that only reported its presence would assert
           about requests nothing had the chance to issue. */}
@@ -186,6 +192,41 @@ describe("the action is offered but EXPLAINED, because this document refuses", (
     show({ onDefaultLocale: false });
     expect(text("present")).toBe("present");
     expect(text("reason")).toMatch(/default locale/i);
+  });
+});
+
+describe("the picker's open state", () => {
+  const picker = () => screen.queryByRole("dialog");
+
+  it("does not carry over to a different document", async () => {
+    /*
+     * The router renders one page component for every entry of a route without
+     * a key, so this hook survives navigation between documents. A plain
+     * boolean would keep the picker open over a document nobody opened it for,
+     * aimed at the new one. The state names the document instead.
+     *
+     * Asserted on the picker being ON SCREEN rather than on a flag, because
+     * that is the thing that would be wrong for the author.
+     */
+    const { rerender } = render(<Probe entryId="e1" />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /add to release/i })
+    );
+    expect(picker()).not.toBeNull();
+
+    rerender(<Probe entryId="e2" />);
+    expect(picker()).toBeNull();
+  });
+
+  it("stays open while the document does not change", async () => {
+    // The control: a hook reporting closed on every re-render would satisfy the
+    // case above while making the picker impossible to keep open at all.
+    const { rerender } = render(<Probe entryId="e1" />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /add to release/i })
+    );
+    rerender(<Probe entryId="e1" />);
+    expect(picker()).not.toBeNull();
   });
 });
 

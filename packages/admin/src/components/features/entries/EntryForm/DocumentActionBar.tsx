@@ -134,11 +134,49 @@ export interface DocumentActionBarProps {
  *
  * Nothing when the action is usable, so a usable row carries no stray
  * attributes and a test asserting their absence means something.
+ *
+ * These attributes are a SUPPLEMENT to the visible line below, never the whole
+ * answer. A disabled Radix item carries `pointer-events-none` and is skipped by
+ * the menu's roving focus, so a `title` never opens and an `aria-description`
+ * on an unfocusable row is read by nobody. A refusal that only lives in these
+ * is a refusal the author cannot obtain.
  */
 function reasonAttributes(reason: string | undefined): Record<string, string> {
   return reason === undefined
     ? {}
     : { title: reason, "aria-description": reason };
+}
+
+/**
+ * A menu row: what the action is called, and — when it cannot be used — why.
+ *
+ * The reason is rendered as TEXT rather than left to a tooltip. A disabled row
+ * cannot be hovered or focused, so the explanation attached to it was
+ * unreachable by both pointer and keyboard; an author saw a grey row and no
+ * way to find out what was wrong with it, which is the "reads as broken rather
+ * than as forbidden" problem the reasons exist to solve, one step further on.
+ *
+ * The row stays genuinely `disabled` rather than being made focusable to carry
+ * a tooltip. These rows include Delete and Unpublish, and the refusals are
+ * permissions — a control that cannot fire is worth more than one that explains
+ * itself well.
+ */
+function ActionRow({
+  label,
+  reason,
+}: {
+  label: string;
+  reason: string | undefined;
+}) {
+  if (reason === undefined) return <>{label}</>;
+  return (
+    <span className="flex flex-col items-start gap-0.5">
+      <span>{label}</span>
+      <span className="text-xs font-normal text-muted-foreground">
+        {reason}
+      </span>
+    </span>
+  );
 }
 
 /** Both reasons an action may be unusable, or undefined when it is usable. */
@@ -259,7 +297,10 @@ export function DocumentActionBar({
                 */
                 {...reasonAttributes(reasonFor(action, binding))}
               >
-                {action.label}
+                <ActionRow
+                  label={action.label}
+                  reason={reasonFor(action, binding)}
+                />
               </DropdownMenuItem>
             ))}
             {/*
@@ -279,7 +320,10 @@ export function DocumentActionBar({
                 className="text-destructive focus:text-destructive"
                 {...reasonAttributes(reasonFor(action, binding))}
               >
-                {action.label}
+                <ActionRow
+                  label={action.label}
+                  reason={reasonFor(action, binding)}
+                />
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

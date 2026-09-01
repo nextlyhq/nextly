@@ -216,11 +216,11 @@ export interface EntrySystemHeaderProps {
   /**
    * Document actions the PAGE owns, folded in with the built-in ones.
    *
-   * Descriptions rather than rendered controls. A node could only ever be a
-   * button in one fixed spot: it cannot be demoted to the menu, ordered against
-   * the built-ins, or given a reason when a permission withholds it — so a
-   * release control drawn that way had to VANISH where an author lacked the
-   * permission, which reads as the feature not existing.
+   * Descriptions rather than rendered controls, so placement, ordering and
+   * disabled reasons stay this component's answer. A rendered node decides all
+   * three where it is written, and a control with no way to carry a reason has
+   * to disappear when a permission withholds it — which an author cannot
+   * distinguish from a feature that does not exist.
    */
   contributedActions?: readonly ContributedAction[];
 

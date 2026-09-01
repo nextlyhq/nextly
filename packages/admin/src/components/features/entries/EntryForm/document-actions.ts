@@ -439,8 +439,25 @@ export function withContributedActions(
   built: readonly DocumentAction[],
   contributed: readonly DocumentAction[]
 ): DocumentAction[] {
+  /*
+   * `taken` GROWS as contributions are admitted, so the first of two
+   * contributions sharing an id wins and the second is dropped.
+   *
+   * Checking only against the built-ins would let both through, and the damage
+   * is not that a row appears twice. `acceptContributions` keys bindings by id,
+   * so the second contribution's handler overwrites the first — and BOTH rows,
+   * including the one still showing the first contribution's label and its
+   * destructive styling, would run the second one's operation. React would also
+   * be handed duplicate keys for them.
+   */
   const taken = new Set(built.map(action => action.id));
-  return [...built, ...contributed.filter(action => !taken.has(action.id))];
+  const accepted: DocumentAction[] = [...built];
+  for (const action of contributed) {
+    if (taken.has(action.id)) continue;
+    taken.add(action.id);
+    accepted.push(action);
+  }
+  return accepted;
 }
 
 /**
