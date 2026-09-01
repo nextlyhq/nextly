@@ -356,6 +356,66 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
+  it("refuses a query on a queryless archetype, as the registry does", () => {
+    // The registry contract forbids a query on `text`/`actions`, and this
+    // channel accepted one -- so a contributed widget could carry a query the
+    // registry would have refused. Not merely inconsistent: core draws
+    // `actions` from the declaration, so the grid batched a read on every mount
+    // and refetch whose result the declared renderer never looks at.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    // The other queryless archetype, so the rule is the vocabulary's rather
+    // than one arm's.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/note",
+          archetype: "text",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses that query even behind a component fallback", () => {
+    // Same bypass the shortcut rule had: the component short-circuit must not
+    // skip a declaration core will draw from.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          component: "@acme/p/admin#Shortcuts",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("leaves a DATA archetype's query alone", () => {
+    // The bound. The refusal is the queryless vocabulary's, not a ban on
+    // queries -- a `metric` is drawn FROM one.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a contributed actions widget whose shortcuts are complete", () => {
     // The control. A gate that refused every actions widget would satisfy the
     // assertions above while making the archetype undeclarable.

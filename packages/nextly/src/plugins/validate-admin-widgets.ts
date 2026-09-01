@@ -20,6 +20,7 @@
 import {
   actionProblem,
   DATA_ARCHETYPES,
+  querylessQueryProblem,
   QUERYLESS_ARCHETYPES,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
@@ -81,6 +82,13 @@ const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
  * nothing further here.
  */
 function querylessProblem(widget: Record<string, unknown>): string | undefined {
+  // Through the SAME rule the registry applies. A queryless archetype is drawn
+  // from its declaration, so a query beside it is never read -- and because
+  // `coreDraws` is true for one, the grid batched a request per mount and
+  // refetch for a result the declared renderer discards.
+  const queryProblem = querylessQueryProblem(widget.archetype, widget.query);
+  if (queryProblem !== undefined) return queryProblem;
+
   if (widget.archetype !== "actions") return undefined;
 
   if (!Array.isArray(widget.actions) || widget.actions.length === 0) {
