@@ -138,6 +138,38 @@ describe("the editor previews what the server renders", () => {
     expect(result.current.previewSubject).toBe("GOOD SUBJECT");
   });
 
+  /*
+   * The RECOVERY, not the steady state. The unparseable test below holds the
+   * JSON broken throughout, so it never crosses back and cannot see this: the
+   * decision to send and the payload were debounced separately, so correcting
+   * the JSON flipped `enabled` at once while the body was still the 300ms-old
+   * empty object — one render with every variable blank.
+   */
+  it("never renders with empty data after the sample JSON is corrected", async () => {
+    previewDraft.mockResolvedValue({ subject: "", html: "", text: "" });
+
+    const { rerender } = renderHook(
+      ({ sampleOverride }: { sampleOverride: string }) =>
+        useDerivedTemplateState({ ...INPUT, sampleOverride }),
+      { wrapper, initialProps: { sampleOverride: "{ not json" } }
+    );
+
+    // Let the debounce settle on the unrenderable state.
+    await new Promise(resolve => setTimeout(resolve, 450));
+    expect(previewDraft).not.toHaveBeenCalled();
+
+    rerender({ sampleOverride: JSON.stringify({ userName: "Priya" }) });
+
+    await waitFor(() => {
+      expect(previewDraft).toHaveBeenCalled();
+    });
+    // Every call carries the corrected data. A call with `{}` is the bug:
+    // the author sees their variables render blank for a frame.
+    for (const [, data] of previewDraft.mock.calls) {
+      expect(data).toEqual({ userName: "Priya" });
+    }
+  });
+
   it("does not render at all while the sample data is unparseable", async () => {
     previewDraft.mockResolvedValue({ subject: "", html: "", text: "" });
 

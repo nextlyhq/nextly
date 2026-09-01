@@ -48,6 +48,12 @@ export const PREVIEW_PALETTE = {
 /**
  * The two widths an email is actually authored against.
  *
+ * The frame is these widths EDGE TO EDGE: the document inside carries no
+ * horizontal padding, because a mail client's viewport does not. Padding it
+ * would leave a 600px email 568px to lay out in, so a conventional fixed-width
+ * 600px table would overflow the frame the toolbar labels "600px" — and the
+ * breathing room around the frame belongs outside it, where it already is.
+ *
  * 600 rather than a round browser width: it is the ceiling virtually every
  * HTML email is built to, because Outlook's reading pane has historically been
  * narrower than that and anything wider is clipped. 375 is the iPhone viewport
@@ -216,7 +222,7 @@ export function PreviewPane({
     );
     return `<!doctype html><html><head><meta name="color-scheme" content="${
       dark ? "dark" : "light"
-    }"><style>html,body{margin:0}body{background:${pageBg};padding:16px}</style></head><body>${
+    }"><style>html,body{margin:0}body{background:${pageBg};padding:16px 0}</style></head><body>${
       themedHtml ||
       `<p style='font-family:sans-serif;color:${PREVIEW_PALETTE.muted}'>Nothing to preview yet.</p>`
     }</body></html>`;

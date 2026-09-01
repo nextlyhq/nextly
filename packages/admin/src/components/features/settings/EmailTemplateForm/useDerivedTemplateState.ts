@@ -141,11 +141,15 @@ export function useDerivedTemplateState({
     previewSubject,
     isPreviewPending,
     previewError,
-  } = useDraftPreview(draft, sampleData, {
-    // Unparseable sample data has no render: sending `{}` would silently
-    // preview against different values than the ones on screen.
-    enabled: sampleError === null,
-  });
+  } = useDraftPreview(
+    /*
+     * `null` while the sample JSON is unparseable: sending `{}` would preview
+     * against values the author cannot see. Carried INSIDE the snapshot rather
+     * than as a separate `enabled` flag, so the decision and the payload are
+     * debounced together — see `DraftPreviewRequest`.
+     */
+    sampleError === null ? { draft, data: sampleData } : null
+  );
 
   return {
     sampleText,

@@ -29,6 +29,22 @@ import type {
  */
 const PREVIEW_DEBOUNCE_MS = 300;
 
+/**
+ * Stands in for the draft while there is nothing renderable.
+ *
+ * Never sent — the query is disabled in that state — but it keeps the key a
+ * stable reference so a disabled hook does not churn a new one each render.
+ */
+const EMPTY_DRAFT: DraftPreviewTemplate = {
+  subject: "",
+  htmlContent: "",
+  plainTextContent: null,
+  preheader: null,
+  useLayout: false,
+  kind: "template",
+  layoutId: null,
+};
+
 export interface DraftPreviewState {
   previewHtml: string;
   previewText: string;
@@ -39,19 +55,36 @@ export interface DraftPreviewState {
   previewError: string | null;
 }
 
+/**
+ * What to render, or `null` when the draft cannot be rendered at all.
+ *
+ * One object rather than three arguments because the payload and the decision
+ * to send it MUST travel together. Debounced separately, correcting unparseable
+ * sample data flips the decision to true immediately while the payload is still
+ * the 300ms-old empty object, and the pane renders every variable blank until
+ * the real data catches up.
+ */
+export type DraftPreviewRequest = {
+  draft: DraftPreviewTemplate;
+  data: Record<string, unknown>;
+} | null;
+
 export function useDraftPreview(
-  draft: DraftPreviewTemplate,
-  data: Record<string, unknown>,
-  { enabled }: { enabled: boolean }
+  request: DraftPreviewRequest
 ): DraftPreviewState {
-  const debouncedDraft = useDebouncedValue(draft, PREVIEW_DEBOUNCE_MS);
-  const debouncedData = useDebouncedValue(data, PREVIEW_DEBOUNCE_MS);
+  // ONE snapshot. `enabled` is read off the same debounced value as the body,
+  // so the two can never disagree about which moment they describe.
+  const debounced = useDebouncedValue(request, PREVIEW_DEBOUNCE_MS);
 
   const {
     data: preview,
     isPending,
     error,
-  } = useDraftEmailTemplatePreview(debouncedDraft, debouncedData, { enabled });
+  } = useDraftEmailTemplatePreview(
+    debounced?.draft ?? EMPTY_DRAFT,
+    debounced?.data ?? {},
+    { enabled: debounced !== null }
+  );
 
   /*
    * The last render that SUCCEEDED, held across a failure.
