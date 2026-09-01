@@ -189,11 +189,16 @@ A widget is drawn one of two ways, and you pick by what you declare.
 Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
 runs the query for the signed-in user and renders the card.
 
-> **What the host draws today: `metric`, and only `metric`.**
-> `table`, `list`, `text` and `actions` are accepted by the contract but have no
-> renderer yet, so a widget declaring one shows "the … archetype is not rendered yet"
-> in its card unless it also ships a `component` to draw the body itself. Declare
-> those archetypes only with a component fallback until this note says otherwise.
+> **What the host draws today: `metric` and `list`.**
+> `table`, `text` and `actions` are accepted by the contract but have no renderer
+> yet, so a widget declaring one shows "the … archetype is not rendered yet" in its
+> card unless it also ships a `component` to draw the body itself. Declare those
+> archetypes only with a component fallback until this note says otherwise.
+>
+> A `list` widget draws one row per result. Its query's `select` decides what each
+> row shows, in order: the first field is the row's label and the second, if there
+> is one, is the muted line under it. A `list` that selects nothing says so rather
+> than guessing at a field.
 
 ```ts
 contributes: {
@@ -213,8 +218,8 @@ contributes: {
 ```
 
 `text` and `actions` are drawn without data, so they take no `query` — declaring one is
-a type error. Every other archetype requires it. (Neither has a renderer yet; see the
-note above.)
+a type error. Every other archetype requires it. (Neither of those two has a renderer
+yet; see the note above.)
 
 ### Draw it yourself
 

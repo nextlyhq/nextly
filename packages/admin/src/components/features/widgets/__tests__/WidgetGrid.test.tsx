@@ -14,6 +14,7 @@ import {
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
 
+import { coreDrawsArchetype } from "../outcome";
 import { WidgetGrid } from "../WidgetGrid";
 
 let mockBranding: AdminBranding | undefined;
@@ -46,6 +47,32 @@ function renderGrid() {
   );
   return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
 }
+
+/**
+ * An archetype core cannot draw in THIS release, derived rather than named.
+ *
+ * Several cases below need a widget nothing can render — to prove the grid does
+ * not spend a query on it, does not claim freshness for it, and still counts it
+ * as failed. Naming one (`list`, until it gained a body) makes those cases go
+ * quietly wrong the day that archetype lands: they keep passing while testing
+ * something else entirely. Asking the renderer table keeps them pointed at
+ * whatever is genuinely undrawn.
+ */
+// Listed here rather than imported: `nextly/config` publishes the archetype
+// VOCABULARY as a type only, and is deliberately almost free of runtime values.
+// The names are stable; which of them core can draw is the part that moves, and
+// that is asked of `coreDrawsArchetype` below.
+const HOST_DRAWN_ARCHETYPES = ["metric", "table", "list", "text", "actions"];
+
+const UNDRAWABLE = HOST_DRAWN_ARCHETYPES.find(
+  archetype => !coreDrawsArchetype(archetype)
+);
+
+it("has an archetype core cannot draw, which several cases below need", () => {
+  // Stated as its own case so that when core draws everything, this fails with
+  // a sentence instead of leaving the cases below silently vacuous.
+  expect(UNDRAWABLE).toBeDefined();
+});
 
 function brandingWith(widgets: unknown[]): AdminBranding {
   return {
@@ -228,7 +255,7 @@ describe("WidgetGrid — collection and gating", () => {
       {
         id: "acme/recent",
         title: "Recent posts",
-        archetype: "list",
+        archetype: UNDRAWABLE,
         query: { source: "collection:posts", op: "list" },
       },
     ]);
@@ -254,7 +281,7 @@ describe("WidgetGrid — collection and gating", () => {
       {
         id: "acme/recent",
         title: "Recent posts",
-        archetype: "list",
+        archetype: UNDRAWABLE,
         query: { source: "collection:posts", op: "list" },
       },
       {
@@ -291,7 +318,7 @@ describe("WidgetGrid — collection and gating", () => {
       {
         id: "acme/recent",
         title: "Recent posts",
-        archetype: "list",
+        archetype: UNDRAWABLE,
         component: "@acme/admin#Recent",
         query: { source: "collection:posts", op: "list" },
       },
@@ -304,6 +331,60 @@ describe("WidgetGrid — collection and gating", () => {
 
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
     expect(screen.getByText("recent body")).toBeInTheDocument();
+  });
+
+  it("draws a LIST widget end to end, from declaration to rows", async () => {
+    // The second host-drawn archetype, through the whole path: a declarative
+    // contribution with no component, its query batched, the `list` arm of the
+    // response validated, and the rows drawn from the fields it selected.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        defaultSize: "md",
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "slug"],
+          limit: 5,
+        },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: [
+              { title: "First post", slug: "first-post" },
+              { title: "Second post", slug: "second-post" },
+            ],
+          },
+        },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-list-row")).toHaveLength(2)
+    );
+    expect(screen.getByText("First post")).toBeInTheDocument();
+    expect(screen.getByText("second-post")).toBeInTheDocument();
+    // And the select reached the server as declared, so the rows are drawn from
+    // fields the query actually asked for.
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [
+        {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "slug"],
+          limit: 5,
+        },
+      ],
+    });
   });
 
   it("puts a registered widget's query in the same batch as a contributed one", async () => {
@@ -793,7 +874,7 @@ describe("WidgetGrid — accessibility", () => {
     mockBranding = brandingWith([
       {
         id: "listy",
-        archetype: "list",
+        archetype: UNDRAWABLE,
         title: "Recent",
         query: { source: "collection:posts", op: "list" },
       },

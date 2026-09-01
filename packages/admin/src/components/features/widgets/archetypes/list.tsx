@@ -1,0 +1,118 @@
+/**
+ * The `list` archetype: a few rows, each a line of text.
+ *
+ * WHICH field a row shows is taken from the query's `select`, in order: the
+ * first selected field is the row's label and the second, when there is one, is
+ * the muted line under it. Everything after that is ignored.
+ *
+ * Derived from `select` rather than declared separately, because a second
+ * declaration would be a second answer to one question — the author has already
+ * said which fields this widget is about, and a `list: { primary, secondary }`
+ * block could disagree with it. It also means the widget cannot display a field
+ * it did not ask the server for, which keeps the card honest about its own
+ * query.
+ *
+ * A `list` widget that selects NOTHING is refused by name rather than guessed
+ * at. Without `select` the rows carry whatever the collection happens to hold,
+ * so core would be picking a key out of a document it knows nothing about — and
+ * the field it picked would change the day someone added a column.
+ *
+ * @module components/features/widgets/archetypes/list
+ */
+
+import type { ArchetypeBody } from "./types";
+
+/** How many rows a card of this size can show without becoming a table. */
+const MAX_ROWS = 5;
+
+/**
+ * One cell as text, or `undefined` when it is not something to print.
+ *
+ * Objects and arrays are DROPPED rather than stringified. `String({})` is
+ * "[object Object]", which is not a defect a reader can act on — it looks like
+ * data. A relationship, a repeater or a rich-text value all arrive here as
+ * objects, and this widget cannot draw any of them; saying nothing is better
+ * than saying that. The same reading `RecentEntriesWidget` had to be taught
+ * when its titles came back as objects.
+ *
+ * `null` and `undefined` are absent values, not text. `0` and `false` ARE text:
+ * a count of zero is a real answer and dropping it would make the row lie.
+ */
+function asText(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") return value.trim() === "" ? undefined : value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
+
+export const listBody: ArchetypeBody = (result, definition) => {
+  if (result.op !== "list") {
+    return {
+      ok: false,
+      message: `"${definition.title}" expected a list, but the query returned a ${result.op}.`,
+    };
+  }
+
+  const select = definition.query?.select ?? [];
+  const [labelField, detailField] = select;
+  if (!labelField) {
+    return {
+      ok: false,
+      message: `"${definition.title}" is a list widget whose query selects no fields, so there is nothing to show in each row.`,
+    };
+  }
+
+  if (result.items.length === 0) {
+    return {
+      ok: true,
+      node: (
+        <p
+          data-testid="widget-list-empty"
+          className="text-sm text-muted-foreground"
+        >
+          Nothing yet.
+        </p>
+      ),
+    };
+  }
+
+  const rows = result.items.slice(0, MAX_ROWS);
+
+  return {
+    ok: true,
+    node: (
+      <ul data-testid="widget-list" className="flex flex-col gap-2">
+        {rows.map((item, index) => {
+          const label = asText(item[labelField]);
+          const detail = detailField ? asText(item[detailField]) : undefined;
+          return (
+            <li
+              // The index, because a widget's rows have no identity core can
+              // rely on: `select` need not include a key, and two rows may be
+              // identical in the fields it did select. The list is replaced
+              // wholesale on every refetch and nothing in it is stateful or
+              // reorderable, so there is no state for a wrong key to strand.
+              key={index}
+              data-testid="widget-list-row"
+              className="flex min-w-0 flex-col gap-0.5"
+            >
+              <span className="truncate text-sm text-foreground">
+                {/* An em dash rather than an empty line, so a row whose label
+                    is absent or unprintable still occupies its place and the
+                    count of rows matches the count of results. */}
+                {label ?? "—"}
+              </span>
+              {detail !== undefined && (
+                <span className="truncate text-xs text-muted-foreground">
+                  {detail}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    ),
+  };
+};

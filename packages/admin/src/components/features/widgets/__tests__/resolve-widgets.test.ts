@@ -91,6 +91,10 @@ describe("resolveDashboardWidgets", () => {
   });
 
   it("keeps the contributed component when the registry names an archetype core cannot draw", () => {
+    // `table` because it has no renderer in this release; the point is an
+    // archetype core cannot draw, not that particular name. When `table` gains
+    // a body this must move to whichever archetype is still undrawn.
+    //
     // The population this resolver reads both channels FOR: an app that
     // registered a widget and also contributed it, which is how it got a card
     // before the registry was published at all. `WidgetDefinition` forbids
@@ -106,7 +110,7 @@ describe("resolveDashboardWidgets", () => {
         {
           id: "acme/recent",
           title: "Recent posts",
-          archetype: "list",
+          archetype: "table",
           defaultSize: "md",
           query: { source: "collection:posts", op: "list", limit: 5 },
         } as unknown as RegisteredWidgetMeta,
@@ -138,7 +142,7 @@ describe("resolveDashboardWidgets", () => {
         {
           id: "acme/recent",
           title: "Recent posts",
-          archetype: "list",
+          archetype: "table",
           defaultSize: "md",
           requiredPermission: "read-secrets",
           query: { source: "collection:posts", op: "list", limit: 5 },
