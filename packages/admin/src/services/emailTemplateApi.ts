@@ -14,6 +14,11 @@
  * ```
  */
 
+import type {
+  DraftPreviewRequest,
+  RenderedTemplate,
+} from "nextly/api/email-template-preview-types";
+
 import { fetcher } from "../lib/api/fetcher";
 import type {
   ActionResponse,
@@ -202,36 +207,29 @@ export async function previewTemplate(
 }
 
 /**
- * The fields the draft-preview route renders, and nothing more.
+ * The fields the draft-preview route renders — DERIVED from the schema the
+ * server validates against, never restated.
  *
- * Mirrors the route's own zod schema rather than reusing a template payload
- * type: a preview never writes, so sending a name, a slug or an id would hand
- * the endpoint input it has no use for, and widening this later would widen
- * what an unsaved draft can put on the wire.
+ * A hand-written mirror compiles happily while every request is rejected: add
+ * a required field on the server and nothing here fails until runtime. Taking
+ * the type from the canonical schema turns that into a build error, for the
+ * same reason the render itself has only one implementation — a contract with
+ * two definitions is one that drifts.
+ *
+ * A type-only import, so nothing of the server reaches the browser bundle, and
+ * the entry point it comes from pulls zod and nothing else.
  */
-export interface DraftPreviewTemplate {
-  subject: string;
-  htmlContent: string;
-  plainTextContent: string | null;
-  preheader: string | null;
-  useLayout: boolean;
-  kind: EmailTemplateKind;
-  layoutId: string | null;
-}
+export type DraftPreviewTemplate = DraftPreviewRequest["template"];
 
 /**
  * A rendered draft: the complete artifact, including the text part.
  *
+ * The server's own `RenderedTemplate`, so the field the browser-side preview
+ * used to guess at cannot be dropped here without the compiler noticing.
  * Distinct from `EmailTemplatePreviewResult`, which carries no `text` because
- * the saved-row preview predates the unified renderer. Narrowing this to match
- * it would discard the one field that tells an author whether the plain-text
- * alternative recipients receive is the one they wrote.
+ * the saved-row preview predates the unified renderer.
  */
-export interface DraftPreviewResult {
-  subject: string;
-  html: string;
-  text: string;
-}
+export type DraftPreviewResult = RenderedTemplate;
 
 /**
  * Render UNSAVED template fields through the server's composition.
