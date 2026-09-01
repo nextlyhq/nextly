@@ -54,6 +54,40 @@ describe("countByType", () => {
   });
 });
 
+describe("countByType, on a document the engine has not repaired", () => {
+  /*
+   * The form's value is whatever is stored, and `documentNodes` only checks
+   * that `nodes` is an array. A hand-recursive walk over that is a stack
+   * overflow waiting for a deep enough tree, and it renders during a component
+   * render — so it takes the admin down rather than reporting anything.
+   */
+  it("counts a tree far deeper than a recursive walk would survive", () => {
+    let node: Record<string, unknown> = { id: "leaf", type: "core/text" };
+    for (let i = 0; i < 20_000; i += 1) {
+      node = { id: `n${i}`, type: "core/box", slots: { children: [node] } };
+    }
+
+    const counts = countByType([node] as unknown as readonly BlockNode[]);
+
+    expect(counts.get("core/text")).toBe(1);
+  });
+
+  /*
+   * A cycle is not hypothetical for a stored value: the engine's own walk
+   * reports one rather than assuming it away, which is why this asks the engine
+   * instead of walking the slots itself. A hand-rolled recursion does not
+   * return from this input at all.
+   */
+  it("returns on a document that contains a cycle", () => {
+    const parent: Record<string, unknown> = { id: "p", type: "core/box" };
+    parent.slots = { children: [parent] };
+
+    const counts = countByType([parent] as unknown as readonly BlockNode[]);
+
+    expect(counts.get("core/box")).toBeGreaterThanOrEqual(1);
+  });
+});
+
 describe("totalBlocks", () => {
   it("sums every count", () => {
     expect(

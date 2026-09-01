@@ -12,7 +12,7 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/page-summary
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import { walkNodes, type BlockNode } from "@nextlyhq/blocks-engine";
 
 /**
  * The nodes a form value holds, for a value that may not hold any.
@@ -33,25 +33,42 @@ export function documentNodes(value: unknown): readonly BlockNode[] {
 }
 
 /**
- * Every block type in the tree with how many times it appears, in tree order.
+ * Every block type in the tree with how many times it appears.
+ *
+ * Walked by the ENGINE rather than by a traversal written here, and that is a
+ * correctness choice rather than a tidiness one. The value being counted is
+ * whatever is stored: `documentNodes` checks only that `nodes` is an array, so
+ * this runs over a shape nothing has repaired.
+ *
+ * A hand-written recursion over `slots` fails on that input in two ways, both
+ * measured. A deep enough tree exhausts the call stack — and it does so DURING
+ * A RENDER, so it takes the screen down rather than reporting anything. And a
+ * document containing a cycle never returns at all.
+ *
+ * `walkNodes` is iterative, it bounds itself by node count, and it reports a
+ * cycle rather than following it, because the walk is the only thing that can
+ * see one. Asking it means those three properties cannot be lost here by
+ * someone reintroducing an obvious-looking recursion.
  *
  * @param nodes - the document's top-level nodes
+ * @param maxNodes - the site's cap on how many nodes it will read
  * @returns a count per block type
  */
-export function countByType(nodes: readonly BlockNode[]): Map<string, number> {
+export function countByType(
+  nodes: readonly BlockNode[],
+  maxNodes?: number
+): Map<string, number> {
   const counts = new Map<string, number>();
-  const visit = (list: readonly BlockNode[]): void => {
-    for (const node of list) {
-      if (!node || typeof node.type !== "string") continue;
+  walkNodes(
+    // The walk takes a mutable array and does not write to it; the reading
+    // surfaces above hold their nodes as readonly, which is the stronger claim.
+    nodes as BlockNode[],
+    node => {
+      if (typeof node.type !== "string") return;
       counts.set(node.type, (counts.get(node.type) ?? 0) + 1);
-      // Children live under named slots, so a container's contents are counted
-      // too rather than the summary reporting only the top level.
-      for (const slot of Object.values(node.slots ?? {})) {
-        if (Array.isArray(slot)) visit(slot);
-      }
-    }
-  };
-  visit(nodes);
+    },
+    maxNodes === undefined ? {} : { maxNodes }
+  );
   return counts;
 }
 

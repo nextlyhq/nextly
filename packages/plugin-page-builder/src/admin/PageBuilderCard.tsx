@@ -137,8 +137,13 @@ export function PageBuilderCard({
   onOpen,
 }: PageBuilderCardProps) {
   const total = useMemo(
-    () => totalBlocks(countByType(documentNodes(document))),
-    [document]
+    // Counted under the SITE's cap rather than an unbounded read, so the number
+    // beside the page comes from the same bound the renderer reads under.
+    () =>
+      totalBlocks(
+        countByType(documentNodes(document), render.limits?.maxNodes)
+      ),
+    [document, render.limits?.maxNodes]
   );
 
   const empty = total === 0;
