@@ -1581,9 +1581,22 @@ function DropRefusalNotice({
       // the style inspector both skip it.
       {...{ [CHROME_ATTRIBUTE]: "" }}
       style={at === null ? undefined : { left: at.x, top: at.y }}
-      // Announced, because this is the one thing in a drag that a sighted
-      // author learns from the cursor and everyone else learns from nothing.
-      role="status"
+      /*
+       * NOT announced, and that matches {@link DropIndicator} rather than
+       * differing from it.
+       *
+       * This describes a POINTER gesture, and the equivalent keyboard move
+       * reports its own outcome through the editor's single live region. A
+       * second region describing the same act is read alongside the first, so
+       * an author performing one move hears it twice — which is why nothing
+       * else in this drag announces either.
+       *
+       * The accessible route to this information is not missing, it is
+       * elsewhere: a block is selected by clicking and moved with `alt+Arrow`,
+       * and a refused keyboard move is announced there. Adding a live region
+       * here would speak to someone who is not the one dragging.
+       */
+      aria-hidden="true"
     >
       <span className="nx-drop-refusal__why">{headline}</span>
       {takes === null ? null : (

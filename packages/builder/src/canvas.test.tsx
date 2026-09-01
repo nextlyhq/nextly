@@ -2694,4 +2694,38 @@ describe("the drag in flight is drawn on the canvas", () => {
       seen.filter(record => record.attributeName === DRAG_SOURCE_ATTRIBUTE)
     ).toHaveLength(0);
   });
+
+  it("does not announce the refusal, because the keyboard move already does", async () => {
+    /*
+     * The drop indicator is `aria-hidden` for a stated reason: the equivalent
+     * keyboard move reports its own outcome through the editor's single live
+     * region, so a second element describing the same pointer gesture is read
+     * alongside the first. This message is the same kind of chrome and has to
+     * make the same choice, or one author's move is announced twice.
+     *
+     * Asserted on the absence of a live region rather than on the attribute
+     * alone, so swapping `aria-hidden` for `role="status"` — or for any other
+     * implicit live role — fails here rather than passing on a technicality.
+     */
+    const { container } = draw(
+      dragging({
+        draggingId: "leaf",
+        refusal: {
+          regionId: "box::children",
+          parentId: "box",
+          reason: "wrong-parent",
+          permitted: ["acme/twice"],
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    const notice = container.querySelector(".nx-drop-refusal");
+    // Control: the element must be FOUND, or the assertions below are
+    // satisfied by a selector that matches nothing.
+    expect(notice).not.toBeNull();
+    expect(notice?.getAttribute("aria-hidden")).toBe("true");
+    expect(notice?.getAttribute("role")).toBeNull();
+    expect(notice?.getAttribute("aria-live")).toBeNull();
+  });
 });
