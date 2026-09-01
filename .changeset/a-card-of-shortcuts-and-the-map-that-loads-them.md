@@ -37,8 +37,8 @@ A plugin declares a card of shortcuts with no UI code of its own:
   archetype: "actions",
   defaultSize: "sm",
   actions: [
-    { label: "New post", href: "/admin/posts/new" },
-    { label: "Invite user", href: "/admin/users/new", requiredPermission: "create-users" },
+    { label: "New post", href: "/admin/collections/posts/create" },
+    { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
     { label: "Docs", href: "https://nextly.dev/docs", external: true },
   ],
 }

@@ -255,21 +255,25 @@ export interface PluginAdminActionsWidget extends PluginAdminWidgetBase {
 }
 
 /**
- * Every queryless archetype has an arm above, checked by the compiler.
+ * The queryless archetypes NO arm above covers -- `never` while all are armed.
  *
  * The arms ENUMERATE because each carries a different payload -- prose for one,
  * shortcuts for the other -- so they cannot be derived from the vocabulary the
  * way `DeclarativeWidgetArchetype` is. Adding a third queryless archetype to
- * core must therefore be a decision about what it carries, and this is what
- * refuses to let that decision be skipped.
+ * core must therefore be a decision about what it carries, and this type is
+ * what makes skipping that decision observable.
+ *
+ * Exported only so `__tests__/queryless-arms.test-d.ts` can ASSERT it is
+ * `never`. This was previously stated here as
+ * `type _Unused = <this> extends never ? true : never`, which enforced nothing:
+ * a standalone alias resolving to `never` is a perfectly valid unused alias and
+ * `tsc` reports no diagnostic for it, so the guard passed with an unarmed
+ * archetype present. Only an assertion the checker EVALUATES separates the two.
  */
-type UnarmedQuerylessArchetype = Exclude<
+export type UnarmedQuerylessArchetype = Exclude<
   QuerylessWidgetArchetype,
   PluginAdminTextWidget["archetype"] | PluginAdminActionsWidget["archetype"]
 >;
-type _EveryQuerylessArchetypeHasAnArm = UnarmedQuerylessArchetype extends never
-  ? true
-  : never;
 
 /** @experimental A widget the HOST draws without asking for data. */
 export type PluginAdminQuerylessWidget =

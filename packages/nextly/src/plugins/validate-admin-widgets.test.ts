@@ -23,6 +23,14 @@ afterEach(() => {
   resetArchetypeWarnings();
 });
 
+/**
+ * A real admin route, so the fixtures do not teach a URL that resolves nowhere.
+ *
+ * The admin registers entry creation as `/admin/collections/[slug]/create`; the
+ * `/admin/<collection>/new` shape these fixtures once used is not a route.
+ */
+const NEW_ENTRY_HREF = "/admin/collections/posts/create";
+
 const withWidget = (widget: unknown): PluginDefinition =>
   ({
     name: "@acme/p",
@@ -296,6 +304,58 @@ describe("contributed widgets are validated at boot", () => {
     ).toThrow(NextlyError);
   });
 
+  it("refuses a malformed shortcut even when a component is ALSO supplied", () => {
+    // The per-action rule ran only as the fallback for a widget that described
+    // no component, so naming one skipped it -- and a component on an `actions`
+    // widget is a FALLBACK for an admin too old to draw the archetype, not a
+    // replacement for it. A current admin draws the shortcuts itself, from the
+    // same malformed array the gate declined to read, and renders the blank
+    // link the check beside this one exists to prevent.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          component: "@acme/p/admin#Shortcuts",
+          actions: [{}],
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("still accepts a COMPLETE shortcut list beside a component", () => {
+    // The control for the refusal above. A gate that refused every `actions`
+    // widget carrying a component would satisfy that assertion while making the
+    // fallback -- the whole reason a plugin ships one -- undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          component: "@acme/p/admin#Shortcuts",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("leaves a DATA archetype's component fallback alone when it has no query", () => {
+    // The bound on that refusal. Core draws a queryless archetype from the
+    // declaration unconditionally, so the declaration has to be sound there;
+    // a `metric` missing its query is a card core reports as undrawable, and
+    // the component is then the body that actually renders. Holding the two
+    // halves to one rule would reject a widget which draws correctly today.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          component: "@acme/p/admin#Revenue",
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a contributed actions widget whose shortcuts are complete", () => {
     // The control. A gate that refused every actions widget would satisfy the
     // assertions above while making the archetype undeclarable.
@@ -304,7 +364,7 @@ describe("contributed widgets are validated at boot", () => {
         withWidget({
           id: "acme/shortcuts",
           archetype: "actions",
-          actions: [{ label: "New post", href: "/admin/posts/new" }],
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
         }),
       ])
     ).not.toThrow();
