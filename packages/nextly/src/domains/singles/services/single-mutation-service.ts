@@ -1857,21 +1857,23 @@ export class SingleMutationService extends BaseService {
               companion &&
               companionPhysicallyExists &&
               writeLocale !== undefined
-                ? (
-                    await readCompanionLocaleStatusAll(
-                      tx.getDrizzle<
-                        Parameters<typeof readCompanionLocaleStatusAll>[0]
-                      >(),
+                ? // The wildcard transaction already read every locale's status
+                  // above, before any companion write, so the map answers this
+                  // without a second round trip while the row lock is held.
+                  // It is only populated when the companion carries `_status`;
+                  // without one, ask the canonical probe.
+                  companion.hasStatus
+                  ? priorStatuses.has(writeLocale)
+                  : await companionRowExists(
+                      tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
                       companion.table,
                       existingDoc.id,
-                      // Resolved, never left to the query: an unresolved
-                      // relation aborts the whole transaction on PostgreSQL.
+                      writeLocale,
                       cachedCompanionReadiness(
                         this.adapter,
                         companion.companionTableName
                       )
                     )
-                  ).has(writeLocale)
                 : false;
 
             if (

@@ -112,6 +112,7 @@ import {
   COMPANION_STATUS_COLUMN,
 } from "../../i18n/companion-columns";
 import {
+  companionRowExists,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
   readCompanionLocaleStatusAll,
@@ -1861,32 +1862,6 @@ export class CollectionMutationService extends BaseService {
    * the companion `_locales` table is not in the Drizzle schema, and the CRUD
    * helpers camelCase result keys, which would rename `_status`.
    */
-  /**
-   * Whether this locale has a companion row at all.
-   *
-   * Distinct from {@link readCompanionStatus}, which answers `null` both for an
-   * absent row and for a present row whose `_status` is not a string. The
-   * difference decides whether a promoted write may clear a translation or
-   * would be inventing one, so the two questions cannot share an answer.
-   */
-  private async companionRowExists(
-    tx: TransactionContext,
-    companionTableName: string,
-    entryId: string,
-    locale: string
-  ): Promise<boolean> {
-    const isMysqlDialect = this.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await tx.execute(
-      `SELECT 1 FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
-      [entryId, locale]
-    );
-    return rows.length > 0;
-  }
-
   private async readCompanionStatus(
     tx: TransactionContext,
     companionTableName: string,
@@ -6812,13 +6787,24 @@ export class CollectionMutationService extends BaseService {
           // Whether the promoted locale already HAS a row decides what the
           // promotion is allowed to do with it. Read before the upsert, because
           // the upsert is what would change the answer.
-          const promotedLocaleRowExists =
+          const promotedLocaleCompanion =
             sweepAllLocales && promotedDraft && localizedUpdate
-              ? await this.companionRowExists(
-                  tx,
-                  localizedUpdate.companionTableName,
+              ? await this.fileManager.loadCompanionSchema(
+                  params.collectionName,
+                  tx.getDrizzle()
+                )
+              : null;
+          const promotedLocaleRowExists =
+            promotedLocaleCompanion && localizedUpdate
+              ? await companionRowExists(
+                  tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
+                  promotedLocaleCompanion.table,
                   params.entryId,
-                  localizedUpdate.writeLocale
+                  localizedUpdate.writeLocale,
+                  cachedCompanionReadiness(
+                    this.adapter,
+                    promotedLocaleCompanion.companionTableName
+                  )
                 )
               : false;
 

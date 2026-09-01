@@ -159,14 +159,15 @@ describe.each(getConfiguredTestDialects())(
 
       // An edit the author saved is either readable or still pending. Which of
       // the two is an implementation choice; that it is one of them is not.
-      const readable = await readSiteName(t, "en");
-      const stillPending = JSON.stringify(await pendingDrafts(t)).includes(
+      // Separating assertions: a wildcard that refused, or quietly became a
+      // no-op leaving the draft pending, would satisfy "nothing was lost" while
+      // never exercising the promotion this test exists for.
+      expect(result.success).toBe(true);
+      expect(await readSiteName(t, "en")).toBe("EN pending");
+      // The draft was consumed BECAUSE its content landed, not discarded.
+      expect(JSON.stringify(await pendingDrafts(t))).not.toContain(
         "EN pending"
       );
-      expect(readable === "EN pending" || stillPending).toBe(true);
-
-      // A refusal is a legitimate outcome, but only if it keeps the work.
-      if (!result.success) expect(stillPending).toBe(true);
     });
 
     it("CONTROL: the same edit survives a publish that names the language", async () => {

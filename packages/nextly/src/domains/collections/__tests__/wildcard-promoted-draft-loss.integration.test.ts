@@ -156,10 +156,13 @@ describe.each(getConfiguredTestDialects())(
         { status: "published" }
       );
 
-      const readable = await readTitle(t, id, "en");
-      const stillPending = (await pendingDrafts(t, id)).includes("EN pending");
-      expect(readable === "EN pending" || stillPending).toBe(true);
-      if (!result.success) expect(stillPending).toBe(true);
+      // Separating assertions: a wildcard that refused, or quietly became a
+      // no-op leaving the draft pending, would satisfy "nothing was lost" while
+      // never exercising the promotion this test exists for.
+      expect(result.success).toBe(true);
+      expect(await readTitle(t, id, "en")).toBe("EN pending");
+      // The draft was consumed BECAUSE its content landed, not discarded.
+      expect(await pendingDrafts(t, id)).not.toContain("EN pending");
     });
 
     it("CONTROL: the same edit survives a publish that names the language", async () => {
@@ -326,11 +329,14 @@ describe.each(getConfiguredTestDialects())(
         { status: "published" }
       );
 
-      // The clear either landed or is still pending; what it may not do is
-      // vanish while the old value goes on being served.
+      // The clear must LAND, not merely fail to be lost: a refusal or a no-op
+      // that left the draft pending would satisfy a disjunction while the old
+      // translation went on being served.
       const readable = await readTitle(t, id, "en");
-      const stillPending = (await pendingDrafts(t, id)) !== "[]";
-      expect(readable !== "EN live" || stillPending).toBe(true);
+      expect(
+        readable === null || readable === undefined || readable === ""
+      ).toBe(true);
+      expect(await pendingDrafts(t, id)).toBe("[]");
     });
 
     it("CONTROL: the language that does have a translation is unaffected", async () => {
