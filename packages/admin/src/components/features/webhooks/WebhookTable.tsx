@@ -15,7 +15,10 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  useTableColumns,
+} from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { usePagination } from "@admin/hooks/usePagination";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
@@ -38,6 +41,119 @@ export interface WebhookTableProps {
   onViewDeliveries: (webhook: WebhookEndpointSummary) => void;
 }
 
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["name"]);
+
+/** Static column definitions declared at module scope to avoid re-creation on render. */
+const WEBHOOK_COLUMNS: NextlyColumn<WebhookEndpointSummary>[] = [
+  {
+    name: "name",
+    header: "Name",
+    cell: ({ row }) => (
+      <span className="font-medium text-foreground">{row.name}</span>
+    ),
+  },
+  {
+    name: "url",
+    header: "Payload URL",
+    cell: ({ row }) => (
+      <span
+        className="block max-w-80 truncate text-sm text-muted-foreground"
+        title={row.url}
+      >
+        {row.url}
+      </span>
+    ),
+  },
+  {
+    name: "enabled",
+    header: "Status",
+    cell: ({ row }) => <EndpointStatusBadge enabled={row.enabled} />,
+  },
+  {
+    name: "eventTypes",
+    header: "Events",
+    hideOnMobile: true,
+    cell: ({ row }) => (
+      <span
+        className="text-sm text-muted-foreground"
+        title={row.eventTypes.join(", ")}
+      >
+        {describeEvents(row.eventTypes)}
+      </span>
+    ),
+  },
+  {
+    name: "secretPrefix",
+    header: "Secret",
+    hideOnMobile: true,
+    cell: ({ row }) => (
+      <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+        {row.secretPrefix}
+        {"•".repeat(6)}
+      </code>
+    ),
+  },
+  {
+    name: "createdAt",
+    header: "Created",
+    hideOnMobile: true,
+    cell: ({ row }) => (
+      <span className="text-sm text-muted-foreground">
+        {new Date(row.createdAt).toLocaleDateString()}
+      </span>
+    ),
+  },
+];
+
+/** Builds the action items available on each row based on granted permissions. */
+function buildWebhookRowActions(
+  webhook: WebhookEndpointSummary,
+  handlers: Omit<WebhookTableProps, "data" | "isLoading">
+): RowAction<WebhookEndpointSummary>[] {
+  const actions: RowAction<WebhookEndpointSummary>[] = [];
+  if (handlers.canViewDeliveries) {
+    actions.push({
+      id: "deliveries",
+      label: "View deliveries",
+      icon: <List className="h-4 w-4" />,
+      onSelect: () => handlers.onViewDeliveries(webhook),
+    });
+  }
+  if (handlers.canUpdate) {
+    actions.push(
+      {
+        id: "edit",
+        label: "Edit",
+        icon: <Edit className="h-4 w-4" />,
+        onSelect: () => handlers.onEdit(webhook),
+      },
+      {
+        id: "toggle",
+        label: webhook.enabled ? "Disable" : "Enable",
+        icon: <Power className="h-4 w-4" />,
+        onSelect: () => handlers.onToggleEnabled(webhook),
+      },
+      {
+        id: "test",
+        label: "Send test event",
+        icon: <Send className="h-4 w-4" />,
+        onSelect: () => handlers.onTest(webhook),
+      }
+    );
+  }
+  if (handlers.canDelete) {
+    actions.push({
+      id: "delete",
+      label: "Delete",
+      icon: <Trash2 className="h-4 w-4" />,
+      destructive: true,
+      onSelect: () => handlers.onDelete(webhook),
+    });
+  }
+  return actions;
+}
+
 export const WebhookTable: React.FC<WebhookTableProps> = ({
   data,
   isLoading = false,
@@ -58,69 +174,12 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
     resetPage();
   }, [search, resetPage]);
 
-  const columns = useMemo(
-    (): NextlyColumn<WebhookEndpointSummary>[] => [
-      {
-        name: "name",
-        header: "Name",
-        cell: ({ row }) => (
-          <span className="font-medium text-foreground">{row.name}</span>
-        ),
-      },
-      {
-        name: "url",
-        header: "Payload URL",
-        cell: ({ row }) => (
-          <span
-            className="block max-w-80 truncate text-sm text-muted-foreground"
-            title={row.url}
-          >
-            {row.url}
-          </span>
-        ),
-      },
-      {
-        name: "enabled",
-        header: "Status",
-        cell: ({ row }) => <EndpointStatusBadge enabled={row.enabled} />,
-      },
-      {
-        name: "eventTypes",
-        header: "Events",
-        hideOnMobile: true,
-        cell: ({ row }) => (
-          <span
-            className="text-sm text-muted-foreground"
-            title={row.eventTypes.join(", ")}
-          >
-            {describeEvents(row.eventTypes)}
-          </span>
-        ),
-      },
-      {
-        name: "secretPrefix",
-        header: "Secret",
-        hideOnMobile: true,
-        cell: ({ row }) => (
-          <code className="rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
-            {row.secretPrefix}
-            {"•".repeat(6)}
-          </code>
-        ),
-      },
-      {
-        name: "createdAt",
-        header: "Created",
-        hideOnMobile: true,
-        cell: ({ row }) => (
-          <span className="text-sm text-muted-foreground">
-            {new Date(row.createdAt).toLocaleDateString()}
-          </span>
-        ),
-      },
-    ],
-    []
-  );
+  // Resolves persisted column visibility while ensuring pinned webhook names remain visible.
+  const { columns, columnsControl } = useTableColumns({
+    storageKey: "webhooks",
+    columns: WEBHOOK_COLUMNS,
+    alwaysVisible: ALWAYS_VISIBLE,
+  });
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -146,49 +205,17 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
   }, [page, totalPages, setPage]);
 
   const rowActions = useCallback(
-    (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] => {
-      const actions: RowAction<WebhookEndpointSummary>[] = [];
-      if (canViewDeliveries) {
-        actions.push({
-          id: "deliveries",
-          label: "View deliveries",
-          icon: <List className="h-4 w-4" />,
-          onSelect: () => onViewDeliveries(webhook),
-        });
-      }
-      if (canUpdate) {
-        actions.push(
-          {
-            id: "edit",
-            label: "Edit",
-            icon: <Edit className="h-4 w-4" />,
-            onSelect: () => onEdit(webhook),
-          },
-          {
-            id: "toggle",
-            label: webhook.enabled ? "Disable" : "Enable",
-            icon: <Power className="h-4 w-4" />,
-            onSelect: () => onToggleEnabled(webhook),
-          },
-          {
-            id: "test",
-            label: "Send test event",
-            icon: <Send className="h-4 w-4" />,
-            onSelect: () => onTest(webhook),
-          }
-        );
-      }
-      if (canDelete) {
-        actions.push({
-          id: "delete",
-          label: "Delete",
-          icon: <Trash2 className="h-4 w-4" />,
-          destructive: true,
-          onSelect: () => onDelete(webhook),
-        });
-      }
-      return actions;
-    },
+    (webhook: WebhookEndpointSummary): RowAction<WebhookEndpointSummary>[] =>
+      buildWebhookRowActions(webhook, {
+        canUpdate,
+        canDelete,
+        canViewDeliveries,
+        onEdit,
+        onToggleEnabled,
+        onTest,
+        onDelete,
+        onViewDeliveries,
+      }),
     [
       canUpdate,
       canDelete,
@@ -209,6 +236,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         placeholder: "Search endpoints by name or URL...",
         isLoading,
       }}
+      columnsControl={columnsControl}
       columns={columns}
       rows={paginated}
       loading={isLoading}
