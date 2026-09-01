@@ -1046,7 +1046,16 @@ async function handleServiceRequest(
     // Branch on the parsed method rather than the HTTP verb: the trigger
     // accepts GET as well, so a verb test would send a list request to the
     // runner and drain the queue as a side effect of reading it.
-    return method === "listJobs" ? listJobsRoute(req) : runJobsRoute(req);
+    // Matched explicitly, both ways. A ternary would make the SIDE-EFFECTING
+    // runner the default, so a jobs route added later — or a method name
+    // mistyped in the parser — would drain the queue instead of failing. The
+    // dangerous operation must never be what an unrecognised name falls into.
+    if (method === "listJobs") return listJobsRoute(req);
+    if (method === "runJobs") return runJobsRoute(req);
+    throw NextlyError.notFound({
+      message: `Unknown jobs operation: ${method}`,
+      logContext: { service: "jobs", method },
+    });
   }
 
   // ==================== PREVIEW LINKS DIRECT DISPATCH ====================

@@ -54,6 +54,7 @@ export const nextlyJobsSqlite = sqliteTable(
   },
   table => [
     index("nextly_jobs_due_idx").on(table.state, table.runAt),
+    index("nextly_jobs_recent_idx").on(table.updatedAt),
     uniqueIndex("nextly_jobs_dedupe_idx").on(table.dedupeKey),
   ]
 );

@@ -38,14 +38,54 @@ export type JobDisplayStatus =
 export interface JobStatusInput {
   state: "pending" | "running" | "done" | "failed";
   attemptCount: number;
+  /**
+   * When this runner's lease expires, or `null` when nothing holds one.
+   *
+   * Load-bearing, and not obvious: `claim` takes the lease WITHOUT changing
+   * state, so a job executing right now still reads `pending`. The state column
+   * therefore never says "running" for work the runner is doing, and the lease
+   * is the only evidence that it is.
+   */
+  lockedUntil: Date | null;
 }
 
 /**
- * `attemptCount` is what separates waiting from retrying, because the state
- * column cannot: `finalize` writes `pending` for a retry, so the count is the
- * only surviving evidence that an attempt already happened.
+ * Read in this order, and the order is the whole correctness argument.
+ *
+ * A LIVE LEASE first, because it is the only signal that work is happening:
+ * `claim` writes `lockedBy`/`lockedUntil` and leaves the state alone, and
+ * `markAttempt` raises the count BEFORE the handler is invoked. So an in-flight
+ * first attempt is `pending` with a count of 1 — which, read by count alone,
+ * reports as "retrying" and tells an operator a healthy job has already failed.
+ *
+ * An EXPIRED lease is not a running job. It is a runner that died holding one,
+ * and the row is waiting to be reclaimed — so the comparison is against `now`
+ * rather than against the field being present.
+ *
+ * Reading the lease first is SAFE against a terminal row because `finalize`
+ * clears `lockedBy`/`lockedUntil` on every outcome — retry and terminal alike.
+ * A finished job therefore never carries a live lease, so the ordering cannot
+ * report one as running. That is a guarantee of the repository rather than of
+ * this function, which is why it is named here: if `finalize` ever stopped
+ * clearing the lock, this ordering would need to invert.
+ *
+ * `attemptCount` last, because it is what separates waiting from retrying once
+ * nothing is executing: `finalize` writes `pending` for a retry, so the count
+ * is the only surviving evidence that an attempt already happened.
+ *
+ * `now` is a parameter rather than read from the clock inside, so a caller
+ * rendering a page and a test asserting one both control it.
  */
-export function jobDisplayStatus(row: JobStatusInput): JobDisplayStatus {
+export function jobDisplayStatus(
+  row: JobStatusInput,
+  now: Date
+): JobDisplayStatus {
+  if (row.lockedUntil !== null && row.lockedUntil.getTime() > now.getTime()) {
+    return "running";
+  }
+  // Kept for completeness: nothing writes this state today, and a status
+  // derivation that silently reported a stored value as something else would be
+  // the harder defect to find if something starts.
   if (row.state === "running") return "running";
   if (row.state === "done") return "succeeded";
   if (row.state === "failed") return "failed";

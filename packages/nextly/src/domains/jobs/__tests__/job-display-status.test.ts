@@ -15,38 +15,63 @@ import {
   type JobStatusInput,
 } from "../job-display-status";
 
+const NOW = new Date("2026-09-01T12:00:00.000Z");
+const LIVE = new Date(NOW.getTime() + 30_000);
+const EXPIRED = new Date(NOW.getTime() - 30_000);
+
 const row = (over: Partial<JobStatusInput> = {}): JobStatusInput => ({
   state: "pending",
   attemptCount: 0,
+  lockedUntil: null,
   ...over,
 });
+
+const status = (over: Partial<JobStatusInput> = {}) =>
+  jobDisplayStatus(row(over), NOW);
 
 describe("what a job row means to a person", () => {
   it("separates a job that has never run from one that is retrying", () => {
     // Same state. Only the count differs, which is the whole mechanism.
-    expect(jobDisplayStatus(row({ state: "pending", attemptCount: 0 }))).toBe(
-      "waiting"
-    );
-    expect(jobDisplayStatus(row({ state: "pending", attemptCount: 2 }))).toBe(
-      "retrying"
-    );
+    expect(status({ state: "pending", attemptCount: 0 })).toBe("waiting");
+    expect(status({ state: "pending", attemptCount: 2 })).toBe("retrying");
   });
 
   it("reports a spent job as failed, not as retrying", () => {
     // A terminal failure also carries attempts. Reading the count first would
     // call this "retrying" and bury a dead job among self-healing noise.
-    expect(jobDisplayStatus(row({ state: "failed", attemptCount: 5 }))).toBe(
-      "failed"
-    );
+    expect(status({ state: "failed", attemptCount: 5 })).toBe("failed");
   });
 
   it("reports the remaining stored states", () => {
-    expect(jobDisplayStatus(row({ state: "running", attemptCount: 1 }))).toBe(
-      "running"
-    );
-    expect(jobDisplayStatus(row({ state: "done", attemptCount: 1 }))).toBe(
-      "succeeded"
-    );
+    expect(status({ state: "running", attemptCount: 1 })).toBe("running");
+    expect(status({ state: "done", attemptCount: 1 })).toBe("succeeded");
+  });
+
+  /*
+   * The case the state column CANNOT express. `claim` takes the lease without
+   * touching state and `markAttempt` raises the count before the handler runs,
+   * so a healthy first attempt in flight is `pending` with a count of 1 — which
+   * by count alone reads as "retrying" and tells an operator a working job has
+   * already failed once.
+   */
+  it("reports work in flight as running, not as retrying", () => {
+    expect(
+      status({ state: "pending", attemptCount: 1, lockedUntil: LIVE })
+    ).toBe("running");
+  });
+
+  /*
+   * An EXPIRED lease is a runner that died, not a job executing. The row is
+   * waiting to be reclaimed, so the comparison must be against the clock rather
+   * than against the field merely being set.
+   */
+  it("does not call an expired lease running", () => {
+    expect(
+      status({ state: "pending", attemptCount: 1, lockedUntil: EXPIRED })
+    ).toBe("retrying");
+    expect(
+      status({ state: "pending", attemptCount: 0, lockedUntil: EXPIRED })
+    ).toBe("waiting");
   });
 
   /*

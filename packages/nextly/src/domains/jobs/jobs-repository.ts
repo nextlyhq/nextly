@@ -126,6 +126,16 @@ export interface JobRow {
   updatedAt: Date;
 }
 
+/**
+ * A job as a monitor needs it: every column except `input`.
+ *
+ * Derived from {@link JobRow} rather than restated, so a column added there is
+ * carried here and one REMOVED is a compile error rather than a silent gap.
+ * `input` is omitted because it is arbitrary caller data of unbounded size that
+ * no list consumer reads.
+ */
+export type JobSummaryRow = Omit<JobRow, "input">;
+
 export interface NewJob {
   slug: string;
   input: unknown;
@@ -301,8 +311,24 @@ export class JobsRepository {
     limit: number;
     /** Restrict to these states. Omitted means every state. */
     states?: readonly JobState[];
-  }): Promise<JobRow[]> {
-    return this.db.select<JobRow>(JOBS, {
+  }): Promise<JobSummaryRow[]> {
+    // PROJECTED, deliberately. `input` is arbitrary caller data of unbounded
+    // size and no consumer of this method reads it, so selecting it would let
+    // anyone opening a monitor pull up to `limit` complete payloads out of the
+    // database and into memory for nothing.
+    return this.db.select<JobSummaryRow>(JOBS, {
+      columns: [
+        "id",
+        "slug",
+        "state",
+        "attemptCount",
+        "runAt",
+        "nextAttemptAt",
+        "lockedUntil",
+        "lastError",
+        "createdAt",
+        "updatedAt",
+      ],
       ...(input.states === undefined || input.states.length === 0
         ? {}
         : {

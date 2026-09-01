@@ -25,13 +25,14 @@
  * @module api/jobs-list-route
  */
 
-import { requireAnyPermission } from "../auth/middleware";
 import { container } from "../di";
 import { jobDisplayStatus } from "../domains/jobs/job-display-status";
 import type { JobsRepository } from "../domains/jobs/jobs-repository";
 import { getCachedNextly } from "../init";
 
-import { respondData } from "./response-shapes";
+import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
+import { respondList } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 
 /**
@@ -66,26 +67,61 @@ function readLimit(request: Request): number {
  * use for it.
  */
 export const listJobsRoute = withErrorHandler(async (request: Request) => {
-  await requireAnyPermission(request, [
+  /*
+   * `requireRouteAnyPermission`, not `requireAnyPermission`. The latter RETURNS
+   * an `ErrorResponse` rather than throwing, so awaiting it and discarding the
+   * result authorizes nobody — an unauthorized caller walks straight past it to
+   * the read. The throwing wrapper exists so a route cannot make that mistake,
+   * and it is the one every other authenticated route here uses.
+   */
+  await requireRouteAnyPermission(request, [
     { action: "manage", resource: "background-jobs" },
   ]);
 
   await getCachedNextly();
   const repository = container.get<JobsRepository>("jobsRepository");
-  const rows = await repository.listRecent({ limit: readLimit(request) });
+  const limit = readLimit(request);
+  const rows = await repository.listRecent({ limit });
+  const now = new Date();
 
-  return respondData({
-    jobs: rows.map(row => ({
-      id: row.id,
-      slug: row.slug,
-      state: row.state,
-      status: jobDisplayStatus(row),
-      attemptCount: row.attemptCount,
-      lastError: row.lastError,
-      runAt: row.runAt,
-      nextAttemptAt: row.nextAttemptAt,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    })),
-  });
+  const items = rows.map(row => ({
+    id: row.id,
+    slug: row.slug,
+    state: row.state,
+    status: jobDisplayStatus(row, now),
+    attemptCount: row.attemptCount,
+    lastError: row.lastError,
+    runAt: row.runAt,
+    nextAttemptAt: row.nextAttemptAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+
+  /*
+   * The canonical list envelope, not a shape invented for this endpoint. A
+   * generic consumer reads `items` and `meta` from every list in this API, and
+   * a bespoke `{ jobs }` would be the one it cannot.
+   *
+   * `total` is the page's own length and the page count is 1, stated honestly
+   * rather than fabricated: this endpoint answers "the most recent N", the seam
+   * it reads through offers no count, and a second query for one would produce
+   * a total that can disagree with the page beside it. A caller needing true
+   * pagination should ask for it rather than infer it from a number that looks
+   * like one.
+   */
+  return respondList(
+    items,
+    {
+      total: items.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    },
+    // Permission-scoped, and `lastError` is arbitrary internal text. Without
+    // this a browser or shared cache can replay the body after logout, or to
+    // another session, without authorization running again.
+    { headers: PRIVATE_NO_STORE_HEADERS }
+  );
 });
