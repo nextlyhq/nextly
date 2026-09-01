@@ -31,6 +31,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { listBody } from "./archetypes/list";
 import { metricBody } from "./archetypes/metric";
 import type { ArchetypeBody } from "./archetypes/types";
 
@@ -43,6 +44,7 @@ import type { ArchetypeBody } from "./archetypes/types";
  */
 const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
   metric: metricBody,
+  list: listBody,
 };
 
 /**
