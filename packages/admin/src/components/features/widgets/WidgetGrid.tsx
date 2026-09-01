@@ -73,6 +73,65 @@ function settledAnnouncement(
     : `${loaded} of ${total} ${noun} updated.`;
 }
 
+/**
+ * What the grid shows when it holds no widget, which is three different facts.
+ *
+ * Its own component because the distinction is not the grid's job: the grid
+ * draws widgets, and "there are none", "we have not been told yet" and "we
+ * could not find out" are a separate question with a separate answer each.
+ * Folded into the grid they were three branches inside a function whose
+ * complexity the hygiene gate had already flagged.
+ *
+ * The distinction itself is the branding provider's to make, not this
+ * component's: `isUnavailable` means admin-meta never produced an answer, while
+ * a failed BACKGROUND refetch over a cached response leaves that response valid
+ * and is deliberately not reported.
+ */
+function NothingToDraw({
+  isPending,
+  isUnavailable,
+}: {
+  isPending: boolean;
+  isUnavailable: boolean;
+}) {
+  if (isUnavailable) {
+    return (
+      <section
+        aria-label="Dashboard widgets"
+        data-testid="widget-grid-unavailable"
+        className="rounded-lg border border-border bg-card px-4 py-6 text-sm text-muted-foreground"
+      >
+        Your dashboard could not be loaded. It will reappear once the connection
+        recovers.
+      </section>
+    );
+  }
+
+  if (isPending) {
+    // Placeholders rather than nothing, so the page does not reflow from empty
+    // to full as the answer lands. Three, matching the sections a default
+    // install draws; `aria-hidden` because the grid's own live region already
+    // speaks for it and a screen reader gains nothing from three empty boxes.
+    return (
+      <section
+        aria-label="Dashboard widgets"
+        data-testid="widget-grid-loading"
+        className="grid grid-cols-12 gap-6"
+      >
+        {[0, 1, 2].map(row => (
+          <div
+            key={row}
+            aria-hidden
+            className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
+          />
+        ))}
+      </section>
+    );
+  }
+
+  return null;
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -176,49 +235,10 @@ export function WidgetGrid() {
   // of one that never answered. Collapsing all three into `return null` blanked
   // the entire page on first paint and on any transient failure, where the
   // sections used to mount immediately and draw their own states.
-  //
-  // The distinction is the provider's to make, not this component's:
-  // `isUnavailable` means admin-meta never produced an answer, while a failed
-  // BACKGROUND refetch over a cached response leaves that response valid and
-  // is deliberately not reported here.
   if (widgets.length === 0) {
-    if (isUnavailable) {
-      return (
-        <section
-          aria-label="Dashboard widgets"
-          data-testid="widget-grid-unavailable"
-          className="rounded-lg border border-border bg-card px-4 py-6 text-sm text-muted-foreground"
-        >
-          Your dashboard could not be loaded. It will reappear once the
-          connection recovers.
-        </section>
-      );
-    }
-
-    if (isPending) {
-      // Placeholders rather than nothing, so the page does not reflow from
-      // empty to full as the answer lands. Three, matching the sections a
-      // default install draws; `aria-hidden` because the live region below
-      // already speaks for the grid and a screen reader gains nothing from
-      // three empty boxes.
-      return (
-        <section
-          aria-label="Dashboard widgets"
-          data-testid="widget-grid-loading"
-          className="grid grid-cols-12 gap-6"
-        >
-          {[0, 1, 2].map(row => (
-            <div
-              key={row}
-              aria-hidden
-              className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
-            />
-          ))}
-        </section>
-      );
-    }
-
-    return null;
+    return (
+      <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+    );
   }
 
   return (
