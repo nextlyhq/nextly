@@ -10,6 +10,8 @@
  *
  * @module domains/collections/__tests__/wildcard-locale-contract.integration.test
  */
+import { randomUUID } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
@@ -690,7 +692,10 @@ describe.each(getConfiguredTestDialects())(
 
       // A pending edit in `fr`, which this app does not configure.
       await t.adapter.insert("nextly_versions", {
-        id: `stale-${id}`,
+        // `nextly_versions.id` is varchar(36) on MySQL, a width a UUID exactly
+        // fills, so a prefixed id does not fit. Nothing reads this value: the
+        // row is located by entryId and locale.
+        id: randomUUID(),
         scopeKind: "collection",
         scopeSlug: DRAFTS_SLUG,
         entryId: id,
