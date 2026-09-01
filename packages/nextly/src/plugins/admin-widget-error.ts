@@ -65,12 +65,14 @@ export function adminWidgetShapeError(
     publicMessage: "Plugin configuration is invalid.",
     logMessage:
       `Plugin "${pluginName}" contributes an admin widget "${widgetId}" that ` +
-      `${reason}. The dashboard grid renders a contributed widget through its ` +
-      "`component` and through nothing else, and keys the cell on its `id`, " +
-      "so both must carry real text. `component` is required by the type, " +
-      "which reaches a TypeScript caller and nothing else -- a plugin " +
-      "authored in JavaScript, or one whose manifest arrives as parsed JSON, " +
-      "reaches this check with neither field enforced.",
+      `${reason}. A widget is drawn one of two ways and must describe one of ` +
+      "them: ship a `component` and draw the card yourself, or declare an " +
+      "`archetype` other than `custom` together with the `query` the host " +
+      "draws it from. The cell is keyed on `id`, so that must carry real text " +
+      "whichever way you choose. The type states this too, but it reaches a " +
+      "TypeScript caller and nothing else -- a plugin authored in JavaScript, " +
+      "or one whose manifest arrives as parsed JSON, reaches this check with " +
+      "nothing enforced.",
     logContext: { plugin: pluginName, widget: widgetId, reason },
   });
 }

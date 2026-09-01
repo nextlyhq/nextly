@@ -88,10 +88,11 @@ const DashboardPage: React.FC = () => {
               single batched request behind all of them. Renders nothing when no
               plugin contributes a widget the current user may see.
 
-              This replaces `PluginWidgetGrid`, which stays in the tree until the
-              core widget registry lands: it is the only thing that has ever
-              rendered plugin widgets, and removing it before its replacement is
-              wired to the registry would take them off the dashboard. */}
+              This REPLACED `PluginWidgetGrid`, which nothing mounts any more:
+              it reads the same contributions, plus the registry the older grid
+              could not see. `PluginWidgetGrid` itself is still in the tree,
+              kept alive only by its own test, and is deleted with the core
+              widget migration. */}
           <WidgetGrid />
         </div>
       </PageContainer>

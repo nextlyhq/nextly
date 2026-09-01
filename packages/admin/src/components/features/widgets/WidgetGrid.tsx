@@ -30,7 +30,7 @@ import {
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
-import { resolveWidgetOutcome } from "./outcome";
+import { coreDrawsArchetype, resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
 import { WidgetRenderer } from "./WidgetRenderer";
@@ -91,12 +91,38 @@ export function WidgetGrid() {
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       widgets.flatMap(widget =>
-        widget.query ? [{ widgetId: widget.id, query: widget.query }] : []
+        // A query is only worth running if SOMETHING can draw its result. A
+        // widget naming an archetype core cannot draw yet, and shipping no
+        // component to draw it instead, resolves to a card that reads "not
+        // rendered yet" -- so asking for the data spends an access-checked
+        // read, and one of the batch's limited slots, on a result thrown away
+        // on arrival. `custom` always draws, because the plugin's component
+        // decides what to do with the slot.
+        //
+        // Asked of `coreDrawsArchetype` rather than listed here, so the read
+        // starts happening on its own the day core learns to draw one.
+        widget.query &&
+        (widget.archetype === "custom" || coreDrawsArchetype(widget.archetype))
+          ? [{ widgetId: widget.id, query: widget.query }]
+          : []
       ),
     [widgets]
   );
 
   const { slots, isFetching, updatedAt } = useWidgetQueries(requests);
+
+  // Which widgets are actually IN the batch, taken from the requests that were
+  // sent rather than re-derived from `widget.query`.
+  //
+  // Those two disagree, and the disagreement is the whole point of this set: a
+  // widget declaring a query whose archetype nothing can draw is deliberately
+  // left out of the batch above, but it still HAS a `widget.query`. Testing
+  // that field again below gave such a card a freshness line for a request that
+  // never ran, and marked it `aria-busy` during someone else's refetch.
+  const requested = useMemo(
+    () => new Set(requests.map(request => request.widgetId)),
+    [requests]
+  );
 
   // The same answer the cards are drawn from, so the announcement cannot
   // describe a dashboard other than the one on screen. Counting slots instead
@@ -153,11 +179,12 @@ export function WidgetGrid() {
           <WidgetRenderer
             definition={widget}
             slot={slots[widget.id]}
-            updatedAt={widget.query ? updatedAt : null}
-            // Only a widget that asked for something can be waiting on an
-            // answer. A card drawn entirely by a plugin component took no part
-            // in the batch, so a refetch says nothing about it.
-            isFetching={widget.query ? isFetching : false}
+            updatedAt={requested.has(widget.id) ? updatedAt : null}
+            // Only a widget that actually ASKED can be waiting on an answer. A
+            // card drawn entirely by a plugin component took no part in the
+            // batch, and neither did one whose archetype nothing can draw, so a
+            // refetch says nothing about either.
+            isFetching={requested.has(widget.id) ? isFetching : false}
           />
         </div>
       ))}
