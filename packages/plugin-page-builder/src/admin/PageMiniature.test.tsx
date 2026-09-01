@@ -52,88 +52,25 @@ describe("PageMiniature", () => {
     const { container } = render(
       <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
     );
-    const frame = container.querySelector<HTMLIFrameElement>(
-      '[data-slot="page-miniature-surface"]'
-    );
-
-    // Read from the frame's own document rather than the admin's, which is the
-    // whole point: the page is no longer written into the screen around it.
-    expect(frame?.srcdoc).toContain("Hello from the page");
+    expect(container.textContent).toContain("Hello from the page");
   });
 
   /*
-   * A picture, not a workspace — and now enforced by the sandbox rather than by
-   * `inert`. An empty `sandbox` grants nothing: no scripts, no form submission,
-   * no navigation. `inert` governs focus and the accessibility tree and would
-   * not have stopped a page's own form from submitting.
+   * A picture, not a workspace. Nothing inside may take focus or a click, and
+   * the accessible account of the page is the text beside it — a screen reader
+   * reading a whole page layout here would bury the one control that matters.
    */
-  it("grants the frame nothing, so the preview cannot act", () => {
+  it("marks the rendered subtree inert and hidden from assistive technology", () => {
     const { container } = render(
       <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
     );
-    const frame = container.querySelector(
+    const surface = container.querySelector(
       '[data-slot="page-miniature-surface"]'
     );
 
-    expect(frame?.tagName).toBe("IFRAME");
-    expect(frame?.getAttribute("sandbox")).toBe("");
-    expect(frame?.getAttribute("aria-hidden")).toBe("true");
-    expect(frame?.getAttribute("tabindex")).toBe("-1");
-  });
-
-  /*
-   * The nested-form defect, asserted at its cause. The entry screen is itself a
-   * `<form>`; a page holding the form block emits one too, and nested forms are
-   * invalid — a parser closes the outer one early and entry fields after it stop
-   * belonging to the form that submits them. A separate document makes that
-   * unrepresentable.
-   */
-  it("keeps the page out of the admin's own document", () => {
-    const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
-    );
-
-    expect(container.querySelector("form")).toBeNull();
-    expect(container.textContent).not.toContain("Hello from the page");
-  });
-
-  /*
-   * A relative URL resolves against the document it sits in. Without a base the
-   * frame would resolve it against the admin's entry route and ask for an image
-   * under /admin/..., where the site has none.
-   */
-  it("resolves relative URLs against the site rather than the admin route", () => {
-    const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
-    );
-    const frame = container.querySelector<HTMLIFrameElement>(
-      '[data-slot="page-miniature-surface"]'
-    );
-
-    expect(frame?.srcdoc).toContain('<base href="/">');
-  });
-
-  /*
-   * Viewport units measure the viewport, so the frame must HAVE one of the
-   * composed size. Sized in pixels rather than percentages for that reason: a
-   * percentage would inherit the admin window's dimensions and `50vw` would go
-   * on answering for the wrong screen.
-   */
-  it("gives the page a viewport of the width it is composed at", () => {
-    const { container } = render(
-      <PageMiniature
-        document={doc}
-        siteStyles={undefined}
-        render={RENDER}
-        renderWidth={1280}
-      />
-    );
-    const frame = container.querySelector<HTMLElement>(
-      '[data-slot="page-miniature-surface"]'
-    );
-
-    expect(frame?.style.width).toBe("1280px");
-    expect(frame?.style.height).toBe("800px");
+    expect(surface).not.toBeNull();
+    expect(surface?.hasAttribute("inert")).toBe(true);
+    expect(surface?.getAttribute("aria-hidden")).toBe("true");
   });
 
   /*
@@ -152,7 +89,7 @@ describe("PageMiniature", () => {
       />
     );
     const scaled = container.querySelector<HTMLElement>(
-      '[data-slot="page-miniature-surface"]'
+      '[data-slot="page-miniature-scaled"]'
     );
 
     expect(scaled).not.toBeNull();
@@ -180,6 +117,85 @@ describe("PageMiniature", () => {
   });
 
   /*
+   * The container has to be declared on the element whose width the compiled
+   * rules must answer for — the COMPOSED width, not the clipped frame's. A
+   * named container left at the default `container-type: normal` is not a
+   * size-query container, so every rule the compile emitted stays inert.
+   */
+  it("declares the compiled container on the composed box", () => {
+    const withContainer = pageRenderInputs({
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1024 }],
+          container: [],
+        },
+      } as never,
+      clientConfig: undefined,
+      previewContainer: "nx-preview-mini",
+      limits: DEFAULT_LIMITS,
+    });
+
+    const { container } = render(
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={withContainer}
+      />
+    );
+    const scaled = container.querySelector<HTMLElement>(
+      '[data-slot="page-miniature-scaled"]'
+    );
+
+    expect(scaled?.style.containerName).toBe("nx-preview-mini");
+    expect(scaled?.style.containerType).toBe("inline-size");
+  });
+
+  /*
+   * The entry screen is a `<form>`, so a page holding a form block puts one
+   * form inside another. The live consequence in this rendering path is a
+   * submit from the previewed page reaching the form that saves the entry.
+   *
+   * Asserted through a REAL submit event on a real form rendered by the real
+   * block, rather than by checking that a handler was passed: a prop can be
+   * present and still not stop anything.
+   */
+  it("refuses a submit raised inside the page", () => {
+    const FORM = coreBlocks.find(block => block.name === "core/form");
+    if (!FORM) throw new Error("core/form is missing from coreBlocks");
+
+    const withForm = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "page",
+      nodes: [
+        {
+          id: "f",
+          type: FORM.name,
+          version: FORM.version,
+          props: { method: "post", submitText: "Send", fields: [] },
+        },
+      ],
+    } as unknown as BlockDocument;
+
+    const { container } = render(
+      <PageMiniature
+        document={withForm}
+        siteStyles={undefined}
+        render={RENDER}
+      />
+    );
+
+    const form = container.querySelector("form");
+    // The control: if the page drew no form, the assertion below would pass
+    // against nothing at all.
+    expect(form).not.toBeNull();
+
+    const submit = new Event("submit", { bubbles: true, cancelable: true });
+    form?.dispatchEvent(submit);
+
+    expect(submit.defaultPrevented).toBe(true);
+  });
+
+  /*
    * The property that makes the scale correct, and the one jsdom can still see.
    *
    * `transform` removes an element from painting and leaves it in LAYOUT, so a
@@ -195,7 +211,7 @@ describe("PageMiniature", () => {
       <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
     );
     const scaled = container.querySelector<HTMLElement>(
-      '[data-slot="page-miniature-surface"]'
+      '[data-slot="page-miniature-scaled"]'
     );
 
     expect(scaled?.className).toContain("absolute");
@@ -217,7 +233,7 @@ describe("PageMiniature", () => {
       />
     );
     const scaled = container.querySelector<HTMLElement>(
-      '[data-slot="page-miniature-surface"]'
+      '[data-slot="page-miniature-scaled"]'
     );
 
     expect(scaled?.style.transform).toBe("scale(1)");

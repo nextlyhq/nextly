@@ -111,11 +111,8 @@ describe("the entry form at rest", () => {
 
     const { container } = render(<Host />);
 
-    const frame = container.querySelector<HTMLIFrameElement>(MINIATURE);
-
-    expect(frame).not.toBeNull();
-    // The page lives in the frame's own document, not the admin's around it.
-    expect(frame?.srcdoc).toContain(PAGE_TEXT);
+    expect(container.querySelector(MINIATURE)).not.toBeNull();
+    expect(container.textContent).toContain(PAGE_TEXT);
   });
 
   it("does not put the block's type name on the screen", () => {
