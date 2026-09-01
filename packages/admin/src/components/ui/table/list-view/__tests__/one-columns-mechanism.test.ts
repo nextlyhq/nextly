@@ -39,6 +39,26 @@ const ALLOWED_LIST_COLUMNS = [
   join("entries", "EntryList", "EntryTable.tsx"),
 ];
 
+/** The complete inventory of admin entity table surfaces. */
+const ENTITY_TABLE_SURFACES = [
+  join("components", "features", "api-keys", "ApiKeyTable.tsx"),
+  join("pages", "dashboard", "collection", "components", "CollectionTable.tsx"),
+  join(
+    "pages",
+    "dashboard",
+    "field-group",
+    "components",
+    "FieldGroupTable.tsx"
+  ),
+  join("pages", "dashboard", "plugins", "components", "PluginsTable.tsx"),
+  join("pages", "dashboard", "roles", "components", "RoleTable.tsx"),
+  join("pages", "dashboard", "settings", "email-providers", "index.tsx"),
+  join("pages", "dashboard", "settings", "email-templates", "index.tsx"),
+  join("pages", "dashboard", "settings", "image-sizes", "index.tsx"),
+  join("pages", "dashboard", "singles", "components", "SinglesTable.tsx"),
+  join("pages", "dashboard", "users", "components", "UserTable.tsx"),
+];
+
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
@@ -63,7 +83,7 @@ describe("one columns mechanism", () => {
    * callers in exactly the same words as a clean one. Asserted by MEMBERSHIP,
    * because a count passes on any set of the right size.
    */
-  it("reads the admin source, including both hooks", () => {
+  it("reads the admin source, including both hooks and all entity tables", () => {
     const rel = files.map(f => relative(SRC, f));
     expect(rel).toContain(join("hooks", "useColumnVisibility.ts"));
     expect(rel).toContain(
@@ -72,6 +92,9 @@ describe("one columns mechanism", () => {
     expect(rel).toContain(
       join("components", "ui", "table", "list-view", "useTableColumns.ts")
     );
+    for (const surface of ENTITY_TABLE_SURFACES) {
+      expect(rel).toContain(surface);
+    }
   });
 
   it("has no product code calling the storage hook directly", () => {
@@ -102,6 +125,21 @@ describe("one columns mechanism", () => {
       "These call `useListColumns` directly. Use `useTableColumns` from " +
         "`components/ui/table/list-view` instead: it enforces the pinned-column " +
         "and hidden-column resolution policy across entity tables."
+    ).toEqual([]);
+  });
+
+  it("requires every entity table surface to adopt useTableColumns", () => {
+    const missing = ENTITY_TABLE_SURFACES.filter(surface => {
+      const fullPath = join(SRC, surface);
+      const content = readFileSync(fullPath, "utf8");
+      return !/useTableColumns\(/.test(content);
+    });
+
+    expect(
+      missing,
+      "Every admin entity table surface must adopt `useTableColumns` to " +
+        "enforce the unified column policy (pinned sets, storage key, and " +
+        "hidden resolution)."
     ).toEqual([]);
   });
 });
