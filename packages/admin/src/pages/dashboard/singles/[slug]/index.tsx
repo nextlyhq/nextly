@@ -19,7 +19,7 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
-import { AddToReleaseButton } from "@admin/components/features/releases/AddToReleaseButton";
+import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
   SingleForm,
@@ -206,6 +206,19 @@ export default function SingleEditPage({
     translateFrom,
   });
 
+  /*
+   * Above this page's loading and error returns, because it is a hook. What it
+   * produces is only read once those guards pass; while the schema or the
+   * document is still loading it reports no action, which is correct.
+   */
+  const release = useAddToReleaseAction({
+    scopeKind: "single",
+    scopeSlug: slug,
+    entryId: document?.id,
+    lifecycleEnabled: schema?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+  });
+
   // Update mutation — routes the save to the active language's companion row.
   const { mutateAsync: updateDocument, isPending: isUpdating } =
     useUpdateSingleDocument(slug || "", locale);
@@ -342,6 +355,7 @@ export default function SingleEditPage({
           }
           onDefaultLocale={!isNonDefaultLocale}
         />
+        {release.dialog}
         <SingleForm
           // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
           // expects FieldConfig[] (discriminated). The runtime payload is the
@@ -354,13 +368,7 @@ export default function SingleEditPage({
              only through the API. With the form's own actions, matching the
              collection editor. */
           documentActions={
-            <AddToReleaseButton
-              scopeKind="single"
-              scopeSlug={slug ?? ""}
-              entryId={document.id}
-              lifecycleEnabled={schema?.status === true}
-              onDefaultLocale={!isNonDefaultLocale}
-            />
+            release.contributed === null ? [] : [release.contributed]
           }
           onSubmit={handleSubmit}
           isSubmitting={isUpdating}

@@ -28,6 +28,36 @@ beforeEach(() => {
 });
 
 describe("registerSource / getSource", () => {
+  it("refuses a field label that is present but unusable", () => {
+    // A plugin registering its own source through the SDK reaches the stored
+    // snapshot without passing the collection path's normalisation, and
+    // `label: "   "` is legal TypeScript. Refused rather than trimmed away,
+    // because a blank label is a mistake in the plugin's config and silently
+    // dropping it leaves the author wondering why their heading never appears.
+    expect(() =>
+      registerSource({
+        id: "acme:revenue",
+        label: "Revenue",
+        kind: "plugin",
+        supports: ["count"],
+        fields: [{ name: "total", type: "number", label: "   " }],
+      })
+    ).toThrow();
+  });
+
+  it("accepts a field that declares no label at all", () => {
+    // The control: absent is ordinary, unusable is not.
+    expect(() =>
+      registerSource({
+        id: "acme:orders",
+        label: "Orders",
+        kind: "plugin",
+        supports: ["count"],
+        fields: [{ name: "total", type: "number" }],
+      })
+    ).not.toThrow();
+  });
+
   it("registers a well-formed source and makes it retrievable", () => {
     registerSource(VALID_SOURCE);
     expect(getSource("collection:posts")).toEqual(VALID_SOURCE);

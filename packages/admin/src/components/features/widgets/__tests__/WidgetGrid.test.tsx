@@ -14,6 +14,7 @@ import {
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
 
+import { coreDraws } from "../outcome";
 import { WidgetGrid } from "../WidgetGrid";
 
 let mockBranding: AdminBranding | undefined;
@@ -46,6 +47,35 @@ function renderGrid() {
   );
   return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
 }
+
+/**
+ * An archetype core cannot draw in THIS release, derived rather than named.
+ *
+ * Several cases below need a widget nothing can render — to prove the grid does
+ * not spend a query on it, does not claim freshness for it, and still counts it
+ * as failed. Naming one (`list`, until it gained a body) makes those cases go
+ * quietly wrong the day that archetype lands: they keep passing while testing
+ * something else entirely. Asking the renderer table keeps them pointed at
+ * whatever is genuinely undrawn.
+ */
+// Listed here rather than imported: `nextly/config` publishes the archetype
+// VOCABULARY as a type only, and is deliberately almost free of runtime values.
+// The names are stable; which of them core can draw is the part that moves, and
+// that is asked of `coreDrawsArchetype` below.
+const HOST_DRAWN_ARCHETYPES = ["metric", "table", "list", "text", "actions"];
+
+const UNDRAWABLE = HOST_DRAWN_ARCHETYPES.find(
+  // A declaration carrying a query, so what is being asked is "can core draw
+  // this archetype at all", not "is this particular widget under-declared".
+  archetype =>
+    !coreDraws({ archetype, query: { select: ["title"], op: "list" } })
+);
+
+it("has an archetype core cannot draw, which several cases below need", () => {
+  // Stated as its own case so that when core draws everything, this fails with
+  // a sentence instead of leaving the cases below silently vacuous.
+  expect(UNDRAWABLE).toBeDefined();
+});
 
 function brandingWith(widgets: unknown[]): AdminBranding {
   return {
@@ -184,6 +214,290 @@ describe("WidgetGrid — collection and gating", () => {
         "42"
       );
     });
+  });
+
+  it("draws a contributed widget that ships NO component at all", async () => {
+    // Tier 1 end to end, and the thing the contract change exists for: the
+    // plugin declares an archetype and a query, ships no UI code, and the host
+    // draws the card. `component` was required on every contributed widget
+    // until now, so this declaration could not be written -- an author had to
+    // name a component core would never resolve.
+    mockBranding = brandingWith([
+      {
+        id: "acme/posts",
+        title: "Published posts",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:posts", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 42 } }],
+    });
+
+    renderGrid();
+
+    // The card, drawn by core from the query result -- not a plugin component,
+    // and not the "archetype is not rendered yet" refusal.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("42")
+    );
+    expect(screen.getByText("Published posts")).toBeInTheDocument();
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [{ source: "collection:posts", op: "count" }],
+    });
+  });
+
+  it("spends no query on a widget nothing can draw", async () => {
+    // A declarative widget naming an archetype core has no renderer for, and
+    // shipping no component to draw it instead, resolves to a card reading
+    // "not rendered yet". Asking for its data would spend an access-checked
+    // read, and one of the batch's limited slots, on a result discarded on
+    // arrival -- on every mount and every window focus.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: UNDRAWABLE,
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+
+    renderGrid();
+
+    // The card is drawn and says why, so the widget is not silently missing.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/not rendered yet/i)).toBeInTheDocument();
+    // And nothing was asked of the server on its behalf.
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("claims no freshness for a query that never ran", async () => {
+    // The widget declares a query, so `widget.query` is truthy -- but its
+    // archetype is undrawable, so the grid deliberately left it out of the
+    // batch. Reading `widget.query` again to decide the card's freshness gave
+    // it an "Updated just now" for a request nothing ever sent, and marked it
+    // busy while an unrelated widget refetched.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: UNDRAWABLE,
+        query: { source: "collection:posts", op: "list" },
+      },
+      {
+        id: "acme/posts",
+        title: "Posts",
+        archetype: "metric",
+        query: { source: "collection:posts", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 3 } }],
+    });
+
+    renderGrid();
+
+    // The metric card asked and answered, so it carries the batch's timestamp.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("3")
+    );
+    const cells = screen.getAllByTestId(/^widget-cell-/);
+    expect(cells).toHaveLength(2);
+
+    // Exactly one freshness line on the page: the widget that took part.
+    expect(screen.getAllByTestId("widget-card-freshness")).toHaveLength(1);
+  });
+
+  it("DOES spend a query when a component can draw the result", async () => {
+    // The control, and the boundary: the same undrawable archetype WITH a
+    // component resolves to `custom`, the plugin's component consumes the slot,
+    // so the read is wanted. A grid that simply skipped undrawable archetypes
+    // would starve it.
+    registerComponents({ "@acme/admin#Recent": () => <div>recent body</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: UNDRAWABLE,
+        component: "@acme/admin#Recent",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "list", items: [] } }],
+    });
+
+    renderGrid();
+
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("recent body")).toBeInTheDocument();
+  });
+
+  it("spends no query on a list that selects nothing", async () => {
+    // The declaration is refused by the archetype itself, so the card can never
+    // be drawn -- but the refusal used to arrive only after the query ran. The
+    // grid batched it because `list` had a renderer, the server performed an
+    // UNPROJECTED read and shipped whole documents to the browser, and the card
+    // threw them away to print the refusal. On every mount and every focus.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/selects no fields/i)).toBeInTheDocument();
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("keeps a contributed component when the registered list is under-declared", async () => {
+    // A widget declared through BOTH channels. The registration names `list`
+    // and omits `select`, so core cannot draw it -- and the contributed
+    // component is the only thing that can. The fallback fires when core cannot
+    // draw, and core reported that it could purely because `list` had an entry
+    // in the renderer table.
+    registerComponents({ "@acme/admin#Recent": () => <div>plugin rows</div> });
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [{ id: "shared", component: "@acme/admin#Recent" }],
+        },
+      ],
+      widgets: [
+        {
+          id: "shared",
+          title: "Shared",
+          archetype: "list",
+          defaultSize: "md",
+          query: { source: "collection:posts", op: "list" },
+        },
+      ],
+    } as unknown as AdminBranding;
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "list", items: [] } }],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByText("plugin rows")).toBeInTheDocument()
+    );
+    expect(screen.queryByText(/selects no fields/i)).not.toBeInTheDocument();
+  });
+
+  it("draws a LIST widget end to end, from declaration to rows", async () => {
+    // The second host-drawn archetype, through the whole path: a declarative
+    // contribution with no component, its query batched, the `list` arm of the
+    // response validated, and the rows drawn from the fields it selected.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        defaultSize: "md",
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "slug"],
+          limit: 5,
+        },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: [
+              { title: "First post", slug: "first-post" },
+              { title: "Second post", slug: "second-post" },
+            ],
+          },
+        },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-list-row")).toHaveLength(2)
+    );
+    expect(screen.getByText("First post")).toBeInTheDocument();
+    expect(screen.getByText("second-post")).toBeInTheDocument();
+    // And the select reached the server as declared, so the rows are drawn from
+    // fields the query actually asked for.
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [
+        {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "slug"],
+          limit: 5,
+        },
+      ],
+    });
+  });
+
+  it("draws a TABLE end to end, headed by the columns the server described", async () => {
+    // The whole path for the third host-drawn archetype: a declaration with no
+    // component, its query batched, the `list` arm validated with its column
+    // descriptions intact, and the headings taken from those rather than from
+    // `select` -- which is what keeps a field the reader may not see out of the
+    // header row.
+    mockBranding = brandingWith([
+      {
+        id: "acme/posts",
+        title: "Recent posts",
+        archetype: "table",
+        defaultSize: "lg",
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "publishedAt"],
+          limit: 5,
+        },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ title: "First post", publishedAt: "yesterday" }],
+            fields: [
+              { name: "title", label: "Title" },
+              { name: "publishedAt", label: "Published at" },
+            ],
+          },
+        },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-table")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Published at")).toBeInTheDocument();
+    expect(screen.getByText("First post")).toBeInTheDocument();
+    // The label reached the browser through the batch parser, which rebuilds a
+    // list result from the fields it names -- so this also proves the
+    // descriptions survive that boundary.
+    expect(screen.queryByText("publishedAt")).not.toBeInTheDocument();
   });
 
   it("puts a registered widget's query in the same batch as a contributed one", async () => {
@@ -665,10 +979,15 @@ describe("WidgetGrid — accessibility", () => {
     // A slot can be `ok` and still unrenderable: this release draws `metric`
     // and nothing else, and a metric handed a list payload refuses it. Counting
     // slots said every widget updated while both cards showed an error.
+    //
+    // `listy` is counted as a failure WITHOUT being queried: nothing can draw a
+    // `list` result in this release and it ships no component, so the grid does
+    // not ask -- which is why only two results come back for three widgets.
+    // The announcement still has to describe all three.
     mockBranding = brandingWith([
       {
         id: "listy",
-        archetype: "list",
+        archetype: UNDRAWABLE,
         title: "Recent",
         query: { source: "collection:posts", op: "list" },
       },
@@ -688,7 +1007,6 @@ describe("WidgetGrid — accessibility", () => {
     vi.mocked(protectedApi.post).mockResolvedValue({
       results: [
         { ok: true, result: { op: "list", items: [] } },
-        { ok: true, result: { op: "list", items: [] } },
         { ok: true, result: { op: "count", total: 4 } },
       ],
     });
@@ -699,6 +1017,14 @@ describe("WidgetGrid — accessibility", () => {
         /1 of 3 widgets updated, 2 failed/i
       )
     );
+    // Two queries for three widgets, and the positional keying still lands each
+    // result on the widget that asked for it.
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [
+        { source: "collection:posts", op: "count" },
+        { source: "collection:pages", op: "count" },
+      ],
+    });
   });
 
   it("has exactly ONE live region for the whole grid", async () => {

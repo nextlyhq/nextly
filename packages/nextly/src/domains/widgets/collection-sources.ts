@@ -101,14 +101,27 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
  */
 function readableFields(
   fields: unknown
-): Array<{ name: string; type: string }> {
-  const usable: Array<{ name: string; type: string }> = [];
+): Array<{ name: string; type: string; label?: string }> {
+  const usable: Array<{ name: string; type: string; label?: string }> = [];
   for (const raw of addressableFields(fields, {
     descendInto: storedAtThisLevel,
   })) {
-    const field = raw as { name?: unknown; type?: unknown };
+    const field = raw as { name?: unknown; type?: unknown; label?: unknown };
     if (typeof field.name === "string" && typeof field.type === "string") {
-      usable.push({ name: field.name, type: field.type });
+      // The label is carried when the field has a usable one, and omitted
+      // otherwise -- a blank or whitespace label is not a heading, and passing
+      // it on would put an empty column head above real data. `label` is
+      // optional on a field config, so its absence is ordinary rather than a
+      // fault.
+      const label =
+        typeof field.label === "string" && field.label.trim() !== ""
+          ? field.label
+          : undefined;
+      usable.push({
+        name: field.name,
+        type: field.type,
+        ...(label && { label }),
+      });
     }
   }
   return usable;

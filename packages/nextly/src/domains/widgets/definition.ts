@@ -36,12 +36,24 @@ export const WIDGET_ARCHETYPES = [
 ] as const;
 export type WidgetArchetype = (typeof WIDGET_ARCHETYPES)[number];
 
-/** Archetypes whose content comes from a data query. */
-const DATA_ARCHETYPES: ReadonlySet<WidgetArchetype> = new Set([
-  "metric",
-  "table",
-  "list",
-]);
+/**
+ * Archetypes whose content comes from a data query.
+ *
+ * Exported, and this is the reason: the contributions channel has to make the
+ * same distinction, and it got it WRONG by restating it -- requiring a query
+ * for every non-`custom` archetype, which made `text` and `actions` undeclarable
+ * and contradicted the rule below for the same two names. One question, one
+ * implementation; a narrower view is derived from this rather than computed
+ * beside it.
+ */
+export const DATA_ARCHETYPES = ["metric", "table", "list"] as const;
+
+/** An archetype core draws from a query result. */
+export type DataWidgetArchetype = (typeof DATA_ARCHETYPES)[number];
+
+const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
+  DATA_ARCHETYPES
+);
 
 export interface WidgetDefinition {
   /** `namespace/name`, e.g. "core/recent-entries". */
@@ -208,17 +220,43 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  * want core to run its query, so the forbidden set is NAMED rather than
  * derived as "everything that is not a data archetype".
  */
-const QUERYLESS_ARCHETYPES: ReadonlySet<WidgetArchetype> = new Set([
-  "text",
-  "actions",
-]);
+/**
+ * Archetypes core draws with NO query at all, exported for the same reason as
+ * `DATA_ARCHETYPES` above.
+ */
+export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
+
+/** An archetype core draws without asking for data. */
+export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
+
+const QUERYLESS_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
+  QUERYLESS_ARCHETYPES
+);
+
+/**
+ * Any archetype belonging to none of the three groups.
+ *
+ * `custom` is drawn by the plugin; the other two sets are drawn by core with
+ * and without a query. Adding a name to `WIDGET_ARCHETYPES` and forgetting to
+ * classify it would otherwise leave it silently outside every rule below --
+ * accepted with or without a query, and undeclarable through the contributions
+ * union that derives from these names.
+ *
+ * Asserted to be `never` in `__tests__/archetype-classification.test-d.ts`,
+ * where this repo keeps its compile-time assertions, so adding an unclassified
+ * archetype fails the typecheck naming it.
+ */
+export type UnclassifiedArchetype = Exclude<
+  WidgetArchetype,
+  DataWidgetArchetype | QuerylessWidgetArchetype | "custom"
+>;
 
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
-  if (DATA_ARCHETYPES.has(archetype) && !d.query) {
+  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
   }
-  if (QUERYLESS_ARCHETYPES.has(archetype) && d.query !== undefined) {
+  if (QUERYLESS_ARCHETYPE_SET.has(archetype) && d.query !== undefined) {
     fail(
       `${d.id}: query is only valid for a data archetype or "custom", not "${d.archetype}"`
     );

@@ -11,15 +11,54 @@
  * @module components/features/widgets/resolve-widgets
  */
 
+import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
+
 import type {
   PluginMetadata,
-  PluginWidgetMeta,
   RegisteredWidgetMeta,
 } from "@admin/types/branding";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { coreDrawsArchetype } from "./outcome";
+import { coreDraws } from "./outcome";
 import { legacySizeToWidgetSize } from "./sizes";
+
+/**
+ * A contributed widget as this file READS it, which is deliberately not how a
+ * plugin author WRITES it.
+ *
+ * `PluginWidgetMeta` is a union: either a component-bearing widget or an
+ * archetype-and-query one. That union is an authoring contract — it exists so a
+ * plugin author cannot declare a widget describing no body, and so the mistake
+ * is a compile error at the point it is made.
+ *
+ * A reader wants the opposite. Nothing here branches on which arm a declaration
+ * came from; every field is read, each is handled when absent, and the values
+ * arrive over the wire from a server that may be a different version and from
+ * plugins that may not be TypeScript at all. Reading through the union would
+ * mean narrowing at every access to recover facts this code does not use, and
+ * `mergeCollision` cannot satisfy either arm at the type level anyway: it
+ * composes a registration and a contribution, and only the two together are
+ * known to describe a body.
+ *
+ * Strict to write, permissive to read, with the boot check and the resolver
+ * below as the things that actually refuse a declaration that says nothing.
+ */
+export interface ReadableWidgetDeclaration {
+  id: string;
+  size?: "full" | "half";
+  requiredPermission?: string;
+  title?: string;
+  description?: string;
+  icon?: string;
+  category?: string;
+  archetype?: WidgetArchetype;
+  defaultSize?: WidgetSize;
+  minSize?: WidgetSize;
+  maxSize?: WidgetSize;
+  query?: WidgetQuery;
+  component?: string;
+  link?: { label: string; href: string };
+}
 
 /**
  * The archetype a declaration means, or `undefined` when it means nothing
@@ -36,23 +75,33 @@ import { legacySizeToWidgetSize } from "./sizes";
  * so a declaration describes a body core cannot produce in two ways, and a
  * component the author shipped beats both.
  *
- * It may declare no query: no request is made for it, no slot ever arrives, and
- * the card reads that absence as "still loading" for the life of the page.
- * `PluginAdminWidget` makes `query` optional and `component` required, so that
- * declaration is legal and the component is always there.
+ * It may declare no query where its archetype needs one: no request is made for
+ * it, no slot ever arrives, and the card reads that absence as "still loading"
+ * for the life of the page. A component-bearing widget may pair any archetype
+ * with any query, so this declaration is legal and the component is there to
+ * draw instead.
+ *
+ * The component is NO LONGER always there. `component` became conditional when
+ * a widget gained the ability to declare an archetype and a query and let the
+ * host draw it, so this branch stops firing for a declarative widget -- which
+ * is correct: there is nothing to fall back to, and the card says by name that
+ * the archetype is not drawn yet.
  *
  * Or it may name an archetype THIS RELEASE DOES NOT DRAW. `list`, `table`,
  * `text` and `actions` are declarable today and none of them has a renderer, so
  * a widget naming one had its component discarded in favour of the sentence
  * "the list widget archetype is not rendered yet" -- an error where a working
- * card was available. Asked of `coreDrawsArchetype` rather than listed here, so
- * the fallback stops applying on its own the day core learns to draw one.
+ * card was available. Asked of `coreDraws` rather than listed here, so the
+ * fallback stops applying on its own the day core learns to draw one -- and
+ * asked of the whole DECLARATION, because a renderer that refuses this
+ * particular widget leaves the contributed component the only thing that can
+ * draw it, exactly as a missing renderer does.
  */
 function resolveArchetype(
-  meta: PluginWidgetMeta
+  meta: ReadableWidgetDeclaration
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
-    const undrawable = !meta.query || !coreDrawsArchetype(meta.archetype);
+    const undrawable = !meta.query || !coreDraws(meta);
     if (meta.archetype !== "custom" && undrawable && meta.component) {
       return "custom";
     }
@@ -65,8 +114,8 @@ function resolveArchetype(
  * A title with visible text, falling back to the widget's id.
  *
  * TRIMMED, not merely nullish-checked. `title: ""` and `title: "   "` are legal
- * for a contributed widget -- boot requires only a usable `id` and `component`
- * -- and both pass a `??`. The title is the card region's `aria-labelledby`
+ * for a contributed widget -- boot requires a usable `id` and a describable
+ * body, never a title -- and both pass a `??`. The title is the card region's `aria-labelledby`
  * target, so an empty one makes a landmark with no accessible name, which is
  * worse for a screen-reader user than having no landmark at all. The id is a
  * poor title and it NAMES the widget, which is the one thing a card in that
@@ -86,7 +135,7 @@ function resolveTitle(title: string | undefined, id: string): string {
  */
 function declaredWidgets(
   plugins: PluginMetadata[] | undefined
-): PluginWidgetMeta[] {
+): ReadableWidgetDeclaration[] {
   return (plugins ?? []).flatMap(plugin => plugin.widgets ?? []);
 }
 
@@ -101,7 +150,7 @@ function declaredWidgets(
  * mounted must not cause a request on the user's behalf.
  */
 function resolveOne(
-  meta: PluginWidgetMeta,
+  meta: ReadableWidgetDeclaration,
   hasPermission: (permission: string) => boolean
 ): DashboardWidget | undefined {
   if (meta.requiredPermission && !hasPermission(meta.requiredPermission)) {
@@ -188,9 +237,9 @@ function resolveRegistered(
  * code in both paths rather than a second copy that can drift.
  */
 function mergeCollision(
-  contribution: PluginWidgetMeta,
+  contribution: ReadableWidgetDeclaration,
   registration: RegisteredWidgetMeta
-): PluginWidgetMeta {
+): ReadableWidgetDeclaration {
   return {
     id: registration.id,
     // Named field by field rather than spread. `{ ...contribution,

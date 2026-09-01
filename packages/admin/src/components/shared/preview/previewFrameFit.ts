@@ -29,7 +29,7 @@
  * sees — which is why a caller must label the real width rather than let the
  * scaling pass unremarked.
  *
- * @module components/features/entries/PreviewMode/previewFrameFit
+ * @module components/shared/preview/previewFrameFit
  */
 
 import type { CSSProperties } from "react";

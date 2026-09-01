@@ -191,7 +191,12 @@ export { pluginAdminSlug } from "./plugins/plugin-slug";
 // byte to the config entry point's bundle.
 export type {
   ComponentPath,
+  DeclarativeWidgetArchetype,
   HeaderButtonId,
+  PluginAdminCustomWidget,
+  PluginAdminDataWidget,
+  PluginAdminDeclarativeWidget,
+  PluginAdminQuerylessWidget,
   PluginAdminWidget,
 } from "./plugins/admin-contributions";
 //
@@ -206,6 +211,8 @@ export type {
 // be one contract declared twice.
 export type {
   WidgetArchetype,
+  DataWidgetArchetype,
+  QuerylessWidgetArchetype,
   WidgetDefinition,
   WidgetHeight,
   WidgetSize,

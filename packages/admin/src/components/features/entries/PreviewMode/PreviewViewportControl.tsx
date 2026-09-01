@@ -30,11 +30,10 @@ import {
 } from "@nextlyhq/ui";
 import { useCallback, useEffect, useId, useState } from "react";
 
+import type { PreviewFit } from "@admin/components/shared/preview/previewFrameFit";
 import { UI } from "@admin/constants/ui";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import type { PreviewViewport } from "@admin/services/previewLinkApi";
-
-import type { PreviewFit } from "./previewFrameFit";
 
 /** The width the author asked for, or `null` for "fill the pane". */
 export interface PreviewViewportControlProps {

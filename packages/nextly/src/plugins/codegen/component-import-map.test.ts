@@ -378,7 +378,14 @@ function exposedComponentPaths(meta: PluginAdminMeta): ExposedPaths {
 
   return {
     registered,
-    widgets: (meta.widgets ?? []).map(widget => widget.component),
+    // A widget's component is OPTIONAL now: a declarative widget names an
+    // archetype and a query and ships no UI code, so it exposes no path for
+    // the import map to carry. Dropped rather than collected as `undefined`,
+    // because this list is what the map's coverage is measured against and an
+    // absent path is not an uncovered one.
+    widgets: (meta.widgets ?? []).flatMap(widget =>
+      widget.component === undefined ? [] : [widget.component]
+    ),
     unclassified: Object.keys(meta).filter(
       key =>
         !readsComponents.has(key) &&
@@ -412,7 +419,17 @@ describe("parity with the admin-meta surface", () => {
           header: { slot: "@acme/x/admin#HeaderSlot" },
           schemaBuilderSlot: "@acme/x/admin#SchemaSlot",
           entryFormToolbarSlot: "@acme/x/admin#ToolbarSlot",
-          widgets: [{ id: "stats", component: "@acme/x/admin#StatsWidget" }],
+          widgets: [
+            { id: "stats", component: "@acme/x/admin#StatsWidget" },
+            // A DECLARATIVE widget beside it: an archetype and a query, no UI
+            // code. It must contribute no path at all -- see the assertion at
+            // the end of this test.
+            {
+              id: "posts",
+              archetype: "metric",
+              query: { source: "collection:posts", op: "count" },
+            },
+          ],
           clientConfig: { accent: "#0ea5e9" },
         },
       },
@@ -461,6 +478,16 @@ describe("parity with the admin-meta surface", () => {
     // Asserted rather than left to a fixture that happens to declare no
     // widgets, so whoever wires codegen to emit them sees this go red.
     expect(exposed.widgets).toEqual(["@acme/x/admin#StatsWidget"]);
+
+    // And a DECLARATIVE widget contributes no path whatsoever. The fixture
+    // above declares two widgets and only one names a component: the host
+    // draws the other from its archetype and query, so there is nothing for
+    // any import map -- static or otherwise -- to carry for it. Without this
+    // the single-entry assertion above could be read as "widgets contribute
+    // one path each", which stopped being true when `component` became
+    // conditional.
+    expect(meta.widgets).toHaveLength(2);
+    expect(exposed.widgets).toHaveLength(1);
     expect(collected.has("@acme/x/admin#StatsWidget")).toBe(false);
 
     // `clientConfig` is plugin data. A colour is not a component path, and

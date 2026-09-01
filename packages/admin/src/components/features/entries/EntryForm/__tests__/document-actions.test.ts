@@ -15,6 +15,8 @@ import {
   actionsAt,
   documentActions,
   menuGroups,
+  withContributedActions,
+  type DocumentAction,
   type DocumentActionState,
 } from "../document-actions";
 
@@ -300,5 +302,89 @@ describe("why an action cannot be used", () => {
     const viewApi = actions.find(a => a.id === "view-api");
     expect(viewApi).toBeDefined();
     expect(viewApi?.disabledReason).toBeUndefined();
+  });
+});
+
+describe("actions a host contributes", () => {
+  const built: DocumentAction[] = [
+    { id: "save", label: "Save", placement: "primary" },
+    { id: "delete", label: "Delete", placement: "menu", group: "danger" },
+  ];
+
+  it("appends them after the built-ins", () => {
+    /*
+     * Order is the model's answer, not the host's. A contribution placed first
+     * would let a page push its own action above Publish simply by contributing
+     * early, which is the ordering problem the untyped slot had.
+     */
+    const merged = withContributedActions(built, [
+      { id: "add-to-release", label: "Add to release", placement: "menu" },
+    ]);
+    expect(merged.map(a => a.id)).toEqual(["save", "delete", "add-to-release"]);
+  });
+
+  it("keeps several contributions in the order they were given", () => {
+    const merged = withContributedActions(built, [
+      { id: "one", label: "One", placement: "menu" },
+      { id: "two", label: "Two", placement: "menu" },
+    ]);
+    expect(merged.map(a => a.id).slice(-2)).toEqual(["one", "two"]);
+  });
+
+  it("DROPS a contribution that reuses a built-in id", () => {
+    /*
+     * The safety property. The built-ins carry the permission checks and the
+     * destructive flags, so a contribution reusing `delete` would replace the
+     * verb the model reasoned about with one it knows nothing about — and a
+     * substituted Delete looks entirely correct on screen.
+     */
+    const merged = withContributedActions(built, [
+      { id: "delete", label: "Delete everything", placement: "toolbar" },
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged.find(a => a.id === "delete")).toMatchObject({
+      label: "Delete",
+      placement: "menu",
+    });
+  });
+
+  it("keeps the non-colliding contributions when one collides", () => {
+    // The control: dropping the whole contribution list on any collision would
+    // satisfy the case above while silently removing unrelated actions.
+    const merged = withContributedActions(built, [
+      { id: "delete", label: "Delete everything", placement: "toolbar" },
+      { id: "add-to-release", label: "Add to release", placement: "menu" },
+    ]);
+    expect(merged.map(a => a.id)).toContain("add-to-release");
+  });
+
+  it("keeps only the FIRST of two contributions sharing an id", () => {
+    /*
+     * Not merely a repeated row. Bindings are keyed by id, so the second
+     * contribution's handler would overwrite the first — and both rows,
+     * including the one still showing the first contribution's label and
+     * destructive styling, would run the second one's operation.
+     */
+    const merged = withContributedActions(built, [
+      { id: "export", label: "Export", placement: "menu" },
+      { id: "export", label: "Export and delete", placement: "menu" },
+    ]);
+    const exports = merged.filter(a => a.id === "export");
+    expect(exports).toHaveLength(1);
+    expect(exports[0]?.label).toBe("Export");
+  });
+
+  it("still admits contributions with distinct ids", () => {
+    // The control: deduplicating on any repeat would satisfy the case above
+    // while dropping unrelated contributions.
+    const merged = withContributedActions(built, [
+      { id: "export", label: "Export", placement: "menu" },
+      { id: "archive", label: "Archive", placement: "menu" },
+    ]);
+    expect(merged.map(a => a.id).slice(-2)).toEqual(["export", "archive"]);
+  });
+
+  it("changes nothing when there is nothing to contribute", () => {
+    expect(withContributedActions(built, [])).toEqual(built);
   });
 });

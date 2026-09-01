@@ -20,6 +20,7 @@
  */
 
 import {
+  keepPreviousData,
   useMutation,
   useQuery,
   useQueryClient,
@@ -33,7 +34,10 @@ import {
   updateTemplate,
   deleteTemplate,
   previewTemplate,
+  previewDraft,
   sendTestEmail,
+  type DraftPreviewResult,
+  type DraftPreviewTemplate,
   type EmailTemplateRecord,
   type CreateEmailTemplatePayload,
   type UpdateEmailTemplatePayload,
@@ -50,6 +54,18 @@ export const emailTemplateKeys = {
   lists: () => [...emailTemplateKeys.all(), "list"] as const,
   details: () => [...emailTemplateKeys.all(), "detail"] as const,
   detail: (id: string) => [...emailTemplateKeys.details(), id] as const,
+  /**
+   * A rendered draft, keyed by everything the render reads.
+   *
+   * The fields ARE the key: a preview is a pure function of them, so two
+   * identical drafts share one cache entry and a changed character is a
+   * different entry. Keying by template id instead would serve one draft's
+   * render for another's edits, and would have no key at all while creating.
+   */
+  draftPreview: (
+    template: DraftPreviewTemplate,
+    data: Record<string, unknown>
+  ) => [...emailTemplateKeys.all(), "draftPreview", template, data] as const,
 };
 
 // ============================================================
@@ -213,5 +229,48 @@ export function useSendTestEmailTemplate() {
     { slug: string; to: string; variables: Record<string, unknown> }
   >({
     mutationFn: ({ slug, to, variables }) => sendTestEmail(slug, to, variables),
+  });
+}
+
+/**
+ * useDraftEmailTemplatePreview — render UNSAVED fields on the server.
+ *
+ * A QUERY rather than a mutation, though the transport is a POST. The render
+ * is a read: it writes nothing, and it is re-run whenever the fields change.
+ * As a mutation, typing would fire one per keystroke with no relationship
+ * between them, and whichever RESPONDED last would win — not the one typed
+ * last — leaving a stale preview on screen with nothing to indicate it. As a
+ * query, React Query dedupes identical fields, discards superseded results,
+ * and `keepPreviousData` holds the last good render in place instead of
+ * flashing empty between keystrokes.
+ *
+ * Debouncing belongs to the CALLER: this hook renders whatever key it is
+ * given, and only the caller knows which of its fields are typed into.
+ */
+export function useDraftEmailTemplatePreview(
+  template: DraftPreviewTemplate,
+  data: Record<string, unknown>,
+  options?: { enabled?: boolean }
+) {
+  return useQuery<DraftPreviewResult, Error>({
+    queryKey: emailTemplateKeys.draftPreview(template, data),
+    queryFn: () => previewDraft(template, data),
+    enabled: options?.enabled ?? true,
+    placeholderData: keepPreviousData,
+    /*
+     * BOUNDED, not infinite. The render is not a pure function of this key
+     * whenever `useLayout` is set: the server resolves the wrapping layout
+     * from the database, so the same draft fields and sample data can render
+     * differently after someone edits that layout in another tab or another
+     * session. Held forever, an author would be shown an obsolete wrapper as
+     * the current email with no way to notice — a remount and a window focus
+     * would both keep serving it.
+     *
+     * Edits made HERE already invalidate this: the mutation hooks above
+     * invalidate `emailTemplateKeys.all()`, and this key sits beneath it.
+     * The window is for the edits this session cannot see.
+     */
+    staleTime: 30_000,
+    retry: false,
   });
 }

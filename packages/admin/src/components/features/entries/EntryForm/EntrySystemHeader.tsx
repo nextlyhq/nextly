@@ -24,12 +24,17 @@ import { translationCounts } from "../translation-meta";
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { documentActions } from "./document-actions";
-import { DocumentActionBar, type ActionBinding } from "./DocumentActionBar";
+import {
+  acceptContributions,
+  DocumentActionBar,
+  type ActionBinding,
+  type ContributedAction,
+} from "./DocumentActionBar";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
 import { PreviewActions } from "./PreviewActions";
-import { TOOLBAR_CONTAINER, ToolbarLabel } from "./toolbar-density";
+import { TOOLBAR_CONTAINER } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
@@ -208,6 +213,16 @@ export interface EntrySystemHeaderProps {
    * plugin-agnostic — the caller builds it from `entryFormToolbarSlot`.
    */
   toolbarSlot?: React.ReactNode;
+  /**
+   * Document actions the PAGE owns, folded in with the built-in ones.
+   *
+   * Descriptions rather than rendered controls, so placement, ordering and
+   * disabled reasons stay this component's answer. A rendered node decides all
+   * three where it is written, and a control with no way to carry a reason has
+   * to disappear when a permission withholds it — which an author cannot
+   * distinguish from a feature that does not exist.
+   */
+  contributedActions?: readonly ContributedAction[];
 
   /**
    * Current schema fields, used to render a stored version in the history
@@ -256,6 +271,7 @@ export function EntrySystemHeader({
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
+  contributedActions = [],
   localized,
   isPreviewAvailable = false,
   onPreview,
@@ -277,22 +293,6 @@ export function EntrySystemHeader({
     getLocale,
   } = useLocalization();
   const defaultLocaleLabel = getLocale(defaultLocale)?.label ?? defaultLocale;
-  /*
-   * A declared label is used VERBATIM, not built into a sentence.
-   *
-   * `previewLabel` is a complete button label, not a noun: collections
-   * legitimately name one "View page", and "Show View page" is not English.
-   * Where the author supplied nothing there is no such risk and the control
-   * keeps its own wording, which says what the click will do.
-   *
-   * Losing "Show"/"Hide" for a declared label costs nothing that is not carried
-   * elsewhere — `aria-pressed` states it for assistive technology and the
-   * variant states it visually, which is how a toggle button reports itself.
-   */
-  const previewToggleLabel =
-    previewLabel ?? (previewPaneOpen ? "Hide preview" : "Show preview");
-  const previewToggleTitle =
-    previewLabel ?? (previewPaneOpen ? "Hide the preview" : "Show the preview");
   // Present only when the entry was fetched with `?translation-status=1` on a
   // localized collection; undefined otherwise, which both consumers below
   // treat as "nothing to report" rather than as zero progress.
@@ -523,6 +523,17 @@ export function EntrySystemHeader({
       : { delete: { onSelect: onDelete, disabledReason: busyReason } }),
   };
 
+  /*
+   * One merge for both halves. Splitting them would let the bar draw a built-in
+   * verb wired to a contribution that lost its collision — Delete, from the
+   * model, running somebody else's handler.
+   */
+  const withContributions = acceptContributions(
+    documentVerbs,
+    actionBindings,
+    contributedActions
+  );
+
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -616,40 +627,24 @@ export function EntrySystemHeader({
             minting a link and opening a preview both act on what is already
             saved, so a submit in flight is a race with them and not merely a
             busy form. */}
+          {/* ONE control for the preview, not three. The pane toggle used to
+            sit beside this looking like a second preview button, with opening
+            and copying already sharing a menu of their own — three of the
+            header's controls for one idea. */}
           <PreviewActions
             size="sm"
             isPreviewAvailable={isPreviewAvailable}
             {...(onPreview === undefined ? {} : { onPreview })}
             {...(previewLabel === undefined ? {} : { previewLabel })}
+            {...(onTogglePreviewPane === undefined
+              ? {}
+              : { onTogglePreviewPane })}
+            previewPaneOpen={previewPaneOpen}
             isLinkAvailable={isLinkAvailable}
             {...(onCopyLink === undefined ? {} : { onCopyLink })}
             isCopyingLink={isCopyingLink}
             disabled={isSubmitting}
           />
-          {/* The pane toggle, beside the preview actions rather than inside
-              them: `PreviewActions` decides its own shape from which of OPEN
-              and COPY are available, and a third action would make that a
-              three-way decision for a control whose whole design is that it
-              collapses to one button when only one thing can be done.
-
-              Offered only where a pane exists to open — an embedded editor in
-              a modal passes no handler and gets no control. */}
-          {onTogglePreviewPane !== undefined && (
-            <Button
-              type="button"
-              variant={previewPaneOpen ? "secondary" : "ghost"}
-              size="sm"
-              onClick={onTogglePreviewPane}
-              disabled={isSubmitting}
-              aria-pressed={previewPaneOpen}
-              title={previewToggleTitle}
-            >
-              <PanelRight className="h-4 w-4" aria-hidden="true" />
-              <ToolbarLabel priority="secondary">
-                {previewToggleLabel}
-              </ToolbarLabel>
-            </Button>
-          )}
           {/* Sits with the actions rather than beside the title: it reports on
             the same work the save buttons act on, and reads as status for that
             cluster.
@@ -703,8 +698,8 @@ export function EntrySystemHeader({
             rather than each control testing `isReadingHistory` for itself.
           */}
           <DocumentActionBar
-            actions={documentVerbs}
-            bindings={actionBindings}
+            actions={withContributions.actions}
+            bindings={withContributions.bindings}
             pending={isSubmitting}
           />
 

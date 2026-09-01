@@ -88,7 +88,15 @@ export function renderTemplate(
     escapeHtml: false,
   });
 
-  let html = interpolateTemplate(template.htmlContent, data);
+  // A layout row IS the wrapper, so the chrome variables its own markup
+  // references resolve here exactly as they do when a body is spliced into it.
+  // Withheld from an ordinary body: a template that says `{{appName}}` in its
+  // own copy has always rendered whatever the caller supplied, and nothing
+  // when the caller supplied nothing.
+  let html = interpolateTemplate(
+    template.htmlContent,
+    template.kind === "layout" ? withLayoutChrome(data, options) : data
+  );
 
   // Derived BEFORE the preheader and the layout are spliced in. The preheader
   // is a hidden preview line, and a text part derived after it would repeat
@@ -108,17 +116,36 @@ export function renderTemplate(
   // A layout row IS a wrapper, so wrapping it in another would nest two
   // documents. It renders as itself.
   if (template.kind !== "layout" && template.useLayout && layout) {
-    html = spliceIntoLayout(layout.htmlContent, html, {
-      ...data,
-      // A layout's own chrome routinely references these, and a caller sending
-      // one specific template has no reason to know that. Supplied here so a
-      // footer never renders blank, and only where the caller said nothing.
-      year: data.year ?? new Date().getFullYear().toString(),
-      appName: data.appName ?? options.appName,
-    });
+    html = spliceIntoLayout(
+      layout.htmlContent,
+      html,
+      withLayoutChrome(data, options)
+    );
   }
 
   return { subject, html, text };
+}
+
+/**
+ * The caller's data, plus the variables a layout's chrome routinely references.
+ *
+ * A layout's markup says `{{appName}}` and `{{year}}` in its footer, and a
+ * caller rendering one specific template has no reason to know that. Supplied
+ * for BOTH the wrapper a body is spliced into and a layout row rendering
+ * itself: they are the same markup, and filling one but not the other is what
+ * made a layout preview its own footer as blank.
+ *
+ * Only where the caller said nothing — an explicit value always wins.
+ */
+function withLayoutChrome(
+  data: Record<string, unknown>,
+  options: RenderTemplateOptions
+): Record<string, unknown> {
+  return {
+    ...data,
+    year: data.year ?? new Date().getFullYear().toString(),
+    appName: data.appName ?? options.appName,
+  };
 }
 
 /**

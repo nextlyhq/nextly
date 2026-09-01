@@ -8,11 +8,15 @@ export {
   WIDGET_SIZES,
   WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
+  DATA_ARCHETYPES,
+  QUERYLESS_ARCHETYPES,
   validateWidgetDefinition,
   type WidgetDefinition,
   type WidgetSize,
   type WidgetHeight,
   type WidgetArchetype,
+  type DataWidgetArchetype,
+  type QuerylessWidgetArchetype,
 } from "./definition";
 export {
   MAX_WIDGET_LIMIT,

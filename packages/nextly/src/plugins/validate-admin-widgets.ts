@@ -17,6 +17,13 @@
  * @module plugins/validate-admin-widgets
  */
 
+import {
+  DATA_ARCHETYPES,
+  QUERYLESS_ARCHETYPES,
+  WIDGET_ARCHETYPES,
+} from "../domains/widgets/definition";
+import { getNextlyLogger } from "../observability/logger";
+
 import type { PluginAdminWidget } from "./admin-contributions";
 import { adminWidgetError, adminWidgetShapeError } from "./admin-widget-error";
 import { jsonOnly, unserializableKeys } from "./json-round-trip";
@@ -35,26 +42,6 @@ function widgetLabel(widget: unknown, index: number): string {
 }
 
 /**
- * The two fields the admin grid cannot draw a widget without, and what each is
- * for.
- *
- * Checked HERE rather than by borrowing `validateWidgetDefinition`, which
- * validates a different shape and would reject valid contributions. That
- * validator requires `title`, `archetype` and `defaultSize` -- all OPTIONAL on
- * `PluginAdminWidget` -- insists on `namespace/name` for the id, which this
- * contract puts no shape on at all, and FORBIDS `component` on any archetype
- * but `custom`, where this contract requires it on every widget. The two
- * disagree field for field, so the reuse would be a name rather than a shared
- * decision.
- *
- * `id` keys the grid cell, so a blank one collides with every other blank one
- * and React reconciles two different widgets as one. `component` is the only
- * thing the grid draws: `PluginWidgetGrid` passes it to `PluginSlot`, and an
- * empty or absent path renders a blank card.
- */
-const REQUIRED_WIDGET_TEXT = ["id", "component"] as const;
-
-/**
  * Whether a decoded property carries real, non-whitespace text.
  *
  * Trimmed rather than length-checked: a component path made of spaces resolves
@@ -65,19 +52,188 @@ function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+/** Archetypes core fills from a query result, as a set for lookup. */
+const DATA_ARCHETYPE_SET: ReadonlySet<string> = new Set(DATA_ARCHETYPES);
+
+/** Archetypes core draws without asking for data. */
+const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
+  QUERYLESS_ARCHETYPES
+);
+
 /**
- * The name of the first required field this widget cannot supply, or
- * `undefined` when both are present.
+ * Whether this widget describes a body CORE can draw without the plugin.
  *
- * Reads the DECODED value rather than the caller's object, so a getter that
- * answered once for this check cannot answer differently for the
- * serialization -- the same reason `validatedAdminWidgets` publishes the
- * decoded value.
+ * DERIVED from core's two vocabularies rather than restated. Restating it is
+ * exactly how this went wrong once: "every archetype but `custom` needs a
+ * query" sounds right, and it made `text` and `actions` undeclarable while
+ * contradicting `validateWidgetDefinition`, which REFUSES a query on those two.
+ * One question, one implementation.
+ *
+ * So the pair is the unit for a DATA archetype and the archetype alone is the
+ * unit for a queryless one. A `metric` without a query describes a card core
+ * can never fill -- no request is made for it, no slot arrives, and the grid
+ * reads that absence as still loading for the life of the page.
+ *
+ * An archetype in NEITHER set is not judged here at all: it belongs to a newer
+ * core, and `warnUnknownArchetype` has already let it through. Requiring a
+ * query of it would be guessing which half of a vocabulary we do not have.
+ *
+ * `query` is checked for being an OBJECT and no further. What is inside it is
+ * `validateWidgetQuery`'s job, at the point the query runs and against the
+ * source registry that only exists then; duplicating any of it here would be a
+ * second opinion that can disagree with the one that decides.
  */
-function missingRequiredText(
-  widget: Record<string, unknown>
-): string | undefined {
-  return REQUIRED_WIDGET_TEXT.find(field => !isUsableText(widget[field]));
+function describesDrawableBody(widget: Record<string, unknown>): boolean {
+  const archetype = widget.archetype;
+  if (typeof archetype !== "string" || archetype === "custom") return false;
+
+  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) return true;
+
+  if (DATA_ARCHETYPE_SET.has(archetype)) {
+    return typeof widget.query === "object" && widget.query !== null;
+  }
+
+  // Unrecognised, and therefore a newer core's. Accepted for the same reason
+  // `warnUnknownArchetype` does not throw: the card reports itself, and the
+  // install stands.
+  return true;
+}
+
+/**
+ * Says so when a widget names an archetype this core does not know, WITHOUT
+ * refusing it.
+ *
+ * A boot failure here would be the worst outcome available. `assertAdminWidgets`
+ * runs during plugin resolution, so a throw aborts the install -- and the
+ * reachable cause is a plugin built against a NEWER core naming an archetype
+ * this one has not learned yet. Trading the whole admin for one card it cannot
+ * draw is not a trade anyone would choose, and it is the opposite of the
+ * blast-radius argument the other refusals in this file rest on: those exist
+ * because ONE unserializable widget breaks the workspace payload for every
+ * admin. An unrecognised archetype is perfectly serializable. It costs its own
+ * card and nothing else, and the grid already reports it there by name.
+ *
+ * Grafana answers the same question the same way -- an unknown panel type
+ * renders "Panel plugin not found" in that panel and the dashboard stands --
+ * and VS Code drops a single unrecognised contribution rather than the
+ * extension.
+ *
+ * Logged rather than swallowed, because the other reachable cause is a typo,
+ * and "metrics" for "metric" is a mistake whose card reads "not rendered yet"
+ * -- a sentence that suggests waiting rather than fixing.
+ *
+ * Called from `assertAdminWidgets` and NOWHERE else, which is the boot gate and
+ * runs once. `validatedAdminWidgets` is the wrong home for it despite being
+ * where the check would naturally sit: `buildPluginAdminMeta` calls it on every
+ * `/api/admin-meta` request, that route is public and unauthenticated because
+ * the sign-in screen renders before a session exists, and the responses are
+ * `no-store`. One mistyped archetype would have written a warning line per
+ * anonymous request, forever -- burying the one occurrence that says something
+ * under a stream of identical ones.
+ */
+/**
+ * What has already been warned about, as `plugin\u0000widget\u0000archetype`.
+ *
+ * `assertAdminWidgets` is called more than once per boot -- `registerServices`
+ * runs it through `resolvePlugins` and then again on the transformed list, and
+ * the CLI follows the same two-pass shape -- so an unchanged widget produced the
+ * same warning at least twice. A diagnostic that repeats itself reads as two
+ * problems, and the author counting occurrences learns nothing from the second.
+ *
+ * Module-level, so it lives as long as the process the warning describes. NUL as
+ * the separator because a plugin name or widget id may contain anything else.
+ */
+const WARNED_ARCHETYPES = new Set<string>();
+
+/**
+ * Forgets what has been warned about.
+ *
+ * For tests, which share one module instance across cases and would otherwise
+ * find the second case silent because the first already warned -- the same
+ * reason `clearWidgets` exists on the registry. A running app never calls it:
+ * the set describes one process, and re-warning inside it is exactly what was
+ * being fixed.
+ */
+export function resetArchetypeWarnings(): void {
+  WARNED_ARCHETYPES.clear();
+}
+
+function warnUnknownArchetype(
+  pluginName: string,
+  widget: { id?: unknown; archetype?: unknown }
+): void {
+  const archetype = widget.archetype;
+  if (typeof archetype !== "string") return;
+  if (
+    WIDGET_ARCHETYPES.includes(archetype as (typeof WIDGET_ARCHETYPES)[number])
+  ) {
+    return;
+  }
+  const widgetId = typeof widget.id === "string" ? widget.id : "";
+  const seenKey = `${pluginName}\u0000${widgetId}\u0000${archetype}`;
+  if (WARNED_ARCHETYPES.has(seenKey)) return;
+  WARNED_ARCHETYPES.add(seenKey);
+
+  getNextlyLogger().warn({
+    kind: "widget-archetype-unknown",
+    plugin: pluginName,
+    widget: widgetId === "" ? undefined : widgetId,
+    archetype,
+    known: WIDGET_ARCHETYPES,
+    message:
+      `Plugin "${pluginName}" contributes a widget with archetype ` +
+      `"${archetype}", which this version of Nextly does not draw. Its card ` +
+      "will say so and the rest of the dashboard is unaffected. If that is a " +
+      "typo, the known archetypes are: " +
+      WIDGET_ARCHETYPES.join(", ") +
+      ".",
+  });
+}
+
+/**
+ * Why a widget cannot be drawn at all, or `undefined` when it can.
+ *
+ * TWO ways to describe a body, because there are two tiers and the contract has
+ * to be able to say so. A plugin either ships a component and draws its own
+ * card, or it declares an archetype and a query and the HOST draws it -- which
+ * is the tier the whole widget query contract exists for, and which this gate
+ * previously made unreachable by requiring `component` on every widget.
+ *
+ * That requirement was justified on `PluginWidgetGrid` being "the only
+ * consumer", and it renders `PluginSlot path={widget.component}`, so a widget
+ * with no component drew an empty cell. `WidgetGrid` replaced it and nothing
+ * mounts `PluginWidgetGrid` any more: the current grid draws a `metric` from
+ * its query and says so by name when it cannot draw an archetype yet. The
+ * premise the rule rested on is gone, and the rule outlived it.
+ *
+ * `id` is still required unconditionally. It keys the grid cell, so a blank one
+ * collides with every other blank one and React reconciles two different
+ * widgets as one.
+ */
+function undrawableReason(widget: Record<string, unknown>): string | undefined {
+  if (!isUsableText(widget.id)) return 'declares no usable "id"';
+
+  // A SUPPLIED component must be usable, whether or not the declarative route
+  // would also have carried this widget.
+  //
+  // Checking it only as an alternative let `component: "   "` through beside a
+  // valid archetype and query -- and the admin resolver reads the component for
+  // TRUTHINESS, not usability, so a whitespace string won the archetype
+  // fallback, reached `PluginSlot` as a path nothing resolves, and drew a blank
+  // card where the archetype's own "not rendered yet" diagnostic belonged. An
+  // absent component is a choice; an unusable one is a mistake, and only the
+  // second is worth refusing.
+  if (widget.component !== undefined && !isUsableText(widget.component)) {
+    return 'supplies a "component" that is empty or not a string';
+  }
+
+  if (isUsableText(widget.component)) return undefined;
+  if (describesDrawableBody(widget)) return undefined;
+  return (
+    'describes no body: it needs either a usable "component", or an ' +
+    '"archetype" other than "custom" together with the "query" core draws it ' +
+    "from"
+  );
 }
 
 /**
@@ -115,13 +271,9 @@ export function validatedAdminWidgets(
     // blank or absent: `{ id: "stats", component: "" }` is perfectly good
     // JSON, so it was cast to `PluginAdminWidget` and published, and the grid
     // drew an empty card from it.
-    const missing = missingRequiredText(serializable);
-    if (missing !== undefined) {
-      throw adminWidgetShapeError(
-        plugin.name,
-        label,
-        `declares no usable "${missing}"`
-      );
+    const undrawable = undrawableReason(serializable);
+    if (undrawable !== undefined) {
+      throw adminWidgetShapeError(plugin.name, label, undrawable);
     }
     publishable.push(serializable as unknown as PluginAdminWidget);
   }
@@ -137,5 +289,12 @@ export function validatedAdminWidgets(
  * that answers 500 — boot is where that is still cheap to say.
  */
 export function assertAdminWidgets(plugins: PluginDefinition[]): void {
-  for (const plugin of plugins) validatedAdminWidgets(plugin);
+  for (const plugin of plugins) {
+    // The widgets that survived, so the warning describes what will actually be
+    // published rather than what was declared.
+    const widgets = validatedAdminWidgets(plugin) ?? [];
+    for (const widget of widgets) {
+      warnUnknownArchetype(plugin.name, widget);
+    }
+  }
 }

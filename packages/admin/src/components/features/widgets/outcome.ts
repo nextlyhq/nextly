@@ -31,8 +31,10 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { listAccepts, listBody } from "./archetypes/list";
 import { metricBody } from "./archetypes/metric";
-import type { ArchetypeBody } from "./archetypes/types";
+import { tableAccepts, tableBody } from "./archetypes/table";
+import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
 
 /**
  * The archetypes core draws from a query result.
@@ -41,9 +43,33 @@ import type { ArchetypeBody } from "./archetypes/types";
  * render, and the card says so by name rather than coming up blank. `custom`
  * is deliberately absent — it is not drawn from a result at all.
  */
-const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
-  metric: metricBody,
+const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
+  metric: { body: metricBody },
+  list: { accepts: listAccepts, body: listBody },
+  table: { accepts: tableAccepts, body: tableBody },
 };
+
+/**
+ * The renderer for an archetype, or `undefined` — by OWN property only.
+ *
+ * `ARCHETYPE_BODIES[archetype]` is not this question, and the difference is
+ * reachable. The archetype arrives over the wire from a plugin that may be
+ * JavaScript or built against a newer core, and boot deliberately accepts a
+ * name this release does not know so one unknown card cannot abort the install.
+ * A plain object answers for every name on `Object.prototype` as well as its
+ * own: `"__proto__"` returns an object, so the renderer looked present and then
+ * threw "body is not a function", taking the whole grid down with it — and
+ * `"constructor"`, `"toString"` and `"valueOf"` are worse, because they are
+ * FUNCTIONS. Those get CALLED with a widget result, return something whose `ok`
+ * is `undefined`, and draw a blank error with no message on it.
+ *
+ * `Object.hasOwn` asks the question that was meant.
+ */
+function archetypeRenderer(archetype: string): ArchetypeRenderer | undefined {
+  return Object.hasOwn(ARCHETYPE_BODIES, archetype)
+    ? ARCHETYPE_BODIES[archetype as WidgetArchetype]
+    : undefined;
+}
 
 /**
  * Whether core can draw this archetype from a result in this release.
@@ -54,8 +80,39 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
  * the table above -- not a second list that has to be remembered when an
  * archetype lands here.
  */
-export function coreDrawsArchetype(archetype: WidgetArchetype): boolean {
-  return ARCHETYPE_BODIES[archetype] !== undefined;
+/**
+ * Why core cannot draw this DECLARATION, or `undefined` when it can.
+ *
+ * The question every caller actually has, and the one `coreDrawsArchetype` --
+ * "is there an entry in the table?" -- only approximated. An archetype having a
+ * renderer says nothing about whether that renderer can draw a particular
+ * widget: a `list` needs `select`, and a declaration without one is refused by
+ * the same renderer that claims the archetype.
+ *
+ * Treating those as the same question cost two things. The grid batched a query
+ * for a widget that could never be drawn, spending an unprojected read and one
+ * of the batch's slots on documents thrown away on arrival. And a widget
+ * declared through both channels lost its contributed component -- the
+ * fallback fires when core cannot draw, and core reported that it could.
+ *
+ * `custom` is not asked about here: it is drawn by the plugin, and its
+ * declaration is judged where the component is resolved.
+ */
+export function coreCannotDraw(definition: DeclaredWidget): string | undefined {
+  const archetype = definition.archetype;
+  if (typeof archetype !== "string" || archetype === "custom") return undefined;
+
+  const renderer = archetypeRenderer(archetype);
+  if (!renderer) {
+    return `The "${archetype}" widget archetype is not rendered yet.`;
+  }
+
+  return renderer.accepts?.(definition);
+}
+
+/** Whether core can draw this declaration at all. */
+export function coreDraws(definition: DeclaredWidget): boolean {
+  return coreCannotDraw(definition) === undefined;
 }
 
 /**
@@ -79,8 +136,18 @@ export function resolveWidgetOutcome(
   // The escape hatch. A plugin component owns its own body and its own states.
   if (definition.archetype === "custom") return { state: "self-drawn" };
 
-  const body = ARCHETYPE_BODIES[definition.archetype];
-  if (!body) {
+  // Everything knowable WITHOUT a payload, decided first: an archetype with no
+  // renderer, and a declaration the renderer refuses. Both are settled before
+  // the slot is consulted, so a card that can never be drawn says why on the
+  // first render instead of waiting for a request the grid does not make.
+  const refusal = coreCannotDraw(definition);
+  if (refusal !== undefined) return { state: "failed", message: refusal };
+
+  const renderer = archetypeRenderer(definition.archetype);
+  // Unreachable: `coreCannotDraw` returned nothing, which for a non-`custom`
+  // archetype means the table held a renderer. Narrowing rather than asserting,
+  // so a future archetype that answers differently cannot walk past this.
+  if (!renderer) {
     return {
       state: "failed",
       message: `The "${definition.archetype}" widget archetype is not rendered yet.`,
@@ -105,7 +172,7 @@ export function resolveWidgetOutcome(
 
   if (!slot.ok) return { state: "failed", message: slot.error };
 
-  const drawn = body(slot.result, definition);
+  const drawn = renderer.body(slot.result, definition);
   return drawn.ok
     ? { state: "ready", node: drawn.node }
     : { state: "failed", message: drawn.message };

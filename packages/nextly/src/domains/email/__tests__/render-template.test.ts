@@ -172,6 +172,45 @@ describe("the composition recipients receive", () => {
     expect(out.html).not.toContain(CONTENT_MARKER);
   });
 
+  /*
+   * The chrome variables were supplied only to a wrapper a body was spliced
+   * INTO, so a layout row rendering itself resolved them against nothing and
+   * emitted `<footer> </footer>`. It is the same markup either way.
+   */
+  it("fills a layout ROW's own appName and year", () => {
+    const out = render(
+      {
+        subject: "s",
+        htmlContent: `<footer>{{appName}} {{year}}</footer>${CONTENT_MARKER}`,
+        plainTextContent: null,
+        preheader: null,
+        useLayout: true,
+        kind: "layout",
+      },
+      null,
+      {}
+    );
+    expect(out.html).toContain(APP_NAME);
+    expect(out.html).toMatch(/\d{4}/);
+  });
+
+  it("lets the caller's own values win on a layout ROW too", () => {
+    const out = render(
+      {
+        subject: "s",
+        htmlContent: `<footer>{{appName}} {{year}}</footer>${CONTENT_MARKER}`,
+        plainTextContent: null,
+        preheader: null,
+        useLayout: true,
+        kind: "layout",
+      },
+      null,
+      { appName: "Northwind", year: "1999" }
+    );
+    expect(out.html).toContain("Northwind 1999");
+    expect(out.html).not.toContain(APP_NAME);
+  });
+
   it("does not wrap when useLayout is false, even with a layout to hand", () => {
     const out = render(
       { ...base, useLayout: false },
