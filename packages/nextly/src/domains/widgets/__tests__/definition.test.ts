@@ -282,3 +282,47 @@ describe("a custom widget's component must be able to resolve", () => {
     ).toThrow(/requires a component path/);
   });
 });
+
+describe("defaultOrder places a widget without depending on which channel it came through", () => {
+  const base = {
+    id: "core/notes",
+    title: "Notes",
+    archetype: "text" as const,
+    defaultSize: "md" as const,
+  };
+
+  it("accepts a definition that omits it", () => {
+    // The control, and the compatibility bound: every widget that exists today
+    // declares none, so an absent value must stay valid.
+    expect(() => validateWidgetDefinition(base)).not.toThrow();
+  });
+
+  it("accepts any finite number, negative and fractional included", () => {
+    // Not an index. A caller inserting between two neighbours should not have
+    // to renumber them, which is the whole reason this is a number and not a
+    // position.
+    for (const defaultOrder of [0, 3, -1, 1.5]) {
+      expect(() =>
+        validateWidgetDefinition({ ...base, defaultOrder })
+      ).not.toThrow();
+    }
+  });
+
+  it("refuses a non-finite number", () => {
+    // `1e400` is valid JSON and parses to Infinity, so this is reachable from a
+    // decoded manifest rather than only from a test double. An Infinity sort
+    // key is not a diagnosable position -- it silently pins the card to one end
+    // and compares equal to every other Infinity.
+    for (const defaultOrder of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        validateWidgetDefinition({ ...base, defaultOrder })
+      ).toThrow();
+    }
+  });
+
+  it("refuses a value that is not a number at all", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...base, defaultOrder: "1" })
+    ).toThrow();
+  });
+});

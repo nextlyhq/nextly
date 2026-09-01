@@ -93,6 +93,21 @@ export interface WidgetDefinition {
   category?: string;
   archetype: WidgetArchetype;
   defaultSize: WidgetSize;
+  /**
+   * Where this widget sits by default, ascending. Omitted means "after
+   * everything that states one".
+   *
+   * The DECLARED default, not the reader's own arrangement -- a stored layout
+   * carries its own order per placement and wins over this. It exists because
+   * position was otherwise an accident of which CHANNEL a widget arrived
+   * through: the resolver reads contributions before registrations, so a card
+   * moved across the grid when its author switched from one to the other
+   * without changing anything about the card.
+   *
+   * A number rather than an index, so inserting between two neighbours does not
+   * renumber them. Any finite value is legal, negatives and fractions included.
+   */
+  defaultOrder?: number;
   /** Bounds what a user may resize to. Omitted means unconstrained. */
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
@@ -374,6 +389,23 @@ export function querylessQueryProblem(
   return `query is only valid for a data archetype or "custom", not "${archetype}"`;
 }
 
+/**
+ * `defaultOrder`, when stated, must be a finite number.
+ *
+ * `Number.isFinite` rather than a `typeof` check alone, and it is reachable
+ * rather than defensive: `1e400` is valid JSON that parses to `Infinity`, so a
+ * decoded plugin manifest can carry one without any code having written it. An
+ * infinite sort key cannot be diagnosed from the grid -- it pins the card to one
+ * end and compares equal to every other infinity, so two of them order
+ * arbitrarily against each other.
+ */
+function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
+  if (d.defaultOrder === undefined) return;
+  if (typeof d.defaultOrder !== "number" || !Number.isFinite(d.defaultOrder)) {
+    fail(`${d.id}: defaultOrder must be a finite number`);
+  }
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
@@ -399,4 +431,5 @@ export function validateWidgetDefinition(
   validateComponent(d);
   validateActions(d);
   validateQuery(d);
+  validateDefaultOrder(d);
 }
