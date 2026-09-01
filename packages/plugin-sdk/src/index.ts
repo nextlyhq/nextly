@@ -464,6 +464,8 @@ export {
   type WidgetSize,
   type WidgetHeight,
   type WidgetArchetype,
+  type DataWidgetArchetype,
+  type QuerylessWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
   type WidgetSourceFieldType,
