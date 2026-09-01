@@ -33,6 +33,7 @@ const NO_LIFECYCLE_SLUG = "plainrows";
 const SINGLE_SLUG = "prefs";
 const DRAFTS_SLUG = "drafted";
 const NO_LIFECYCLE_SINGLE = "plainprefs";
+const STRIPS_SLUG = "stripped";
 
 /** An editor who may update, and may publish, but may NOT take anything down. */
 const EDITOR = { id: "editor-1", isActive: true };
@@ -65,6 +66,29 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           update: () => true,
           publish: () => true,
           unpublish: () => true,
+        },
+        fields: [text({ name: "title", localized: true })],
+      }),
+      defineCollection({
+        slug: STRIPS_SLUG,
+        localized: true,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        hooks: {
+          beforeChange: [
+            ctx => {
+              // Stands in for any hook that decides this write should not carry
+              // a lifecycle change.
+              const next = { ...(ctx.data as Record<string, unknown>) };
+              delete next.status;
+              return next;
+            },
+          ],
         },
         fields: [text({ name: "title", localized: true })],
       }),
@@ -522,6 +546,78 @@ describe.each(getConfiguredTestDialects())(
         return payload?.resource?.locale === "de";
       });
       expect(german.map(e => e.type)).toContain("single.published");
+    });
+
+    it("REFUSES a wildcard status the lifecycle cannot hold", async () => {
+      // The guard has to check the VALUE, not just the key. `{ status: false }`
+      // otherwise passes: a dialect coerces it into the main row while the
+      // companion split omits `_status`, so the sweep — which needs a string —
+      // skips every translation. That is a partial move arriving through the
+      // door built to prevent partial moves.
+      const t = await boot(dialect);
+      const id = await germanStillLive(t);
+
+      const refused = await handlerOf(t).updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: false as unknown as string }
+      );
+
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(400);
+      // Nothing moved, in either row.
+      const after = await companionStatuses(t, `dc_${SLUG}_locales`);
+      expect(after.de).toBe("published");
+    });
+
+    it("REFUSES a wildcard whose status a hook removed", async () => {
+      // A `beforeChange` hook can clear `status`. The write would then succeed
+      // having moved nothing — no transition, no sweep — and the release that
+      // asked for it re-reads one language, finds it already at the target, and
+      // records itself applied. Refused where the knowledge is, because the
+      // verification step reads a single language and cannot see the others.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: STRIPS_SLUG, overrideAccess: true },
+        { title: "EN", status: "draft" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+
+      const refused = await handlerOf(t).updateEntry(
+        {
+          collectionName: STRIPS_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(409);
+    });
+
+    it("CONTROL: the same collection accepts an ordinary per-language write", async () => {
+      // Proves the refusal above is the wildcard rule meeting a hook that
+      // strips status, not the fixture being broken or refusing everything.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: STRIPS_SLUG, overrideAccess: true },
+        { title: "EN", status: "draft" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+
+      const ok = await handlerOf(t).updateEntry(
+        { collectionName: STRIPS_SLUG, entryId: id, overrideAccess: true },
+        { title: "EN v2" }
+      );
+      expect(ok.success).toBe(true);
     });
 
     it("REFUSES the wildcard on a collection with no lifecycle to move", async () => {

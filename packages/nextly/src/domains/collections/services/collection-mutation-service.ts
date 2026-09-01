@@ -45,6 +45,8 @@ import { recordFlattenedError } from "../../../hooks/side-effect-warnings";
 import { toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
+  LIFECYCLE_STATUSES,
+  isLifecycleStatus,
   resolveFirstPublishedStamp,
   resolvePublishTransition,
   selectPublicationTransition,
@@ -5355,6 +5357,24 @@ export class CollectionMutationService extends BaseService {
     if (sweepAllLocales) {
       const named = Object.keys(body);
       const statusOnly = named.length === 1 && named[0] === "status";
+      // The VALUE has to be one the lifecycle can hold, not merely the right
+      // key. A caller sending `{ status: false }` otherwise passes this guard,
+      // and the write then splits: a dialect coerces the value into the main
+      // row while `splitLocalizedWriteData` omits `_status`, so the companion
+      // sweep — which requires a string — skips every translation. That is the
+      // partial move this whole change exists to prevent, arriving through the
+      // door meant to stop it.
+      if (statusOnly && !isLifecycleStatus(body.status)) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
+            `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
+            `${JSON.stringify(body.status)}.`,
+          data: null,
+        };
+      }
       if (!statusOnly) {
         return {
           success: false,
@@ -5741,6 +5761,33 @@ export class CollectionMutationService extends BaseService {
       // body — see the create path.
       const intendedStatus = finalData.status;
 
+      // A wildcard that no longer carries a status after hooks has nothing to
+      // move, and must say so rather than commit an ordinary write.
+      //
+      // A `beforeChange` hook can remove `status` from the patch. The write then
+      // succeeds having moved nothing: no transition fires, so the sweep is
+      // skipped, and every language keeps the status it had. The release that
+      // asked for this reads the main row afterwards, finds the default language
+      // already at the target, and records itself applied — reporting a
+      // document-wide move that never happened, in the one direction nobody
+      // re-checks.
+      //
+      // Refused HERE rather than detected afterwards, because this is where the
+      // knowledge is: the verification step reads one language and cannot see
+      // the others, so no check it performs could tell the two cases apart.
+      if (sweepAllLocales && !isLifecycleStatus(intendedStatus)) {
+        return {
+          success: false,
+          statusCode: 409,
+          message:
+            `locale '${EVERY_LOCALE}' was asked to move this document's ` +
+            `publication status, but after hooks the write carries no status ` +
+            `to move. A hook that clears 'status' turns a document-wide ` +
+            `lifecycle change into a write that silently does nothing.`,
+          data: null,
+        };
+      }
+
       let localizedUpdate = await this.splitLocalizedWriteData(
         params.collectionName,
         finalData,
@@ -5889,53 +5936,6 @@ export class CollectionMutationService extends BaseService {
         requestLocale: params.locale ?? null,
         defaultLocale: this.localization?.defaultLocale ?? null,
       });
-
-      // A wildcard must not decide the fate of work somebody saved and has not
-      // released yet.
-      //
-      // Another language may be holding a pending edit, and moving the whole
-      // document's lifecycle would publish that language while its edit stayed
-      // unreleased — marking a translation live against values its author had
-      // already replaced. Releasing those edits here instead is not the smaller
-      // problem it looks: a pending edit stores the whole document as it looked
-      // when it was saved, not the fields its author actually touched, so two
-      // languages' edits cannot be merged without inventing a rule for which
-      // shared value wins — and every such rule silently discards somebody's
-      // work in some ordering.
-      //
-      // So this refuses, naming the languages that are holding work. A
-      // scheduled release then stops where an operator can see it, which is
-      // recoverable; guessing is not.
-      if (
-        sweepAllLocales &&
-        (collection as { versions?: { drafts?: { enabled?: boolean } } })
-          .versions?.drafts?.enabled === true
-      ) {
-        const heldBy = (
-          await new VersionsRepository(this.adapter).findAllWorkingDrafts({
-            scopeKind: "collection",
-            scopeSlug: params.collectionName,
-            entryId: params.entryId,
-          })
-        )
-          .map(draft => draft.locale)
-          .filter(
-            (locale): locale is string =>
-              locale !== null && locale !== draftLocaleKey
-          );
-        if (heldBy.length > 0) {
-          return {
-            success: false,
-            statusCode: 409,
-            message:
-              `This document has unpublished changes in ${heldBy.join(", ")}. ` +
-              `Publish or discard them first, or publish each language on its ` +
-              `own — locale '${EVERY_LOCALE}' moves every language's status and ` +
-              `will not decide what happens to work that has not been released.`,
-            data: null,
-          };
-        }
-      }
       // The component schemas reachable from this collection, resolved once off
       // the transaction (registry reads on the pooled connection, the same reason
       // as `webhookFields` below) and reused by the promote path. Skipped when a
@@ -6175,6 +6175,58 @@ export class CollectionMutationService extends BaseService {
           // The adapter owns the dialect specifics and no-ops where row locking
           // does not exist.
           await tx.lockRow(tableName, params.entryId);
+
+          // A wildcard must not decide the fate of work somebody saved and has
+          // not released yet — asked UNDER THE LOCK, because the answer changes.
+          //
+          // Another language may be holding a pending edit, and moving the whole
+          // document's lifecycle would publish that language while its edit
+          // stayed unreleased — marking a translation live against values its
+          // author had already replaced. Releasing those edits here instead is
+          // not the smaller problem it looks: a pending edit stores the whole
+          // document as it looked when it was saved, not the fields its author
+          // touched, so two languages' edits cannot be merged without inventing
+          // a rule for which shared value wins — and every such rule silently
+          // discards somebody's work in some ordering.
+          //
+          // Asked here rather than before the transaction because a draft save
+          // serialises on this same parent lock: a check that ran earlier can be
+          // overtaken by a save that commits first, and the release would then
+          // proceed over work it never saw. The refusal travels out on the
+          // same out-of-band result the transition gate uses, since the adapter
+          // re-wraps a thrown sentinel before the catch can identify it.
+          if (
+            sweepAllLocales &&
+            (collection as { versions?: { drafts?: { enabled?: boolean } } })
+              .versions?.drafts?.enabled === true
+          ) {
+            const heldBy = (
+              await new VersionsRepository(tx).findAllWorkingDrafts({
+                scopeKind: "collection",
+                scopeSlug: params.collectionName,
+                entryId: params.entryId,
+              })
+            )
+              .map(draft => draft.locale)
+              .filter(
+                (locale): locale is string =>
+                  locale !== null && locale !== draftLocaleKey
+              );
+            if (heldBy.length > 0) {
+              transitionDeniedResult = {
+                success: false,
+                statusCode: 409,
+                message:
+                  `This document has unpublished changes in ${heldBy.join(", ")}. ` +
+                  `Publish or discard them first, or publish each language on ` +
+                  `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                  `status and will not decide what happens to work that has ` +
+                  `not been released.`,
+                data: null,
+              };
+              throw new StatusTransitionDeniedError();
+            }
+          }
 
           // Read the committed state before this attempt's UPDATE. Nothing read
           // after the write can serve as prior state: the UPDATE below, the

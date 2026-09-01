@@ -31,6 +31,8 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
+  LIFECYCLE_STATUSES,
+  isLifecycleStatus,
   resolvePublishTransition,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
@@ -355,6 +357,18 @@ export class SingleMutationService extends BaseService {
     if (sweepAllLocales) {
       const named = Object.keys(data);
       const statusOnly = named.length === 1 && named[0] === "status";
+      // The VALUE, not merely the key — see the collection guard for why a
+      // coerced non-string splits the write instead of refusing it.
+      if (statusOnly && !isLifecycleStatus(data.status)) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
+            `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
+            `${JSON.stringify(data.status)}.`,
+        };
+      }
       if (!statusOnly) {
         return {
           success: false,
@@ -472,53 +486,6 @@ export class SingleMutationService extends BaseService {
       });
       if (accessDenied) {
         return accessDenied;
-      }
-
-      // A wildcard must not decide the fate of work somebody saved and has not
-      // released yet. Same rule, same reasoning, as the collection path: a
-      // pending edit stores the whole document as it looked when it was saved
-      // rather than the fields its author touched, so two languages' edits
-      // cannot be merged without inventing a rule for which shared value wins —
-      // and every such rule silently discards somebody's work in some ordering.
-      //
-      // The write locale is derived through the shared resolver rather than
-      // restated here, so this and the promotion that runs later cannot disagree
-      // about which language the write already covers.
-      if (
-        sweepAllLocales &&
-        existingDoc !== null &&
-        singleMeta.versions?.drafts?.enabled === true
-      ) {
-        const writeDraftLocale = workingDraftLocale({
-          documentLocalized: singleMeta.localized === true,
-          // A wildcard carries no request locale by the time it reaches here:
-          // it was resolved away so the body never sees it as a language.
-          requestLocale: null,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        });
-        const heldBy = (
-          await new VersionsRepository(this.adapter).findAllWorkingDrafts({
-            scopeKind: "single",
-            scopeSlug: slug,
-            entryId: existingDoc.id,
-          })
-        )
-          .map(draft => draft.locale)
-          .filter(
-            (locale): locale is string =>
-              locale !== null && locale !== writeDraftLocale
-          );
-        if (heldBy.length > 0) {
-          return {
-            success: false,
-            statusCode: 409,
-            message:
-              `This Single has unpublished changes in ${heldBy.join(", ")}. ` +
-              `Publish or discard them first, or publish each language on its ` +
-              `own — locale '${EVERY_LOCALE}' moves every language's status and ` +
-              `will not decide what happens to work that has not been released.`,
-          };
-        }
       }
 
       // 2. Resolve the document to write against. When the Single has never been
@@ -746,6 +713,24 @@ export class SingleMutationService extends BaseService {
       // without the gate.
       stripUndefinedStatus(currentData);
       const finalStatus = (currentData as { status?: unknown }).status;
+
+      // A wildcard that no longer carries a status after hooks has nothing to
+      // move — same rule, same reasoning, as the collection path. A hook that
+      // clears `status` would otherwise turn a document-wide lifecycle change
+      // into a write that succeeds having moved nothing, which the release then
+      // records as applied because the one language it re-reads was already
+      // where it wanted to be.
+      if (sweepAllLocales && !isLifecycleStatus(finalStatus)) {
+        return {
+          success: false,
+          statusCode: 409,
+          message:
+            `locale '${EVERY_LOCALE}' was asked to move this Single's ` +
+            `publication status, but after hooks the write carries no status ` +
+            `to move. A hook that clears 'status' turns a document-wide ` +
+            `lifecycle change into a write that silently does nothing.`,
+        };
+      }
       const isNonDefaultLocaleWrite =
         companion?.hasStatus === true &&
         writeLocale !== undefined &&
@@ -1207,6 +1192,48 @@ export class SingleMutationService extends BaseService {
             // way; the adapter no-ops where row locking is unsupported (SQLite
             // already serializes writers via BEGIN IMMEDIATE).
             await tx.lockRow(singleMeta.tableName, existingDoc.id);
+
+            // Asked UNDER THE LOCK, for the reason the collection path states:
+            // a draft save serialises on this same row, so a check that ran
+            // before the transaction can be overtaken by one that commits
+            // first, and the release would proceed over work it never saw.
+            if (
+              sweepAllLocales &&
+              singleMeta.versions?.drafts?.enabled === true
+            ) {
+              const writeDraftLocale = workingDraftLocale({
+                documentLocalized: singleMeta.localized === true,
+                // A wildcard carries no request locale by the time it reaches
+                // here: it was resolved away so the body never sees it as one.
+                requestLocale: null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              });
+              const heldBy = (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                })
+              )
+                .map(draft => draft.locale)
+                .filter(
+                  (locale): locale is string =>
+                    locale !== null && locale !== writeDraftLocale
+                );
+              if (heldBy.length > 0) {
+                transitionDeniedResult = {
+                  success: false,
+                  statusCode: 409,
+                  message:
+                    `This Single has unpublished changes in ${heldBy.join(", ")}. ` +
+                    `Publish or discard them first, or publish each language on ` +
+                    `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                    `status and will not decide what happens to work that has ` +
+                    `not been released.`,
+                };
+                throw new SingleStatusTransitionDeniedError();
+              }
+            }
 
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state
@@ -2456,8 +2483,23 @@ export class SingleMutationService extends BaseService {
                 companion &&
                 companionPhysicallyExists
               ) {
+                // A locale the app no longer configures still has a
+                // companion row, and an event tagged with one that normal reads
+                // and writes reject would mislead a locale-routed consumer —
+                // it names content the application no longer exposes. Both the
+                // collection sweep and the publish-all route already filter
+                // these, so this is the same decision rather than a new one.
+                const configuredLocales = new Set(
+                  this.localization?.locales.map(l => l.code) ?? []
+                );
                 for (const [locale, prior] of priorStatuses) {
                   if (locale === eventLocale) continue;
+                  if (
+                    configuredLocales.size > 0 &&
+                    !configuredLocales.has(locale)
+                  ) {
+                    continue;
+                  }
                   const nowPublished = dataLocaleStatus === "published";
                   const wasPublished = prior === "published";
                   if (nowPublished === wasPublished) continue;
