@@ -165,10 +165,95 @@ function validateId(d: Partial<WidgetDefinition>): void {
 }
 
 /** Confirms `title` carries real, non-whitespace text. */
-function validateTitle(d: Partial<WidgetDefinition>): void {
-  if (typeof d.title !== "string" || d.title.trim() === "") {
-    fail(`${d.id}: title is required`);
+/**
+ * Why a widget's field VALUES are unusable, or `undefined`.
+ *
+ * The rules that hold identically whichever channel a widget arrives by, in one
+ * place because they kept being written in two. Four fields have already
+ * drifted this way -- the shortcut rule, the queryless no-query rule,
+ * `defaultOrder` and `chrome` -- each added to one validator, missed by the
+ * other, and each time the contributed side was the more permissive, which is
+ * the direction that ships.
+ *
+ * SHAPE is deliberately not here, because the two channels genuinely disagree
+ * about it: a contribution may omit `title` and `defaultSize`, which resolution
+ * fills in, while a `WidgetDefinition` is the resolved widget and requires
+ * both. Those differences belong to their own validators and are listed by name
+ * in `plugins/__tests__/channel-divergence.test.ts`. What is here is only what
+ * neither channel has a reason to read differently.
+ *
+ * Takes a loose record rather than a `Partial<WidgetDefinition>`, so a decoded
+ * JSON object can ask it without either side casting to the other's shape.
+ */
+export function widgetValueProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  // A title is optional on a contribution and required on a definition, but a
+  // BLANK one is meaningless to both -- the card would be labelled with
+  // whitespace, and resolution's fallback to the id never fires because the
+  // field is technically present.
+  if (widget.title !== undefined) {
+    if (typeof widget.title !== "string" || widget.title.trim() === "") {
+      return "title, when given, must be non-empty";
+    }
   }
+
+  // An unknown size is the sharpest of these: `widgetSpanClass` falls back to
+  // full width, so the card silently spans the grid rather than reporting
+  // anything an author could search for.
+  for (const key of ["defaultSize", "minSize", "maxSize"] as const) {
+    const value = widget[key];
+    if (value !== undefined && !WIDGET_SIZES.includes(value as WidgetSize)) {
+      return `${key} must be one of ${WIDGET_SIZES.join(", ")}`;
+    }
+  }
+
+  const rangeProblem = sizeRangeProblem(widget);
+  if (rangeProblem !== undefined) return rangeProblem;
+
+  if (
+    widget.defaultHeight !== undefined &&
+    !WIDGET_HEIGHTS.includes(widget.defaultHeight as WidgetHeight)
+  ) {
+    return `defaultHeight must be one of ${WIDGET_HEIGHTS.join(", ")}`;
+  }
+
+  // `actions` belongs to the archetype named for it. Elsewhere the admin never
+  // reads the array, so declaring one is a shortcut list the author believes
+  // they published and nobody can reach.
+  if (widget.actions !== undefined && widget.archetype !== "actions") {
+    return 'actions are only valid for archetype "actions"';
+  }
+
+  return undefined;
+}
+
+/** The ordering rules between the three sizes, once each is known to be valid. */
+function sizeRangeProblem(widget: Record<string, unknown>): string | undefined {
+  const min = widget.minSize as WidgetSize | undefined;
+  const max = widget.maxSize as WidgetSize | undefined;
+  const dflt = widget.defaultSize as WidgetSize | undefined;
+
+  if (min && max && sizeRank(min) > sizeRank(max)) {
+    return `minSize (${min}) exceeds maxSize (${max})`;
+  }
+  // Only when a default is present. A contribution may omit it, and comparing
+  // an absent size against a bound would refuse a declaration that is complete
+  // by its own contract.
+  if (dflt === undefined) return undefined;
+  if (min && sizeRank(dflt) < sizeRank(min)) {
+    return `defaultSize (${dflt}) is below minSize (${min})`;
+  }
+  if (max && sizeRank(dflt) > sizeRank(max)) {
+    return `defaultSize (${dflt}) is above maxSize (${max})`;
+  }
+  return undefined;
+}
+
+function validateTitle(d: Partial<WidgetDefinition>): void {
+  // REQUIRED here, unlike on a contribution: this is the resolved widget, and
+  // the blank case is the shared rule's.
+  if (d.title === undefined) fail(`${d.id}: title is required`);
 }
 
 /** Confirms `archetype` is one of the known values. */
@@ -180,14 +265,9 @@ function validateArchetype(d: Partial<WidgetDefinition>): void {
 
 /** Confirms each of the three size fields names a real size. */
 function validateSizeValues(d: Partial<WidgetDefinition>): void {
-  if (!WIDGET_SIZES.includes(d.defaultSize as WidgetSize)) {
+  // REQUIRED here; the vocabulary check for all three is the shared rule's.
+  if (d.defaultSize === undefined) {
     fail(`${d.id}: defaultSize must be one of ${WIDGET_SIZES.join(", ")}`);
-  }
-  for (const key of ["minSize", "maxSize"] as const) {
-    const value = d[key];
-    if (value !== undefined && !WIDGET_SIZES.includes(value)) {
-      fail(`${d.id}: ${key} must be one of ${WIDGET_SIZES.join(", ")}`);
-    }
   }
 }
 
@@ -202,22 +282,6 @@ function validateSizeValues(d: Partial<WidgetDefinition>): void {
  * are what a resize is clamped to. Both bounds are inclusive, so a default
  * equal to either is in range.
  */
-function validateSizeRange(d: Partial<WidgetDefinition>): void {
-  if (d.minSize && d.maxSize && sizeRank(d.minSize) > sizeRank(d.maxSize)) {
-    fail(`${d.id}: minSize (${d.minSize}) exceeds maxSize (${d.maxSize})`);
-  }
-  const defaultRank = sizeRank(d.defaultSize as WidgetSize);
-  if (d.minSize && defaultRank < sizeRank(d.minSize)) {
-    fail(
-      `${d.id}: defaultSize (${d.defaultSize}) is below minSize (${d.minSize})`
-    );
-  }
-  if (d.maxSize && defaultRank > sizeRank(d.maxSize)) {
-    fail(
-      `${d.id}: defaultSize (${d.defaultSize}) is above maxSize (${d.maxSize})`
-    );
-  }
-}
 
 /**
  * Confirms `defaultHeight`, when present, names a real height.
@@ -228,14 +292,6 @@ function validateSizeRange(d: Partial<WidgetDefinition>): void {
  * grid resolving a height that does not exist. The two size fields are checked
  * against their vocabulary here; this is the third field of the same kind.
  */
-function validateHeight(d: Partial<WidgetDefinition>): void {
-  if (
-    d.defaultHeight !== undefined &&
-    !WIDGET_HEIGHTS.includes(d.defaultHeight)
-  ) {
-    fail(`${d.id}: defaultHeight must be one of ${WIDGET_HEIGHTS.join(", ")}`);
-  }
-}
 
 /**
  * Confirms `component` is present exactly when the archetype requires it, and
@@ -337,12 +393,9 @@ export type UnclassifiedArchetype = Exclude<
 function validateActions(d: Partial<WidgetDefinition>): void {
   const isActions = d.archetype === "actions";
 
-  if (!isActions) {
-    if (d.actions !== undefined) {
-      fail(`${d.id}: actions are only valid for archetype "actions"`);
-    }
-    return;
-  }
+  // The misplacement case is the shared rule's; what is left here is the
+  // requirement that an `actions` widget actually carries some.
+  if (!isActions) return;
 
   if (!Array.isArray(d.actions) || d.actions.length === 0) {
     fail(`${d.id}: archetype "actions" requires a non-empty actions array`);
@@ -519,11 +572,13 @@ export function validateWidgetDefinition(
   const d = def as Partial<WidgetDefinition>;
 
   validateId(d);
+  // The rules neither channel reads differently, asked once.
+  const valueProblem = widgetValueProblem(d);
+  if (valueProblem !== undefined) fail(`${d.id}: ${valueProblem}`);
+
   validateTitle(d);
   validateArchetype(d);
   validateSizeValues(d);
-  validateSizeRange(d);
-  validateHeight(d);
   validateComponent(d);
   validateActions(d);
   validateQuery(d);

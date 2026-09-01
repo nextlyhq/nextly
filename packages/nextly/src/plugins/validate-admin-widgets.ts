@@ -24,6 +24,7 @@ import {
   defaultOrderProblem,
   querylessQueryProblem,
   QUERYLESS_ARCHETYPES,
+  widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
 import { getNextlyLogger } from "../observability/logger";
@@ -304,6 +305,13 @@ const FIELD_RULES: ReadonlyArray<
   // refused the identical declaration, and the admin then ignored the value --
   // so the documented refusal was true of one channel only.
   widget => chromeProblem(widget.chrome, widget.archetype),
+
+  // Every rule neither channel reads differently -- the size vocabulary and its
+  // ordering, the height vocabulary, a blank title, actions on an archetype
+  // that is not `actions`. Asked as ONE rule so the next field added to the
+  // registry's value checks arrives here too, which is what the four that
+  // drifted before it did not.
+  widget => widgetValueProblem(widget),
 
   // A QUERYLESS archetype is drawn from its declaration ALONE, so a component
   // beside it is a fallback for an admin too old to draw the archetype -- never
