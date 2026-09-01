@@ -221,6 +221,9 @@ export async function previewTemplate(
  */
 export type DraftPreviewTemplate = DraftPreviewRequest["template"];
 
+/** The variable values a render interpolates, as the schema declares them. */
+export type DraftPreviewData = DraftPreviewRequest["data"];
+
 /**
  * A rendered draft: the complete artifact, including the text part.
  *
@@ -241,11 +244,18 @@ export type DraftPreviewResult = RenderedTemplate;
  */
 export async function previewDraft(
   template: DraftPreviewTemplate,
-  data: Record<string, unknown>
+  data: DraftPreviewData
 ): Promise<DraftPreviewResult> {
+  /*
+   * The WHOLE body is annotated, not just the template inside it. Typing only
+   * the nested field leaves the envelope hand-authored, so a schema that gains
+   * another required top-level property still compiles here and fails as a 400
+   * at runtime — which is the failure this derivation exists to prevent.
+   */
+  const body: DraftPreviewRequest = { template, data };
   return fetcher<DraftPreviewResult>(
     "/email-templates/preview",
-    { method: "POST", body: JSON.stringify({ template, data }) },
+    { method: "POST", body: JSON.stringify(body) },
     true
   );
 }
