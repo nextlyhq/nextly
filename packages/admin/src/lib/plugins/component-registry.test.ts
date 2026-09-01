@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as publicSurface from "./component-registry";
+
 import {
   autoRegisterPluginComponents,
   clearRegistry,
   hasComponent,
   registerComponent,
-  registerCoreComponent,
   registerKnownPlugin,
   resetAutoRegistration,
   unregisterComponent,
 } from "./component-registry";
+import { registerCoreComponent } from "./component-registry-internal";
 
 describe("autoRegisterPluginComponents — per-module guard", () => {
   beforeEach(() => {
@@ -115,5 +117,27 @@ describe("the `core#` namespace is reserved for core's own cards", () => {
     // `@acme/core#X`, or `my-core#X`, is not core's.
     registerComponent("@acme/core#Widget", Card);
     expect(hasComponent("@acme/core#Widget")).toBe(true);
+  });
+});
+
+describe("the privileged writer is not on the published subpath", () => {
+  it("is absent from `component-registry`, which the package exports", () => {
+    // `@nextlyhq/admin/lib/component-registry` is a published subpath, so
+    // anything it exports a plugin can import. `registerCoreComponent` skips
+    // the `core#` reservation by design -- exported there it WAS the documented
+    // way around the guard beside it, and the reservation was decoration.
+    //
+    // Asserted on the module's own surface rather than on a call, because the
+    // property is what the package hands out, not what any one caller does.
+    expect(publicSurface).not.toHaveProperty("registerCoreComponent");
+    expect(publicSurface).not.toHaveProperty("writeComponent");
+    expect(publicSurface).not.toHaveProperty("componentRegistry");
+  });
+
+  it("still exports the guarded API it is meant to", () => {
+    // The control. A subpath that exported nothing would satisfy the assertion
+    // above while breaking every plugin.
+    expect(publicSurface).toHaveProperty("registerComponent");
+    expect(publicSurface).toHaveProperty("getComponent");
   });
 });

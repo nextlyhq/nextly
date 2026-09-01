@@ -310,6 +310,13 @@ function mergeCollision(
     link: registration.link ?? contribution.link,
     component: registration.component ?? contribution.component,
     actions: registration.actions ?? contribution.actions,
+    // Both channels can state these, and the registry wins where it does --
+    // the rule `defaultSize` already follows above. Rebuilt field by field
+    // here, so a field added to the contract and not to THIS list is dropped
+    // silently: the merged widget loses its declared position, and an unframed
+    // custom widget is wrapped in the card it asked not to have.
+    defaultOrder: registration.defaultOrder ?? contribution.defaultOrder,
+    chrome: registration.chrome ?? contribution.chrome,
   };
 }
 
@@ -408,6 +415,14 @@ export function resolveDashboardWidgets(
   // so a card crossed the grid when its author moved it between channels
   // without changing anything about the card.
   //
+  // The sentinel is INFINITY, not `MAX_SAFE_INTEGER`. `validateDefaultOrder`
+  // accepts any finite number, and `Number.MAX_VALUE` is finite and far above
+  // `MAX_SAFE_INTEGER` -- so that sentinel let a widget with a perfectly valid
+  // order sort BELOW widgets claiming none, contradicting the one guarantee
+  // this field makes. Infinity is above the whole accepted range by
+  // construction, and nothing can tie with it because non-finite values are
+  // refused at declaration.
+  //
   // STABLE, which `Array.prototype.sort` has guaranteed since ES2019 and which
   // the whole compatibility story rests on: every widget shipping today states
   // no order, so they all compare equal and keep the arrangement they have.
@@ -416,7 +431,7 @@ export function resolveDashboardWidgets(
   // STATED order still passed.
   return [...contributed, ...registrations].sort(
     (a, b) =>
-      (a.defaultOrder ?? Number.MAX_SAFE_INTEGER) -
-      (b.defaultOrder ?? Number.MAX_SAFE_INTEGER)
+      (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
+      (b.defaultOrder ?? Number.POSITIVE_INFINITY)
   );
 }

@@ -39,6 +39,12 @@
 
 import type { ComponentType } from "react";
 
+import {
+  componentRegistry,
+  CORE_COMPONENT_PREFIX,
+  writeComponent,
+} from "./component-registry-internal";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -89,7 +95,6 @@ export interface InjectionPointProps {
  * Internal component registry map.
  * Maps component path strings to actual React components.
  */
-const componentRegistry = new Map<ComponentPath, ComponentType>();
 
 /**
  * Register a component in the registry.
@@ -110,34 +115,6 @@ const componentRegistry = new Map<ComponentPath, ComponentType>();
  * );
  * ```
  */
-/**
- * The prefix core's own dashboard cards resolve under.
- *
- * Reserved because a core widget's DEFINITION names this path and the widget id
- * stays core's, so a plugin registering the same path would replace the body
- * drawn for a card the registry still attributes to core -- a substitution no
- * permission gates, because nothing about the widget changed.
- *
- * A PREFIX, matched with `startsWith` rather than as a substring: a package
- * legitimately named `@acme/core#X` is not core's, and refusing it would reject
- * a valid registration to catch an invalid one.
- */
-const CORE_COMPONENT_PREFIX = "core#";
-
-/**
- * Registers a component core itself owns, under the reserved prefix.
- *
- * The only writer permitted past {@link registerComponent}'s reservation, and
- * separate from it so the permission is a property of the CALL SITE rather than
- * of a flag a caller could pass.
- */
-export function registerCoreComponent(
-  path: ComponentPath,
-  component: ComponentType<never>
-): void {
-  writeComponent(path, component);
-}
-
 export function registerComponent(
   path: ComponentPath,
   component: ComponentType<never>
@@ -168,21 +145,6 @@ export function registerComponent(
   }
 
   writeComponent(path, component);
-}
-
-/**
- * The single write into the registry map.
- *
- * Everything that registers a component reaches the map through here, so the
- * reservation above is complete by CONSTRUCTION rather than by having
- * enumerated the callers -- `registerComponents` and the auto-registration path
- * both route through `registerComponent`, and nothing else calls `set`.
- */
-function writeComponent(
-  path: ComponentPath,
-  component: ComponentType<never>
-): void {
-  componentRegistry.set(path, component as ComponentType);
 }
 
 /**

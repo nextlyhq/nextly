@@ -21,7 +21,7 @@ import { CollectionQuickLinks } from "@admin/components/features/dashboard/Colle
 import { SeedDemoContentCard } from "@admin/components/features/dashboard/SeedDemoContentCard";
 import { SinglesQuickLinks } from "@admin/components/features/dashboard/SinglesQuickLinks";
 import { TeamSummary } from "@admin/components/features/dashboard/TeamSummary";
-import { registerCoreComponent } from "@admin/lib/plugins/component-registry";
+import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 
 /**
  * Every `core#` path core's widget definitions name, bound to its component.

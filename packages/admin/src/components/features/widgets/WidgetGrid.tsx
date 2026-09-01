@@ -22,7 +22,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import {
   useWidgetQueries,
   type WidgetQueryRequest,
@@ -72,6 +75,7 @@ function settledAnnouncement(
 
 export function WidgetGrid() {
   const branding = useBranding();
+  const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
 
   // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
@@ -166,7 +170,56 @@ export function WidgetGrid() {
 
   // Nothing to draw. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
-  if (widgets.length === 0) return null;
+  // THREE outcomes, not two. Every card on the dashboard now arrives through
+  // the workspace query, so an empty list is no longer proof that there is
+  // nothing to draw -- it is equally the shape of a request still in flight and
+  // of one that never answered. Collapsing all three into `return null` blanked
+  // the entire page on first paint and on any transient failure, where the
+  // sections used to mount immediately and draw their own states.
+  //
+  // The distinction is the provider's to make, not this component's:
+  // `isUnavailable` means admin-meta never produced an answer, while a failed
+  // BACKGROUND refetch over a cached response leaves that response valid and
+  // is deliberately not reported here.
+  if (widgets.length === 0) {
+    if (isUnavailable) {
+      return (
+        <section
+          aria-label="Dashboard widgets"
+          data-testid="widget-grid-unavailable"
+          className="rounded-lg border border-border bg-card px-4 py-6 text-sm text-muted-foreground"
+        >
+          Your dashboard could not be loaded. It will reappear once the
+          connection recovers.
+        </section>
+      );
+    }
+
+    if (isPending) {
+      // Placeholders rather than nothing, so the page does not reflow from
+      // empty to full as the answer lands. Three, matching the sections a
+      // default install draws; `aria-hidden` because the live region below
+      // already speaks for the grid and a screen reader gains nothing from
+      // three empty boxes.
+      return (
+        <section
+          aria-label="Dashboard widgets"
+          data-testid="widget-grid-loading"
+          className="grid grid-cols-12 gap-6"
+        >
+          {[0, 1, 2].map(row => (
+            <div
+              key={row}
+              aria-hidden
+              className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
+            />
+          ))}
+        </section>
+      );
+    }
+
+    return null;
+  }
 
   return (
     <section aria-label="Dashboard widgets" className="grid grid-cols-12 gap-6">
@@ -199,14 +252,20 @@ export function WidgetGrid() {
             // An unframed widget is a SECTION, and sections on this page have
             // always been 48px apart -- the `space-y-12` the dashboard used
             // before these became widgets. The grid's own `gap-6` is a card
-            // rhythm and right for cards, so the extra 12px above and below
-            // belongs to the widgets that are not cards rather than to the
-            // grid: two adjacent sections come back to 48px, and a framed card
-            // beside one keeps its own spacing.
+            // rhythm and right for cards, so the difference belongs to the
+            // widgets that are not cards: 24px of trailing margin plus the
+            // 24px row gap puts two adjacent sections back at 48px.
+            //
+            // BOTTOM only. A symmetric `my-3` also pushed the FIRST row down,
+            // and the page's outer `space-y-12` already places the grid 48px
+            // below the welcome header -- so every dashboard gained 12px there
+            // while the inter-section gaps looked correct. Measuring the gaps
+            // alone could not see it; only the header-to-first-section distance
+            // could.
             //
             // Margins, not padding: a hidden cell contributes neither, but
             // padding would also inset a body that draws its own background.
-            widget.chrome === "none" && "my-3"
+            widget.chrome === "none" && "mb-6"
           )}
         >
           <WidgetRenderer

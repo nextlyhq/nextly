@@ -294,6 +294,23 @@ describe("defaultOrder decides position, and only where it is stated", () => {
     expect(ids(widgets)).toEqual(["first", "second", "third"]);
   });
 
+  it("puts an omitted order after EVERY value validation accepts", () => {
+    // `MAX_SAFE_INTEGER` is not the largest finite number, and the validator
+    // accepts any finite one -- so a widget declaring `Number.MAX_VALUE` sorted
+    // AFTER widgets that declared nothing, contradicting the guarantee that an
+    // omitted order goes last. The sentinel has to sit above the accepted
+    // range, not merely above the numbers anyone expects.
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        card("huge", { defaultOrder: Number.MAX_VALUE }),
+        card("none"),
+      ]),
+      [],
+      allow
+    );
+    expect(ids(widgets)).toEqual(["huge", "none"]);
+  });
+
   it("leaves widgets that state nothing in the order they already had", () => {
     // The compatibility bound, and the reason the sort has to be STABLE: every
     // widget shipping today declares no order, so an unstable comparator would
@@ -305,5 +322,69 @@ describe("defaultOrder decides position, and only where it is stated", () => {
       allow
     );
     expect(ids(widgets)).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
+describe("a widget declared through BOTH channels keeps its new fields", () => {
+  const ids = (widgets: { id: string }[]) => widgets.map(w => w.id);
+
+  it("carries defaultOrder and chrome through the collision merge", () => {
+    // `mergeCollision` rebuilds the widget field by field, so a field added to
+    // the contract and not to it is silently dropped -- the dual-channel widget
+    // loses its declared position and an unframed custom widget is wrapped in a
+    // card it asked not to have. Same shape as the result parser that dropped
+    // `fields` when the result contract grew.
+    const contribution = {
+      id: "shared",
+      title: "Shared",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "@acme/p/admin#X",
+      defaultOrder: 5,
+      chrome: "none",
+    } as unknown as RegisteredWidgetMeta;
+
+    const registration = {
+      id: "shared",
+      title: "Shared",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "@acme/p/admin#X",
+      defaultOrder: 1,
+      chrome: "none",
+    } as unknown as RegisteredWidgetMeta;
+
+    const [widget] = resolveDashboardWidgets(
+      contributing([contribution]),
+      [registration],
+      allow
+    );
+
+    // The registry is authoritative over a field it can state, which is the
+    // rule `defaultSize` already follows here.
+    expect(widget.defaultOrder).toBe(1);
+    expect(widget.chrome).toBe("none");
+  });
+
+  it("sorts the merged widget by the order it kept", () => {
+    // The consequence, asserted on the OUTCOME rather than on the merged
+    // object: a dropped order is invisible until something reads it.
+    const merged = {
+      id: "shared",
+      title: "Shared",
+      archetype: "text",
+      defaultSize: "sm",
+      defaultOrder: 0,
+    } as unknown as RegisteredWidgetMeta;
+
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        { id: "first", title: "f", archetype: "text", defaultSize: "sm" },
+        merged,
+      ] as unknown as RegisteredWidgetMeta[]),
+      [merged],
+      allow
+    );
+    expect(ids(widgets)).toEqual(["shared", "first"]);
   });
 });
