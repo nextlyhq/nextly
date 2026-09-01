@@ -166,26 +166,55 @@ async function runCount(
 }
 
 /**
- * The selected fields paired with the source's label for each.
+ * The columns a caller may actually see, paired with the source's label.
  *
- * Driven by `select` rather than by the source, so the answer contains exactly
- * the fields the caller named, in the order they named them -- a column order
- * the admin can render without deciding one of its own. A selected field the
- * source does not describe still appears, with no label: it was asked for, the
- * read allowed it, and dropping it would silently renumber the columns.
+ * Derived from the ROWS that came back, not from the source declaration alone,
+ * and that is an access-control decision rather than a tidiness one. A field
+ * can carry its own `access.read` rule, and `applyFieldReadAccess` strips a
+ * denied field from every row before selection runs -- so describing the
+ * declared selection would have advertised a column no row can fill AND
+ * disclosed the human label of a field this caller may not read. What survived
+ * the read is the only honest answer to "what are the columns".
+ *
+ * Order comes from `select`, because that is the order the widget asked for and
+ * a column order the admin should not have to invent. Duplicates are collapsed
+ * first: `select: ["title", "title"]` is a legal query whose Direct API
+ * projection is a single `{ title: true }`, so emitting two descriptors would
+ * have a table draw two columns for one value.
+ *
+ * Nothing is described when nothing came back. With no rows there is no
+ * evidence about which fields survived, and answering from the declaration
+ * would put the disclosure back on the empty case -- which is exactly the case
+ * a caller denied every selected field would see.
  */
 function describeSelectedFields(
   query: WidgetQuery,
-  source: WidgetSource
+  source: WidgetSource,
+  items: Record<string, unknown>[]
 ): WidgetResultField[] | undefined {
   if (!query.select || query.select.length === 0) return undefined;
+  if (items.length === 0) return undefined;
 
-  const labels = new Map(source.fields.map(field => [field.name, field.label]));
+  const survived = new Set<string>();
+  for (const item of items) {
+    for (const key of Object.keys(item)) survived.add(key);
+  }
 
-  return query.select.map(name => {
+  const labels = new Map<string, string | undefined>(
+    source.fields.map(field => [field.name, field.label])
+  );
+
+  const described: WidgetResultField[] = [];
+  const taken = new Set<string>();
+  for (const name of query.select) {
+    if (taken.has(name)) continue;
+    taken.add(name);
+    if (!survived.has(name)) continue;
     const label = labels.get(name);
-    return { name, ...(label !== undefined && { label }) };
-  });
+    described.push({ name, ...(label !== undefined && { label }) });
+  }
+
+  return described.length > 0 ? described : undefined;
 }
 
 async function runList(
@@ -202,10 +231,11 @@ async function runList(
     ...(select ? { select } : {}),
     ...sharedReadArgs(query, caller),
   });
-  const fields = describeSelectedFields(query, source);
+  const items = result.items ?? [];
+  const fields = describeSelectedFields(query, source, items);
   return {
     op: "list",
-    items: result.items ?? [],
+    items,
     ...(fields && { fields }),
   };
 }

@@ -441,6 +441,49 @@ describe("useWidgetQueries", () => {
       ).toEqual({ ok: false, error: expect.stringMatching(/unreadable/i) });
     });
 
+    it("carries the server's column descriptions through", async () => {
+      // The arm rebuilds a list result from checked fields, so anything not
+      // named here is discarded -- which is exactly what happened when the
+      // server started describing its columns and nothing in the admin could
+      // see them. A table archetype reads these to head its columns.
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ title: "Hello" }],
+            fields: [{ name: "title", label: "Title" }],
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ title: "Hello" }],
+          fields: [{ name: "title", label: "Title" }],
+        },
+      });
+    });
+
+    it("drops malformed column descriptions without losing the rows", async () => {
+      // A malformed heading costs the columns and nothing more. The rows are
+      // the answer, and refusing the whole result over its headings would turn
+      // a cosmetic problem into a blank card.
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ title: "Hello" }],
+            fields: [{ label: "no name here" }],
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "list", items: [{ title: "Hello" }] },
+      });
+    });
+
     it("still passes a well-formed LIST through untouched", async () => {
       // The second positive control, so the arm added beside `count` is known
       // to accept as well as refuse.

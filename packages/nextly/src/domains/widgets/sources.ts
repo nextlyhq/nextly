@@ -219,6 +219,22 @@ function validateSourceFields(s: Partial<WidgetSource>): void {
     if (seen.has(field.name)) {
       fail(`${s.id}: field "${field.name}" is declared more than once`);
     }
+    // A label that is present but unusable is refused HERE, where every source
+    // passes, rather than only on the path that builds one from a collection.
+    // A plugin registering its own source through the SDK reaches the stored
+    // snapshot untouched by that path, and `"   "` is legal TypeScript -- so
+    // the empty column head this field exists to prevent arrived through the
+    // one channel that had no normalisation. Refused rather than trimmed away,
+    // because a blank label is a mistake in the plugin's config and silently
+    // dropping it leaves the author wondering why their heading never appears.
+    if (
+      field.label !== undefined &&
+      (typeof field.label !== "string" || field.label.trim() === "")
+    ) {
+      fail(
+        `${s.id}: field "${field.name}" has a label that is empty or not a string`
+      );
+    }
     seen.add(field.name);
   }
 }

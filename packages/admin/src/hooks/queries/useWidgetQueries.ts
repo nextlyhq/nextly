@@ -33,6 +33,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
   WidgetQueryBatchResponse,
   WidgetResult,
+  WidgetResultField,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
@@ -152,6 +153,41 @@ function asSlot(value: unknown): WidgetSlot {
 }
 
 /**
+ * The server's column descriptions, or `undefined`.
+ *
+ * Checked like everything else that crosses this boundary: a descriptor with no
+ * usable `name` describes no column, and a `label` that is not a string is not
+ * a heading. A malformed `fields` costs the columns and nothing more -- the
+ * rows are the answer, and refusing the whole result over its headings would
+ * turn a cosmetic problem into a blank card.
+ *
+ * This function exists because the previous arm rebuilt a list result as
+ * `{ op, items }` and nothing else, which silently discarded the field
+ * descriptions the moment the server started sending them. Its own docblock
+ * said this is "the place that has to grow when the result contract does" --
+ * and then the contract grew.
+ */
+function asResultFields(value: unknown): WidgetResultField[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const described: WidgetResultField[] = [];
+  for (const raw of value) {
+    if (!isObject(raw)) return undefined;
+    const field = raw as { name?: unknown; label?: unknown };
+    if (typeof field.name !== "string" || field.name === "") return undefined;
+    if (field.label !== undefined && typeof field.label !== "string") {
+      return undefined;
+    }
+    described.push({
+      name: field.name,
+      ...(field.label !== undefined && { label: field.label }),
+    });
+  }
+
+  return described.length > 0 ? described : undefined;
+}
+
+/**
  * One `result` payload as the union it claims to be, or `undefined`.
  *
  * Narrowed by construction rather than asserted: each arm returns a fresh
@@ -181,7 +217,12 @@ function asSlot(value: unknown): WidgetSlot {
 function asResult(value: unknown): WidgetResult | undefined {
   if (!isObject(value)) return undefined;
 
-  const result = value as { op?: unknown; total?: unknown; items?: unknown };
+  const result = value as {
+    op?: unknown;
+    total?: unknown;
+    items?: unknown;
+    fields?: unknown;
+  };
 
   if (result.op === "count") {
     return typeof result.total === "number" && Number.isFinite(result.total)
@@ -195,7 +236,9 @@ function asResult(value: unknown): WidgetResult | undefined {
     // than here -- the same shape as the `total` above, one level down.
     if (!Array.isArray(result.items)) return undefined;
     const items: unknown[] = result.items;
-    return items.every(isObject) ? { op: "list", items } : undefined;
+    if (!items.every(isObject)) return undefined;
+    const fields = asResultFields(result.fields);
+    return { op: "list", items, ...(fields && { fields }) };
   }
 
   return undefined;

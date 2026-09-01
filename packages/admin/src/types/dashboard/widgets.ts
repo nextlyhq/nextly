@@ -30,9 +30,21 @@ import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
  * for a list cannot be read as each other — a renderer that reaches for
  * `total` on a list result must fail to compile, not print `undefined`.
  */
+/** One column of a list result, as the server described it. */
+export interface WidgetResultField {
+  name: string;
+  /** Absent when the source has no human label for this field. */
+  label?: string;
+}
+
 export type WidgetResult =
   | { op: "count"; total: number }
-  | { op: "list"; items: Record<string, unknown>[] };
+  | {
+      op: "list";
+      items: Record<string, unknown>[];
+      /** The selected columns, present only when the query declared `select`. */
+      fields?: WidgetResultField[];
+    };
 
 /**
  * One slot of the batch response, positionally matched to one query.
