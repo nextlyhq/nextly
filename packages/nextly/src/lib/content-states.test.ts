@@ -52,6 +52,28 @@ describe("what a state means", () => {
     expect(isPublicState("PUBLISHED")).toBe(false);
   });
 
+  it("answers membership with the SAME list the read filter uses", () => {
+    /*
+     * The two helpers must never disagree, and the only guarantee is that one
+     * of them does not walk `states` itself. A second walk agrees until the day
+     * normalization or deduplication is added to one of them; the disagreement
+     * then surfaces as a document the filter excluded and the predicate called
+     * public — the direction that publishes unpublished work.
+     */
+    const workflows: ContentWorkflow[] = [DEFAULT_WORKFLOW, EDITORIAL];
+    for (const workflow of workflows) {
+      for (const state of [...workflow.states, { name: "unknown" }]) {
+        expect(isPublicState(state.name, workflow)).toBe(
+          publicStateNames(workflow).includes(state.name)
+        );
+      }
+    }
+    // The premise: this ran over states of BOTH kinds, so agreeing everywhere
+    // is a real agreement rather than two empty answers.
+    expect(publicStateNames(EDITORIAL).length).toBe(1);
+    expect(EDITORIAL.states.length).toBeGreaterThan(1);
+  });
+
   it("returns every public state, not merely the first", () => {
     // A workflow may have more than one public state — `published` and a
     // `featured` that is also live. Returning one would hide the other's rows

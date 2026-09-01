@@ -13,8 +13,17 @@ import { publicStateNames } from "./content-states";
 /** Caller-facing status filter override. */
 export type StatusOption = "published" | "draft" | "all";
 
-/** Subset that maps directly to a column equality predicate. */
-export type StatusFilterValue = "published" | "draft";
+/**
+ * The state name a lifecycle-bounded read filters by.
+ *
+ * NOT a closed union, deliberately. A workflow names its own states, so the set
+ * of values this can hold is open the moment one is configurable, and a
+ * two-value type would only be kept true by casting the third value into it —
+ * which is how a consumer comparing the literal `"published"` would go on
+ * compiling while silently taking the wrong branch. Consumers ask
+ * `isPublicState` what the value MEANS rather than which word it is.
+ */
+export type StatusFilterValue = string;
 
 export type ResolveStatusFilterArgs = {
   /** True when the target collection/single has Draft/Published enabled. */
@@ -70,7 +79,7 @@ export function resolveStatusFilter(
       },
     });
   }
-  return { value: publicStates[0] as StatusFilterValue };
+  return { value: publicStates[0] };
 }
 
 /**

@@ -42,6 +42,15 @@ state a later edit removed, and the only safe reading of "nobody has decided
 about this" is that it is not published — absence of a decision is not
 permission.
 
+The release-aware read paths ask the same question. A due release publishes into
+whatever state the workflow calls public, so the four places that recognised the
+word `published` — the SQL condition, both collection read paths and Singles —
+now ask whether the state IS public. Under the default workflow they take exactly
+the branch they took before; under a workflow that renames its public state they
+keep revealing scheduled publications and keep applying scheduled withdrawals,
+where a literal would have skipped both and shown a query that returns rows and
+looks like it worked.
+
 The single-public-state assertion is deliberate. A workflow with two public
 states needs a set predicate rather than an equality, which the SQL builder does
 not construct yet, so this refuses rather than silently dropping rows from every

@@ -93,5 +93,11 @@ export function isPublicState(
   name: string,
   workflow: ContentWorkflow = DEFAULT_WORKFLOW
 ): boolean {
-  return workflow.states.some(state => state.name === name && state.isPublic);
+  // Asked of {@link publicStateNames} rather than walked again here. The two
+  // answers must never differ, and the only way to guarantee that is for one of
+  // them not to exist: a second walk over `states` would keep agreeing until
+  // the day normalization or deduplication is added to one of them, and the
+  // disagreement then appears as a document the filter excluded and this
+  // predicate called public.
+  return publicStateNames(workflow).includes(name);
 }

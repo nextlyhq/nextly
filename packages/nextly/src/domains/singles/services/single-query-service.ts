@@ -38,6 +38,7 @@ import {
 import type { HookRegistry } from "../../../hooks/hook-registry";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
+import { DEFAULT_WORKFLOW, isPublicState } from "../../../lib/content-states";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import {
   expansionStatusScope,
@@ -749,7 +750,10 @@ export class SingleQueryService extends BaseService {
     now: Date;
   }): Promise<boolean> {
     const matchesStatus = input.storedStatus === input.statusFilter.value;
-    if (input.statusFilter.value !== "published") return matchesStatus;
+    // The workflow decides what "published" means; see `lib/content-states`.
+    if (!isPublicState(input.statusFilter.value, DEFAULT_WORKFLOW)) {
+      return matchesStatus;
+    }
     if (typeof input.documentId !== "string") return matchesStatus;
 
     const decisions = await this.releaseVisibility.decisions({

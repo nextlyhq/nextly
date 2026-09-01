@@ -27,6 +27,7 @@ import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { getFilterRegistry, FilterSeams } from "../../../filters";
 import { toSnakeCase } from "../../../lib/case-conversion";
+import { DEFAULT_WORKFLOW, isPublicState } from "../../../lib/content-states";
 import { statusCondition } from "../../../lib/status-condition";
 import {
   expansionStatusScope,
@@ -315,7 +316,16 @@ export class CollectionQueryService extends BaseService {
     statusFilter: { value: StatusFilterValue } | null,
     now: Date
   ): Promise<ReleaseDecisions> {
-    if (statusFilter?.value !== "published") return NO_DECISIONS;
+    // Asked of the workflow rather than compared against the word `published`:
+    // a release publishes into whatever state the workflow calls public, and a
+    // literal here would skip the lookup — and the due publication — for any
+    // team that renamed it.
+    if (
+      statusFilter === null ||
+      !isPublicState(statusFilter.value, DEFAULT_WORKFLOW)
+    ) {
+      return NO_DECISIONS;
+    }
     return this.releaseVisibility.decisions({
       scopeKind: "collection",
       scopeSlug: collectionName,
@@ -1259,6 +1269,12 @@ export class CollectionQueryService extends BaseService {
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
+        // Named rather than defaulted, at every call site, so the day a
+        // collection carries its own workflow the sites still to be threaded
+        // are the ones that say DEFAULT_WORKFLOW — a default left implicit
+        // here would let one read answer a different question from its
+        // neighbour with nothing in the diff to show it.
+        workflow: DEFAULT_WORKFLOW,
         decisions: await this.releaseDecisions(
           params.collectionName,
           statusFilter,
@@ -2380,6 +2396,12 @@ export class CollectionQueryService extends BaseService {
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
+        // Named rather than defaulted, at every call site, so the day a
+        // collection carries its own workflow the sites still to be threaded
+        // are the ones that say DEFAULT_WORKFLOW — a default left implicit
+        // here would let one read answer a different question from its
+        // neighbour with nothing in the diff to show it.
+        workflow: DEFAULT_WORKFLOW,
         decisions: await this.releaseDecisions(
           params.collectionName,
           statusFilter,
@@ -2896,7 +2918,9 @@ export class CollectionQueryService extends BaseService {
       // the pending draft. When nothing is overlaid after all, the 404 below
       // still refuses to return the published row to a draft-only view.
       const suppressDraftStatusFilter =
-        draftOverlayPossible && statusFilter?.value === "draft";
+        draftOverlayPossible &&
+        statusFilter !== null &&
+        !isPublicState(statusFilter.value, DEFAULT_WORKFLOW);
       // Named `lifecycleCondition` rather than shadowing the imported
       // `statusCondition` helper it now delegates to.
       const readNow = new Date();
@@ -2906,6 +2930,7 @@ export class CollectionQueryService extends BaseService {
             filter: statusFilter,
             statusColumn: schema.status,
             idColumn: schema.id,
+            workflow: DEFAULT_WORKFLOW,
             decisions: await this.releaseDecisions(
               params.collectionName,
               statusFilter,

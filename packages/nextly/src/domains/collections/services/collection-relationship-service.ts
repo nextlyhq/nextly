@@ -12,6 +12,7 @@ import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
 } from "../../../lib/case-conversion";
+import { DEFAULT_WORKFLOW, isPublicState } from "../../../lib/content-states";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import { statusCondition } from "../../../lib/status-condition";
 import { resolveStatusFilter } from "../../../lib/status-filter";
@@ -1322,7 +1323,15 @@ export class CollectionRelationshipService extends BaseService {
     statusValue: string | undefined,
     now: Date
   ): Promise<ReleaseDecisions> {
-    if (statusValue !== "published") return NO_DECISIONS;
+    // The workflow decides what "published" means; see
+    // `lib/content-states`. An expansion bounded to a non-public state has
+    // nothing for a release to reveal.
+    if (
+      statusValue === undefined ||
+      !isPublicState(statusValue, DEFAULT_WORKFLOW)
+    ) {
+      return NO_DECISIONS;
+    }
     return this.releaseVisibility.decisions({
       scopeKind: "collection",
       scopeSlug: targetCollection,
@@ -1813,6 +1822,9 @@ export class CollectionRelationshipService extends BaseService {
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
+        // See collection-query-service: every call site names its workflow so
+        // the ones phase 2 must thread are greppable.
+        workflow: DEFAULT_WORKFLOW,
         decisions: await this.targetDecisions(
           targetCollection,
           statusFilter?.value,
