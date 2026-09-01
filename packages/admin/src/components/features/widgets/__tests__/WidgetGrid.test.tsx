@@ -14,7 +14,7 @@ import {
 } from "@admin/lib/plugins/component-registry";
 import type { AdminBranding } from "@admin/types/branding";
 
-import { coreDrawsArchetype } from "../outcome";
+import { coreDraws } from "../outcome";
 import { WidgetGrid } from "../WidgetGrid";
 
 let mockBranding: AdminBranding | undefined;
@@ -65,7 +65,10 @@ function renderGrid() {
 const HOST_DRAWN_ARCHETYPES = ["metric", "table", "list", "text", "actions"];
 
 const UNDRAWABLE = HOST_DRAWN_ARCHETYPES.find(
-  archetype => !coreDrawsArchetype(archetype)
+  // A declaration carrying a query, so what is being asked is "can core draw
+  // this archetype at all", not "is this particular widget under-declared".
+  archetype =>
+    !coreDraws({ archetype, query: { select: ["title"], op: "list" } })
 );
 
 it("has an archetype core cannot draw, which several cases below need", () => {
@@ -331,6 +334,67 @@ describe("WidgetGrid — collection and gating", () => {
 
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
     expect(screen.getByText("recent body")).toBeInTheDocument();
+  });
+
+  it("spends no query on a list that selects nothing", async () => {
+    // The declaration is refused by the archetype itself, so the card can never
+    // be drawn -- but the refusal used to arrive only after the query ran. The
+    // grid batched it because `list` had a renderer, the server performed an
+    // UNPROJECTED read and shipped whole documents to the browser, and the card
+    // threw them away to print the refusal. On every mount and every focus.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/selects no fields/i)).toBeInTheDocument();
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("keeps a contributed component when the registered list is under-declared", async () => {
+    // A widget declared through BOTH channels. The registration names `list`
+    // and omits `select`, so core cannot draw it -- and the contributed
+    // component is the only thing that can. The fallback fires when core cannot
+    // draw, and core reported that it could purely because `list` had an entry
+    // in the renderer table.
+    registerComponents({ "@acme/admin#Recent": () => <div>plugin rows</div> });
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [{ id: "shared", component: "@acme/admin#Recent" }],
+        },
+      ],
+      widgets: [
+        {
+          id: "shared",
+          title: "Shared",
+          archetype: "list",
+          defaultSize: "md",
+          query: { source: "collection:posts", op: "list" },
+        },
+      ],
+    } as unknown as AdminBranding;
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "list", items: [] } }],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByText("plugin rows")).toBeInTheDocument()
+    );
+    expect(screen.queryByText(/selects no fields/i)).not.toBeInTheDocument();
   });
 
   it("draws a LIST widget end to end, from declaration to rows", async () => {
