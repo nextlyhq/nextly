@@ -52,6 +52,7 @@ import {
   DRAG_SOURCE_ATTRIBUTE,
   DROP_PARENT_ATTRIBUTE,
   DROP_REFUSED_ATTRIBUTE,
+  LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   canvasScale,
   nodeIdFromEvent,
@@ -2650,7 +2651,46 @@ describe("the drag in flight is drawn on the canvas", () => {
     // The whole point of the row: the reason the engine computed reaches the
     // author, in words, naming the container and what it would accept.
     expect(getByText("Box does not take a Leaf.")).toBeTruthy();
-    expect(getByText("Takes Twice")).toBeTruthy();
+    // `wrong-parent` carries the MOVING block's valid parents, so the remedy
+    // says where the leaf can go — never that the box accepts a Twice.
+    expect(getByText("Leaf goes inside Twice")).toBeTruthy();
+  });
+
+  it("draws no refusal while a target is still committed", async () => {
+    /*
+     * `useCanvasDrag` holds the committed target across a short crossing while
+     * setting the refusal from the region under the pointer immediately, so
+     * both are non-null for the width of the switch threshold.
+     *
+     * Drawing the refusal there contradicts two things at once: the indicator
+     * still points at the held target, and releasing commits it. The chrome
+     * would say the block cannot land while letting go moves it.
+     */
+    const { container, queryByText } = draw(
+      dragging({
+        draggingId: "leaf",
+        target: {
+          id: "t",
+          regionId: "box::children",
+          at: { parentId: "box", slot: "children", index: 0 },
+        } as never,
+        refusal: {
+          regionId: "box::children",
+          parentId: "box",
+          reason: "wrong-parent",
+          permitted: ["acme/twice"],
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    // Control: the target half IS drawn, so the absences below are about the
+    // refusal being withheld rather than about nothing having rendered.
+    expect(
+      container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)
+    ).not.toBeNull();
+    expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
+    expect(queryByText(/does not take/)).toBeNull();
   });
 
   it("draws no drag marks at all when no drag is supplied", async () => {
@@ -2727,6 +2767,31 @@ describe("the drag in flight is drawn on the canvas", () => {
     expect(notice?.getAttribute("aria-hidden")).toBe("true");
     expect(notice?.getAttribute("role")).toBeNull();
     expect(notice?.getAttribute("aria-live")).toBeNull();
+  });
+
+  it("marks a locked node, so the grab cursor can be withheld from it", async () => {
+    /*
+     * `useCanvasDrag` returns before creating a gesture for a locked node, and
+     * with no drag handle the cursor is the only thing advertising a block as
+     * movable. Offering it on a node the engine has already refused leaves an
+     * author pressing repeatedly at something that will never move.
+     *
+     * Both halves asserted: marking every node would withhold the affordance
+     * from the whole page, which is the same defect pointing the other way.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "box", type: "acme/box", version: 1, props: {}, locked: true },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const locked = container.querySelectorAll(`[${LOCKED_ATTRIBUTE}]`);
+    expect(locked).toHaveLength(1);
+    expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
   });
 
   it("clears a drag mark from an element that has LOST its node id", async () => {

@@ -36,6 +36,7 @@ import {
   previewStateClass,
   statePropagatesToAncestors,
   STYLE_STATES,
+  walkNodes,
   type BlockDocument,
   type BreakpointSet,
   type StyleState,
@@ -55,7 +56,8 @@ import type { CanvasDragHandlers, CanvasDragState } from "./canvas-drag";
 import { offeredTiers } from "./canvas-width";
 import { FIT_ZOOM, usableScale, type CanvasZoom } from "./canvas-zoom";
 import { refusalWording } from "./drag-refusal";
-import { canvasContentRect } from "./geometry-dom";
+import { canvasContentRect, scrollableAncestor } from "./geometry-dom";
+import { isLocked } from "./locking";
 import { observeRenderedTree } from "./rendered-tree";
 import { selectionModeFor, type SelectionMode } from "./selection";
 import { CANVAS_ROOT_CLASS } from "./shell-state";
@@ -94,6 +96,17 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
  * Boolean by presence, for the reason {@link SELECTED_ATTRIBUTE} is: the
  * element already states its id.
  */
+/**
+ * Marks a node the drag engine will refuse to pick up.
+ *
+ * Drawn so the grab cursor can be withheld from it. With no drag handle, that
+ * cursor is the only thing advertising a block as movable, so offering it on a
+ * node `useCanvasDrag` returns early for leaves an author pressing repeatedly
+ * at something that will never move — an affordance promising what the engine
+ * has already decided against.
+ */
+export const LOCKED_ATTRIBUTE = "data-nx-locked";
+
 export const DRAG_SOURCE_ATTRIBUTE = "data-nx-drag-source";
 
 /**
@@ -748,7 +761,8 @@ function useCanvasMarkers(
   selectedId: string | null,
   page: React.ReactNode,
   forcedState: StyleState | undefined,
-  drag: CanvasDragState | undefined
+  drag: CanvasDragState | undefined,
+  lockedIds: ReadonlySet<string>
 ): void {
   /*
    * The drag's three marks are read into plain ids here rather than inside the
@@ -759,7 +773,7 @@ function useCanvasMarkers(
    */
   const sourceId = drag?.draggingId ?? null;
   const parentId = drag?.target?.at.parentId ?? null;
-  const refusedId = drag?.refusal?.parentId ?? null;
+  const refusedId = drawnRefusal(drag)?.parentId ?? null;
   useEffect(() => {
     const container = box.current;
     if (container === null) return;
@@ -810,6 +824,7 @@ function useCanvasMarkers(
             `[${DRAG_SOURCE_ATTRIBUTE}]`,
             `[${DROP_PARENT_ATTRIBUTE}]`,
             `[${DROP_REFUSED_ATTRIBUTE}]`,
+            `[${LOCKED_ATTRIBUTE}]`,
             ...STYLE_STATES.map(state => `.${previewStateClass(state)}`),
           ].join(", ")
         )
@@ -859,17 +874,15 @@ function useCanvasMarkers(
         [DROP_REFUSED_ATTRIBUTE, refusedId],
       ];
       touched.forEach(element => {
+        if (!ownedByCanvas(element, container)) return;
         const id = element.getAttribute(NODE_ID_ATTRIBUTE);
+        // Whether the engine would refuse to move this node, asked from the set
+        // rather than from the document per element: this walk re-runs on every
+        // change to the rendered tree, and a tree search per element would make
+        // that quadratic on a large page.
+        setFlag(element, LOCKED_ATTRIBUTE, id !== null && lockedIds.has(id));
         for (const [attribute, wanted] of dragMarks) {
-          // Compared before writing, for the reason the selection attribute
-          // above is: `setAttribute` queues a mutation record even when the
-          // value it writes is the value already there, the appender observes
-          // this subtree, and a drag writes on every pointer move — so an
-          // unguarded mark is a re-measure per frame rather than per drop.
-          const should = id !== null && id === wanted;
-          if (should === element.hasAttribute(attribute)) continue;
-          if (should) element.setAttribute(attribute, "");
-          else element.removeAttribute(attribute);
+          setFlag(element, attribute, id !== null && id === wanted);
         }
       });
 
@@ -981,7 +994,40 @@ function useCanvasMarkers(
     sourceId,
     parentId,
     refusedId,
+    lockedIds,
   ]);
+}
+
+/**
+ * Whether this element belongs to the canvas doing the marking.
+ *
+ * A node id is unique within a DOCUMENT and not across documents, so a block
+ * that renders a second canvas puts another document's ids inside the outer
+ * walk's reach. An inner node sharing the dragged id would then be dimmed by a
+ * drag it has no part in, and the refusal could anchor to it.
+ */
+function ownedByCanvas(element: Element, container: HTMLElement): boolean {
+  if (element === container) return true;
+  return element.closest(`.${CANVAS_ROOT_CLASS}`) === container;
+}
+
+/**
+ * Add or remove a boolean attribute, writing only when the answer changes.
+ *
+ * The comparison is the point rather than a saving. `setAttribute` queues a
+ * mutation record even when the value it writes is the value already there,
+ * the empty-container appender observes this subtree, and a drag re-marks on
+ * every pointer move — so an unguarded write is a re-measure per frame rather
+ * than one per drop.
+ *
+ * One function rather than the same three lines at each mark: they are one
+ * rule, and four copies of it are four chances for the guard to be dropped
+ * from whichever copy is edited next.
+ */
+function setFlag(element: Element, attribute: string, wanted: boolean): void {
+  if (wanted === element.hasAttribute(attribute)) return;
+  if (wanted) element.setAttribute(attribute, "");
+  else element.removeAttribute(attribute);
 }
 
 /**
@@ -1539,6 +1585,28 @@ export interface CanvasProps {
  * different block rather than at nothing.
  */
 /**
+ * The refusal a canvas should DRAW, which is not every refusal it is given.
+ *
+ * `useCanvasDrag` holds the committed target across a short crossing so the
+ * indicator does not flicker, while setting the refusal from the region under
+ * the pointer immediately — so both are non-null for the width of the switch
+ * threshold. Drawing the refusal there contradicts two things at once: the
+ * line still points at the held target, and releasing commits it. The chrome
+ * would say the block cannot land while letting go moves it.
+ *
+ * So a refusal is the honest answer only once there is no target to disagree
+ * with. One function rather than the same condition written at the mark and
+ * again at the message, because two spellings of one rule drift and the drift
+ * shows up as chrome that half-agrees with itself.
+ */
+function drawnRefusal(
+  drag: CanvasDragState | undefined
+): CanvasDragState["refusal"] {
+  if (drag === undefined || drag.target !== null) return null;
+  return drag.refusal;
+}
+
+/**
  * The sentence a refused drop draws, over the container that refused it.
  *
  * Anchored to the CONTAINER rather than to the pointer. The drag state carries
@@ -1582,7 +1650,8 @@ function DropRefusalNotice({
    */
   useIsomorphicLayoutEffect(() => {
     const element = notice.current;
-    const root = element?.closest(`.${CANVAS_ROOT_CLASS}`);
+    if (element === null) return;
+    const root = element.closest(`.${CANVAS_ROOT_CLASS}`);
     if (!(root instanceof HTMLElement)) return;
     // The root itself when the refusal is at the page level: there is no
     // container node to point at, which is the whole of what
@@ -1590,10 +1659,40 @@ function DropRefusalNotice({
     const region = parentId === undefined ? root : nodeElement(root, parentId);
     if (region === null) return;
     const rect = canvasContentRect(region, root);
-    setAt({ x: rect.x, y: rect.y });
+
+    /*
+     * Clamped into the part of the canvas the author can actually see.
+     *
+     * The anchor alone is not enough. A root refusal has no container to point
+     * at, so it resolves to the canvas itself and lands at the page origin —
+     * which on a long page is several screens above someone dragging near the
+     * bottom, so the explanation for what just refused them is drawn where they
+     * are not looking. A very tall container scrolled past does the same.
+     *
+     * The scroller defines "visible": the shell scrolls an ancestor rather than
+     * the canvas, and its rectangle measured in this canvas's own content
+     * coordinates is exactly the band on screen.
+     */
+    const scroller = scrollableAncestor(root);
+    if (scroller === null) {
+      setAt({ x: rect.x, y: rect.y });
+      return;
+    }
+    const band = canvasContentRect(scroller, root);
+    const inset = 12;
+    const lowest = band.y + band.height - inset - element.offsetHeight;
+    const top = band.y + inset;
+    // A band shorter than the message puts `lowest` above its own top, which
+    // makes the range inverted rather than narrow. Taking the top there keeps
+    // the message on screen instead of pinning it to a bound derived from a
+    // height that does not fit.
+    setAt({
+      x: rect.x,
+      y: lowest < top ? top : Math.max(top, Math.min(rect.y, lowest)),
+    });
   }, [parentId, reason]);
 
-  const { headline, takes } = refusalWording(refusal, movingType, regionType);
+  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
   return (
     <div
       ref={notice}
@@ -1620,8 +1719,8 @@ function DropRefusalNotice({
       aria-hidden="true"
     >
       <span className="nx-drop-refusal__why">{headline}</span>
-      {takes === null ? null : (
-        <span className="nx-drop-refusal__takes">{takes}</span>
+      {remedy === null ? null : (
+        <span className="nx-drop-refusal__takes">{remedy}</span>
       )}
     </div>
   );
@@ -1722,7 +1821,34 @@ export function Canvas({
     [rendered, document, sheet]
   );
 
-  useCanvasMarkers(root, marked, selectedId, page, forcedState, drag);
+  /*
+   * The locked nodes, collected in ONE traversal per document rather than asked
+   * per element inside the marker walk, which re-runs on every change to the
+   * rendered tree.
+   */
+  const lockedIds = useMemo(() => {
+    const ids = new Set<string>();
+    walkNodes(document.nodes, node => {
+      if (isLocked(node)) ids.add(node.id);
+    });
+    return ids;
+  }, [document]);
+
+  useCanvasMarkers(
+    root,
+    marked,
+    selectedId,
+    page,
+    forcedState,
+    drag,
+    lockedIds
+  );
+
+  // Bound once rather than called per prop: three calls would be three chances
+  // for the narrowing to be spelt differently, and the last one needed a
+  // non-null assertion to type-check at all.
+  const refusalDrawn = drawnRefusal(drag);
+  const refusedParentId = refusalDrawn?.parentId;
 
   return (
     <div
@@ -1768,10 +1894,10 @@ export function Canvas({
     >
       {page}
       {overlay}
-      {drag?.refusal == null ? null : (
+      {refusalDrawn === null ? null : (
         <DropRefusalNotice
-          refusal={drag.refusal}
-          movingType={drag.draggingBlockName ?? ""}
+          refusal={refusalDrawn}
+          movingType={drag?.draggingBlockName ?? ""}
           /*
            * The container's TYPE, resolved from the document the canvas is
            * already drawing. The refusal names the node; what an author reads
@@ -1779,9 +1905,9 @@ export function Canvas({
            * mapping exists.
            */
           regionType={
-            drag.refusal.parentId === undefined
+            refusedParentId === undefined
               ? undefined
-              : findNode(document.nodes, drag.refusal.parentId)?.type
+              : findNode(document.nodes, refusedParentId)?.type
           }
         />
       )}
