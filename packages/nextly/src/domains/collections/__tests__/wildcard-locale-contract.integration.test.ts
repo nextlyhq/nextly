@@ -34,11 +34,16 @@ const SINGLE_SLUG = "prefs";
 const DRAFTS_SLUG = "drafted";
 const NO_LIFECYCLE_SINGLE = "plainprefs";
 const STRIPS_SLUG = "stripped";
+const NO_LIFECYCLE_HOOKED = "plainhooked";
+
+/** Set by the hook below, so "did a hook run" is observable. */
+let hookRuns = 0;
 
 /** An editor who may update, and may publish, but may NOT take anything down. */
 const EDITOR = { id: "editor-1", isActive: true };
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
+  hookRuns = 0;
   current = await createTestNextly({
     dialect,
     collections: [
@@ -91,6 +96,21 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           ],
         },
         fields: [text({ name: "title", localized: true })],
+      }),
+      defineCollection({
+        slug: NO_LIFECYCLE_HOOKED,
+        // No lifecycle, and a hook that records having run. A hook is where
+        // external side effects live, so "did it run" is the property.
+        access: { read: () => true, update: () => true },
+        hooks: {
+          beforeChange: [
+            ctx => {
+              hookRuns += 1;
+              return ctx.data;
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
       }),
       defineCollection({
         slug: NO_LIFECYCLE_SLUG,
@@ -618,6 +638,120 @@ describe.each(getConfiguredTestDialects())(
         { title: "EN v2" }
       );
       expect(ok.success).toBe(true);
+    });
+
+    it("does not CREATE a translation the document never had", async () => {
+      // A document can exist with only a non-default translation. Normalising
+      // the wildcard to the default language sends it through the ordinary
+      // upsert, which would mint a status-only default row — published, and
+      // carrying no content. That is the state this sweep's own rule forbids:
+      // a language with no row has no translation, and inventing one
+      // manufactures the record whose absence was the fact.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: SLUG, overrideAccess: true, locale: "de" },
+        { title: "Nur Deutsch", status: "draft" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+
+      // Precondition: exactly one translation exists, and it is not the default.
+      const before = await companionStatuses(t, `dc_${SLUG}_locales`);
+      expect(Object.keys(before)).toEqual(["de"]);
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      const after = await companionStatuses(t, `dc_${SLUG}_locales`);
+      // The German row moved; no English row was conjured to move with it.
+      expect(after.de).toBe("published");
+      expect(Object.keys(after)).toEqual(["de"]);
+    });
+
+    it("is not blocked forever by work held in a language that was removed", async () => {
+      // The refusal must stay satisfiable. A draft left behind by a language no
+      // longer configured cannot be published or discarded — reads and writes
+      // reject that locale — so blocking on it would refuse every wildcard
+      // takedown for good, leaving a document live with no route out.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: DRAFTS_SLUG, overrideAccess: true },
+        { title: "EN", status: "published" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+
+      // A pending edit in `fr`, which this app does not configure.
+      await t.adapter.insert("nextly_versions", {
+        id: `stale-${id}`,
+        scopeKind: "collection",
+        scopeSlug: DRAFTS_SLUG,
+        entryId: id,
+        versionNo: null,
+        status: "draft",
+        isAutosave: false,
+        snapshot: JSON.stringify({ title: "Français" }),
+        label: null,
+        locale: "fr",
+        sourceVersionNo: null,
+        createdBy: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const result = await handlerOf(t).updateEntry(
+        {
+          collectionName: DRAFTS_SLUG,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "draft" }
+      );
+
+      // It runs. A configured language holding work still blocks — that case is
+      // covered by the refusal test above, which is what keeps this from
+      // passing on a guard that stopped blocking entirely.
+      expect(result.success).toBe(true);
+    });
+
+    it("refuses a lifecycle-less wildcard BEFORE any hook runs", async () => {
+      // A hook is where external side effects live — a webhook, a mail, a write
+      // into another system — and a 400 cannot take those back. A precondition
+      // reached after them is a report rather than a gate.
+      const t = await boot(dialect);
+      const created = await handlerOf(t).createEntry(
+        { collectionName: NO_LIFECYCLE_HOOKED, overrideAccess: true },
+        { title: "x" }
+      );
+      const id = (created.data as { id?: string } | undefined)?.id;
+      if (typeof id !== "string") throw new Error("no id from create");
+      const before = hookRuns;
+
+      const refused = await handlerOf(t).updateEntry(
+        {
+          collectionName: NO_LIFECYCLE_HOOKED,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      expect(refused.success).toBe(false);
+      expect(refused.statusCode).toBe(400);
+      // The whole point: the hook did not fire for a request invalid by
+      // definition. `before` is nonzero from the create above, so this is a
+      // comparison rather than an assertion satisfied by nothing happening.
+      expect(before).toBeGreaterThan(0);
+      expect(hookRuns).toBe(before);
     });
 
     it("REFUSES the wildcard on a collection with no lifecycle to move", async () => {

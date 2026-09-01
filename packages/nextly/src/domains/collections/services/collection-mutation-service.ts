@@ -5534,6 +5534,38 @@ export class CollectionMutationService extends BaseService {
         collection as Record<string, unknown>
       );
 
+      // Asked BEFORE any hook runs. This request is invalid by definition,
+      // and a hook may have external side effects — a webhook, a mail, a write
+      // into another system — that the 400 below cannot take back. A
+      // precondition reached after the side effects have happened is a report
+      // rather than a gate.
+      //
+      // The wildcard moves a LIFECYCLE, so a collection that has none has
+      // nothing for it to move, and the write must not proceed as an ordinary
+      // one. This is the flag on the config, not the presence of a `status`
+      // COLUMN: a collection carrying an ordinary user field called `status` has
+      // the column and no lifecycle, and letting the wildcard through there
+      // would write that field on the default locale — a field write, which is
+      // exactly what the wildcard contract refuses.
+      //
+      // Refused rather than answered as a no-op success. A no-op would let a
+      // scheduled release report itself applied having moved nothing, which is
+      // the failure mode this whole change exists to remove.
+      if (
+        sweepAllLocales &&
+        (collection as { status?: boolean }).status !== true
+      ) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `Collection '${params.collectionName}' has no draft/published ` +
+            `lifecycle, so locale '${EVERY_LOCALE}' has no publication status ` +
+            `to move across its languages.`,
+          data: null,
+        };
+      }
+
       const tableName = this.resolveTableName(
         collection,
         params.collectionName
@@ -5824,29 +5856,6 @@ export class CollectionMutationService extends BaseService {
       // here would let `status: 0`/`false` slip an unpublish past the gate.
       const collectionHasStatus =
         (collection as { status?: boolean }).status === true;
-
-      // The wildcard moves a LIFECYCLE, so a collection that has none has
-      // nothing for it to move, and the write must not proceed as an ordinary
-      // one. This is the flag on the config, not the presence of a `status`
-      // COLUMN: a collection carrying an ordinary user field called `status` has
-      // the column and no lifecycle, and letting the wildcard through there
-      // would write that field on the default locale — a field write, which is
-      // exactly what the wildcard contract refuses.
-      //
-      // Refused rather than answered as a no-op success. A no-op would let a
-      // scheduled release report itself applied having moved nothing, which is
-      // the failure mode this whole change exists to remove.
-      if (sweepAllLocales && !collectionHasStatus) {
-        return {
-          success: false,
-          statusCode: 400,
-          message:
-            `Collection '${params.collectionName}' has no draft/published ` +
-            `lifecycle, so locale '${EVERY_LOCALE}' has no publication status ` +
-            `to move across its languages.`,
-          data: null,
-        };
-      }
       // The guard carries the pre-resolved PERMISSION denial (document-
       // independent) plus, when the op's stored rule is document-dependent
       // (owner-only/custom), the rules to re-evaluate against the ROW-LOCKED
@@ -6195,6 +6204,9 @@ export class CollectionMutationService extends BaseService {
           // proceed over work it never saw. The refusal travels out on the
           // same out-of-band result the transition gate uses, since the adapter
           // re-wraps a thrown sentinel before the catch can identify it.
+          const configuredLocalesForHold = new Set(
+            this.localization?.locales.map(l => l.code) ?? []
+          );
           if (
             sweepAllLocales &&
             (collection as { versions?: { drafts?: { enabled?: boolean } } })
@@ -6211,7 +6223,23 @@ export class CollectionMutationService extends BaseService {
               .filter(
                 (locale): locale is string =>
                   locale !== null && locale !== draftLocaleKey
-              );
+              )
+              // Only a language the app still configures can block this write.
+              //
+              // A draft left behind by a language that was REMOVED from the
+              // configuration would otherwise refuse every wildcard publish and
+              // takedown forever, and the remedy this refusal recommends —
+              // publish or discard it — cannot be carried out, because reads and
+              // writes reject that locale. A scheduled takedown would then leave
+              // the document live indefinitely with no route out through the
+              // API: a refusal that cannot be satisfied is worse than the
+              // ambiguity it was added to avoid.
+              //
+              // The stale draft is left where it is rather than cleaned up here.
+              // A write asked to move a lifecycle has no business deleting
+              // somebody's stored work as a side effect, and the row is the only
+              // record that the work existed.
+              .filter(locale => configuredLocalesForHold.has(locale));
             if (heldBy.length > 0) {
               transitionDeniedResult = {
                 success: false,
@@ -6759,6 +6787,16 @@ export class CollectionMutationService extends BaseService {
           if (
             !storeAsWorkingDraft &&
             localizedUpdate &&
+            // A wildcard never UPSERTS. Normalising it to the default language
+            // sends the ordinary path through this call, which would create a
+            // status-only row for a document that has no default translation —
+            // one built with `locale: "de"` alone, say. That row then reads as a
+            // published default carrying no content, which is the state the
+            // sweep's own comment says must stay absent: a language with no
+            // companion row has no translation, and inventing one manufactures
+            // the record whose absence was the fact. The sweep below moves every
+            // row that genuinely exists, which is the whole of what was asked.
+            !sweepAllLocales &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
             await upsertCompanionRow(

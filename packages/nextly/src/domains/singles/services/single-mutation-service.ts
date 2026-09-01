@@ -1219,6 +1219,14 @@ export class SingleMutationService extends BaseService {
                 .filter(
                   (locale): locale is string =>
                     locale !== null && locale !== writeDraftLocale
+                )
+                // Only a configured language can block — see the collection
+                // path for why a removed one would make this refusal
+                // unsatisfiable rather than merely cautious.
+                .filter(locale =>
+                  new Set(
+                    this.localization?.locales.map(l => l.code) ?? []
+                  ).has(locale)
                 );
               if (heldBy.length > 0) {
                 transitionDeniedResult = {
@@ -1844,6 +1852,10 @@ export class SingleMutationService extends BaseService {
               // there IS live content, so writing it would publish the
               // translated half of a change whose rest is still pending.
               !holdEdit &&
+              // A wildcard never creates a translation — see the collection
+              // path. The sweep moves rows that exist; it does not manufacture
+              // a default-language row for a document that has none.
+              !sweepAllLocales &&
               companion &&
               companionPhysicallyExists &&
               writeLocale !== undefined &&
