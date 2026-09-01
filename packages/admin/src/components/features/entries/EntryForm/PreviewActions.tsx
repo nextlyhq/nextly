@@ -134,11 +134,22 @@ function SplitControl({
   options,
   size,
   disabled,
+  optionsLabel,
+  copying,
 }: {
   press: ReactElement;
   options: ReactElement[];
   size: "default" | "sm";
   disabled: boolean;
+  /**
+   * What this chevron opens, named after the control it belongs to.
+   *
+   * The chevron carries no visible text, so its `aria-label` IS its name, and a
+   * fixed one detaches it from a press whose label the collection chose.
+   */
+  optionsLabel: string;
+  /** Whether a link is being minted, which only this control can still show. */
+  copying: boolean;
 }) {
   if (options.length === 0) return press;
   return (
@@ -152,10 +163,20 @@ function SplitControl({
             size={size}
             disabled={disabled}
             className="rounded-l-none px-1.5"
-            aria-label="Preview options"
-            title="Preview options"
+            aria-label={optionsLabel}
+            title={optionsLabel}
           >
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
+            {/*
+              Progress belongs on the control that STAYS. Choosing to copy
+              closes the menu, so the item that showed the spinner is gone the
+              instant it would start — a slow mint then looks like nothing
+              happened at all.
+            */}
+            {copying ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ChevronDown className="h-4 w-4" aria-hidden="true" />
+            )}
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">{options}</DropdownMenuContent>
@@ -236,6 +257,8 @@ export function PreviewActions({
         size={size}
         disabled={disabled}
         options={options}
+        optionsLabel={`${labels.pane} options`}
+        copying={isCopyingLink}
         press={
           <Button
             type="button"
@@ -305,11 +328,27 @@ export function PreviewActions({
           variant="outline"
           size={size}
           disabled={disabled}
-          aria-label="Preview options"
-          title="Preview options"
+          /*
+            Derived from the VISIBLE text, not fixed. A collection naming its
+            preview "View page" renders that word, and a hardcoded name here
+            overrides it — so a voice-control user saying what they can see
+            addresses nothing, and a screen reader announces a name the screen
+            does not show.
+          */
+          aria-label={`${labels.menuTrigger} options`}
+          title={`${labels.menuTrigger} options`}
           data-preview-lead="menu"
         >
-          <Eye className="h-4 w-4" aria-hidden="true" />
+          {/*
+            Progress belongs on the control that STAYS: choosing to copy closes
+            the menu, so the item that would show the spinner is gone the
+            instant it starts.
+          */}
+          {isCopyingLink ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Eye className="h-4 w-4" aria-hidden="true" />
+          )}
           <ToolbarLabel priority="secondary">{labels.menuTrigger}</ToolbarLabel>
           <ChevronDown className="h-4 w-4" aria-hidden="true" />
         </Button>
