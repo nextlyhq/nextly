@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import {
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -10,6 +11,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PageBuilderCard } from "./PageBuilderCard";
+import { pageRenderInputs } from "./page-render-inputs";
 
 // Derived from the block's own definition rather than pinned: the renderer
 // drops a node whose version it cannot reconcile, and it drops it silently.
@@ -31,7 +33,15 @@ function doc(count: number): BlockDocument {
 
 const base = {
   siteStyles: undefined,
-  stylePending: false,
+  styleState: "ready" as const,
+  // Built through the real derivation, so the fixture cannot describe a bundle
+  // the product never produces.
+  render: pageRenderInputs({
+    siteStyle: undefined,
+    clientConfig: undefined,
+    previewContainer: undefined,
+    limits: DEFAULT_LIMITS,
+  }),
   canEdit: true,
   onOpen: () => {},
 };
@@ -83,7 +93,7 @@ describe("PageBuilderCard", () => {
    */
   it("draws no page at all while the site style is still arriving", () => {
     const { container } = render(
-      <PageBuilderCard {...base} document={doc(2)} stylePending />
+      <PageBuilderCard {...base} document={doc(2)} styleState="pending" />
     );
 
     expect(container.querySelector(MINIATURE)).toBeNull();
@@ -92,7 +102,7 @@ describe("PageBuilderCard", () => {
 
   it("draws the page once the site style has resolved", () => {
     const { container } = render(
-      <PageBuilderCard {...base} document={doc(2)} stylePending={false} />
+      <PageBuilderCard {...base} document={doc(2)} styleState="ready" />
     );
 
     expect(container.querySelector(MINIATURE)).not.toBeNull();
@@ -101,10 +111,49 @@ describe("PageBuilderCard", () => {
 
   it("still reports what the page holds while the style is pending", () => {
     const { container } = render(
-      <PageBuilderCard {...base} document={doc(2)} stylePending />
+      <PageBuilderCard {...base} document={doc(2)} styleState="pending" />
     );
 
     expect(container.textContent).toContain("2 blocks");
+  });
+
+  /*
+   * The third state, and the reason it has its own name.
+   *
+   * On a FAILED read `pending` goes false and the resolved style falls back to
+   * the config defaults, so a card keyed on `pending` alone would draw a page
+   * missing this site's stored classes, tokens and block defaults — the same
+   * plausible-but-wrong picture the pending branch refuses, arriving through
+   * the one door that branch does not watch.
+   */
+  it("draws no page when the site style could not be loaded", () => {
+    const { container } = render(
+      <PageBuilderCard {...base} document={doc(2)} styleState="unavailable" />
+    );
+
+    expect(container.querySelector(MINIATURE)).toBeNull();
+    expect(container.textContent).not.toContain("Block 0");
+  });
+
+  it("says why, rather than showing an empty frame", () => {
+    render(
+      <PageBuilderCard {...base} document={doc(2)} styleState="unavailable" />
+    );
+
+    expect(screen.getByRole("status").textContent).toMatch(
+      /cannot be previewed/i
+    );
+  });
+
+  // A failed preview must not take the way into the builder with it.
+  it("still offers the way in when the style could not be loaded", () => {
+    render(
+      <PageBuilderCard {...base} document={doc(2)} styleState="unavailable" />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /open page builder/i })
+    ).toBeDefined();
   });
 
   /*

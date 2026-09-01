@@ -42,9 +42,6 @@
 
 import {
   resolveSiteTokens,
-  isPlainRecord,
-  DEFAULT_LIMITS,
-  type DocumentLimits,
   getBlock,
   hasBlock,
   registerBlocks,
@@ -74,7 +71,6 @@ import {
   type CanvasZoom,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
-  offeredTiers,
   selectableTiers,
   widthForBreakpoint,
   BlockContextMenu,
@@ -144,13 +140,13 @@ import {
   classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
-  siteBreakpoints,
   siteSheet,
   type SiteStyleData,
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
 import { PageBuilderCard } from "./PageBuilderCard";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
@@ -158,6 +154,7 @@ import { PageBuilderCard } from "./PageBuilderCard";
 import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
 import { UnsavedChangesPill } from "./UnsavedChangesPill";
+import { useRestingPageRender } from "./use-resting-page-render";
 import { useShown } from "./use-shown";
 
 export interface BlocksFieldProps<
@@ -332,13 +329,15 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
    * than fetching twice; `pending` is forwarded so the card can decline to draw
    * a page it cannot draw faithfully yet.
    */
-  const restingClientConfig = usePluginClientConfig(PLUGIN_SOURCE);
-  const restingConfigStyle = useMemo(
-    () => readSiteStyleRecord(restingClientConfig?.siteStyle),
-    [restingClientConfig]
-  );
-  const { siteStyle: restingSiteStyle, pending: restingStylePending } =
-    useSiteStyle(restingConfigStyle);
+  /*
+   * What the resting card draws with, asked as ONE question.
+   *
+   * The site's style, whether it has arrived, its config and a container name
+   * for this field's own box — four reads, each of which produces a
+   * faithful-looking wrong page when got subtly wrong. They belong together and
+   * not in a control whose job is choosing between two surfaces.
+   */
+  const resting = useRestingPageRender(PLUGIN_SOURCE);
 
   /*
    * Closed if the form becomes read-only while the editor is up.
@@ -368,8 +367,9 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   ) : (
     <PageBuilderCard
       document={documentFrom(field.value)}
-      siteStyles={siteSheet(restingSiteStyle)}
-      stylePending={restingStylePending}
+      siteStyles={resting.siteStyles}
+      styleState={resting.styleState}
+      render={resting.render}
       // The gate is passed through rather than restated: `canEditBlocks`
       // already answers it for the editor above, and two readings of "may this
       // author edit" is one more than the question has.
@@ -733,53 +733,6 @@ function useClassWrites(
   );
 
   return { run };
-}
-
-/**
- * The document bounds the host renders under, as published to the browser.
- *
- * Read DEFENSIVELY and one key at a time: `clientConfig` is JSON that crossed a
- * transport, so nothing here can assume a shape. Anything unreadable falls back
- * to the engine's defaults, which is what the renderer itself falls back to —
- * so the two still agree rather than diverging in the direction that would
- * misreport which classes a page applies.
- */
-function readDocumentLimits(
-  clientConfig: Record<string, unknown> | undefined
-): DocumentLimits {
-  const declared = clientConfig?.limits;
-  if (!isPlainRecord(declared)) return DEFAULT_LIMITS;
-  // Built by overriding the defaults key by key rather than by asserting a
-  // shape onto the transported value: the keys come from `DEFAULT_LIMITS`, so
-  // a bound the engine adds later is carried without this being edited, and a
-  // key the host sent that the engine does not have is ignored.
-  const merged: DocumentLimits = { ...DEFAULT_LIMITS };
-  for (const key of Object.keys(DEFAULT_LIMITS) as (keyof DocumentLimits)[]) {
-    const supplied = declared[key];
-    /*
-     * Zero and Infinity are both LEGITIMATE bounds, so neither may be narrowed
-     * away here. A host setting `maxNodes: 0` gets a renderer that draws
-     * nothing, and substituting the default would have the panel mark classes
-     * as present on a page that renders none of them; the engine supports an
-     * infinite byte limit outright. What is refused is a value that is not a
-     * number, or one below zero, which no bound can mean.
-     */
-    // `null` is the wire spelling for an INFINITE bound: `Infinity` is not a
-    // JSON value and the client config is refused unless it survives the round
-    // trip unchanged, so the publisher encodes it and this decodes it.
-    if (supplied === null) {
-      merged[key] = Number.POSITIVE_INFINITY;
-      continue;
-    }
-    if (
-      typeof supplied === "number" &&
-      !Number.isNaN(supplied) &&
-      supplied >= 0
-    ) {
-      merged[key] = supplied;
-    }
-  }
-  return merged;
 }
 
 /**
@@ -1535,6 +1488,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   );
 
   /*
+   * The site's document caps, read once.
+   *
+   * Two readers now — the renderer inputs, which repair the document against
+   * them, and the class-usage count. Read separately they would agree until the
+   * day one of them was pointed at a different config.
+   */
+  const documentLimits = useMemo(
+    () => readDocumentLimits(clientConfig),
+    [clientConfig]
+  );
+
+  /*
    * What the inspector judges a written URL by.
    *
    * Without this the Style tab asks the engine to validate a value with no
@@ -1701,51 +1666,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     undefined
   );
 
-  const canvasRender = useMemo(() => {
-    /*
-     * ONE read of the site's breakpoints, feeding both the context and the
-     * decision about whether to preview at all.
-     *
-     * Two calls returned equal sets today and would stop the day `siteBreakpoints`
-     * normalises or defaults anything — and then preview eligibility would be
-     * answering from a different set than the canvas renders, which is the
-     * box/compile mismatch this whole seam exists to make unrepresentable. The
-     * docblock above already says this about the context's THREE readers; the
-     * eligibility question is a fourth.
-     */
-    const breakpoints = siteBreakpoints(canvasSiteStyle);
-    return {
-      styleContext: {
-        breakpoints,
-        /*
-         * Carried on the SAME context the cascade and the inspector read, so
-         * all three describe one compile. Supplied unconditionally rather than
-         * only while a tier is selected: at the full width the box is still a
-         * box, and a region narrower than the widest tier is already showing a
-         * narrower tier's rules. Compiling `@media` there would answer for the
-         * admin WINDOW instead — a wide window around a narrow canvas reports
-         * the desktop tier live while the box paints the tablet one.
-         */
-        ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
-        /*
-         * Unconditional, unlike the container above. A page cannot force a
-         * pseudo-class on itself, so the sheet has to carry a class alternative
-         * beside each one before the canvas can show an author the hover
-         * appearance they are editing — and whether they are editing one is not
-         * known when the sheet is compiled.
-         *
-         * It costs a few bytes per state rule in a sheet only the editor sees,
-         * and nothing at all in weight: the marker sits inside the `:where()`
-         * that already wrapped the pseudo-class, which contributes nothing. The
-         * published sheet is compiled elsewhere and never asks for this.
-         */
+  /*
+   * The renderer inputs, from the ONE derivation the entry screen's miniature
+   * also asks.
+   *
+   * This used to be assembled here, and the resting field assembled a poorer
+   * copy of its own — which is how the miniature came to render with no
+   * breakpoint container, no host policy and default caps while the canvas had
+   * all three. Two surfaces drawing one document must not answer "what does
+   * this site render like" separately.
+   *
+   * `previewStates` is the editor's alone: the canvas needs a class alternative
+   * beside each pseudo-class rule so it can show an author the state being
+   * edited, and a surface showing the page as published must not have one.
+   */
+  const canvasRender = useMemo(
+    () =>
+      pageRenderInputs({
+        siteStyle: canvasSiteStyle,
+        clientConfig,
+        previewContainer,
         previewStates: true,
-      },
-      ...(remotePatterns === undefined
-        ? {}
-        : { hostPolicy: { remotePatterns } }),
-    };
-  }, [canvasSiteStyle, remotePatterns, previewContainer]);
+        limits: documentLimits,
+      }),
+    [canvasSiteStyle, clientConfig, previewContainer, documentLimits]
+  );
 
   /*
    * What the canvas is previewing under, read back from the ONE context that
@@ -1899,8 +1844,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     // lowered them renders under those, and a walk here under different bounds
     // selects different nodes — which would report a class as absent from a
     // page that renders it, or present on one that does not.
-    () => classUsageOf(editor.document, readDocumentLimits(clientConfig)),
-    [editor.document, clientConfig]
+    () => classUsageOf(editor.document, documentLimits),
+    [editor.document, documentLimits]
   );
 
   /*

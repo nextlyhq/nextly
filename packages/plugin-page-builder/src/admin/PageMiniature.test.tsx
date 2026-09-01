@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import {
+  DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
@@ -10,6 +11,7 @@ import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { PageMiniature } from "./PageMiniature";
+import { pageRenderInputs } from "./page-render-inputs";
 
 // The version is DERIVED rather than written as 1: a document literal pinning
 // the number keeps parsing after the format moves, and the renderer would then
@@ -34,10 +36,21 @@ const doc = {
   ],
 } as unknown as BlockDocument;
 
+/*
+ * Built through the real derivation rather than as a literal, so this fixture
+ * cannot describe a bundle the product never produces.
+ */
+const RENDER = pageRenderInputs({
+  siteStyle: undefined,
+  clientConfig: undefined,
+  previewContainer: undefined,
+  limits: DEFAULT_LIMITS,
+});
+
 describe("PageMiniature", () => {
   it("draws the document's own content", () => {
     const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} />
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
     );
     expect(container.textContent).toContain("Hello from the page");
   });
@@ -49,7 +62,7 @@ describe("PageMiniature", () => {
    */
   it("marks the rendered subtree inert and hidden from assistive technology", () => {
     const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} />
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
     );
     const surface = container.querySelector(
       '[data-slot="page-miniature-surface"]'
@@ -68,7 +81,12 @@ describe("PageMiniature", () => {
    */
   it("scales by transform from the top left, never by zoom", () => {
     const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} renderWidth={1280} />
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={RENDER}
+        renderWidth={1280}
+      />
     );
     const scaled = container.querySelector<HTMLElement>(
       '[data-slot="page-miniature-scaled"]'
@@ -78,6 +96,58 @@ describe("PageMiniature", () => {
     expect(scaled?.style.width).toBe("1280px");
     expect(scaled?.style.transformOrigin).toBe("top left");
     expect(scaled?.style.getPropertyValue("zoom")).toBe("");
+  });
+
+  /*
+   * `inert` does not prevent a resource load, so the policy has to reach the
+   * renderer: without it remote fetching defaults OPEN and the miniature can
+   * request an image or an iframe from a host the published page refuses.
+   */
+  it("carries the site's remote-host policy to the renderer", () => {
+    const render_ = pageRenderInputs({
+      siteStyle: undefined,
+      clientConfig: { remotePatterns: [{ hostname: "cdn.example" }] },
+      previewContainer: undefined,
+      limits: DEFAULT_LIMITS,
+    });
+
+    expect(render_.hostPolicy?.remotePatterns).toEqual([
+      { hostname: "cdn.example" },
+    ]);
+  });
+
+  /*
+   * The container has to be declared on the element whose width the compiled
+   * rules must answer for — the COMPOSED width, not the clipped frame's. A
+   * named container left at the default `container-type: normal` is not a
+   * size-query container, so every rule the compile emitted stays inert.
+   */
+  it("declares the compiled container on the composed box", () => {
+    const withContainer = pageRenderInputs({
+      siteStyle: {
+        breakpoints: {
+          viewport: [{ id: "tablet", label: "Tablet", maxWidth: 1024 }],
+          container: [],
+        },
+      } as never,
+      clientConfig: undefined,
+      previewContainer: "nx-preview-mini",
+      limits: DEFAULT_LIMITS,
+    });
+
+    const { container } = render(
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={withContainer}
+      />
+    );
+    const scaled = container.querySelector<HTMLElement>(
+      '[data-slot="page-miniature-scaled"]'
+    );
+
+    expect(scaled?.style.containerName).toBe("nx-preview-mini");
+    expect(scaled?.style.containerType).toBe("inline-size");
   });
 
   /*
@@ -93,7 +163,7 @@ describe("PageMiniature", () => {
    */
   it("takes the scaled page out of the layout flow", () => {
     const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} />
+      <PageMiniature document={doc} siteStyles={undefined} render={RENDER} />
     );
     const scaled = container.querySelector<HTMLElement>(
       '[data-slot="page-miniature-scaled"]'
@@ -110,7 +180,12 @@ describe("PageMiniature", () => {
    */
   it("renders unscaled while the container cannot be measured", () => {
     const { container } = render(
-      <PageMiniature document={doc} siteStyles={undefined} renderWidth={1280} />
+      <PageMiniature
+        document={doc}
+        siteStyles={undefined}
+        render={RENDER}
+        renderWidth={1280}
+      />
     );
     const scaled = container.querySelector<HTMLElement>(
       '[data-slot="page-miniature-scaled"]'

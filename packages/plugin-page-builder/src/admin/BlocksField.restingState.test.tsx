@@ -140,6 +140,39 @@ describe("the entry form at rest", () => {
     expect(container.textContent).toContain("1 block");
   });
 
+  /*
+   * The failed read, end to end.
+   *
+   * `useSiteStyle` reports the failure and ALSO resolves a style — the config
+   * defaults — with `pending` false. So the field must read the error, or it
+   * draws a page missing this site's stored classes, tokens and block defaults
+   * and looks entirely correct doing it.
+   */
+  it("draws no page when the site-style read failed", () => {
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("site style unavailable"),
+    };
+
+    const { container } = render(<Host />);
+
+    expect(container.querySelector(MINIATURE)).toBeNull();
+    expect(container.textContent).not.toContain(PAGE_TEXT);
+  });
+
+  it("still offers the way into the builder when that read failed", () => {
+    siteStyleRead = {
+      data: undefined,
+      isPending: false,
+      error: new Error("site style unavailable"),
+    };
+
+    const { container } = render(<Host />);
+
+    expect(container.querySelector("button")).not.toBeNull();
+  });
+
   it("offers no way in when the field cannot be edited", () => {
     const { container } = render(<Host readOnly />);
 

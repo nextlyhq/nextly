@@ -22,6 +22,18 @@ import { expect, test, type Page } from "@playwright/test";
 import { STORAGE_STATE } from "../global-setup";
 import { gotoAdmin } from "./support/admin";
 
+/*
+ * The control that opens the page builder, in EITHER state.
+ *
+ * The card names itself for the document it is showing — an empty page invites
+ * you to build it, a populated one to open the builder — so a helper naming one
+ * wording breaks whenever the fixture gains or loses blocks, and breaks with a
+ * timeout that names the editor rather than the button. Kept as a literal
+ * because this suite is deliberately black box and imports no product code;
+ * the source of both strings is `PageBuilderCard`.
+ */
+const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+
 const HOMEPAGE = "/admin/api/singles/homepage";
 
 /** The element the renderer marks as carrying the passage. */
@@ -112,7 +124,7 @@ async function openBuilderWith(page: Page, children: unknown[]): Promise<void> {
   );
 
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: "Edit blocks" }).click();
+  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
   // The passage must be ON SCREEN before anything is aimed at it: a gesture
   // sent at an element that has not rendered lands on the page behind it.
   await expect(page.locator(PASSAGE).first()).toBeVisible({ timeout: 30_000 });

@@ -45,10 +45,15 @@
  * @module @nextlyhq/plugin-page-builder/admin/PageMiniature
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import { PageRenderer, type PageRendererProps } from "@nextlyhq/blocks-react";
+import {
+  PageRenderer,
+  previewContainerStyle,
+  type PageRendererProps,
+} from "@nextlyhq/blocks-react";
 import { useLayoutEffect, useRef, useState } from "react";
 
 import { entryBlockResolver } from "./entry-block-resolver";
+import type { PageRenderInputs } from "./page-render-inputs";
 
 /**
  * The width the page is composed at before being scaled down.
@@ -70,6 +75,16 @@ export interface PageMiniatureProps {
    * decides whether it is ready; this draws whatever it is handed.
    */
   siteStyles: PageRendererProps["siteStyles"];
+  /**
+   * Everything else this site's rendering depends on — its breakpoints, the
+   * container its responsive rules are compiled against, its remote-host policy
+   * and its document caps.
+   *
+   * Taken as one bundle from `pageRenderInputs` rather than as loose props, so
+   * this surface cannot be given three of the four. The canvas is handed the
+   * same bundle.
+   */
+  render: PageRenderInputs;
   /** The width to compose at before scaling. Defaults to a desktop tier. */
   renderWidth?: number;
 }
@@ -81,6 +96,7 @@ export interface PageMiniatureProps {
 export function PageMiniature({
   document,
   siteStyles,
+  render,
   renderWidth = DEFAULT_RENDER_WIDTH,
 }: PageMiniatureProps) {
   const frame = useRef<HTMLDivElement>(null);
@@ -135,10 +151,25 @@ export function PageMiniature({
           width: `${renderWidth}px`,
           transform: `scale(${scale})`,
           transformOrigin: "top left",
+          /*
+           * The container the compiled responsive rules resolve against, on the
+           * element whose width they must answer for — the COMPOSED width, not
+           * the clipped frame's. `@media` asks the window, so without this a
+           * miniature composed at a desktop width gets whichever tier the admin
+           * window happens to be in. `previewContainerStyle` supplies the
+           * `container-type` beside the name, because a named container left at
+           * the default `normal` is not a size-query container and every rule
+           * the compile emitted stays inert.
+           */
+          ...previewContainerStyle(render.styleContext.previewContainer),
         }}
       >
         <div data-slot="page-miniature-surface" inert aria-hidden="true">
           <PageRenderer
+            // Spread rather than listed field by field: the bundle owns which
+            // inputs describe this site's rendering, and a surface restating
+            // them here would silently stop forwarding one it never heard of.
+            {...render}
             document={document}
             blocks={entryBlockResolver()}
             siteStyles={siteStyles}

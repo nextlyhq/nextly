@@ -52,6 +52,7 @@ import { Button, Skeleton } from "@nextlyhq/ui";
 import { LayoutGrid } from "lucide-react";
 import { useMemo } from "react";
 
+import type { PageRenderInputs } from "./page-render-inputs";
 import { countByType, documentNodes, totalBlocks } from "./page-summary";
 import { PageMiniature } from "./PageMiniature";
 
@@ -62,6 +63,19 @@ import { PageMiniature } from "./PageMiniature";
  * the card renders. A copy in the test agrees on the day it is written and
  * then keeps passing — or keeps failing — after the wording moves.
  */
+/**
+ * Whether this site's own style is available to draw the page with.
+ *
+ * THREE states rather than a boolean, because the third is the one that gets
+ * folded into the good one by accident. "Not here yet" and "the read failed"
+ * both mean the page must not be drawn, and they mean it for the same reason —
+ * omitting the sheet does not draw nothing, it draws a plausible page missing
+ * this site's classes, tokens and block defaults. A boolean `pending` collapses
+ * a failed read into `ready`, which is exactly the wrong picture the pending
+ * branch exists to prevent.
+ */
+export type SiteStyleState = "ready" | "pending" | "unavailable";
+
 export const BUILD_PAGE_LABEL = "Build this page";
 
 /** What the action says when the page already holds blocks. */
@@ -91,15 +105,19 @@ export interface PageBuilderCardProps {
    */
   siteStyles: PageRendererProps["siteStyles"];
   /**
-   * Whether the site's own style is still being read.
+   * Whether this site's own style is available yet.
    *
-   * A separate answer from `siteStyles` being absent, and the distinction is
-   * the point: absent means "this site emits no sheet", which is a legitimate
-   * state to render in, while pending means the sheet that WILL apply is not
-   * here yet. Rendering during the second draws a page missing the site's named
-   * classes and block defaults — plausible, and wrong.
+   * A separate answer from `siteStyles` being absent: absent means "this site
+   * emits no sheet", which is a legitimate state to render in, while `pending`
+   * and `unavailable` both mean the sheet that WILL apply is not in hand.
    */
-  stylePending: boolean;
+  styleState: SiteStyleState;
+  /**
+   * Everything else this site's rendering depends on, as one bundle.
+   *
+   * The same bundle the canvas is handed, from the same derivation.
+   */
+  render: PageRenderInputs;
   /** Whether this author may open the editor at all. */
   canEdit: boolean;
   /** Opens the builder over the form. */
@@ -113,7 +131,8 @@ export interface PageBuilderCardProps {
 export function PageBuilderCard({
   document,
   siteStyles,
-  stylePending,
+  styleState,
+  render,
   canEdit,
   onOpen,
 }: PageBuilderCardProps) {
@@ -126,12 +145,31 @@ export function PageBuilderCard({
 
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-      {empty ? null : stylePending ? (
+      {empty ? null : styleState === "pending" ? (
         // Sized like the miniature it stands in for, so the card does not
         // resize under the author the moment the sheet arrives.
         <Skeleton className="aspect-[16/10] w-full rounded-md" />
+      ) : styleState === "unavailable" ? (
+        /*
+         * A refusal, not a fallback. The page COULD be drawn from the config
+         * defaults, and it would look entirely reasonable while missing this
+         * site's stored classes, tokens, fonts and block defaults — a confident
+         * wrong picture, which is worse than none. Saying so also keeps the
+         * count and the action below, so the author is not blocked by it.
+         */
+        <div
+          className="flex aspect-[16/10] w-full items-center justify-center rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground"
+          role="status"
+        >
+          This page cannot be previewed right now — the site&apos;s styles could
+          not be loaded.
+        </div>
       ) : (
-        <PageMiniature document={document} siteStyles={siteStyles} />
+        <PageMiniature
+          document={document}
+          siteStyles={siteStyles}
+          render={render}
+        />
       )}
 
       <div className="flex flex-wrap items-center justify-between gap-3">
