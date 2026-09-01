@@ -201,6 +201,7 @@ export default function PluginsTable() {
     ];
   }, []);
 
+  // Resolves persisted column visibility while ensuring pinned plugin names remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "plugins",
     columns: allColumns,

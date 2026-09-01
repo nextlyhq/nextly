@@ -358,6 +358,7 @@ export default function UserTable() {
     ];
   }, [customColumns, formatDate]);
 
+  // Resolves persisted column visibility while ensuring pinned user names remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "users",
     columns: allColumns,

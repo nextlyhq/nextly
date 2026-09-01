@@ -402,6 +402,7 @@ export default function FieldGroupTable() {
     [getFieldCount]
   );
 
+  // Resolves persisted column visibility while ensuring pinned columns remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "field-groups",
     columns: allColumns,

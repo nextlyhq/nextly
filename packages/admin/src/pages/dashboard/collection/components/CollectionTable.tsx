@@ -377,6 +377,7 @@ export default function CollectionTable() {
     ];
   }, []);
 
+  // Resolves persisted column visibility while ensuring pinned columns remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "collections",
     columns: allColumns,

@@ -16,9 +16,10 @@ const ALL_COLUMNS = [
   { name: "name", header: "Name" },
   { name: "email", header: "Email" },
   { name: "created", header: "Created" },
+  { name: "status", header: "Status" },
 ];
-/** Mirrors the module-level `ALWAYS_VISIBLE` sets the call sites declare. */
-const PINS = new Set(["name"]);
+/** Mirrors multi-pin module-level `ALWAYS_VISIBLE` sets like Collections/Singles. */
+const PINS = new Set(["name", "created"]);
 
 /**
  * Seeds a stored choice in which the reader hid EVERY toggleable column —
@@ -64,18 +65,17 @@ describe("useTableColumns", () => {
     );
     expect(
       result.current.columnsControl.columns.map(column => column.name)
-    ).toEqual(["email", "created"]);
+    ).toEqual(["email", "status"]);
   });
 
   /**
-   * A pinned column is never offered and never hidden. The pin exists because
-   * a reader must not be able to hide the one cell that says which row this
-   * is — so the property has to hold against the most hostile thing storage
-   * can contain, not just the happy path: a stored choice that hides
-   * everything else must still leave the pin standing.
+   * Pinned columns are never offered and never hidden. The pin exists because
+   * a reader must not be able to hide the cells that identify the row —
+   * so the property has to hold across multiple pinned columns against a stored
+   * choice that hides everything else.
    */
-  it("never reports a pinned column hidden, whatever the stored choice says", () => {
-    seedHideAll("widgets", ["email", "created"]);
+  it("never reports pinned columns hidden, whatever the stored choice says", () => {
+    seedHideAll("widgets", ["email", "status"]);
     const { result } = renderHook(() =>
       useTableColumns({
         storageKey: "widgets",
@@ -87,8 +87,30 @@ describe("useTableColumns", () => {
       result.current.columns.map(column => [column.name, column])
     );
     expect(byName.get("name")?.hidden).toBeFalsy();
+    expect(byName.get("created")?.hidden).toBeFalsy();
     expect(byName.get("email")?.hidden).toBe(true);
-    expect(byName.get("created")?.hidden).toBe(true);
+    expect(byName.get("status")?.hidden).toBe(true);
+  });
+
+  it("preserves declared default visibility when a toggleable column starts hidden", () => {
+    const columnsWithHidden = [
+      { name: "name", header: "Name" },
+      { name: "email", header: "Email" },
+      { name: "archived", header: "Archived", hidden: true },
+    ];
+    const { result } = renderHook(() =>
+      useTableColumns({
+        storageKey: "items",
+        columns: columnsWithHidden,
+        alwaysVisible: new Set(["name"]),
+      })
+    );
+    const byName = new Map(
+      result.current.columns.map(column => [column.name, column])
+    );
+    expect(byName.get("archived")?.hidden).toBe(true);
+    expect(byName.get("email")?.hidden).toBeFalsy();
+    expect(byName.get("name")?.hidden).toBeFalsy();
   });
 
   it("hides a toggleable column when the reader toggles it", () => {
@@ -105,6 +127,7 @@ describe("useTableColumns", () => {
     );
     expect(byName.get("email")?.hidden).toBe(true);
     expect(byName.get("name")?.hidden).toBeFalsy();
+    expect(byName.get("created")?.hidden).toBeFalsy();
   });
 
   /** A fresh mount is what a reload is: this is the persistence property. */
@@ -131,6 +154,7 @@ describe("useTableColumns", () => {
     );
     expect(byName.get("email")?.hidden).toBe(true);
     expect(byName.get("name")?.hidden).toBeFalsy();
+    expect(byName.get("created")?.hidden).toBeFalsy();
   });
 
   /**
@@ -189,7 +213,7 @@ describe("useTableColumns", () => {
       useTableColumns({
         storageKey: "widgets",
         columns: ALL_COLUMNS,
-        alwaysVisible: new Set(["name"]),
+        alwaysVisible: new Set(["name", "created"]),
       })
     );
     const first = result.current.columns;

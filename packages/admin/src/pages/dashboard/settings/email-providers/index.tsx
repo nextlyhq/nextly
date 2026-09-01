@@ -575,6 +575,7 @@ function EmailProviderTable() {
     [descriptorsByType]
   );
 
+  // Resolves persisted column visibility while ensuring pinned provider names remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "email-providers",
     columns: allColumns,

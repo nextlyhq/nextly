@@ -89,6 +89,7 @@ describe("CollectionTable columns", () => {
     render(<CollectionTable />);
     const table = screen.getByRole("table");
     expect(within(table).getByText("COLLECTION")).toBeDefined();
+    expect(within(table).getByText("CREATED")).toBeDefined();
     expect(screen.getAllByText("Posts").length).toBeGreaterThan(0);
     expect(within(table).queryByText("DESCRIPTION")).toBeNull();
   });

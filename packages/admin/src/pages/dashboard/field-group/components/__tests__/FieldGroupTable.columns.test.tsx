@@ -79,4 +79,14 @@ describe("FieldGroupTable columns", () => {
     expect(screen.queryByText("Layout")).toBeNull();
     expect(screen.getAllByText("Hero Section").length).toBeGreaterThan(0);
   });
+
+  it("still renders the pinned columns after every toggleable column is hidden", () => {
+    seedStoredChoice([]);
+    render(<FieldGroupTable />);
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("FIELD GROUP")).toBeDefined();
+    expect(within(table).getByText("CREATED")).toBeDefined();
+    expect(screen.getAllByText("Hero Section").length).toBeGreaterThan(0);
+    expect(within(table).queryByText("CATEGORY")).toBeNull();
+  });
 });

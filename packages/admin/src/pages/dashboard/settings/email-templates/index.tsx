@@ -380,6 +380,7 @@ function EmailTemplateTable() {
     []
   );
 
+  // Resolves persisted column visibility while ensuring pinned template names remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "email-templates",
     columns: allColumns,

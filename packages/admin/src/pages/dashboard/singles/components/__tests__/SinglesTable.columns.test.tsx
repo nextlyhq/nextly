@@ -81,6 +81,7 @@ describe("SinglesTable columns", () => {
     render(<SinglesTable />);
     const table = screen.getByRole("table");
     expect(within(table).getByText("SINGLE")).toBeDefined();
+    expect(within(table).getByText("CREATED")).toBeDefined();
     expect(screen.getAllByText("Homepage").length).toBeGreaterThan(0);
     expect(within(table).queryByText("SOURCE")).toBeNull();
   });

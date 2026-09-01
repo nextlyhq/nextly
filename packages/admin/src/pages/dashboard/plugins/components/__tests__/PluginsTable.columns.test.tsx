@@ -62,6 +62,7 @@ describe("PluginsTable columns", () => {
     // column and not a string that never renders at all.
     expect(within(table).getAllByText("VERSION").length).toBeGreaterThan(0);
     expect(within(table).queryByText("CATEGORY")).toBeNull();
+    expect(screen.queryByText("Content")).toBeNull();
     expect(screen.getAllByText("Form Builder").length).toBeGreaterThan(0);
   });
 });

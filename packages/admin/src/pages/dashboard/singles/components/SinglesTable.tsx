@@ -348,6 +348,7 @@ export default function SinglesTable({ mode = "builder" }: SinglesTableProps) {
     [getFieldCount]
   );
 
+  // Resolves persisted column visibility while ensuring pinned single label/created remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "singles",
     columns: allColumns,

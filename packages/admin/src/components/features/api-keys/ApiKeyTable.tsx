@@ -207,6 +207,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
     ];
   }, []);
 
+  // Resolves persisted column visibility while ensuring pinned API key names remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "api-keys",
     columns: allColumns,

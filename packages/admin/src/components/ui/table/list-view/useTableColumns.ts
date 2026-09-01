@@ -76,10 +76,19 @@ export function useTableColumns<Row extends object>({
     [columns, stablePins]
   );
 
+  const defaultVisible = useMemo(
+    () =>
+      toggleableColumns
+        .filter(column => !column.hidden)
+        .map(column => column.name),
+    [toggleableColumns]
+  );
+
   /* The reader's column choice outlives the tab it was made in. */
   const columnsControl = useListColumns({
     storageKey,
     columns: toggleableColumns,
+    defaultVisible,
   });
 
   const columnsWithVisibility = useMemo(

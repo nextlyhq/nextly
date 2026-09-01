@@ -257,6 +257,7 @@ export default function RoleTable() {
     ];
   }, []);
 
+  // Resolves persisted column visibility while ensuring pinned role names remain visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "roles",
     columns: allColumns,

@@ -203,6 +203,7 @@ function ImageSizesContent({
     []
   );
 
+  // Resolves persisted column visibility while ensuring the primary size name is always visible.
   const { columns, columnsControl } = useTableColumns({
     storageKey: "image-sizes",
     columns: allColumns,
