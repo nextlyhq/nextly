@@ -6796,7 +6796,12 @@ export class CollectionMutationService extends BaseService {
             // companion row has no translation, and inventing one manufactures
             // the record whose absence was the fact. The sweep below moves every
             // row that genuinely exists, which is the whole of what was asked.
-            !sweepAllLocales &&
+            // A PROMOTED draft is the exception the paragraph above does not
+            // cover: an author wrote those values and this write is publishing
+            // them, so writing the row records a translation rather than
+            // inventing one. Without it the promotion still consumes the draft
+            // and the edit reaches no read path at all.
+            (!sweepAllLocales || promotedDraft) &&
             Object.keys(localizedUpdate.companionData).length > 0
           ) {
             await upsertCompanionRow(

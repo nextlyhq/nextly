@@ -1852,10 +1852,15 @@ export class SingleMutationService extends BaseService {
               // there IS live content, so writing it would publish the
               // translated half of a change whose rest is still pending.
               !holdEdit &&
-              // A wildcard never creates a translation — see the collection
-              // path. The sweep moves rows that exist; it does not manufacture
-              // a default-language row for a document that has none.
-              !sweepAllLocales &&
+              // A wildcard does not manufacture a translation: the sweep moves
+              // rows that exist rather than inventing a default-language row
+              // for a document that has none. A PROMOTED draft is the one thing
+              // that is not invention — an author wrote those values and this
+              // write is publishing them — so it carries its own permission to
+              // land. Without the exception the promotion below still consumes
+              // the draft, and the edit reaches no read path at all.
+              (!sweepAllLocales ||
+                (promotedDraft && Object.keys(companionData).length > 0)) &&
               companion &&
               companionPhysicallyExists &&
               writeLocale !== undefined &&
