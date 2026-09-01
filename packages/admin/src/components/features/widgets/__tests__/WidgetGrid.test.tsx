@@ -451,6 +451,84 @@ describe("WidgetGrid — collection and gating", () => {
     });
   });
 
+  it("shows an actions card's empty state when the reader may use none of them", async () => {
+    // The declaration is valid and carries shortcuts; the PERMISSION FILTER
+    // empties it. A drawability check that re-tested the length could not tell
+    // that apart from a widget declaring none, so it reported a malformed
+    // widget and made the card's own empty state unreachable.
+    mockBranding = brandingWith([
+      {
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        actions: [
+          {
+            label: "Invite user",
+            href: "/admin/users/new",
+            requiredPermission: "create-users",
+          },
+        ],
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("widget-cell-core/shortcuts")
+      ).toBeInTheDocument()
+    );
+    expect(screen.getByTestId("widget-actions-empty")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/declares no shortcuts/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("draws an actions card through the HOST even when a component is offered", async () => {
+    // `actions` is queryless by design, so a drawability test that asked "does
+    // it declare a query" called every actions widget undrawable and handed one
+    // carrying a component fallback to that component -- bypassing the host
+    // renderer and, with it, the per-item permission gating.
+    registerComponents({ "@acme/admin#Shortcuts": () => <div>plugin ui</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        component: "@acme/admin#Shortcuts",
+        actions: [{ label: "New post", href: "/admin/posts/new" }],
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-action")).toHaveTextContent("New post")
+    );
+    expect(screen.queryByText("plugin ui")).not.toBeInTheDocument();
+  });
+
+  it("STILL prefers the component when core cannot draw the declaration", async () => {
+    // The control for the change above: a metric with no query is genuinely
+    // undrawable, and the contributed component remains the only thing that can
+    // draw that card. Removing the query test must not have removed this.
+    registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/queryless",
+        title: "Queryless",
+        archetype: "metric",
+        component: "@acme/admin#Panel",
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByText("panel body")).toBeInTheDocument()
+    );
+  });
+
   it("draws a TABLE end to end, headed by the columns the server described", async () => {
     // The whole path for the third host-drawn archetype: a declaration with no
     // component, its query batched, the `list` arm validated with its column

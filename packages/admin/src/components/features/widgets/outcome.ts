@@ -31,9 +31,9 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
-import { actionsAccepts, actionsBody } from "./archetypes/actions";
+import { actionsBody } from "./archetypes/actions";
 import { listAccepts, listBody } from "./archetypes/list";
-import { metricBody } from "./archetypes/metric";
+import { metricAccepts, metricBody } from "./archetypes/metric";
 import { tableAccepts, tableBody } from "./archetypes/table";
 import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
 
@@ -45,10 +45,10 @@ import type { ArchetypeRenderer, DeclaredWidget } from "./archetypes/types";
  * is deliberately absent — it is not drawn from a result at all.
  */
 const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeRenderer>> = {
-  metric: { body: metricBody },
+  metric: { accepts: metricAccepts, body: metricBody },
   list: { accepts: listAccepts, body: listBody },
   table: { accepts: tableAccepts, body: tableBody },
-  actions: { accepts: actionsAccepts, declared: actionsBody },
+  actions: { declared: actionsBody },
 };
 
 /**

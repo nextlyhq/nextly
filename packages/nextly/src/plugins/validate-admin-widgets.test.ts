@@ -269,6 +269,47 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
+  it("refuses a contributed action missing its label or href", () => {
+    // A JavaScript plugin or a decoded manifest reaches this check with nothing
+    // enforced by the type. Checking only that the array was non-empty let
+    // `actions: [{}]` through, and the admin drew a blank link with an
+    // undefined destination -- while a REGISTERED widget carrying the same
+    // shortcut was refused. One contract, two channels, one rule.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{}],
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post" }],
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts a contributed actions widget whose shortcuts are complete", () => {
+    // The control. A gate that refused every actions widget would satisfy the
+    // assertions above while making the archetype undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: "/admin/posts/new" }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("says nothing about an archetype it DOES know", () => {
     // The control. A warning that fired for every widget would satisfy the
     // assertion above while telling an author nothing.

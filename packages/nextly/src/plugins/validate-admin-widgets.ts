@@ -18,6 +18,7 @@
  */
 
 import {
+  actionProblem,
   DATA_ARCHETYPES,
   QUERYLESS_ARCHETYPES,
   WIDGET_ARCHETYPES,
@@ -92,7 +93,16 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
     // other queryless archetypes are drawn from the declaration alone and need
     // nothing further here.
     if (archetype === "actions") {
-      return Array.isArray(widget.actions) && widget.actions.length > 0;
+      // Every item, through the SAME rule the registry applies. Checking only
+      // that the array is non-empty let a JavaScript plugin publish
+      // `actions: [{}]`, which the admin then drew as a blank link with an
+      // undefined destination -- while a registered widget carrying the same
+      // shortcut was refused. One contract, two channels, one rule.
+      return (
+        Array.isArray(widget.actions) &&
+        widget.actions.length > 0 &&
+        widget.actions.every(action => actionProblem(action) === undefined)
+      );
     }
     return true;
   }

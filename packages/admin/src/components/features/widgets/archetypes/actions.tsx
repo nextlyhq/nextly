@@ -18,7 +18,8 @@
 
 import { Link } from "@admin/components/ui/link";
 
-import type { ArchetypeAccepts, DeclaredBody } from "./types";
+import { resolveIconName } from "./icon";
+import type { DeclaredBody } from "./types";
 
 /**
  * How many shortcuts a card shows before it stops being a shortcut.
@@ -31,13 +32,20 @@ import type { ArchetypeAccepts, DeclaredBody } from "./types";
  */
 const MAX_ACTIONS = 6;
 
-export const actionsAccepts: ArchetypeAccepts = definition => {
-  const name = definition.title ?? "This actions widget";
-  const actions = (definition as { actions?: unknown[] }).actions ?? [];
-  if (actions.length > 0) return undefined;
-  return `"${name}" is an actions widget that declares no shortcuts, so there is nothing to show.`;
-};
-
+/**
+ * NO `accepts` for this archetype, deliberately.
+ *
+ * A declaration carrying no shortcuts is already refused where it is written --
+ * the type requires them and boot refuses a contribution without them -- so by
+ * the time a widget reaches the browser its list was non-empty. What CAN empty
+ * it here is the per-item permission filter in `resolve-widgets`, and that is
+ * not a malformed widget: it is a reader who may use none of the shortcuts, and
+ * the card says so below.
+ *
+ * An `accepts` that re-checked the length could not tell those apart, because
+ * it runs on the FILTERED list. It reported "declares no shortcuts" for a
+ * perfectly good widget and made the empty state under it unreachable.
+ */
 export const actionsBody: DeclaredBody = definition => {
   const declared = definition.actions ?? [];
 
@@ -84,8 +92,13 @@ export const actionsBody: DeclaredBody = definition => {
                 {...(action.external
                   ? { target: "_blank", rel: "noopener noreferrer" }
                   : {})}
-                className="block truncate rounded px-1 py-0.5 text-sm text-primary hover:underline focus-visible:underline"
+                className="flex items-center truncate rounded px-1 py-0.5 text-sm text-primary hover:underline focus-visible:underline"
               >
+                {action.icon && (
+                  <span aria-hidden="true" className="mr-1.5 inline-flex">
+                    {resolveIconName(action.icon)}
+                  </span>
+                )}
                 {action.label}
                 {action.external && (
                   <span className="sr-only"> (opens in a new tab)</span>

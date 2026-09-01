@@ -321,12 +321,29 @@ function validateActions(d: Partial<WidgetDefinition>): void {
  * broken rather than absent.
  */
 function validateAction(action: WidgetAction | undefined, at: string): void {
-  if (typeof action?.label !== "string" || action.label.trim() === "") {
-    fail(`${at} requires a non-empty label`);
+  const problem = actionProblem(action);
+  if (problem) fail(`${at} ${problem}`);
+}
+
+/**
+ * What is wrong with one shortcut, or `undefined` when nothing is.
+ *
+ * A PREDICATE beside the throwing check, because both channels into the grid
+ * need this rule and only one of them throws. `assertAdminWidgets` refuses a
+ * contributed widget with its own error shape and its own message, so it cannot
+ * call `validateAction` -- and restating the rule there is how the two came to
+ * disagree: the registry rejected a blank label while a contributed
+ * `actions: [{}]` was published and drew a link with an undefined destination.
+ */
+export function actionProblem(action: unknown): string | undefined {
+  const candidate = action as Partial<WidgetAction> | null | undefined;
+  if (typeof candidate?.label !== "string" || candidate.label.trim() === "") {
+    return "requires a non-empty label";
   }
-  if (typeof action.href !== "string" || action.href.trim() === "") {
-    fail(`${at} requires a non-empty href`);
+  if (typeof candidate.href !== "string" || candidate.href.trim() === "") {
+    return "requires a non-empty href";
   }
+  return undefined;
 }
 
 function validateQuery(d: Partial<WidgetDefinition>): void {

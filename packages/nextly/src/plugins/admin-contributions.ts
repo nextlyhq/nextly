@@ -217,29 +217,64 @@ export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
 }
 
 /**
- * @experimental A widget the HOST draws WITHOUT asking for data.
+ * @experimental A widget the HOST draws from its declared prose.
  *
- * `text` and `actions` have no query, and the registry validator refuses one on
- * them -- a query here would be a database read whose result nothing could
- * draw. `never` rather than merely absent, so declaring one is a compile error
- * at the point it is written instead of a boot failure later.
+ * No query -- the registry validator refuses one -- and no actions, which
+ * belong to the archetype named for them.
  */
-export interface PluginAdminQuerylessWidget extends PluginAdminWidgetBase {
-  archetype: QuerylessWidgetArchetype;
+export interface PluginAdminTextWidget extends PluginAdminWidgetBase {
+  archetype: "text";
   query?: never;
-  /**
-   * Required for `actions`, which IS its list of shortcuts, and forbidden for
-   * every other archetype -- the same both-directions reading `component`
-   * takes. Enforced at boot, because the type reaches a TypeScript caller and
-   * nothing else.
-   */
-  actions?: WidgetAction[];
+  actions?: never;
   /**
    * Optional FALLBACK body, for an archetype this admin release cannot draw
    * yet. Omit it and the card says so by name.
    */
   component?: ComponentPath;
 }
+
+/**
+ * @experimental A widget the HOST draws as a card of shortcuts.
+ *
+ * `actions` is REQUIRED, because the widget is its list: one declaring none
+ * describes an empty card. Split from `text` rather than left optional on a
+ * shared queryless shape, so both mistakes fail where they are written --
+ * `{ archetype: "actions" }` with no shortcuts, and `{ archetype: "text" }`
+ * carrying some. Optional on one shape made the first a boot failure and let
+ * the second pass boot and silently drop what it declared.
+ */
+export interface PluginAdminActionsWidget extends PluginAdminWidgetBase {
+  archetype: "actions";
+  query?: never;
+  actions: WidgetAction[];
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * Every queryless archetype has an arm above, checked by the compiler.
+ *
+ * The arms ENUMERATE because each carries a different payload -- prose for one,
+ * shortcuts for the other -- so they cannot be derived from the vocabulary the
+ * way `DeclarativeWidgetArchetype` is. Adding a third queryless archetype to
+ * core must therefore be a decision about what it carries, and this is what
+ * refuses to let that decision be skipped.
+ */
+type UnarmedQuerylessArchetype = Exclude<
+  QuerylessWidgetArchetype,
+  PluginAdminTextWidget["archetype"] | PluginAdminActionsWidget["archetype"]
+>;
+type _EveryQuerylessArchetypeHasAnArm = UnarmedQuerylessArchetype extends never
+  ? true
+  : never;
+
+/** @experimental A widget the HOST draws without asking for data. */
+export type PluginAdminQuerylessWidget =
+  | PluginAdminTextWidget
+  | PluginAdminActionsWidget;
 
 /** @experimental Either shape of a widget the host draws. */
 export type PluginAdminDeclarativeWidget =

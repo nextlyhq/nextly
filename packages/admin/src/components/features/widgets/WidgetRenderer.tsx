@@ -22,15 +22,13 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
-import type { ReactNode } from "react";
-
-import * as Icons from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
   DashboardWidget,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { resolveIconName } from "./archetypes/icon";
 import { resolveWidgetOutcome } from "./outcome";
 import { WidgetCard } from "./WidgetCard";
 
@@ -42,15 +40,6 @@ import { WidgetCard } from "./WidgetCard";
  * meant to be functional here, and a stand-in that means nothing is worse than
  * the header simply not having one.
  */
-function resolveIcon(name: string | undefined): ReactNode {
-  if (!name) return undefined;
-  const icons = Icons as unknown as Record<
-    string,
-    Icons.LucideIcon | undefined
-  >;
-  const Icon = icons[name];
-  return Icon ? <Icon className="h-4 w-4" /> : undefined;
-}
 
 export interface WidgetRendererProps {
   definition: DashboardWidget;
@@ -82,7 +71,7 @@ export function WidgetRenderer({
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
-    icon: resolveIcon(definition.icon),
+    icon: resolveIconName(definition.icon),
     link: definition.link,
   };
 

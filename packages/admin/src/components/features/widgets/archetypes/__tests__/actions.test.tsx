@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { actionsAccepts, actionsBody } from "../actions";
+import { actionsBody } from "../actions";
 
 vi.mock("@admin/components/ui/link", () => ({
   Link: ({ children, ...rest }: Record<string, unknown>) => (
@@ -20,7 +20,12 @@ vi.mock("@admin/components/ui/link", () => ({
 }));
 
 const widget = (
-  actions?: { label: string; href: string; external?: boolean }[]
+  actions?: {
+    label: string;
+    href: string;
+    external?: boolean;
+    icon?: string;
+  }[]
 ): DashboardWidget =>
   ({
     id: "core/shortcuts",
@@ -98,10 +103,31 @@ describe("the actions archetype", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("refuses a declaration carrying no shortcuts at all", () => {
-    expect(actionsAccepts(widget())).toMatch(/declares no shortcuts/i);
+  it("renders the icon the contract advertises", () => {
+    // `WidgetAction.icon` is published as "Lucide icon name, resolved by the
+    // admin". A field a plugin can set and nothing reads is a promise the
+    // contract does not keep.
+    draw(
+      widget([
+        { label: "New post", href: "/admin/posts/new", icon: "FileText" },
+      ])
+    );
     expect(
-      actionsAccepts(widget([{ label: "New post", href: "/x" }]))
-    ).toBeUndefined();
+      screen.getByTestId("widget-action").querySelector("svg")
+    ).not.toBeNull();
+  });
+
+  it("draws the label when the icon name is unknown", () => {
+    // An icon is decoration on a card whose label is the content, so a typo in
+    // one must not cost the shortcut. `constructor` is the interesting name: a
+    // plain namespace lookup answers with a FUNCTION for it.
+    draw(
+      widget([
+        { label: "New post", href: "/admin/posts/new", icon: "constructor" },
+      ])
+    );
+    const link = screen.getByTestId("widget-action");
+    expect(link).toHaveTextContent("New post");
+    expect(link.querySelector("svg")).toBeNull();
   });
 });

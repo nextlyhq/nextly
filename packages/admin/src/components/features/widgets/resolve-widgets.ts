@@ -133,7 +133,14 @@ function resolveArchetype(
   meta: ReadableWidgetDeclaration
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
-    const undrawable = !meta.query || !coreDraws(meta);
+    // ONE question, asked once. This used to be `!meta.query || !coreDraws(meta)`,
+    // and the first half was wrong the moment an archetype was drawn WITHOUT a
+    // query: `actions` is queryless by design, so the query test called every
+    // actions widget undrawable and handed one carrying a component fallback to
+    // that component -- bypassing the host renderer and its per-item permission
+    // gating. Each archetype states its own precondition now, so `coreDraws`
+    // already knows a metric needs a query and an actions card does not.
+    const undrawable = !coreDraws(meta);
     if (meta.archetype !== "custom" && undrawable && meta.component) {
       return "custom";
     }
