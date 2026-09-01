@@ -42,6 +42,7 @@ const ALLOWED_LIST_COLUMNS = [
 /** The complete inventory of admin entity table surfaces. */
 const ENTITY_TABLE_SURFACES = [
   join("components", "features", "api-keys", "ApiKeyTable.tsx"),
+  join("components", "features", "webhooks", "WebhookTable.tsx"),
   join("pages", "dashboard", "collection", "components", "CollectionTable.tsx"),
   join(
     "pages",

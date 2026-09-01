@@ -15,7 +15,10 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import { ListView } from "@admin/components/ui/table/list-view";
+import {
+  ListView,
+  useTableColumns,
+} from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { usePagination } from "@admin/hooks/usePagination";
 import type { WebhookEndpointSummary } from "@admin/types/webhooks";
@@ -38,6 +41,9 @@ export interface WebhookTableProps {
   onViewDeliveries: (webhook: WebhookEndpointSummary) => void;
 }
 
+/** Columns pinned as always-visible in the column toggle. */
+const ALWAYS_VISIBLE = new Set(["name"]);
+
 export const WebhookTable: React.FC<WebhookTableProps> = ({
   data,
   isLoading = false,
@@ -58,7 +64,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
     resetPage();
   }, [search, resetPage]);
 
-  const columns = useMemo(
+  const allColumns = useMemo(
     (): NextlyColumn<WebhookEndpointSummary>[] => [
       {
         name: "name",
@@ -121,6 +127,13 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
     ],
     []
   );
+
+  // Resolves persisted column visibility while ensuring pinned webhook names remain visible.
+  const { columns, columnsControl } = useTableColumns({
+    storageKey: "webhooks",
+    columns: allColumns,
+    alwaysVisible: ALWAYS_VISIBLE,
+  });
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -209,6 +222,7 @@ export const WebhookTable: React.FC<WebhookTableProps> = ({
         placeholder: "Search endpoints by name or URL...",
         isLoading,
       }}
+      columnsControl={columnsControl}
       columns={columns}
       rows={paginated}
       loading={isLoading}
