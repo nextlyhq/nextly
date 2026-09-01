@@ -96,6 +96,14 @@ const clientEntries = [
   // server reads it with. Imported by the admin's API Playground and by plugin
   // admin components, which is why it is a leaf rather than a root export.
   "src/query/index.ts",
+  // The one helper an out-of-tree storage adapter needs, as its OWN entry.
+  //
+  // Reaching it through `nextly/storage` instead makes a bundler traverse that
+  // whole barrel — the local adapter and its `fs/promises` and `path`, the
+  // env-config and its dotenv chunks — into a package that depends on neither.
+  // Measured on `@nextlyhq/storage-vercel-blob`: 240K over 6 files became 1.3M
+  // over 16 the moment the barrel import landed, and every install pays it.
+  "src/storage/fetch-stored-bytes.ts",
 ];
 
 // Shared config options

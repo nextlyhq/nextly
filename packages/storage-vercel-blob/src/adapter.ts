@@ -27,9 +27,8 @@
  * ```
  */
 
-import { put, del, head, list } from "@vercel/blob";
+import { put, del, head, list, BlobNotFoundError } from "@vercel/blob";
 import { NextlyError } from "nextly/errors";
-import { fetchStoredBytes } from "nextly/storage";
 import type {
   IStorageAdapter,
   UploadOptions,
@@ -39,6 +38,7 @@ import type {
   FileMetadata,
   BulkDeleteResult,
 } from "nextly/storage";
+import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 
 import type {
   VercelBlobStorageConfig,
@@ -266,9 +266,20 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
     try {
       const meta = await head(filePath, { token: this.resolvedConfig.token });
       target = meta.downloadUrl ?? meta.url;
-    } catch {
-      // Vercel Blob throws when the blob does not exist.
-      return null;
+    } catch (error: unknown) {
+      /*
+       * ONLY the not-found class becomes `null`. `head` also rejects for an
+       * expired token, a suspended or missing store, an aborted request and a
+       * plain network failure, and every one of those says nothing about
+       * whether the blob exists. Catching them all reports an outage as a
+       * deletion, which a caller may act on by writing a replacement over a
+       * file that is still there.
+       *
+       * Identified by the CLASS the SDK exports rather than by matching the
+       * message, because the message is prose this package does not own.
+       */
+      if (error instanceof BlobNotFoundError) return null;
+      throw error;
     }
 
     /*

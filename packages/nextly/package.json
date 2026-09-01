@@ -179,6 +179,10 @@
       "types": "./dist/cli/utils/index.d.ts",
       "import": "./dist/cli/utils/index.mjs"
     },
+    "./storage/fetch-stored-bytes": {
+      "types": "./dist/storage/fetch-stored-bytes.d.ts",
+      "import": "./dist/storage/fetch-stored-bytes.mjs"
+    },
     "./storage": {
       "types": "./dist/storage/index.d.ts",
       "import": "./dist/storage/index.mjs"

@@ -15,12 +15,13 @@
  * ```
  */
 
-import { BaseStorageAdapter, fetchStoredBytes } from "nextly/storage";
+import { BaseStorageAdapter } from "nextly/storage";
 import type {
   UploadOptions,
   UploadResult,
   BulkDeleteResult,
 } from "nextly/storage";
+import { fetchStoredBytes } from "nextly/storage/fetch-stored-bytes";
 import { UTApi } from "uploadthing/server";
 
 // ============================================================
@@ -148,15 +149,25 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
    * @returns The file's bytes, or `null` when no such key exists
    */
   async read(filePath: string): Promise<Buffer | null> {
-    let target: string | undefined;
-    try {
-      const result = await this.utapi.getFileUrls([filePath], {
-        keyType: "fileKey",
-      });
-      target = Array.from(result.data)[0]?.url;
-    } catch {
-      return null;
-    }
+    /*
+     * NOT wrapped in a catch. This is a batch lookup, so a key that is not
+     * there comes back as an EMPTY `data` array — the branch below — rather
+     * than as a rejection. What a rejection means instead is an invalid token,
+     * an outage or a dropped connection, none of which say the file was
+     * deleted; folding those into `null` would let a caller overwrite a file
+     * that is still there.
+     *
+     * Stated as the reasoning rather than as a verified fact: the shape of a
+     * missing-key response is not pinned by the SDK's types, so if this service
+     * does reject for an absent key, `read` throws where the contract promises
+     * `null`. That direction is the safe one to be wrong in — a caller sees an
+     * error instead of a false "deleted" — which is why the uncertainty is
+     * resolved toward propagating rather than toward swallowing.
+     */
+    const result = await this.utapi.getFileUrls([filePath], {
+      keyType: "fileKey",
+    });
+    const target = Array.from(result.data)[0]?.url;
     if (target === undefined) return null;
 
     /*
