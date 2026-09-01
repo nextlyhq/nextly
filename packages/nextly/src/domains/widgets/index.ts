@@ -12,6 +12,7 @@ export {
   QUERYLESS_ARCHETYPES,
   validateWidgetDefinition,
   type WidgetDefinition,
+  type WidgetAction,
   type WidgetSize,
   type WidgetHeight,
   type WidgetArchetype,

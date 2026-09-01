@@ -111,7 +111,7 @@ describe("contributed widgets are validated at boot", () => {
     // and nothing else. A plugin authored in JavaScript, or one whose manifest
     // arrives as parsed JSON, passes the JSON round trip with `component: ""`
     // and is then CAST to `PluginAdminWidget` and published -- and
-    // `PluginWidgetGrid` hands that empty path straight to `PluginSlot`, which
+    // The grid hands that empty path straight to `PluginSlot`, which
     // draws the blank dashboard cell making `component` required was supposed
     // to prevent.
     expect(() =>

@@ -214,6 +214,7 @@ export type {
   DataWidgetArchetype,
   QuerylessWidgetArchetype,
   WidgetDefinition,
+  WidgetAction,
   WidgetHeight,
   WidgetSize,
 } from "./domains/widgets/definition";

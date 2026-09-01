@@ -1,5 +1,6 @@
 import type {
   DataWidgetArchetype,
+  WidgetAction,
   QuerylessWidgetArchetype,
   WidgetArchetype,
   WidgetQuery,
@@ -227,6 +228,13 @@ export interface PluginAdminQuerylessWidget extends PluginAdminWidgetBase {
   archetype: QuerylessWidgetArchetype;
   query?: never;
   /**
+   * Required for `actions`, which IS its list of shortcuts, and forbidden for
+   * every other archetype -- the same both-directions reading `component`
+   * takes. Enforced at boot, because the type reaches a TypeScript caller and
+   * nothing else.
+   */
+  actions?: WidgetAction[];
+  /**
    * Optional FALLBACK body, for an archetype this admin release cannot draw
    * yet. Omit it and the card says so by name.
    */
@@ -255,9 +263,9 @@ export type PluginAdminDeclarativeWidget =
  * rendering nothing, reporting nothing. This contract said the requirement
  * would become conditional "when that grid exists and can draw a widget from
  * its archetype alone". `WidgetGrid` now does exactly that, draws `metric` from
- * a query, and names any archetype it cannot draw yet -- and nothing mounts
- * `PluginWidgetGrid` any longer. The consumer is behind the change rather than
- * ahead of it.
+ * a query, and names any archetype it cannot draw yet -- and the grid that
+ * required a component has since been deleted. The consumer is behind the
+ * change rather than ahead of it.
  *
  * Both arms allow `component`, so every existing `{ id, component, size }`
  * declaration keeps compiling untouched. What the union adds is the second

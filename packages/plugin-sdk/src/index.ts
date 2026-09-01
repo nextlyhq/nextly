@@ -460,6 +460,7 @@ export {
   registerWidget,
   registerSource,
   type WidgetDefinition,
+  type WidgetAction,
   type WidgetQuery,
   type WidgetSize,
   type WidgetHeight,

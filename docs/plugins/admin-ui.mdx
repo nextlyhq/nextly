@@ -189,11 +189,10 @@ A widget is drawn one of two ways, and you pick by what you declare.
 Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
 runs the query for the signed-in user and renders the card.
 
-> **What the host draws today: `metric`, `list` and `table`.**
-> `text` and `actions` are accepted by the contract but have no renderer yet, so a
-> widget declaring one shows "the … archetype is not rendered yet" in its card
-> unless it also ships a `component` to draw the body itself. Declare those two
-> only with a component fallback until this note says otherwise.
+> **What the host draws today: `metric`, `list`, `table` and `actions`.**
+> `text` is accepted by the contract but has no renderer yet, so a widget
+> declaring it shows "the text archetype is not rendered yet" in its card unless
+> it also ships a `component` to draw the body itself.
 >
 > A `list` widget draws one row per result. Its query's `select` decides what each
 > row shows, in order: the first field is the row's label and the second, if there
@@ -207,6 +206,29 @@ runs the query for the signed-in user and renders the card.
 >
 > A `list` or `table` that selects nothing says so rather than guessing at a field,
 > and says it without running a query.
+>
+> An `actions` widget is a short column of shortcuts, declared rather than
+> queried:
+>
+> ```ts
+> {
+>   id: "acme/shortcuts",
+>   title: "Shortcuts",
+>   archetype: "actions",
+>   defaultSize: "sm",
+>   actions: [
+>     { label: "New post", href: "/admin/posts/new" },
+>     { label: "Invite user", href: "/admin/users/new", requiredPermission: "create-users" },
+>     { label: "Docs", href: "https://nextly.dev/docs", external: true },
+>   ],
+> }
+> ```
+>
+> Each item is gated on its own `requiredPermission`: a reader who may not use a
+> shortcut does not see it, while the card itself stays. That is separate from
+> the widget's own `requiredPermission`, which decides whether the card appears
+> at all. `external: true` opens the destination in a new tab and says so to a
+> screen reader. A card shows at most six shortcuts and counts the rest.
 
 ```ts
 contributes: {

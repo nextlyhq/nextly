@@ -491,6 +491,7 @@ export {
   validateWidgetQuery,
   MAX_WIDGET_LIMIT,
   type WidgetDefinition,
+  type WidgetAction,
   type WidgetQuery,
   type WidgetSize,
   type WidgetHeight,

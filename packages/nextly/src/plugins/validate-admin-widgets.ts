@@ -87,7 +87,15 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
   const archetype = widget.archetype;
   if (typeof archetype !== "string" || archetype === "custom") return false;
 
-  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) return true;
+  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) {
+    // `actions` IS its shortcuts, so an empty one describes an empty card. The
+    // other queryless archetypes are drawn from the declaration alone and need
+    // nothing further here.
+    if (archetype === "actions") {
+      return Array.isArray(widget.actions) && widget.actions.length > 0;
+    }
+    return true;
+  }
 
   if (DATA_ARCHETYPE_SET.has(archetype)) {
     return typeof widget.query === "object" && widget.query !== null;
@@ -199,7 +207,8 @@ function warnUnknownArchetype(
  * is the tier the whole widget query contract exists for, and which this gate
  * previously made unreachable by requiring `component` on every widget.
  *
- * That requirement was justified on `PluginWidgetGrid` being "the only
+ * That requirement was justified on `PluginWidgetGrid` (since deleted) being
+ * "the only
  * consumer", and it renders `PluginSlot path={widget.component}`, so a widget
  * with no component drew an empty cell. `WidgetGrid` replaced it and nothing
  * mounts `PluginWidgetGrid` any more: the current grid draws a `metric` from

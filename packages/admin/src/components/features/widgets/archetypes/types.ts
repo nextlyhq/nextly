@@ -62,9 +62,30 @@ export type ArchetypeAccepts = (
   definition: DeclaredWidget
 ) => string | undefined;
 
-/** An archetype core can draw: its precondition, and its body. */
+/**
+ * An archetype drawn from the DECLARATION alone, with no data behind it.
+ *
+ * `text` and `actions` are queryless by core's own contract -- the registry
+ * validator refuses a query on them -- so they never enter the batch and no
+ * slot ever arrives for them. Reading that absence as "in flight" or as "drawn
+ * from a query and declaring none" is right for every data archetype and wrong
+ * for these two, which is why they get their own kind of body rather than a
+ * `WidgetResult` they would have to ignore.
+ */
+export type DeclaredBody = (definition: DashboardWidget) => ArchetypeOutcome;
+
+/**
+ * An archetype core can draw: its precondition, and its body.
+ *
+ * The body is one of two kinds and the dispatch branches on which. A DATA
+ * archetype is drawn from a result and waits for one; a DECLARED archetype is
+ * drawn from the declaration and must never wait, because nothing is coming.
+ */
 export interface ArchetypeRenderer {
   /** Absent when the archetype needs nothing beyond its result. */
   accepts?: ArchetypeAccepts;
-  body: ArchetypeBody;
+  /** Drawn from a query result. Mutually exclusive with `declared`. */
+  body?: ArchetypeBody;
+  /** Drawn from the declaration alone, with no query behind it. */
+  declared?: DeclaredBody;
 }

@@ -55,6 +55,33 @@ const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
   DATA_ARCHETYPES
 );
 
+/**
+ * One shortcut on an `actions` widget.
+ *
+ * `requiredPermission` gates the ITEM, not the card. A shortcut to something
+ * the reader may not do is worse than no shortcut: it advertises a capability,
+ * costs a click, and answers with a refusal screen. The card's own
+ * `requiredPermission` decides whether the widget appears at all, which is a
+ * different question -- a card of five shortcuts where the reader may use two
+ * should show two, not disappear.
+ *
+ * `external` marks a destination outside the admin, which the renderer opens in
+ * a new tab and marks for a screen reader. Declared rather than sniffed from
+ * the href, because "is this my origin" is a question the browser answers
+ * differently than the author meant -- a relative path served behind a proxy is
+ * internal, and an absolute URL to the same host is still a full page load.
+ */
+export interface WidgetAction {
+  label: string;
+  href: string;
+  /** Lucide icon name, resolved by the admin. */
+  icon?: string;
+  /** Hides this ITEM from a reader without the grant. */
+  requiredPermission?: string;
+  /** Opens in a new tab, and says so. */
+  external?: boolean;
+}
+
 export interface WidgetDefinition {
   /** `namespace/name`, e.g. "core/recent-entries". */
   id: string;
@@ -82,6 +109,8 @@ export interface WidgetDefinition {
   query?: WidgetQuery;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
+  /** Required for `actions`; forbidden otherwise. */
+  actions?: WidgetAction[];
   /** Where a "view all" footer link points. */
   link?: { label: string; href: string };
 }
@@ -251,6 +280,43 @@ export type UnclassifiedArchetype = Exclude<
   DataWidgetArchetype | QuerylessWidgetArchetype | "custom"
 >;
 
+/**
+ * An `actions` widget is its list of shortcuts, so it must have one.
+ *
+ * Both directions, the same reading `validateComponent` takes: an `actions`
+ * widget without them describes an empty card, and any other archetype carrying
+ * them describes shortcuts nothing will draw -- accepted at every layer,
+ * rendering nothing, reporting nothing.
+ *
+ * Each item is checked for the two fields that make it a link. A label is what
+ * the reader clicks and an href is where it goes; neither has a sensible
+ * default, and a blank one is a shortcut that looks broken rather than absent.
+ */
+function validateActions(d: Partial<WidgetDefinition>): void {
+  const isActions = d.archetype === "actions";
+
+  if (!isActions) {
+    if (d.actions !== undefined) {
+      fail(`${d.id}: actions are only valid for archetype "actions"`);
+    }
+    return;
+  }
+
+  if (!Array.isArray(d.actions) || d.actions.length === 0) {
+    fail(`${d.id}: archetype "actions" requires a non-empty actions array`);
+  }
+
+  for (const [index, action] of d.actions.entries()) {
+    const at = `${d.id}: action #${index}`;
+    if (typeof action?.label !== "string" || action.label.trim() === "") {
+      fail(`${at} requires a non-empty label`);
+    }
+    if (typeof action.href !== "string" || action.href.trim() === "") {
+      fail(`${at} requires a non-empty href`);
+    }
+  }
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
@@ -277,5 +343,6 @@ export function validateWidgetDefinition(
   validateSizeRange(d);
   validateHeight(d);
   validateComponent(d);
+  validateActions(d);
   validateQuery(d);
 }

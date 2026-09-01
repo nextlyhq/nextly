@@ -116,6 +116,21 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
       if (slot) paths.push(slot);
     }
   }
+  // Widget components, which were excluded while nothing rendered them.
+  //
+  // Being pre-bundled by this map is what puts a component in the registry
+  // `PluginSlot` reads; the registry's runtime fallback cannot resolve a bare
+  // package specifier in a bundled browser. So while widgets were excluded, a
+  // `custom` widget drew its card and then nothing inside it unless the plugin
+  // called `registerComponents` itself from its admin entry -- which the
+  // documented contract never asked it to do.
+  //
+  // Optional now: a declarative widget names an archetype and a query and ships
+  // no component at all, so only the ones that HAVE a path contribute one.
+  for (const widget of admin.widgets ?? []) {
+    if (widget.component) paths.push(widget.component);
+  }
+
   paths.push(...collectAdminSlotPaths(admin));
   return paths;
 }

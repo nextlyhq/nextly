@@ -114,15 +114,94 @@ describe("validateWidgetDefinition", () => {
       })
     ).toThrow(/query is only valid for/);
 
+    // Carries its shortcuts, so it reaches the QUERY rule rather than being
+    // refused earlier for describing an empty card. Isolating the rule under
+    // test is the point: without them this asserts the actions rule instead and
+    // the query rule goes unexercised.
     expect(() =>
       validateWidgetDefinition({
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
         defaultSize: "md",
+        actions: [{ label: "New post", href: "/admin/posts/new" }],
         query: { source: "collection:posts", op: "count", limit: 5 },
       })
     ).toThrow(/query is only valid for/);
+  });
+
+  it("requires an actions widget to carry its shortcuts", () => {
+    // An `actions` widget IS its list, so an empty one describes an empty card.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+      })
+    ).toThrow(/requires a non-empty actions array/);
+  });
+
+  it("forbids actions on an archetype that cannot draw them", () => {
+    // The other direction, the same reading `component` takes: shortcuts on a
+    // metric describe something nothing will draw -- accepted at every layer,
+    // rendering nothing, reporting nothing.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/posts",
+        title: "Posts",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:posts", op: "count" },
+        actions: [{ label: "New post", href: "/admin/posts/new" }],
+      })
+    ).toThrow(/only valid for archetype "actions"/);
+  });
+
+  it("requires each shortcut to carry a label and an href", () => {
+    // Neither has a sensible default, and a blank one is a shortcut that looks
+    // broken rather than absent.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        actions: [{ label: "   ", href: "/admin/posts/new" }],
+      })
+    ).toThrow(/requires a non-empty label/);
+
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        actions: [{ label: "New post", href: "" }],
+      })
+    ).toThrow(/requires a non-empty href/);
+  });
+
+  it("accepts a well-formed actions widget", () => {
+    // The positive control. A validator that refused every actions widget would
+    // satisfy all three assertions above.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        actions: [
+          { label: "New post", href: "/admin/posts/new" },
+          {
+            label: "Docs",
+            href: "https://nextly.dev/docs",
+            external: true,
+            requiredPermission: "read-docs",
+          },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it("still allows a query on the custom archetype", () => {
