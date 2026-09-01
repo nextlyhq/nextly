@@ -23,6 +23,10 @@ import {
 import { DashboardHeader } from "../components/layout/header";
 import { SidebarProvider } from "../components/layout/sidebar";
 import { DualSidebar } from "../components/layout/sidebar/DualSidebar";
+import {
+  SidePanelReservationProvider,
+  useReservedInlineEnd,
+} from "../components/layout/SidePanelReservation";
 import { MediaProvider } from "../context/providers/MediaProvider";
 
 interface DashboardLayoutProps {
@@ -48,7 +52,9 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <ChromeSuppressionProvider>
-      <DashboardChrome>{children}</DashboardChrome>
+      <SidePanelReservationProvider>
+        <DashboardChrome>{children}</DashboardChrome>
+      </SidePanelReservationProvider>
     </ChromeSuppressionProvider>
   );
 }
@@ -66,6 +72,14 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
     hidden.has("primaryRail") && hidden.has("subSidebar");
   const { pathname } = useRouter();
   const branding = useBranding();
+  /*
+   * A panel pinned to the window's edge is `position: fixed`, so it is outside
+   * this column's layout and the column keeps its full width underneath it.
+   * Padding the column is what turns "drawn over" into "beside": the header's
+   * account controls and every document action move inboard of the panel
+   * instead of sitting under it, unclickable and silent about it.
+   */
+  const reservedInlineEnd = useReservedInlineEnd();
 
   // Close mobile menu on route change
   useEffect(() => {
@@ -126,7 +140,10 @@ function DashboardChrome({ children }: DashboardLayoutProps) {
             </Sheet>
 
             {/* Main Content */}
-            <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative">
+            <div
+              className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden relative transition-[padding] duration-150"
+              style={{ paddingInlineEnd: reservedInlineEnd }}
+            >
               {!hidden.has("header") && <DashboardHeader />}
               {/* Named container so content responds to the panel width
                   (viewport minus sidebar), not the viewport. */}

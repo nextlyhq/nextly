@@ -7,6 +7,7 @@ import {
   type AdminChromeLayer,
   type ChromeSuppressionRequest,
 } from "./lib/chrome-suppression";
+import { useMountRegistry } from "./lib/mount-registry";
 
 interface ChromeSuppressionContextValue {
   hidden: Set<AdminChromeLayer>;
@@ -39,22 +40,8 @@ export function ChromeSuppressionProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [requests, setRequests] = React.useState<
-    readonly ChromeSuppressionRequest[]
-  >([]);
-
-  const register = React.useCallback((request: ChromeSuppressionRequest) => {
-    setRequests(current => [...current, request]);
-    // Identity removal, not value removal: two surfaces asking for the same
-    // layers produce equal objects, and removing by value would release both
-    // when one unmounts.
-    return () =>
-      setRequests(current => {
-        const at = current.indexOf(request);
-        if (at === -1) return current;
-        return [...current.slice(0, at), ...current.slice(at + 1)];
-      });
-  }, []);
+  const { entries: requests, register } =
+    useMountRegistry<ChromeSuppressionRequest>();
 
   const value = React.useMemo<ChromeSuppressionContextValue>(
     () => ({ hidden: resolveSuppressedChrome(requests), register }),

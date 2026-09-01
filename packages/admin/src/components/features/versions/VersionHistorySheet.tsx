@@ -17,6 +17,7 @@
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useReserveSidePanel } from "@admin/components/layout/SidePanelReservation";
 import {
   Alert,
   AlertDescription,
@@ -36,6 +37,7 @@ import {
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
+import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
@@ -54,6 +56,28 @@ import { VersionRow } from "./VersionRow";
 // manual "Load more" control. Bounds the search in a long, retention-disabled,
 // multi-locale history where a lone-locale row would otherwise page to the end.
 const MAX_AUTO_PREVIOUS_PAGES = 3;
+
+/**
+ * The panel's width, and the one place it is stated.
+ *
+ * Both the element's own width and the space the layout keeps clear for it are
+ * taken from here. Two literals would agree on the day they were written and
+ * disagree the day one of them is changed, and the failure that follows is
+ * silent: the page is indented by one number while the panel occupies another,
+ * so a strip of the document is drawn under the panel and its controls stop
+ * responding without appearing to have changed.
+ */
+const PANEL_WIDTH = 480;
+
+/**
+ * The narrowest window that can hold the panel BESIDE the document.
+ *
+ * `PANEL_WIDTH` plus 720, which is what is left for everything else: the
+ * navigation rail takes about 256 of it, leaving the document a little over
+ * 460 — narrow, and still a document rather than a column of wrapped words.
+ * Below this the panel covers the page and is modal instead.
+ */
+const PANEL_MIN_WINDOW = PANEL_WIDTH + 720;
 
 export interface VersionHistorySheetProps {
   open: boolean;
@@ -403,21 +427,55 @@ export function VersionHistorySheet({
   });
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
 
+  /*
+   * Whether the window can hold this panel BESIDE the document rather than over
+   * it. Asked of the window, because the panel is `position: fixed` and so is
+   * measured against the window rather than against whatever contains it.
+   *
+   * Read on every render of the header, not on open: `useMediaQuery` answers
+   * `false` until its effect runs, and deciding at the moment of opening would
+   * mount the panel modal and switch it a frame later — engaging a focus trap
+   * and then releasing it.
+   */
+  const roomBeside = useMediaQuery(`(min-width: ${PANEL_MIN_WINDOW}px)`);
+
+  /*
+   * The claim, and the ONE fact both behaviours below are derived from. A panel
+   * that is reserved is beside the document, so the document stays live and
+   * only the explicit controls close it; a panel that is not is over the
+   * document, so it is modal and says so. Deciding those separately is how a
+   * panel ends up non-modal with nothing having made room for it, which leaves
+   * every control underneath it visible, enabled and inert.
+   */
+  useReserveSidePanel(open && roomBeside ? PANEL_WIDTH : null);
+
   return (
-    // Non-modal, and that is the point rather than a detail. A modal panel
-    // scrims the page, traps focus and withdraws everything behind it from the
-    // accessibility tree — so reading a document's history made the document
-    // itself unreachable and unscrollable, which is the one thing an editor
-    // needs beside it. Nothing else about the panel changes.
-    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
+    // Non-modal WHERE THE LAYOUT MADE ROOM, and that is the point rather than a
+    // detail. A modal panel scrims the page, traps focus and withdraws
+    // everything behind it from the accessibility tree — so reading a
+    // document's history made the document itself unreachable and
+    // unscrollable, which is the one thing an editor needs beside it.
+    //
+    // Where the window is too narrow to hold both, modal is the honest state:
+    // the panel covers the document either way, and a modal one refuses the
+    // clicks it is swallowing instead of accepting them into nothing.
+    <Sheet open={open} onOpenChange={onOpenChange} modal={!roomBeside}>
       <SheetContent
         side="right"
-        className="w-[480px] sm:max-w-[480px] p-0 flex flex-col"
+        className="p-0 flex flex-col"
+        // Width from the same constant the reservation is made with, so the
+        // space kept clear cannot drift from the space taken. Capped at the
+        // window because the panel is wider than a phone.
+        style={{ width: `min(${PANEL_WIDTH}px, 100vw)`, maxWidth: "100vw" }}
         // A non-modal surface closes on outside interaction by default, which
         // would make the document unusable while history is open: the first
         // click into the page it now leaves interactive would dismiss the
-        // panel. Closing stays with the explicit controls and Escape.
-        onInteractOutside={event => event.preventDefault()}
+        // panel. Closing stays with the explicit controls and Escape. A modal
+        // panel keeps the default, which is what a drawer over a page should
+        // do.
+        {...(roomBeside
+          ? { onInteractOutside: (event: Event) => event.preventDefault() }
+          : {})}
       >
         <SheetHeader className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">
