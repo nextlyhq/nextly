@@ -131,6 +131,33 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
  * anonymous request, forever -- burying the one occurrence that says something
  * under a stream of identical ones.
  */
+/**
+ * What has already been warned about, as `plugin\u0000widget\u0000archetype`.
+ *
+ * `assertAdminWidgets` is called more than once per boot -- `registerServices`
+ * runs it through `resolvePlugins` and then again on the transformed list, and
+ * the CLI follows the same two-pass shape -- so an unchanged widget produced the
+ * same warning at least twice. A diagnostic that repeats itself reads as two
+ * problems, and the author counting occurrences learns nothing from the second.
+ *
+ * Module-level, so it lives as long as the process the warning describes. NUL as
+ * the separator because a plugin name or widget id may contain anything else.
+ */
+const WARNED_ARCHETYPES = new Set<string>();
+
+/**
+ * Forgets what has been warned about.
+ *
+ * For tests, which share one module instance across cases and would otherwise
+ * find the second case silent because the first already warned -- the same
+ * reason `clearWidgets` exists on the registry. A running app never calls it:
+ * the set describes one process, and re-warning inside it is exactly what was
+ * being fixed.
+ */
+export function resetArchetypeWarnings(): void {
+  WARNED_ARCHETYPES.clear();
+}
+
 function warnUnknownArchetype(
   pluginName: string,
   widget: { id?: unknown; archetype?: unknown }
@@ -142,10 +169,15 @@ function warnUnknownArchetype(
   ) {
     return;
   }
+  const widgetId = typeof widget.id === "string" ? widget.id : "";
+  const seenKey = `${pluginName}\u0000${widgetId}\u0000${archetype}`;
+  if (WARNED_ARCHETYPES.has(seenKey)) return;
+  WARNED_ARCHETYPES.add(seenKey);
+
   getNextlyLogger().warn({
     kind: "widget-archetype-unknown",
     plugin: pluginName,
-    widget: typeof widget.id === "string" ? widget.id : undefined,
+    widget: widgetId === "" ? undefined : widgetId,
     archetype,
     known: WIDGET_ARCHETYPES,
     message:
@@ -180,6 +212,21 @@ function warnUnknownArchetype(
  */
 function undrawableReason(widget: Record<string, unknown>): string | undefined {
   if (!isUsableText(widget.id)) return 'declares no usable "id"';
+
+  // A SUPPLIED component must be usable, whether or not the declarative route
+  // would also have carried this widget.
+  //
+  // Checking it only as an alternative let `component: "   "` through beside a
+  // valid archetype and query -- and the admin resolver reads the component for
+  // TRUTHINESS, not usability, so a whitespace string won the archetype
+  // fallback, reached `PluginSlot` as a path nothing resolves, and drew a blank
+  // card where the archetype's own "not rendered yet" diagnostic belonged. An
+  // absent component is a choice; an unusable one is a mistake, and only the
+  // second is worth refusing.
+  if (widget.component !== undefined && !isUsableText(widget.component)) {
+    return 'supplies a "component" that is empty or not a string';
+  }
+
   if (isUsableText(widget.component)) return undefined;
   if (describesDrawableBody(widget)) return undefined;
   return (

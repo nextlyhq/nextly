@@ -46,6 +46,28 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
 };
 
 /**
+ * The renderer for an archetype, or `undefined` — by OWN property only.
+ *
+ * `ARCHETYPE_BODIES[archetype]` is not this question, and the difference is
+ * reachable. The archetype arrives over the wire from a plugin that may be
+ * JavaScript or built against a newer core, and boot deliberately accepts a
+ * name this release does not know so one unknown card cannot abort the install.
+ * A plain object answers for every name on `Object.prototype` as well as its
+ * own: `"__proto__"` returns an object, so the renderer looked present and then
+ * threw "body is not a function", taking the whole grid down with it — and
+ * `"constructor"`, `"toString"` and `"valueOf"` are worse, because they are
+ * FUNCTIONS. Those get CALLED with a widget result, return something whose `ok`
+ * is `undefined`, and draw a blank error with no message on it.
+ *
+ * `Object.hasOwn` asks the question that was meant.
+ */
+function archetypeBody(archetype: string): ArchetypeBody | undefined {
+  return Object.hasOwn(ARCHETYPE_BODIES, archetype)
+    ? ARCHETYPE_BODIES[archetype as WidgetArchetype]
+    : undefined;
+}
+
+/**
  * Whether core can draw this archetype from a result in this release.
  *
  * Exported so `resolve-widgets` can ask the question rather than answer it
@@ -54,8 +76,8 @@ const ARCHETYPE_BODIES: Partial<Record<WidgetArchetype, ArchetypeBody>> = {
  * the table above -- not a second list that has to be remembered when an
  * archetype lands here.
  */
-export function coreDrawsArchetype(archetype: WidgetArchetype): boolean {
-  return ARCHETYPE_BODIES[archetype] !== undefined;
+export function coreDrawsArchetype(archetype: string): boolean {
+  return archetypeBody(archetype) !== undefined;
 }
 
 /**
@@ -79,7 +101,7 @@ export function resolveWidgetOutcome(
   // The escape hatch. A plugin component owns its own body and its own states.
   if (definition.archetype === "custom") return { state: "self-drawn" };
 
-  const body = ARCHETYPE_BODIES[definition.archetype];
+  const body = archetypeBody(definition.archetype);
   if (!body) {
     return {
       state: "failed",

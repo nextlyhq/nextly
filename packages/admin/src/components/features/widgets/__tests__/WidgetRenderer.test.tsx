@@ -131,6 +131,62 @@ describe("WidgetRenderer — metric", () => {
   });
 });
 
+describe("WidgetRenderer — an archetype named off Object.prototype", () => {
+  // Boot accepts an archetype this release does not know, so one unknown card
+  // cannot abort the install. That makes the archetype an arbitrary string from
+  // a plugin, and a plain-object renderer table answers for every name on
+  // `Object.prototype` as well as its own.
+  const inherited: DashboardWidget = {
+    id: "acme/evil",
+    title: "Evil",
+    archetype: "__proto__" as DashboardWidget["archetype"],
+    size: "sm",
+    query: { source: "collection:posts", op: "count" },
+  };
+
+  it("does not mistake `__proto__` for a renderer", () => {
+    // `ARCHETYPE_BODIES["__proto__"]` is an object, so the renderer looked
+    // present and `body(...)` threw "body is not a function" -- out of the card
+    // and into the dashboard's error boundary, taking every other widget with
+    // it, because nothing wraps a widget individually.
+    render(<WidgetRenderer definition={inherited} slot={countSlot(1)} />);
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      /not rendered yet/i
+    );
+  });
+
+  it("does not CALL an inherited function like `constructor`", () => {
+    // The quieter half, and the reason `Object.hasOwn` rather than a typeof
+    // check: `constructor`, `toString` and `valueOf` ARE functions. They were
+    // invoked with a widget result and returned something whose `ok` is
+    // `undefined`, drawing a blank error with no sentence on it.
+    render(
+      <WidgetRenderer
+        definition={{
+          ...inherited,
+          archetype: "constructor" as DashboardWidget["archetype"],
+        }}
+        slot={countSlot(1)}
+      />
+    );
+    expect(screen.getByTestId("widget-card-error")).toHaveTextContent(
+      /not rendered yet/i
+    );
+  });
+
+  it("still draws the archetype it DOES own", () => {
+    // The positive control. A lookup that refused everything would satisfy both
+    // assertions above while rendering nothing at all.
+    render(
+      <WidgetRenderer
+        definition={{ ...inherited, archetype: "metric" }}
+        slot={countSlot(7)}
+      />
+    );
+    expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("7");
+  });
+});
+
 describe("WidgetRenderer — custom", () => {
   const custom: DashboardWidget = {
     id: "acme/panel",

@@ -111,6 +111,19 @@ export function WidgetGrid() {
 
   const { slots, isFetching, updatedAt } = useWidgetQueries(requests);
 
+  // Which widgets are actually IN the batch, taken from the requests that were
+  // sent rather than re-derived from `widget.query`.
+  //
+  // Those two disagree, and the disagreement is the whole point of this set: a
+  // widget declaring a query whose archetype nothing can draw is deliberately
+  // left out of the batch above, but it still HAS a `widget.query`. Testing
+  // that field again below gave such a card a freshness line for a request that
+  // never ran, and marked it `aria-busy` during someone else's refetch.
+  const requested = useMemo(
+    () => new Set(requests.map(request => request.widgetId)),
+    [requests]
+  );
+
   // The same answer the cards are drawn from, so the announcement cannot
   // describe a dashboard other than the one on screen. Counting slots instead
   // said "3 of 3 widgets updated" while a card read "the list archetype is not
@@ -166,11 +179,12 @@ export function WidgetGrid() {
           <WidgetRenderer
             definition={widget}
             slot={slots[widget.id]}
-            updatedAt={widget.query ? updatedAt : null}
-            // Only a widget that asked for something can be waiting on an
-            // answer. A card drawn entirely by a plugin component took no part
-            // in the batch, so a refetch says nothing about it.
-            isFetching={widget.query ? isFetching : false}
+            updatedAt={requested.has(widget.id) ? updatedAt : null}
+            // Only a widget that actually ASKED can be waiting on an answer. A
+            // card drawn entirely by a plugin component took no part in the
+            // batch, and neither did one whose archetype nothing can draw, so a
+            // refetch says nothing about either.
+            isFetching={requested.has(widget.id) ? isFetching : false}
           />
         </div>
       ))}

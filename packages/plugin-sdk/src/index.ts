@@ -290,6 +290,11 @@ export type {
   PluginAdminPage,
   PluginNavSection,
   PluginAdminWidget,
+  PluginAdminCustomWidget,
+  PluginAdminDataWidget,
+  PluginAdminDeclarativeWidget,
+  PluginAdminQuerylessWidget,
+  DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginMenuItem,
 } from "nextly";

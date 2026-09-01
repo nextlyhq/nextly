@@ -244,6 +244,43 @@ describe("WidgetGrid — collection and gating", () => {
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
+  it("claims no freshness for a query that never ran", async () => {
+    // The widget declares a query, so `widget.query` is truthy -- but its
+    // archetype is undrawable, so the grid deliberately left it out of the
+    // batch. Reading `widget.query` again to decide the card's freshness gave
+    // it an "Updated just now" for a request nothing ever sent, and marked it
+    // busy while an unrelated widget refetched.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        query: { source: "collection:posts", op: "list" },
+      },
+      {
+        id: "acme/posts",
+        title: "Posts",
+        archetype: "metric",
+        query: { source: "collection:posts", op: "count" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 3 } }],
+    });
+
+    renderGrid();
+
+    // The metric card asked and answered, so it carries the batch's timestamp.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-metric-value")).toHaveTextContent("3")
+    );
+    const cells = screen.getAllByTestId(/^widget-cell-/);
+    expect(cells).toHaveLength(2);
+
+    // Exactly one freshness line on the page: the widget that took part.
+    expect(screen.getAllByTestId("widget-card-freshness")).toHaveLength(1);
+  });
+
   it("DOES spend a query when a component can draw the result", async () => {
     // The control, and the boundary: the same undrawable archetype WITH a
     // component resolves to `custom`, the plugin's component consumes the slot,

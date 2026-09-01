@@ -5,9 +5,9 @@ description: Contribute admin menu items, pages, settings, and collection-view o
 
 A plugin can extend the Nextly admin in two complementary ways:
 
-- **`contributes.admin`** — the _declarative_ surface: menu entries, custom pages,
+- **`contributes.admin`** — the *declarative* surface: menu entries, custom pages,
   a settings panel, and per-collection view overrides (D19–D23).
-- **`admin`** (on the plugin definition) — _placement & appearance_: where the
+- **`admin`** (on the plugin definition) — *placement & appearance*: where the
   plugin's items sit in the sidebar and how they look (D20).
 
 Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
@@ -127,20 +127,12 @@ means your styles do not depend on the host's build at all.
 
 ```jsonc
 // package.json
-{
-  "scripts": {
-    "build:css": "nextly-build-admin-css src/admin.css dist/admin.css",
-  },
-}
+{ "scripts": { "build:css": "nextly-build-admin-css src/admin.css dist/admin.css" } }
 ```
 
 ```ts
 // your plugin definition
-contributes: {
-  admin: {
-    styles: "@acme/plugin/dist/admin.css";
-  }
-}
+contributes: { admin: { styles: "@acme/plugin/dist/admin.css" } }
 ```
 
 Then side-effect-import the built file from your admin entry so the host app's bundler
@@ -195,7 +187,13 @@ A widget is drawn one of two ways, and you pick by what you declare.
 ### Let the host draw it
 
 Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
-runs the query for the signed-in user and renders the card:
+runs the query for the signed-in user and renders the card.
+
+> **What the host draws today: `metric`, and only `metric`.**
+> `table`, `list`, `text` and `actions` are accepted by the contract but have no
+> renderer yet, so a widget declaring one shows "the … archetype is not rendered yet"
+> in its card unless it also ships a `component` to draw the body itself. Declare
+> those archetypes only with a component fallback until this note says otherwise.
 
 ```ts
 contributes: {
@@ -215,7 +213,8 @@ contributes: {
 ```
 
 `text` and `actions` are drawn without data, so they take no `query` — declaring one is
-a type error. Every other archetype requires it.
+a type error. Every other archetype requires it. (Neither has a renderer yet; see the
+note above.)
 
 ### Draw it yourself
 
@@ -244,9 +243,10 @@ Widgets are rendered on the admin dashboard by `WidgetGrid`, in a 12-column grid
 collapses to one column on small screens, and are hidden from users who lack
 `requiredPermission`. Every widget on the page is fetched in a single batched request.
 
-An archetype this version of Nextly does not draw yet reports itself in that card and
-leaves the rest of the dashboard alone, so a plugin built against a newer core degrades
-one card rather than breaking the admin.
+An archetype this version of Nextly does not draw reports itself in that card and leaves
+the rest of the dashboard alone — whether it is one of the four above or a name from a
+newer core this admin has never heard of. A plugin ahead of its host degrades one card
+rather than breaking the admin.
 
 The contract is still `@experimental` and is expected to grow: charts, a per-instance
 config schema, and saved layouts. Pin your Nextly version while it settles.

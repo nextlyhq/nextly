@@ -11,10 +11,16 @@ import * as loggerModule from "../observability/logger";
 import { buildPluginAdminMeta } from "./admin-meta";
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
-import { assertAdminWidgets } from "./validate-admin-widgets";
+import {
+  assertAdminWidgets,
+  resetArchetypeWarnings,
+} from "./validate-admin-widgets";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // The warning set is module-level and outlives a case, so without this the
+  // second test to use a given archetype finds it already warned.
+  resetArchetypeWarnings();
 });
 
 const withWidget = (widget: unknown): PluginDefinition =>
@@ -205,6 +211,62 @@ describe("contributed widgets are validated at boot", () => {
     expect(logged.kind).toBe("widget-archetype-unknown");
     expect(logged.archetype).toBe("metrics");
     expect(String(logged.message)).toContain("metric");
+  });
+
+  it("warns ONCE about the same widget across repeated boot passes", () => {
+    // `assertAdminWidgets` runs more than once per boot: `registerServices`
+    // calls it through `resolvePlugins` and then again on the transformed list,
+    // and the CLI does the same. An unchanged widget was reported twice, which
+    // reads as two problems and teaches the author nothing the second time.
+    const warn = vi.fn();
+    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+      warn,
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+
+    const plugins = [
+      withWidget({
+        id: "acme/posts",
+        archetype: "metrics",
+        query: { source: "collection:posts", op: "count" },
+      }),
+    ];
+    assertAdminWidgets(plugins);
+    assertAdminWidgets(plugins);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a whitespace-only component even when the declarative half is valid", () => {
+    // The admin resolver reads `component` for TRUTHINESS, so a whitespace
+    // string won the archetype fallback, reached `PluginSlot` as a path nothing
+    // resolves, and drew a blank card where the archetype's own diagnostic
+    // belonged. An absent component is a choice; an unusable one is a mistake.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/posts",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          component: "   ",
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("still accepts a declarative widget that OMITS the component", () => {
+    // The control: absent is fine, unusable is not.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/posts",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).not.toThrow();
   });
 
   it("says nothing about an archetype it DOES know", () => {
