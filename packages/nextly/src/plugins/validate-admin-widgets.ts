@@ -19,6 +19,7 @@
 
 import {
   actionProblem,
+  chromeProblem,
   DATA_ARCHETYPES,
   defaultOrderProblem,
   querylessQueryProblem,
@@ -297,6 +298,12 @@ const FIELD_RULES: ReadonlyArray<
   // as equal to whatever it was measured against and the explicit orders around
   // it quietly stopped holding.
   widget => defaultOrderProblem(widget.defaultOrder),
+
+  // Through the SAME rule the registry applies. Without it a contributed
+  // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
+  // refused the identical declaration, and the admin then ignored the value --
+  // so the documented refusal was true of one channel only.
+  widget => chromeProblem(widget.chrome, widget.archetype),
 
   // A QUERYLESS archetype is drawn from its declaration ALONE, so a component
   // beside it is a fallback for an admin too old to draw the archetype -- never

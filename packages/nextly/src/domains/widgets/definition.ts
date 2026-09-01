@@ -435,18 +435,40 @@ export function querylessQueryProblem(
  * rather than a refusal: the body renders with no heading and no owner for its
  * loading and error states, and nothing anywhere says why.
  */
+/**
+ * Why this `chrome` cannot stand beside this `archetype`, or `undefined`.
+ *
+ * Non-throwing and exported, like {@link actionProblem},
+ * {@link querylessQueryProblem} and {@link defaultOrderProblem}: the
+ * CONTRIBUTIONS channel needs the same answer without a throw. Every one of
+ * those four was added to one validator and missed by the other, and each time
+ * the contributed value was the more permissive of the two.
+ *
+ * The archetype half is the load-bearing one. Accepting `"none"` on an
+ * archetype core draws would be a validated option producing a broken card
+ * rather than a refusal: the body renders with no heading and nothing owning
+ * its loading and error states, and nothing anywhere says why.
+ */
+export function chromeProblem(
+  chrome: unknown,
+  archetype: unknown
+): string | undefined {
+  if (chrome === undefined) return undefined;
+
+  if (!WIDGET_CHROME.includes(chrome as WidgetChrome)) {
+    return `chrome must be one of ${WIDGET_CHROME.join(", ")}`;
+  }
+
+  if (chrome === "none" && archetype !== "custom") {
+    return `chrome "none" is only valid for archetype "custom", not "${String(archetype)}" -- core draws that body into the card itself`;
+  }
+
+  return undefined;
+}
+
 function validateChrome(d: Partial<WidgetDefinition>): void {
-  if (d.chrome === undefined) return;
-
-  if (!WIDGET_CHROME.includes(d.chrome)) {
-    fail(`${d.id}: chrome must be one of ${WIDGET_CHROME.join(", ")}`);
-  }
-
-  if (d.chrome === "none" && d.archetype !== "custom") {
-    fail(
-      `${d.id}: chrome "none" is only valid for archetype "custom", not "${d.archetype}" -- core draws that body into the card itself`
-    );
-  }
+  const problem = chromeProblem(d.chrome, d.archetype);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
 
 /**

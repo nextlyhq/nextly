@@ -470,6 +470,60 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
+  it("refuses a chrome this channel cannot honour", () => {
+    // The registry refuses `chrome: "none"` on an archetype core draws, and on
+    // a value outside the vocabulary. This channel accepted both, so the
+    // documented refusal was true of one channel only -- and the admin then
+    // ignored the value rather than reporting it, which is the shape where an
+    // author sees no card frame, no error, and nothing to search for.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          chrome: "none",
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/thing",
+          component: "@acme/p/admin#Thing",
+          chrome: "borderless",
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts chrome where it IS valid", () => {
+    // The control, both arms. A gate refusing every chrome would satisfy the
+    // assertions above while making the field undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/thing",
+          archetype: "custom",
+          component: "@acme/p/admin#Thing",
+          chrome: "none",
+        }),
+      ])
+    ).not.toThrow();
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          chrome: "card",
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a contributed actions widget whose shortcuts are complete", () => {
     // The control. A gate that refused every actions widget would satisfy the
     // assertions above while making the archetype undeclarable.
