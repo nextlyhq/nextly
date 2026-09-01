@@ -51,6 +51,8 @@
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
+import { useShellIsActive } from "./shell-active";
+
 /** One thing that failed, in the words an author reads. */
 export interface BuilderNotice {
   /** Identity for the list, and what dismissing addresses. */
@@ -119,8 +121,26 @@ export function useSurvivingReport(): (
       mounted.current = false;
     };
   }, []);
+  /*
+   * The other half of "can still draw", and the reason being mounted is not it.
+   *
+   * The shell puts its whole subtree behind `hidden` and `inert` below its
+   * minimum width, and neither attribute unmounts anything — so a caller behind
+   * the narrow-width notice is still mounted, still renders, and is excluded
+   * from both the layout and the accessibility tree. Deciding on `mounted`
+   * alone stores the message inline on a surface nobody can reach, and the
+   * author leaves without learning the write was refused.
+   *
+   * Tracked through a ref, and assigned during render rather than in an effect,
+   * because the callback below is invoked long after the render that created it
+   * — a value closed over at request time describes the shell as it was when
+   * the request STARTED, which is exactly the state that has since changed.
+   */
+  const shellIsActive = useShellIsActive();
+  const active = React.useRef(shellIsActive);
+  active.current = shellIsActive;
   return (reason, showInline) => {
-    if (mounted.current && showInline()) return;
+    if (mounted.current && active.current && showInline()) return;
     raiseNotice(reason);
   };
 }

@@ -1641,23 +1641,70 @@ describe("telling the host which zoom the shell is holding", () => {
 });
 
 describe("where the notice region sits", () => {
-  it("renders it INSIDE the chrome, so its tokens resolve", () => {
+  it("renders it inside a token scope, so its tokens resolve", () => {
     /*
-     * Every `--nx-builder-*` token is declared on `.nx-builder-chrome`, and
-     * custom properties inherit down but never across. A region rendered as a
-     * sibling of the regions resolved its border, background and text to
-     * nothing — a transparent box with host-default text, which in dark mode
-     * is a failure message the author cannot read.
+     * Every `--nx-builder-*` token is declared on `.nx-builder-chrome` or on
+     * `.nx-builder-tokens`, and custom properties inherit down but never
+     * across. A region rendered outside both resolved its border, background
+     * and text to nothing — a transparent box with host-default text, which in
+     * dark mode is a failure message the author cannot read.
+     *
+     * Asserted as "has a token-declaring ancestor" rather than as a fixed
+     * parent, because WHICH scope supplies them is a placement decision and the
+     * placement is what the case below constrains. Pinning the parent here
+     * would make the two cases contradict each other.
      *
      * The region is always mounted so a polite live region exists before its
      * content changes, which is what makes this assertable without provoking a
      * failure first.
      */
     render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
-    const chrome = document.querySelector(".nx-builder-chrome");
-    expect(chrome).not.toBeNull();
     const region = document.querySelector(".nx-notices");
     expect(region).not.toBeNull();
-    expect(chrome?.contains(region ?? null)).toBe(true);
+    expect(
+      region?.closest(".nx-builder-tokens, .nx-builder-chrome") ?? null
+    ).not.toBeNull();
+  });
+
+  it("keeps it out of the subtree the shell makes inert when narrow", () => {
+    /*
+     * The failure this exists for. `hidden` and `inert` do not unmount, so a
+     * notice region inside that wrapper stays mounted and goes on accepting
+     * messages while being excluded from paint AND from the accessibility
+     * tree. A refusal arriving as an author narrows the window then lands
+     * somewhere no one can reach, and they leave believing the write happened.
+     *
+     * Asserted as REACHABILITY rather than as presence. A case checking only
+     * that the region rendered passes on the broken placement, because the
+     * broken placement renders it too.
+     */
+    stubContainerFits(false);
+    render(<BuilderShell onExit={vi.fn()} store={memoryStore()} />);
+
+    const suppressed = (node: Element | null): Element | null => {
+      for (let at = node?.parentElement ?? null; at; at = at.parentElement) {
+        if (at.hasAttribute("inert") || at.hasAttribute("hidden")) return at;
+      }
+      return null;
+    };
+
+    const region = document.querySelector(".nx-notices");
+    expect(region).not.toBeNull();
+    expect(suppressed(region)).toBeNull();
+
+    /*
+     * The control, and it has to be able to come out non-null or the assertion
+     * above is satisfied by a render where nothing is suppressed at all — which
+     * is exactly what a harness that failed to go narrow produces.
+     *
+     * The overlay host rather than `.nx-builder-chrome`: while narrow, the
+     * narrow-width notice renders a chrome root of its own OUTSIDE the wrapper,
+     * so the first match is a visible element and the control would fail while
+     * the shell is behaving correctly. The overlay host has exactly one
+     * instance and is deliberately inside the wrapper.
+     */
+    expect(
+      suppressed(document.querySelector('[data-slot="builder-overlay-host"]'))
+    ).not.toBeNull();
   });
 });

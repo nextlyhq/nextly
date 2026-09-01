@@ -33,6 +33,7 @@ import {
 } from "./builder-notices";
 import { ClassManagerPanel } from "./class-manager-panel";
 import { ClassSelector } from "./class-selector";
+import { ShellActiveContext } from "./shell-active";
 
 afterEach(cleanup);
 
@@ -71,9 +72,18 @@ function deferredCreation(): {
 function Harness({
   nodeId,
   onCreateClass,
+  shellActive = true,
 }: {
   nodeId: string;
   onCreateClass: () => Promise<{ ok: false; reason: string }>;
+  /**
+   * Whether the shell around the selector is the one the author is using.
+   *
+   * The region stays OUTSIDE this provider, mirroring the shell: what the width
+   * suppresses is the editor, and the surface a refusal falls back to has to be
+   * readable while it is suppressed.
+   */
+  shellActive?: boolean;
 }): React.ReactElement {
   const notices = useNoticeQueue();
   return (
@@ -82,16 +92,18 @@ function Harness({
         notices={notices.notices}
         onDismiss={notices.dismiss}
       />
-      <NoticeSinkProvider raise={notices.raise}>
-        <ClassSelector
-          key={nodeId}
-          library={LIBRARY}
-          nodeClassIds={[]}
-          nodeId={nodeId}
-          onCreateClass={onCreateClass}
-          onNodeClassesChange={vi.fn(() => "applied" as const)}
-        />
-      </NoticeSinkProvider>
+      <ShellActiveContext.Provider value={shellActive}>
+        <NoticeSinkProvider raise={notices.raise}>
+          <ClassSelector
+            key={nodeId}
+            library={LIBRARY}
+            nodeClassIds={[]}
+            nodeId={nodeId}
+            onCreateClass={onCreateClass}
+            onNodeClassesChange={vi.fn(() => "applied" as const)}
+          />
+        </NoticeSinkProvider>
+      </ShellActiveContext.Provider>
     </>
   );
 }
@@ -135,6 +147,53 @@ describe("a refusal that arrives after the author has moved on", () => {
     // — a region repeating what is already on screen is one an author learns
     // to ignore.
     expect(screen.getByRole("status").textContent).toBe("");
+  });
+});
+
+describe("a refusal that arrives after the shell stopped being readable", () => {
+  it("goes to the queue, not to the control still mounted behind the notice", async () => {
+    /*
+     * The failure the surviving report exists for, in the form `mounted` cannot
+     * see. Below its minimum width the shell puts its subtree behind `hidden`
+     * and `inert`, and neither unmounts anything — so this selector is still
+     * mounted, still renders, and is removed from paint and from the
+     * accessibility tree. Speaking inline puts the refusal where nobody can
+     * read it, and the author leaves believing the class was created.
+     *
+     * The shell goes inactive AFTER the request starts, which is the whole
+     * point: the author narrows the window while the write is on the network.
+     * A version that read the state when the request BEGAN would still see an
+     * active shell and still answer inline, and a test that started inactive
+     * would pass against it.
+     */
+    const { onCreateClass, refuse } = deferredCreation();
+    const view = render(
+      <Harness nodeId="node-a" onCreateClass={onCreateClass} />
+    );
+
+    fireEvent.change(field(), { target: { value: "promo" } });
+    fireEvent.keyDown(field(), { key: "Enter" });
+
+    view.rerender(
+      <Harness
+        nodeId="node-a"
+        onCreateClass={onCreateClass}
+        shellActive={false}
+      />
+    );
+
+    await refuse("This class could not be saved.");
+
+    expect(screen.getByRole("status").textContent).toMatch(
+      /could not be saved/
+    );
+    /*
+     * And NOT inline. Asserted rather than left implicit, because the two
+     * surfaces are exclusive by design — raising both prints one refusal twice
+     * — so a fix that merely ALSO queued it would satisfy the assertion above
+     * while leaving the duplicate the exclusivity rule exists to prevent.
+     */
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });
 

@@ -39,7 +39,7 @@ import {
 import * as React from "react";
 import { flushSync } from "react-dom";
 
-import { useShellIsActive } from "./builder-shell";
+import { useShellIsActive } from "./shell-active";
 
 /**
  * The keystroke that OPENS the palette, and the one nearly every editor uses for it.

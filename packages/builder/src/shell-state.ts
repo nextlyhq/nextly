@@ -215,6 +215,17 @@ export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
 export const BUILDER_CHROME_CLASS = "nx-builder-chrome";
 
 /**
+ * A scope that resolves `--nx-builder-*` without claiming to be the chrome root.
+ *
+ * For a surface the shell mounts OUTSIDE {@link BUILDER_CHROME_CLASS} — custom
+ * properties inherit down and never across, so such a surface needs the tokens
+ * declared on an ancestor of its own. Giving it the chrome class instead would
+ * put a second chrome root in the document, and every selector and query
+ * meaning "the editor" would match whichever came first.
+ */
+export const BUILDER_TOKENS_CLASS = "nx-builder-tokens";
+
+/**
  * The class marking the canvas root, and the boundary the hit-test stops at.
  *
  * Here rather than in `canvas.tsx` for the reason above: it is the middle term
