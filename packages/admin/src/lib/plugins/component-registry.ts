@@ -110,6 +110,34 @@ const componentRegistry = new Map<ComponentPath, ComponentType>();
  * );
  * ```
  */
+/**
+ * The prefix core's own dashboard cards resolve under.
+ *
+ * Reserved because a core widget's DEFINITION names this path and the widget id
+ * stays core's, so a plugin registering the same path would replace the body
+ * drawn for a card the registry still attributes to core -- a substitution no
+ * permission gates, because nothing about the widget changed.
+ *
+ * A PREFIX, matched with `startsWith` rather than as a substring: a package
+ * legitimately named `@acme/core#X` is not core's, and refusing it would reject
+ * a valid registration to catch an invalid one.
+ */
+const CORE_COMPONENT_PREFIX = "core#";
+
+/**
+ * Registers a component core itself owns, under the reserved prefix.
+ *
+ * The only writer permitted past {@link registerComponent}'s reservation, and
+ * separate from it so the permission is a property of the CALL SITE rather than
+ * of a flag a caller could pass.
+ */
+export function registerCoreComponent(
+  path: ComponentPath,
+  component: ComponentType<never>
+): void {
+  writeComponent(path, component);
+}
+
 export function registerComponent(
   path: ComponentPath,
   component: ComponentType<never>
@@ -128,6 +156,32 @@ export function registerComponent(
     return;
   }
 
+  // Warned and refused rather than thrown, matching the two checks above: this
+  // runs while the admin is mounting, and a throw would trade one unresolvable
+  // card for the whole panel.
+  if (path.startsWith(CORE_COMPONENT_PREFIX)) {
+    console.warn(
+      `[ComponentRegistry] "${CORE_COMPONENT_PREFIX}" is reserved for Nextly's ` +
+        `own dashboard cards and cannot be registered by a plugin: ${path}`
+    );
+    return;
+  }
+
+  writeComponent(path, component);
+}
+
+/**
+ * The single write into the registry map.
+ *
+ * Everything that registers a component reaches the map through here, so the
+ * reservation above is complete by CONSTRUCTION rather than by having
+ * enumerated the callers -- `registerComponents` and the auto-registration path
+ * both route through `registerComponent`, and nothing else calls `set`.
+ */
+function writeComponent(
+  path: ComponentPath,
+  component: ComponentType<never>
+): void {
   componentRegistry.set(path, component as ComponentType);
 }
 
@@ -214,6 +268,17 @@ export function hasComponent(path: ComponentPath | undefined): boolean {
  * @returns true if component was unregistered, false if it wasn't registered
  */
 export function unregisterComponent(path: ComponentPath): boolean {
+  // Removing a core card is the same takeover by the other route: the
+  // definition still names `core#…`, so a deleted entry leaves the card
+  // unresolvable rather than merely unregistered.
+  if (path.startsWith(CORE_COMPONENT_PREFIX)) {
+    console.warn(
+      `[ComponentRegistry] "${CORE_COMPONENT_PREFIX}" is reserved and cannot be ` +
+        `unregistered: ${path}`
+    );
+    return false;
+  }
+
   return componentRegistry.delete(path);
 }
 
