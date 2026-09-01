@@ -11,7 +11,7 @@
  *
  * ## It must not look like a field
  *
- * Gutenberg's own design discussion of switching between editors (issue #1375)
+ * Gutenberg's own design discussion of switching between editors (WordPress/gutenberg issue 1375)
  * reaches two requirements: an author must recognise which editing modes exist
  * and which one they are in, and the handoff must not look "too similar to a
  * block", which "would ultimately confuse the user about what view they are
