@@ -23,6 +23,7 @@ import { useForm, useWatch, type Control } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** What the inline surface answers when this test's editor is finished. */
 let outcome: InlineEditOutcome = { status: "unchanged" };
@@ -203,7 +204,7 @@ function Host(): React.JSX.Element {
 /** Mount the field and open the editor. */
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 /** Whether the editor is still up, which is what holds the author's words. */
@@ -232,7 +233,9 @@ describe("leaving the editor with an inline edit that could not be written", () 
     // passage exists nowhere else — so this is the difference between the
     // author keeping their paragraph and losing it without being asked.
     expect(editorIsOpen()).toBe(true);
-    expect(screen.queryByRole("button", { name: "Edit blocks" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: OPEN_BUILDER_ACTION })
+    ).toBeNull();
   });
 
   it("tells the author why leaving did nothing", () => {

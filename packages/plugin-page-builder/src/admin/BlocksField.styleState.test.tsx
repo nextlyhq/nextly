@@ -34,6 +34,7 @@ import {
 } from "vitest";
 
 import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /*
  * REAL nodes, and one of them of a type the registry does not know.
@@ -165,7 +166,7 @@ function Host(): React.JSX.Element {
 
 function openEditor(): { rerender: () => void } {
   const view = render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
   return {
     rerender: () => {
       React.act(() => {

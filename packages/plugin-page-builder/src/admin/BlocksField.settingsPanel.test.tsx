@@ -29,6 +29,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** What the entry-fields hook answers with for the test in hand. */
 let entryFields: React.ReactNode | null;
@@ -141,7 +142,7 @@ function Host(): React.JSX.Element {
 
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 /** The rail's panel list, as the shell was handed it. */
@@ -268,7 +269,7 @@ describe("offering the Settings panel", () => {
 
     // Commit blocks the way leaving the editor does, then open a fresh one.
     fireEvent.click(screen.getByRole("button", { name: "commit blocks" }));
-    fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 
     expect(pillDirty.at(-1)).toBe(true);
   });

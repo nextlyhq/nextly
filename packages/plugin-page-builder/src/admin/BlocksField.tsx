@@ -4,9 +4,16 @@
  * The blocks field's control: a summary of what the field holds, and the way in
  * to the editor that changes it.
  *
- * Composes `BlocksSummary` rather than replacing it. The summary is a pure
- * read-only account of the document and stays that way — it is what the form
- * shows at rest, and it is worth keeping testable without an editor around it.
+ * At rest it draws `PageBuilderCard`: the page itself, small and inert, and one
+ * way in. A list of block TYPE NAMES was what stood here, and it read as an
+ * inert summary rather than as the door to the editor — the confusion
+ * Gutenberg's own design discussion of editor switching warns about.
+ *
+ * `BlocksSummary` is NOT deleted. It remains exported and registered at the
+ * component path `@nextlyhq/plugin-page-builder/admin#BlocksSummary`, which a
+ * host may address by string, so removing it would break a published surface.
+ * It stays a pure read-only account of the document; both it and the card ask
+ * `page-summary` what the document holds, so they cannot disagree.
  *
  * ## Why the editor opens OVER the form rather than inside it
  *
@@ -143,8 +150,8 @@ import {
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
-import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { PageBuilderCard } from "./PageBuilderCard";
 /* The save state, which the status pill cannot carry: it renders nothing on a
    collection with no publish lifecycle, and took the only reading of unsaved
    work down with it. */
@@ -313,6 +320,27 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   const editable = canEditBlocks({ readOnly, disabled });
 
   /*
+   * The site's own style, read at REST as well as inside the editor.
+   *
+   * The miniature below is the published renderer, so it needs the sheet that
+   * renderer needs. Omitting it is not a neutral choice: `PageRenderer` still
+   * emits the DEFAULT token set, so the page draws plausibly while missing this
+   * site's named classes and block-type defaults — which is the failure
+   * `canvas.tsx` makes the prop required to prevent.
+   *
+   * The same query the editor makes, so the two share one cache entry rather
+   * than fetching twice; `pending` is forwarded so the card can decline to draw
+   * a page it cannot draw faithfully yet.
+   */
+  const restingClientConfig = usePluginClientConfig(PLUGIN_SOURCE);
+  const restingConfigStyle = useMemo(
+    () => readSiteStyleRecord(restingClientConfig?.siteStyle),
+    [restingClientConfig]
+  );
+  const { siteStyle: restingSiteStyle, pending: restingStylePending } =
+    useSiteStyle(restingConfigStyle);
+
+  /*
    * Closed if the form becomes read-only while the editor is up.
    *
    * Not a hypothetical: a permission can be revoked and a form can start
@@ -338,28 +366,16 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       control={control}
     />
   ) : (
-    <div className="flex flex-col gap-3">
-      <BlocksSummary name={name} control={control} />
-      {/*
-        No button at all rather than a disabled one.
-        
-        A disabled control says "you could do this, but not now", which is the
-        wrong sentence for a document that cannot be edited at all — and the
-        summary above already says what the field holds. An affordance that
-        cannot ever act here is one an author spends attention on.
-      */}
-      {editable ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Edit blocks
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <PageBuilderCard
+      document={documentFrom(field.value)}
+      siteStyles={siteSheet(restingSiteStyle)}
+      stylePending={restingStylePending}
+      // The gate is passed through rather than restated: `canEditBlocks`
+      // already answers it for the editor above, and two readings of "may this
+      // author edit" is one more than the question has.
+      canEdit={editable}
+      onOpen={() => setOpen(true)}
+    />
   );
 }
 

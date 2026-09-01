@@ -23,6 +23,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /*
  * ONE document object for the life of the mount.
@@ -199,7 +200,7 @@ function Host(): React.JSX.Element {
 
 function openEditor(): { rerender: () => void } {
   const view = render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
   return {
     rerender: () => {
       React.act(() => {

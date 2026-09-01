@@ -22,6 +22,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** Props the recorders captured on the most recent render. */
 const seen: {
@@ -224,7 +225,7 @@ function Host(): React.JSX.Element {
 /** Mount the field and open the editor, which is where the two surfaces live. */
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 beforeEach(() => {
