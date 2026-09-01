@@ -12,7 +12,7 @@
  * reading it as a real width concludes nothing fits. Neither is what "the box
  * has no size right now" should mean downstream.
  *
- * @module components/features/entries/PreviewMode/useMeasuredWidth
+ * @module components/shared/preview/useMeasuredWidth
  */
 import { useEffect, useLayoutEffect, useState, type RefObject } from "react";
 

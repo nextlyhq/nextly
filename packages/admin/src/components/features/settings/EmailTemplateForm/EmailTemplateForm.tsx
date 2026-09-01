@@ -99,6 +99,7 @@ export function EmailTemplateForm({
   const htmlContent = form.watch("htmlContent");
   const plainTextContent = form.watch("plainTextContent");
   const subject = form.watch("subject");
+  const preheader = form.watch("preheader");
   const useLayout = form.watch("useLayout");
   const isActive = form.watch("isActive");
   const slug = form.watch("slug");
@@ -106,13 +107,6 @@ export function EmailTemplateForm({
   const variables = form.watch("variables");
   const layoutId = form.watch("layoutId");
   const isDirty = form.formState.isDirty;
-
-  // Resolve the wrapping layout for the live preview: the explicit choice,
-  // else the default-layout row, else the first available layout.
-  const activeLayout = useMemo(() => {
-    if (layoutId) return layouts.find(l => l.id === layoutId) ?? null;
-    return layouts.find(l => l.slug === "default-layout") ?? layouts[0] ?? null;
-  }, [layouts, layoutId]);
 
   useEffect(() => {
     if (initialValues) {
@@ -150,15 +144,18 @@ export function EmailTemplateForm({
     previewHtml,
     previewText,
     previewSubject,
+    isPreviewPending,
+    previewError,
   } = useDerivedTemplateState({
     variables,
     sampleOverride,
     subject,
     htmlContent,
     plainTextContent,
+    preheader,
     useLayout,
-    activeLayout,
-    isLayoutRow,
+    layoutId,
+    kind: currentKind,
   });
 
   return (
@@ -243,6 +240,8 @@ export function EmailTemplateForm({
               text={previewText}
               subject={previewSubject}
               format={editorTab}
+              isPending={isPreviewPending}
+              error={previewError}
             />
           }
           inspector={

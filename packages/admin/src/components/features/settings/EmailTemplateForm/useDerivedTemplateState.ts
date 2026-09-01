@@ -1,26 +1,40 @@
 /**
  * Everything the editor DERIVES from what has been typed.
  *
- * Pulled out of the form component because none of it is about the form: it is
- * a pure function of the authored fields plus the sample data, and the
- * component was carrying eight interlocking `useMemo`s that obscured the small
- * amount of state it genuinely owns.
+ * Split along one line: what the SERVER must answer, and what only the browser
+ * can. Rendering is the server's — the fields go to
+ * `POST /api/email-templates/preview`, which composes them through the same
+ * function the transport uses, so the preview cannot disagree with what is
+ * sent. Interpreting the sample-data JSON and spotting variables that resolve
+ * to nothing is the browser's: both are properties of the text on screen, and
+ * a round-trip would only make the feedback slower.
  *
- * The interpolation here is a CLIENT-SIDE copy of what the server renders, and
- * it disagrees with the send path — a preheader is missing, a layout's own
- * `year`/`appName` render blank, and the plain-text tab claims there is no text
- * part when one is generated and sent. Isolating it is the step before deleting
- * it in favour of `POST /api/email-templates/preview`, which renders through
- * the same composition the transport uses.
+ * A client-side copy of the render lived here and had already drifted: it
+ * omitted the preheader entirely, and it reported an empty plain-text part for
+ * every template that does not author one, when the send path derives that
+ * text from the body and delivers it.
  */
 import { useMemo } from "react";
 
-import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import { useDraftEmailTemplatePreview } from "@admin/hooks/queries/useEmailTemplates";
+import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
+import type {
+  DraftPreviewTemplate,
+  EmailTemplateKind,
+} from "@admin/services/emailTemplateApi";
 
-import { collectVariableNames, interpolate } from "./interpolate";
+import { collectVariableNames } from "./interpolate";
 import { BUILT_IN_VARIABLES, buildSampleData } from "./sample-data";
 import type { TemplateFormVariable } from "./schema";
-import { PREVIEW_PALETTE } from "./TemplatePreview";
+
+/**
+ * How long typing must pause before the draft is rendered again.
+ *
+ * Long enough that a word typed at speed is one render rather than six; short
+ * enough that the pane still reads as live. Applied to the render inputs only:
+ * switching device or format re-reads what is already cached.
+ */
+const PREVIEW_DEBOUNCE_MS = 300;
 
 export interface DerivedTemplateState {
   /** Sample JSON as edited, or as derived from the declared variables. */
@@ -32,6 +46,10 @@ export interface DerivedTemplateState {
   previewHtml: string;
   previewText: string;
   previewSubject: string;
+  /** A render is in flight and no earlier one is being shown in its place. */
+  isPreviewPending: boolean;
+  /** The render was refused or unreachable; the pane says so rather than lying. */
+  previewError: string | null;
 }
 
 export function useDerivedTemplateState({
@@ -40,22 +58,26 @@ export function useDerivedTemplateState({
   subject,
   htmlContent,
   plainTextContent,
+  preheader,
   useLayout,
-  activeLayout,
-  isLayoutRow,
+  layoutId,
+  kind,
 }: {
   variables: TemplateFormVariable[] | undefined;
   sampleOverride: string | null;
   subject: string | undefined;
   htmlContent: string | undefined;
   plainTextContent: string | undefined;
+  preheader: string | undefined;
   useLayout: boolean;
-  activeLayout: EmailTemplateRecord | null;
-  isLayoutRow: boolean;
+  layoutId: string | undefined;
+  kind: EmailTemplateKind;
 }): DerivedTemplateState {
+  const isLayoutRow = kind === "layout";
+
   const suggestedSample = useMemo(
-    () => buildSampleData(variables ?? []),
-    [variables]
+    () => buildSampleData(variables ?? [], { isLayoutRow }),
+    [variables, isLayoutRow]
   );
   const sampleText = sampleOverride ?? JSON.stringify(suggestedSample, null, 2);
   const { sampleData, sampleError } = useMemo<{
@@ -97,52 +119,54 @@ export function useDerivedTemplateState({
     return [...referenced].filter(n => !knownNames.has(n.split(".")[0]));
   }, [subject, htmlContent, knownNames]);
 
-  const previewHtml = useMemo(() => {
-    // Split a wrapper at its FIRST {{content}} marker, preserving the rest (a
-    // well-formed layout has exactly one). With no marker, the body is appended
-    // after the wrapper so nothing is silently dropped.
-    const CONTENT_MARKER = "{{content}}";
-    const splitLayout = (wrapper: string): [string, string] => {
-      const i = wrapper.indexOf(CONTENT_MARKER);
-      return i === -1
-        ? [wrapper, ""]
-        : [wrapper.slice(0, i), wrapper.slice(i + CONTENT_MARKER.length)];
-    };
-
-    // A layout row previews its own wrapper with a stand-in body at the
-    // {{content}} placeholder so authors can see where content lands.
-    if (isLayoutRow) {
-      const [before, after] = splitLayout(htmlContent ?? "");
-      const head = interpolate(before, sampleData, false);
-      const tail = interpolate(after, sampleData, false);
-      const sampleBody = `<p style="color:${PREVIEW_PALETTE.sample};font-style:italic;">Your email content appears here.</p>`;
-      return `${head}${sampleBody}${tail}`;
-    }
-
-    const body = interpolate(htmlContent ?? "", sampleData, true);
-    if (!useLayout || !activeLayout) return body;
-    const [before, after] = splitLayout(activeLayout.htmlContent);
-    const head = interpolate(before, sampleData, false);
-    const tail = interpolate(after, sampleData, false);
-    return `${head}${body}${tail}`;
-  }, [htmlContent, sampleData, useLayout, activeLayout, isLayoutRow]);
-
-  const previewText = useMemo(
-    () => interpolate(plainTextContent ?? "", sampleData, false),
-    [plainTextContent, sampleData]
+  /*
+   * Exactly the route's schema, and nothing beyond it. Assembled as one object
+   * so the debounce and the query key both track the whole render input: a
+   * key that tracked only the body would serve a stale subject.
+   */
+  const draft = useMemo<DraftPreviewTemplate>(
+    () => ({
+      subject: subject ?? "",
+      htmlContent: htmlContent ?? "",
+      plainTextContent: plainTextContent ?? null,
+      preheader: preheader ?? null,
+      useLayout,
+      kind,
+      layoutId: layoutId ?? null,
+    }),
+    [
+      subject,
+      htmlContent,
+      plainTextContent,
+      preheader,
+      useLayout,
+      kind,
+      layoutId,
+    ]
   );
-  const previewSubject = useMemo(
-    () => interpolate(subject ?? "", sampleData, false),
-    [subject, sampleData]
-  );
+
+  const debouncedDraft = useDebouncedValue(draft, PREVIEW_DEBOUNCE_MS);
+  const debouncedData = useDebouncedValue(sampleData, PREVIEW_DEBOUNCE_MS);
+
+  const {
+    data: preview,
+    isPending,
+    error,
+  } = useDraftEmailTemplatePreview(debouncedDraft, debouncedData, {
+    // Unparseable sample data has no render: sending `{}` would silently
+    // preview against different values than the ones on screen.
+    enabled: sampleError === null,
+  });
 
   return {
     sampleText,
     sampleData,
     sampleError,
     unknownVariables,
-    previewHtml,
-    previewText,
-    previewSubject,
+    previewHtml: preview?.html ?? "",
+    previewText: preview?.text ?? "",
+    previewSubject: preview?.subject ?? "",
+    isPreviewPending: isPending && preview === undefined,
+    previewError: error ? error.message : null,
   };
 }

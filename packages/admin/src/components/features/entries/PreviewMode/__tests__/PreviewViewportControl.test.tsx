@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI } from "@admin/constants/ui";
 import type { PreviewViewport } from "@admin/services/previewLinkApi";
 
-import type { PreviewFit } from "../previewFrameFit";
+import type { PreviewFit } from "@admin/components/shared/preview/previewFrameFit";
 import { PreviewViewportControl } from "../PreviewViewportControl";
 
 /**

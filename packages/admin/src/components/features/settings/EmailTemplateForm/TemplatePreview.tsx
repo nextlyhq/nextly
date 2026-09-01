@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { Monitor, Moon, Smartphone, Sun } from "@admin/components/icons";
+import {
+  previewFrameFit,
+  previewFrameStyle,
+} from "@admin/components/shared/preview/previewFrameFit";
+import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
 
 import { escapeHtmlValue } from "./interpolate";
 import { Segmented } from "./Segmented";
@@ -39,6 +44,18 @@ export const PREVIEW_PALETTE = {
 // Preview pane
 // ============================================================
 
+/**
+ * The two widths an email is actually authored against.
+ *
+ * 600 rather than a round browser width: it is the ceiling virtually every
+ * HTML email is built to, because Outlook's reading pane has historically been
+ * narrower than that and anything wider is clipped. 375 is the iPhone viewport
+ * most mobile mail is read in. Neither is the pane's width, which is why the
+ * frame is scaled to fit rather than resized — resizing it would reflow the
+ * email to a width no recipient uses and preview a layout nobody receives.
+ */
+const DEVICE_WIDTH = { desktop: 600, mobile: 375 } as const;
+
 type PreviewDevice = "desktop" | "mobile";
 type PreviewTheme = "light" | "dark";
 export type PreviewFormat = "html" | "text";
@@ -48,15 +65,30 @@ export function PreviewPane({
   text,
   subject,
   format,
+  isPending = false,
+  error = null,
 }: {
   html: string;
   text: string;
   subject: string;
   /** Driven by the editor tab so the preview always mirrors what's edited. */
   format: PreviewFormat;
+  /** A first render is in flight and there is no earlier one to show. */
+  isPending?: boolean;
+  /** The server refused or was unreachable. */
+  error?: string | null;
 }) {
   const [device, setDevice] = useState<PreviewDevice>("desktop");
   const [theme, setTheme] = useState<PreviewTheme>("light");
+  const viewport = useRef<HTMLDivElement>(null);
+  const available = useMeasuredWidth(viewport);
+  /*
+   * Text has no device width: it is a monospace stream, not a laid-out
+   * document, so scaling it to an email's column would shrink the type for no
+   * gain. It fills the pane instead.
+   */
+  const requested = format === "text" ? null : DEVICE_WIDTH[device];
+  const fit = previewFrameFit(requested, available);
 
   const srcDoc = useMemo(() => {
     const dark = theme === "dark";
@@ -100,6 +132,34 @@ export function PreviewPane({
         <span className="rounded-sm border border-input px-2 py-0.5 text-xs uppercase tracking-wide text-muted-foreground">
           {format === "text" ? "Plain text" : "HTML"}
         </span>
+        {/* The width the email is being rendered AT, and — only when the pane
+            cannot give it — how far it had to be shrunk to fit. Without this
+            an author reads a scaled frame as the true size and mis-judges
+            every type size in it. */}
+        {fit.kind === "exact" || fit.kind === "scaled" ? (
+          <span
+            data-testid="preview-scale"
+            className="font-mono text-xs text-muted-foreground"
+            title={
+              fit.kind === "scaled"
+                ? "Too narrow to show at full size; drawn smaller."
+                : "Shown at full size."
+            }
+          >
+            {fit.width}px
+            {fit.kind === "scaled"
+              ? ` · ${Math.round(fit.scale * 100)}%`
+              : null}
+          </span>
+        ) : null}
+        {isPending ? (
+          <span
+            data-testid="preview-pending"
+            className="text-xs text-muted-foreground"
+          >
+            Rendering…
+          </span>
+        ) : null}
         <div className="ml-auto flex items-center gap-2">
           <Segmented<PreviewDevice>
             value={device}
@@ -145,7 +205,26 @@ export function PreviewPane({
         </span>
       </div>
 
-      <div className="flex min-h-0 flex-1 justify-center overflow-auto bg-muted/40 p-4">
+      {/* The refusal goes ABOVE the frame rather than inside it: the frame is
+          sandboxed and shows the LAST good render, so a message painted into
+          it would be replaced by the stale preview it is warning about. */}
+      {error !== null ? (
+        <div
+          data-testid="preview-error"
+          role="status"
+          className="shrink-0 border-b border-border bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        >
+          Preview could not be rendered: {error}
+        </div>
+      ) : null}
+
+      {/* `overflow-hidden` because a frame wider than this box is drawn inside
+          it and scaled down; without clipping its untransformed corners paint
+          over the border. */}
+      <div
+        ref={viewport}
+        className="min-h-0 flex-1 overflow-hidden bg-muted/40 p-4"
+      >
         <iframe
           // Remount on format/theme change so the sandboxed srcDoc always
           // re-renders (some browsers don't reload srcDoc in place).
@@ -156,8 +235,8 @@ export function PreviewPane({
           // No backdrop class: srcDoc always paints its own body background for
           // the simulated mail client, so a fixed white here would only ever
           // show as a flash of the wrong color in a dark admin.
-          className="h-full min-h-[420px] rounded-md border border-border"
-          style={{ width: device === "mobile" ? 375 : 640, maxWidth: "100%" }}
+          className="h-full w-full rounded-md border border-border"
+          style={previewFrameStyle(fit)}
         />
       </div>
     </div>
