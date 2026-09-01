@@ -284,6 +284,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "WIDGET_SIZES (value)",
   "WIDGET_SOURCE_FIELD_TYPES (value)",
   "WIDGET_SOURCE_KINDS (value)",
+  "WidgetAction (type)",
   "WidgetArchetype (type)",
   "WidgetDefinition (type)",
   "WidgetHeight (type)",
