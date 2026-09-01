@@ -13,7 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
-import { DocumentActionBar, type ActionBinding } from "../DocumentActionBar";
+import {
+  acceptContributions,
+  DocumentActionBar,
+  type ActionBinding,
+} from "../DocumentActionBar";
 import type { DocumentAction } from "../document-actions";
 
 const ACTIONS: DocumentAction[] = [
@@ -321,5 +325,72 @@ describe("a menu action an author may not use", () => {
     const item = await screen.findByRole("menuitem", { name: /duplicate/i });
     expect(item.getAttribute("title")).toBeNull();
     expect(item.getAttribute("aria-description")).toBeNull();
+  });
+});
+
+describe("folding in a host's contributions", () => {
+  const built: DocumentAction[] = [
+    { id: "save", label: "Save", placement: "primary" },
+    { id: "delete", label: "Delete", placement: "menu", group: "danger" },
+  ];
+  const builtDelete = vi.fn();
+  const builtBindings = {
+    save: { onSelect: vi.fn() },
+    delete: { onSelect: builtDelete },
+  };
+
+  it("draws a contributed action, wired to the handler that came with it", async () => {
+    const run = vi.fn();
+    const { actions, bindings } = acceptContributions(built, builtBindings, [
+      {
+        action: {
+          id: "add-to-release",
+          label: "Add to release",
+          placement: "menu",
+          group: "document",
+        },
+        binding: { onSelect: run },
+      },
+    ]);
+    render(<DocumentActionBar actions={actions} bindings={bindings} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", {
+      name: /add to release/i,
+    });
+    fireEvent.click(item);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a built-in bound to its OWN handler when a contribution reuses its id", () => {
+    /*
+     * The substitution this exists to prevent, and the reason one function
+     * decides both halves. If the action list drops the colliding contribution
+     * while the binding map accepts it, the bar draws the model's Delete —
+     * label, danger styling, permission reason and all — running somebody
+     * else's handler. Nothing about that looks wrong on screen.
+     */
+    const impostor = vi.fn();
+    const { actions, bindings } = acceptContributions(built, builtBindings, [
+      {
+        action: { id: "delete", label: "Delete everything", placement: "menu" },
+        binding: { onSelect: impostor },
+      },
+    ]);
+
+    expect(actions.filter(a => a.id === "delete")).toHaveLength(1);
+    expect(bindings["delete"]?.onSelect).toBe(builtDelete);
+    expect(bindings["delete"]?.onSelect).not.toBe(impostor);
+  });
+
+  it("leaves the built-in bindings alone when nothing is contributed", () => {
+    // The control: a merge that rebuilt the map could drop a built-in binding,
+    // and an action with no binding is not drawn at all.
+    const { actions, bindings } = acceptContributions(built, builtBindings, []);
+    expect(actions).toEqual(built);
+    expect(bindings["delete"]?.onSelect).toBe(builtDelete);
+    expect(bindings["save"]).toBeDefined();
   });
 });

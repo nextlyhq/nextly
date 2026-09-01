@@ -31,6 +31,7 @@ import { z } from "zod";
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
 import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
+import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -132,14 +133,19 @@ export interface SingleDocumentData {
 
 export interface SingleFormProps {
   /**
-   * Document-level actions the PAGE owns, rendered with the form's own actions.
+   * Document-level actions the PAGE owns, folded in with the form's own.
    *
-   * Matches the collection editor: a release membership is a fact about this
-   * document, so its control belongs beside Save and Publish rather than in a
-   * bar of its own spanning the full measure — which ran underneath the sticky
-   * side panel and took the click and the hover meant for it.
+   * DESCRIPTIONS paired with handlers, not rendered controls. Adding a document
+   * to a release is a fact about this document, so its control belongs with
+   * Publish and Duplicate — but releases are the page's concern, and a form that
+   * imported them would have to import translations and every later one too.
+   *
+   * It was a `ReactNode`, which could only ever be a button in one fixed spot:
+   * unable to sit in the overflow menu, unable to be ordered against the
+   * built-ins, and unable to say why it was unavailable — so it VANISHED where
+   * a permission withheld it, which reads as the feature not existing.
    */
-  documentActions?: React.ReactNode;
+  documentActions?: readonly ContributedAction[];
   /** Single schema with field definitions */
   schema: SingleSchema;
   /** Current document data */
@@ -707,9 +713,9 @@ export function SingleForm({
                            that toggles a flag nothing reads is worse than no
                            button. */
                             {...previewPane.toggle}
+                            contributedActions={documentActions}
                             toolbarSlot={
                               <>
-                                {documentActions}
                                 <EntryFormToolbarSlots
                                   context="single"
                                   controllerField={controllerNames[0]}

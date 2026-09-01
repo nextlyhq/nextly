@@ -24,7 +24,12 @@ import { translationCounts } from "../translation-meta";
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
 import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
 import { documentActions } from "./document-actions";
-import { DocumentActionBar, type ActionBinding } from "./DocumentActionBar";
+import {
+  acceptContributions,
+  DocumentActionBar,
+  type ActionBinding,
+  type ContributedAction,
+} from "./DocumentActionBar";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
@@ -208,6 +213,16 @@ export interface EntrySystemHeaderProps {
    * plugin-agnostic — the caller builds it from `entryFormToolbarSlot`.
    */
   toolbarSlot?: React.ReactNode;
+  /**
+   * Document actions the PAGE owns, folded in with the built-in ones.
+   *
+   * Descriptions rather than rendered controls. A node could only ever be a
+   * button in one fixed spot: it cannot be demoted to the menu, ordered against
+   * the built-ins, or given a reason when a permission withholds it — so a
+   * release control drawn that way had to VANISH where an author lacked the
+   * permission, which reads as the feature not existing.
+   */
+  contributedActions?: readonly ContributedAction[];
 
   /**
    * Current schema fields, used to render a stored version in the history
@@ -256,6 +271,7 @@ export function EntrySystemHeader({
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
+  contributedActions = [],
   localized,
   isPreviewAvailable = false,
   onPreview,
@@ -507,6 +523,17 @@ export function EntrySystemHeader({
       : { delete: { onSelect: onDelete, disabledReason: busyReason } }),
   };
 
+  /*
+   * One merge for both halves. Splitting them would let the bar draw a built-in
+   * verb wired to a contribution that lost its collision — Delete, from the
+   * model, running somebody else's handler.
+   */
+  const withContributions = acceptContributions(
+    documentVerbs,
+    actionBindings,
+    contributedActions
+  );
+
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -671,8 +698,8 @@ export function EntrySystemHeader({
             rather than each control testing `isReadingHistory` for itself.
           */}
           <DocumentActionBar
-            actions={documentVerbs}
-            bindings={actionBindings}
+            actions={withContributions.actions}
+            bindings={withContributions.bindings}
             pending={isSubmitting}
           />
 
