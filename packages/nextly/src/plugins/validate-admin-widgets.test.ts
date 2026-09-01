@@ -416,6 +416,114 @@ describe("contributed widgets are validated at boot", () => {
     ).not.toThrow();
   });
 
+  it("refuses a defaultOrder this channel cannot sort by", () => {
+    // The registry refuses a non-finite order; this channel had no check at
+    // all. `NaN` compares false against every value, so a widget carrying one
+    // sorted as equal to whatever it met and the explicit orders around it
+    // stopped holding -- intermittently, depending on the order the array
+    // happened to arrive in, which is the worst way for it to fail.
+    for (const defaultOrder of ["soon", Number.NaN, null, {}]) {
+      expect(() =>
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/shortcuts",
+            archetype: "actions",
+            actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+            defaultOrder,
+          }),
+        ])
+      ).toThrow(NextlyError);
+    }
+  });
+
+  it("accepts a finite order", () => {
+    // The control. A gate refusing every order would satisfy the assertion
+    // above while making the field undeclarable.
+    for (const defaultOrder of [0, -1, 2.5]) {
+      expect(() =>
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/shortcuts",
+            archetype: "actions",
+            actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+            defaultOrder,
+          }),
+        ])
+      ).not.toThrow();
+    }
+  });
+
+  it("accepts a widget that states no order at all", () => {
+    // OMITTED, not `defaultOrder: undefined`. An explicitly undefined value is
+    // refused on every field here, `description` and `icon` included, because
+    // it does not survive the JSON round trip this gate runs -- so writing the
+    // absent case that way would assert the serialization rule rather than
+    // this one.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a chrome this channel cannot honour", () => {
+    // The registry refuses `chrome: "none"` on an archetype core draws, and on
+    // a value outside the vocabulary. This channel accepted both, so the
+    // documented refusal was true of one channel only -- and the admin then
+    // ignored the value rather than reporting it, which is the shape where an
+    // author sees no card frame, no error, and nothing to search for.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          chrome: "none",
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/thing",
+          component: "@acme/p/admin#Thing",
+          chrome: "borderless",
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("accepts chrome where it IS valid", () => {
+    // The control, both arms. A gate refusing every chrome would satisfy the
+    // assertions above while making the field undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/thing",
+          archetype: "custom",
+          component: "@acme/p/admin#Thing",
+          chrome: "none",
+        }),
+      ])
+    ).not.toThrow();
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          chrome: "card",
+        }),
+      ])
+    ).not.toThrow();
+  });
+
   it("accepts a contributed actions widget whose shortcuts are complete", () => {
     // The control. A gate that refused every actions widget would satisfy the
     // assertions above while making the archetype undeclarable.

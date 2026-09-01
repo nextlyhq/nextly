@@ -22,7 +22,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import {
   useWidgetQueries,
   type WidgetQueryRequest,
@@ -30,10 +33,16 @@ import {
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
+import { registerCoreWidgetComponents } from "./core-components";
 import { coreDraws, resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
 import { WidgetRenderer } from "./WidgetRenderer";
+
+// At module scope, before any render. `PluginSlot` resolves a path DURING
+// render, so registering from an effect would land after the first paint and
+// every core card would show its unresolved fallback once on the way in.
+registerCoreWidgetComponents();
 
 /**
  * What the grid says once a batch settles, or `null` for a state not worth
@@ -64,8 +73,69 @@ function settledAnnouncement(
     : `${loaded} of ${total} ${noun} updated.`;
 }
 
+/**
+ * What the grid shows when it holds no widget, which is three different facts.
+ *
+ * Its own component because the distinction is not the grid's job: the grid
+ * draws widgets, and "there are none", "we have not been told yet" and "we
+ * could not find out" are a separate question with a separate answer each.
+ * Separate also because the grid's own body is already long: dispatching
+ * widgets and choosing between three fallbacks are different jobs, and folding
+ * them together put three more branches in a function that draws.
+ *
+ * The distinction itself is the branding provider's to make, not this
+ * component's: `isUnavailable` means admin-meta never produced an answer, while
+ * a failed BACKGROUND refetch over a cached response leaves that response valid
+ * and is deliberately not reported.
+ */
+function NothingToDraw({
+  isPending,
+  isUnavailable,
+}: {
+  isPending: boolean;
+  isUnavailable: boolean;
+}) {
+  if (isUnavailable) {
+    return (
+      <section
+        aria-label="Dashboard widgets"
+        data-testid="widget-grid-unavailable"
+        className="rounded-lg border border-border bg-card px-4 py-6 text-sm text-muted-foreground"
+      >
+        Your dashboard could not be loaded. It will reappear once the connection
+        recovers.
+      </section>
+    );
+  }
+
+  if (isPending) {
+    // Placeholders rather than nothing, so the page does not reflow from empty
+    // to full as the answer lands. Three, matching the sections a default
+    // install draws; `aria-hidden` because the grid's own live region already
+    // speaks for it and a screen reader gains nothing from three empty boxes.
+    return (
+      <section
+        aria-label="Dashboard widgets"
+        data-testid="widget-grid-loading"
+        className="grid grid-cols-12 gap-6"
+      >
+        {[0, 1, 2].map(row => (
+          <div
+            key={row}
+            aria-hidden
+            className="col-span-12 mb-6 h-32 animate-pulse rounded-lg bg-muted"
+          />
+        ))}
+      </section>
+    );
+  }
+
+  return null;
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
+  const { isPending, isUnavailable } = useBrandingStatus();
   const { hasPermission } = useCurrentUserPermissions();
 
   // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
@@ -160,7 +230,17 @@ export function WidgetGrid() {
 
   // Nothing to draw. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
-  if (widgets.length === 0) return null;
+  // THREE outcomes, not two. Every card on the dashboard now arrives through
+  // the workspace query, so an empty list is no longer proof that there is
+  // nothing to draw -- it is equally the shape of a request still in flight and
+  // of one that never answered. Collapsing all three into `return null` blanked
+  // the entire page on first paint and on any transient failure, where the
+  // sections used to mount immediately and draw their own states.
+  if (widgets.length === 0) {
+    return (
+      <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+    );
+  }
 
   return (
     <section aria-label="Dashboard widgets" className="grid grid-cols-12 gap-6">
@@ -176,7 +256,38 @@ export function WidgetGrid() {
         <div
           key={widget.id}
           data-testid={`widget-cell-${widget.id}`}
-          className={cn(widgetSpanClass(widget.size))}
+          // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
+          // widget always renders its card, so this can never hide one; it
+          // reaches only an unframed widget whose component returned null --
+          // which core's conditional sections do, and did before they were
+          // widgets. Without it each becomes a blank cell with a `gap-6` on
+          // either side, which is the empty-slot bug rather than the hiding
+          // those components have always performed.
+          //
+          // CSS rather than asking the component to declare its own emptiness:
+          // a declaration is a second statement of what the render already
+          // decided, and the two drift.
+          className={cn(
+            widgetSpanClass(widget.size),
+            "empty:hidden",
+            // An unframed widget is a SECTION, and sections on this page have
+            // always been 48px apart -- the `space-y-12` the dashboard used
+            // before these became widgets. The grid's own `gap-6` is a card
+            // rhythm and right for cards, so the difference belongs to the
+            // widgets that are not cards: 24px of trailing margin plus the
+            // 24px row gap puts two adjacent sections back at 48px.
+            //
+            // BOTTOM only. A symmetric `my-3` also pushed the FIRST row down,
+            // and the page's outer `space-y-12` already places the grid 48px
+            // below the welcome header -- so every dashboard gained 12px there
+            // while the inter-section gaps looked correct. Measuring the gaps
+            // alone could not see it; only the header-to-first-section distance
+            // could.
+            //
+            // Margins, not padding: a hidden cell contributes neither, but
+            // padding would also inset a body that draws its own background.
+            widget.chrome === "none" && "mb-6"
+          )}
         >
           <WidgetRenderer
             definition={widget}

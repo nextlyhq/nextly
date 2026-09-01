@@ -19,7 +19,9 @@
 
 import {
   actionProblem,
+  chromeProblem,
   DATA_ARCHETYPES,
+  defaultOrderProblem,
   querylessQueryProblem,
   QUERYLESS_ARCHETYPES,
   WIDGET_ARCHETYPES,
@@ -258,40 +260,73 @@ function warnUnknownArchetype(
  * collides with every other blank one and React reconciles two different
  * widgets as one.
  */
-function undrawableReason(widget: Record<string, unknown>): string | undefined {
-  if (!isUsableText(widget.id)) return 'declares no usable "id"';
+/**
+ * The field checks a widget must pass whatever kind of body it describes.
+ *
+ * A LIST rather than a ladder of `if`s, because this is a growing set with no
+ * ordering between its members -- each asks about one field and none depends on
+ * another's answer. Every addition was previously another branch in one
+ * function, which is how it reached the point where the shape of the function
+ * hid what it was doing.
+ *
+ * First problem wins, so the diagnostic names the field an author can act on
+ * rather than the last one checked.
+ */
+const FIELD_RULES: ReadonlyArray<
+  (widget: Record<string, unknown>) => string | undefined
+> = [
+  // `id` keys the grid cell, so a blank one collides with every other blank one
+  // and React reconciles two different widgets as one.
+  widget => (isUsableText(widget.id) ? undefined : 'declares no usable "id"'),
 
   // A SUPPLIED component must be usable, whether or not the declarative route
-  // would also have carried this widget.
-  //
-  // Checking it only as an alternative let `component: "   "` through beside a
-  // valid archetype and query -- and the admin resolver reads the component for
-  // TRUTHINESS, not usability, so a whitespace string won the archetype
-  // fallback, reached `PluginSlot` as a path nothing resolves, and drew a blank
-  // card where the archetype's own "not rendered yet" diagnostic belonged. An
-  // absent component is a choice; an unusable one is a mistake, and only the
-  // second is worth refusing.
-  if (widget.component !== undefined && !isUsableText(widget.component)) {
-    return 'supplies a "component" that is empty or not a string';
-  }
+  // would also have carried this widget. Checking it only as an ALTERNATIVE let
+  // `component: "   "` through beside a valid archetype and query -- and the
+  // admin resolver reads the component for TRUTHINESS, not usability, so a
+  // whitespace string won the archetype fallback, reached `PluginSlot` as a
+  // path nothing resolves, and drew a blank card where the archetype's own
+  // "not rendered yet" diagnostic belonged. An absent component is a choice; an
+  // unusable one is a mistake, and only the second is worth refusing.
+  widget =>
+    widget.component !== undefined && !isUsableText(widget.component)
+      ? 'supplies a "component" that is empty or not a string'
+      : undefined,
+
+  // Through the SAME rule the registry applies. This channel had no order check
+  // at all, so `defaultOrder: "soon"` shipped and the admin's comparator made
+  // it `NaN` -- which compares false against every value, so the widget sorted
+  // as equal to whatever it was measured against and the explicit orders around
+  // it quietly stopped holding.
+  widget => defaultOrderProblem(widget.defaultOrder),
+
+  // Through the SAME rule the registry applies. Without it a contributed
+  // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
+  // refused the identical declaration, and the admin then ignored the value --
+  // so the documented refusal was true of one channel only.
+  widget => chromeProblem(widget.chrome, widget.archetype),
 
   // A QUERYLESS archetype is drawn from its declaration ALONE, so a component
   // beside it is a fallback for an admin too old to draw the archetype -- never
   // a substitute for a well-formed declaration. A current admin prefers the
   // host renderer and reads this same declaration, so checking the shortcuts
-  // only as the ALTERNATIVE to a component meant naming one skipped the rule
-  // entirely, and `actions: [{}]` beside a component reached the grid as
-  // exactly the blank link that rule exists to prevent.
+  // only as the ALTERNATIVE to a component meant naming one skipped the rule,
+  // and `actions: [{}]` beside a component reached the grid as exactly the
+  // blank link that rule exists to prevent.
   //
   // The queryless half only. A DATA archetype missing its query is a card core
-  // genuinely cannot fill, so the admin reports it as undrawable and the
-  // component fallback is what renders -- refusing that here would reject a
-  // widget which draws correctly today.
-  if (
+  // genuinely cannot fill, so the admin reports it undrawable and the component
+  // fallback is what renders -- refusing that here would reject a widget which
+  // draws correctly today.
+  widget =>
     typeof widget.archetype === "string" &&
     QUERYLESS_ARCHETYPE_SET.has(widget.archetype)
-  ) {
-    const problem = querylessProblem(widget);
+      ? querylessProblem(widget)
+      : undefined,
+];
+
+function undrawableReason(widget: Record<string, unknown>): string | undefined {
+  for (const rule of FIELD_RULES) {
+    const problem = rule(widget);
     if (problem !== undefined) return problem;
   }
 

@@ -15,6 +15,8 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+
 import {
   clearWidgets,
   listWidgets,
@@ -68,14 +70,30 @@ describe("resetWidgetRegistries", () => {
     expect(() => seedSource("plugin:stripe/revenue")).not.toThrow();
   });
 
-  it("empties the widget registry for the same reason", () => {
+  it("drops the previous boot's widgets and leaves core's own", () => {
+    // The property is that nothing SURVIVES a boot, not that the store ends
+    // empty -- core registers its dashboard cards in this same function, so
+    // empty stopped being the right assertion when it gained its first
+    // definition. Asserted by identity rather than by count: a reset that
+    // dropped a core card while leaving the plugin's would match any total.
     seedWidget("stripe/revenue");
-    expect(listWidgets()).toHaveLength(1);
 
     resetWidgetRegistries();
 
-    expect(listWidgets()).toHaveLength(0);
+    const ids = listWidgets().map(widget => widget.id);
+    expect(ids).not.toContain("stripe/revenue");
+    expect(ids).toEqual(CORE_WIDGETS.map(widget => widget.id));
     expect(() => seedWidget("stripe/revenue")).not.toThrow();
+  });
+
+  it("registers core's cards without colliding across repeated boots", () => {
+    // The hot-reload case, for the rows this function now writes itself: two
+    // resets in a row must not report core's own ids as duplicates, which is
+    // exactly what would happen if the registration ran anywhere but after the
+    // clear in this one function.
+    resetWidgetRegistries();
+    expect(() => resetWidgetRegistries()).not.toThrow();
+    expect(listWidgets()).toHaveLength(CORE_WIDGETS.length);
   });
 
   it("still refuses a genuine duplicate WITHIN one boot", () => {

@@ -241,6 +241,7 @@ contributes: {
         defaultSize: "sm",                   // sm | md | lg | xl | full
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
+        defaultOrder: 40,                    // optional; lower sits higher
       },
     ],
   },
@@ -250,6 +251,48 @@ contributes: {
 `text` and `actions` are drawn without data, so they take no `query` — declaring one is
 a type error. Every other archetype requires it. (`actions` is drawn by the host; `text`
 is not yet — see the note above.)
+
+### Where a card sits
+
+`defaultOrder` is optional and sorts ascending; a widget that omits it goes after every
+widget that states one. Leave it off unless you mean it — without it your card keeps its
+declaration order, which is what nearly every widget wants.
+
+It exists because position would otherwise depend on **how** a widget reached the
+dashboard rather than on anything it said: contributions resolve before registrations, so
+the same card moved across the grid when its author switched channels. Core's own
+dashboard cards state one, which is how they stay above contributed widgets.
+
+Numbers, not indexes — core spaces its own ten apart so a card can be placed between two
+without renumbering anything.
+
+A reader's saved layout, once they have arranged their dashboard, wins over this. Think
+of it as where the card starts, not where it stays.
+
+### Widgets that draw their own surface
+
+A `custom` widget may set `chrome: "none"` to decline the card frame entirely, and is
+then responsible for everything the card would have provided — its heading, its loading
+and error states, its own visual boundary.
+
+Reach for it only when your component **is** already a designed surface, such as a
+titled section with its own rules. Framing one of those draws a second heading above its
+own. If your component draws a body and expects a title around it, leave `chrome` alone.
+
+It is refused on every other archetype, because core composes those bodies **into** the
+card — the card owns the title, the footer and the busy state — so an unframed one would
+render with no heading and nothing reporting that it was loading.
+
+One consequence worth knowing: an unframed component that renders nothing costs no space
+at all. The grid collapses a cell whose widget drew nothing, so a card that hides itself
+when it has nothing to say leaves no gap behind.
+
+<Callout type="info">
+  `core#` is reserved. Core's own dashboard cards resolve their components under that
+  prefix, and the admin refuses to let anything else register or unregister one — a
+  plugin claiming the path would replace the body drawn for a card the registry still
+  attributes to core.
+</Callout>
 
 ### Draw it yourself
 

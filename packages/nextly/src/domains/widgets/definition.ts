@@ -93,6 +93,31 @@ export interface WidgetDefinition {
   category?: string;
   archetype: WidgetArchetype;
   defaultSize: WidgetSize;
+  /**
+   * Where this widget sits by default, ascending. Omitted means "after
+   * everything that states one".
+   *
+   * The DECLARED default, not the reader's own arrangement -- a stored layout
+   * carries its own order per placement and wins over this. It exists because
+   * position was otherwise an accident of which CHANNEL a widget arrived
+   * through: the resolver reads contributions before registrations, so a card
+   * moved across the grid when its author switched from one to the other
+   * without changing anything about the card.
+   *
+   * A number rather than an index, so inserting between two neighbours does not
+   * renumber them. Any finite value is legal, negatives and fractions included.
+   */
+  defaultOrder?: number;
+  /**
+   * Whether the host frames this widget. Defaults to `"card"`.
+   *
+   * Only a `custom` widget may decline the frame, because only a `custom`
+   * widget supplies the component that would replace it. For every archetype
+   * core draws, the card IS the surface the body is composed against -- it owns
+   * the title, the footer and the busy state -- so an unframed one would render
+   * content with no heading and nothing to report its own loading.
+   */
+  chrome?: WidgetChrome;
   /** Bounds what a user may resize to. Omitted means unconstrained. */
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
@@ -255,6 +280,23 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  */
 export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
 
+/**
+ * Whether the HOST frames a widget, or the widget draws its own surface.
+ *
+ * `"card"` is the default and the only value most widgets want: the host draws
+ * the standard card and the widget supplies a body, so every card on the
+ * dashboard shares one anatomy, one busy state and one place its title lives.
+ *
+ * `"none"` is for a widget that IS already a designed surface -- core's own
+ * dashboard sections carry their own heading and rules, and framing one draws a
+ * second heading around the first. The distinction Backstage draws between a
+ * framed `InfoCard` and bare `Content`.
+ */
+export const WIDGET_CHROME = ["card", "none"] as const;
+
+/** How a widget is framed. See {@link WIDGET_CHROME}. */
+export type WidgetChrome = (typeof WIDGET_CHROME)[number];
+
 /** An archetype core draws without asking for data. */
 export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
 
@@ -374,6 +416,92 @@ export function querylessQueryProblem(
   return `query is only valid for a data archetype or "custom", not "${archetype}"`;
 }
 
+/**
+ * `defaultOrder`, when stated, must be a finite number.
+ *
+ * `Number.isFinite` rather than a `typeof` check alone, and it is reachable
+ * rather than defensive: `1e400` is valid JSON that parses to `Infinity`, so a
+ * decoded plugin manifest can carry one without any code having written it. An
+ * infinite sort key cannot be diagnosed from the grid -- it pins the card to one
+ * end and compares equal to every other infinity, so two of them order
+ * arbitrarily against each other.
+ */
+/**
+ * `chrome`, when stated, must be in the vocabulary -- and `"none"` only on
+ * `custom`.
+ *
+ * The archetype restriction is the load-bearing half. Accepting `"none"` on an
+ * archetype core draws would be a validated option that produces a broken card
+ * rather than a refusal: the body renders with no heading and no owner for its
+ * loading and error states, and nothing anywhere says why.
+ */
+/**
+ * Why this `chrome` cannot stand beside this `archetype`, or `undefined`.
+ *
+ * Non-throwing and exported, like {@link actionProblem},
+ * {@link querylessQueryProblem} and {@link defaultOrderProblem}: the
+ * CONTRIBUTIONS channel needs the same answer without a throw. Every one of
+ * those four was added to one validator and missed by the other, and each time
+ * the contributed value was the more permissive of the two.
+ *
+ * The archetype half is the load-bearing one. Accepting `"none"` on an
+ * archetype core draws would be a validated option producing a broken card
+ * rather than a refusal: the body renders with no heading and nothing owning
+ * its loading and error states, and nothing anywhere says why.
+ */
+export function chromeProblem(
+  chrome: unknown,
+  archetype: unknown
+): string | undefined {
+  if (chrome === undefined) return undefined;
+
+  if (!WIDGET_CHROME.includes(chrome as WidgetChrome)) {
+    return `chrome must be one of ${WIDGET_CHROME.join(", ")}`;
+  }
+
+  if (chrome === "none" && archetype !== "custom") {
+    return `chrome "none" is only valid for archetype "custom", not "${String(archetype)}" -- core draws that body into the card itself`;
+  }
+
+  return undefined;
+}
+
+function validateChrome(d: Partial<WidgetDefinition>): void {
+  const problem = chromeProblem(d.chrome, d.archetype);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
+}
+
+/**
+ * Why this value cannot serve as a `defaultOrder`, or `undefined`.
+ *
+ * Non-throwing and exported for the same reason {@link actionProblem} and
+ * {@link querylessQueryProblem} are: the CONTRIBUTIONS channel needs the same
+ * answer without a throw. That channel had no order check at all, so a
+ * JavaScript plugin could publish `defaultOrder: "soon"`, and the admin's
+ * comparator turned it into `NaN` -- which compares false against everything,
+ * so the widget sorted as equal to whatever it met and every explicit order
+ * around it stopped meaning anything. Silently, and only sometimes, depending
+ * on the order the array happened to arrive in.
+ *
+ * `Number.isFinite` rather than a `typeof` check alone, and it is reachable
+ * rather than defensive: `1e400` is valid JSON that parses to `Infinity`, so a
+ * decoded manifest carries one without any code having written it. The sort
+ * uses infinity as its "stated nothing" sentinel, so an infinite ORDER would
+ * tie with every widget that declared none.
+ */
+export function defaultOrderProblem(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "defaultOrder must be a finite number";
+  }
+  return undefined;
+}
+
+function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
+  const problem = defaultOrderProblem(d.defaultOrder);
+  if (problem !== undefined) fail(`${d.id}: ${problem}`);
+}
+
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
@@ -399,4 +527,6 @@ export function validateWidgetDefinition(
   validateComponent(d);
   validateActions(d);
   validateQuery(d);
+  validateDefaultOrder(d);
+  validateChrome(d);
 }

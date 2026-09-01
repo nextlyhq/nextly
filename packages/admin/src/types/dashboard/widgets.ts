@@ -26,6 +26,7 @@ import type {
   WidgetArchetype,
   WidgetQuery,
   WidgetSize,
+  WidgetChrome,
 } from "nextly/config";
 
 /**
@@ -95,4 +96,21 @@ export interface DashboardWidget {
    */
   actions?: WidgetAction[];
   link?: { label: string; href: string };
+  /**
+   * The DECLARED default position, ascending; absent means "after everything
+   * that states one".
+   *
+   * Carried through rather than consumed and dropped, because it is the value a
+   * stored layout defaults each placement's own order FROM. Resolving it here
+   * and discarding it would make that a second derivation of the same fact.
+   */
+  defaultOrder?: number;
+  /**
+   * Whether the host frames this widget; `"card"` when unstated.
+   *
+   * `"none"` belongs to a widget that is already a designed surface -- core's
+   * dashboard sections carry their own heading and rules, so framing one draws
+   * a second heading around the first.
+   */
+  chrome?: WidgetChrome;
 }

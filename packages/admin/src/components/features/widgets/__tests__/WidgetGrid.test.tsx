@@ -18,10 +18,16 @@ import { coreDraws } from "../outcome";
 import { WidgetGrid } from "../WidgetGrid";
 
 let mockBranding: AdminBranding | undefined;
+let mockBrandingStatus: {
+  isPending: boolean;
+  isUnavailable: boolean;
+  isBrandingUnavailable: boolean;
+} = { isPending: false, isUnavailable: false, isBrandingUnavailable: false };
 let granted: string[] = [];
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useBrandingStatus: () => mockBrandingStatus,
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
@@ -1201,5 +1207,43 @@ describe("WidgetGrid — accessibility", () => {
     expect(
       screen.getByRole("region", { name: /dashboard widgets/i })
     ).toBeInTheDocument();
+  });
+});
+
+describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", () => {
+  beforeEach(() => {
+    mockBranding = {};
+    mockBrandingStatus = {
+      isPending: false,
+      isUnavailable: false,
+      isBrandingUnavailable: false,
+    };
+  });
+
+  it("says nothing when the workspace settled and declared no widgets", () => {
+    // The genuinely empty case, and the control for the two below: an app with
+    // no widgets should render no grid rather than a permanent skeleton.
+    const { container } = renderGrid();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("holds space while the workspace query is still in flight", () => {
+    // Every card on the dashboard now arrives through this query. Treating a
+    // PENDING response as "no widgets" blanked the entire page on first paint
+    // and on any slow request -- the sections used to mount immediately and
+    // draw their own skeletons, so the regression was invisible to every test
+    // that supplied widgets.
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    renderGrid();
+    expect(screen.getByTestId("widget-grid-loading")).toBeInTheDocument();
+  });
+
+  it("says so when the workspace never answered", () => {
+    // Distinct from pending, and distinct from empty. Silence here told the
+    // reader their dashboard has no content, when what happened is that we
+    // could not find out.
+    mockBrandingStatus = { ...mockBrandingStatus, isUnavailable: true };
+    renderGrid();
+    expect(screen.getByTestId("widget-grid-unavailable")).toBeInTheDocument();
   });
 });

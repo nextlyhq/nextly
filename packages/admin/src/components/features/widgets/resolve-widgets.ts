@@ -16,6 +16,7 @@ import type {
   WidgetArchetype,
   WidgetQuery,
   WidgetSize,
+  WidgetChrome,
 } from "nextly/config";
 
 import type {
@@ -90,6 +91,8 @@ export interface ReadableWidgetDeclaration {
   component?: string;
   actions?: WidgetAction[];
   link?: { label: string; href: string };
+  defaultOrder?: number;
+  chrome?: WidgetChrome;
 }
 
 /**
@@ -212,6 +215,8 @@ function resolveOne(
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
+    defaultOrder: meta.defaultOrder,
+    chrome: meta.chrome,
   };
 }
 
@@ -253,6 +258,8 @@ function resolveRegistered(
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
+    defaultOrder: meta.defaultOrder,
+    chrome: meta.chrome,
   };
 }
 
@@ -303,6 +310,13 @@ function mergeCollision(
     link: registration.link ?? contribution.link,
     component: registration.component ?? contribution.component,
     actions: registration.actions ?? contribution.actions,
+    // Both channels can state these, and the registry wins where it does --
+    // the rule `defaultSize` already follows above. Rebuilt field by field
+    // here, so a field added to the contract and not to THIS list is dropped
+    // silently: the merged widget loses its declared position, and an unframed
+    // custom widget is wrapped in the card it asked not to have.
+    defaultOrder: registration.defaultOrder ?? contribution.defaultOrder,
+    chrome: registration.chrome ?? contribution.chrome,
   };
 }
 
@@ -395,5 +409,29 @@ export function resolveDashboardWidgets(
     )
   );
 
-  return [...contributed, ...registrations];
+  // ONE sort over both channels, after the merge and the permission gate, so a
+  // widget's position does not depend on which of the two declared it. That
+  // dependency was the defect: registrations are appended after contributions,
+  // so a card crossed the grid when its author moved it between channels
+  // without changing anything about the card.
+  //
+  // The sentinel is INFINITY, not `MAX_SAFE_INTEGER`. `validateDefaultOrder`
+  // accepts any finite number, and `Number.MAX_VALUE` is finite and far above
+  // `MAX_SAFE_INTEGER` -- so that sentinel let a widget with a perfectly valid
+  // order sort BELOW widgets claiming none, contradicting the one guarantee
+  // this field makes. Infinity is above the whole accepted range by
+  // construction, and nothing can tie with it because non-finite values are
+  // refused at declaration.
+  //
+  // STABLE, which `Array.prototype.sort` has guaranteed since ES2019 and which
+  // the whole compatibility story rests on: every widget shipping today states
+  // no order, so they all compare equal and keep the arrangement they have.
+  // Sorting by `?? 0` instead would order them against each other arbitrarily
+  // -- rearranging every existing dashboard while every assertion about a
+  // STATED order still passed.
+  return [...contributed, ...registrations].sort(
+    (a, b) =>
+      (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
+      (b.defaultOrder ?? Number.POSITIVE_INFINITY)
+  );
 }
