@@ -145,8 +145,12 @@ import { readSiteStyleRecord } from "../site-style-record";
 
 import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+/* The save state, which the status pill cannot carry: it renders nothing on a
+   collection with no publish lifecycle, and took the only reading of unsaved
+   work down with it. */
 import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
+import { UnsavedChangesPill } from "./UnsavedChangesPill";
 import { useShown } from "./use-shown";
 
 export interface BlocksFieldProps<
@@ -2038,6 +2042,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         topBar={
           <>
             <DocumentStatusPill isDirty={documentDirty} />
+            {/* Beside the publish state, not folded into it. The two answer
+                different questions and one of them has no answer where a
+                collection declares no lifecycle. */}
+            <UnsavedChangesPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the
