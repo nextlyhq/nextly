@@ -1121,7 +1121,20 @@ function ShellRegions({
                  */
                 tabIndex={0}
                 aria-label="Canvas"
-                className="h-full overflow-auto"
+                /*
+                 * Padded, so the page floats inside the region rather than
+                 * meeting its edges. The frame is then visible on every side at
+                 * every width — without it the page fills the region whenever
+                 * it is not scaled down, and the edge this gap exists to show
+                 * has nowhere to appear.
+                 *
+                 * Safe against the fit: `canvasScale` observes this element's
+                 * CONTENT box, so padding narrows the width the page is fitted
+                 * into and the scale follows it. A padding the measurement
+                 * could not see would size the page to the region and paint it
+                 * over the gap.
+                 */
+                className="h-full overflow-auto p-6"
               >
                 {children}
               </section>

@@ -966,6 +966,33 @@
    */
   background-color: var(--nx-builder-surface-raised);
   /*
+   * A SHEET, not a region that happens to be a different colour.
+   *
+   * The surface alone separates the page from the frame only where the two
+   * tones differ enough to read, and they deliberately do not: the frame is one
+   * step off the background so it recedes. A border states the page's edge at
+   * any tone, in either mode — `--nx-builder-border` is 0.92 against a 0.99
+   * page in light and 0.26 against a 0.00 page in dark, so the edge survives
+   * the palette inverting while the two surfaces swap which of them is lighter.
+   *
+   * The shadow is the secondary cue and is allowed to be nearly invisible in
+   * dark, where a cast shadow has almost nothing to darken. Carrying the
+   * separation on the BORDER rather than the shadow is what keeps both modes
+   * equally legible instead of tuning one and checking the other.
+   *
+   * No radius, deliberately. The drop indicator and the selection chrome are
+   * positioned in this element's own content coordinates and are not clipped by
+   * it; rounding the corners without clipping leaves a block's own background
+   * squaring them off, and clipping to fix that would cut the drag chrome the
+   * canvas exists to draw.
+   *
+   * Stated on the PAGE rather than on the region around it, so the page is a
+   * self-contained sheet: several of them side by side — one per breakpoint —
+   * would each carry their own edge with nothing about this rule to revisit.
+   */
+  border: 1px solid var(--nx-builder-border);
+  box-shadow: var(--shadow-md);
+  /*
    * Fills the region rather than stopping at its content.
    *
    * Without this the canvas is exactly as tall as the blocks in it, so the area

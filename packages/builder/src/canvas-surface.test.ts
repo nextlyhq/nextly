@@ -36,6 +36,34 @@ function canvasRule(): string {
   return body.slice(0, body.indexOf("\n}"));
 }
 
+describe("the canvas as a sheet", () => {
+  it("states its own edge, so the page is separable at any tone", () => {
+    /*
+     * The frame is deliberately one step off the background so it recedes, so
+     * the two surfaces alone are close by design. The border is what makes the
+     * page's edge readable regardless — and regardless of which of the two is
+     * lighter, which the palette inverts between modes.
+     */
+    expect(canvasRule()).toContain(
+      "border: 1px solid var(--nx-builder-border)"
+    );
+  });
+
+  it("carries the separation on the BORDER, not only on a shadow", () => {
+    /*
+     * A shadow has almost nothing to darken on a dark page, so a sheet relying
+     * on one is legible in light mode and flat in dark. The shadow may be
+     * present as a secondary cue; the border may not be missing.
+     */
+    const rule = canvasRule();
+    const hasBorder = rule.includes("border: 1px solid");
+    expect(
+      hasBorder,
+      "a shadow alone leaves the page edgeless wherever it cannot cast"
+    ).toBe(true);
+  });
+});
+
 describe("the canvas surface", () => {
   it("declares a background rather than inheriting the frame", () => {
     expect(canvasRule()).toContain("background-color:");
