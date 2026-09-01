@@ -176,7 +176,18 @@ export function WidgetGrid() {
         <div
           key={widget.id}
           data-testid={`widget-cell-${widget.id}`}
-          className={cn(widgetSpanClass(widget.size))}
+          // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
+          // widget always renders its card, so this can never hide one; it
+          // reaches only an unframed widget whose component returned null --
+          // which core's conditional sections do, and did before they were
+          // widgets. Without it each becomes a blank cell with a `gap-6` on
+          // either side, which is the empty-slot bug rather than the hiding
+          // those components have always performed.
+          //
+          // CSS rather than asking the component to declare its own emptiness:
+          // a declaration is a second statement of what the render already
+          // decided, and the two drift.
+          className={cn(widgetSpanClass(widget.size), "empty:hidden")}
         >
           <WidgetRenderer
             definition={widget}

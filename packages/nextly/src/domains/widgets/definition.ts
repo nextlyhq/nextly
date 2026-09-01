@@ -108,6 +108,16 @@ export interface WidgetDefinition {
    * renumber them. Any finite value is legal, negatives and fractions included.
    */
   defaultOrder?: number;
+  /**
+   * Whether the host frames this widget. Defaults to `"card"`.
+   *
+   * Only a `custom` widget may decline the frame, because only a `custom`
+   * widget supplies the component that would replace it. For every archetype
+   * core draws, the card IS the surface the body is composed against -- it owns
+   * the title, the footer and the busy state -- so an unframed one would render
+   * content with no heading and nothing to report its own loading.
+   */
+  chrome?: WidgetChrome;
   /** Bounds what a user may resize to. Omitted means unconstrained. */
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
@@ -270,6 +280,23 @@ function validateComponent(d: Partial<WidgetDefinition>): void {
  */
 export const QUERYLESS_ARCHETYPES = ["text", "actions"] as const;
 
+/**
+ * Whether the HOST frames a widget, or the widget draws its own surface.
+ *
+ * `"card"` is the default and the only value most widgets want: the host draws
+ * the standard card and the widget supplies a body, so every card on the
+ * dashboard shares one anatomy, one busy state and one place its title lives.
+ *
+ * `"none"` is for a widget that IS already a designed surface -- core's own
+ * dashboard sections carry their own heading and rules, and framing one draws a
+ * second heading around the first. The distinction Backstage draws between a
+ * framed `InfoCard` and bare `Content`.
+ */
+export const WIDGET_CHROME = ["card", "none"] as const;
+
+/** How a widget is framed. See {@link WIDGET_CHROME}. */
+export type WidgetChrome = (typeof WIDGET_CHROME)[number];
+
 /** An archetype core draws without asking for data. */
 export type QuerylessWidgetArchetype = (typeof QUERYLESS_ARCHETYPES)[number];
 
@@ -399,6 +426,29 @@ export function querylessQueryProblem(
  * end and compares equal to every other infinity, so two of them order
  * arbitrarily against each other.
  */
+/**
+ * `chrome`, when stated, must be in the vocabulary -- and `"none"` only on
+ * `custom`.
+ *
+ * The archetype restriction is the load-bearing half. Accepting `"none"` on an
+ * archetype core draws would be a validated option that produces a broken card
+ * rather than a refusal: the body renders with no heading and no owner for its
+ * loading and error states, and nothing anywhere says why.
+ */
+function validateChrome(d: Partial<WidgetDefinition>): void {
+  if (d.chrome === undefined) return;
+
+  if (!WIDGET_CHROME.includes(d.chrome)) {
+    fail(`${d.id}: chrome must be one of ${WIDGET_CHROME.join(", ")}`);
+  }
+
+  if (d.chrome === "none" && d.archetype !== "custom") {
+    fail(
+      `${d.id}: chrome "none" is only valid for archetype "custom", not "${d.archetype}" -- core draws that body into the card itself`
+    );
+  }
+}
+
 function validateDefaultOrder(d: Partial<WidgetDefinition>): void {
   if (d.defaultOrder === undefined) return;
   if (typeof d.defaultOrder !== "number" || !Number.isFinite(d.defaultOrder)) {
@@ -432,4 +482,5 @@ export function validateWidgetDefinition(
   validateActions(d);
   validateQuery(d);
   validateDefaultOrder(d);
+  validateChrome(d);
 }

@@ -103,6 +103,28 @@ export function WidgetRenderer({
   // grid only reports them for a widget that asked -- so nothing here puts a
   // freshness line under a card that never made a request.
   if (outcome.state === "self-drawn") {
+    // A widget that declines the frame draws its own surface, so the card would
+    // be a second one around it -- a heading above its heading, a border around
+    // its border. Core's dashboard sections are exactly that: each already
+    // carries a title, a rule and its own loading and error states.
+    //
+    // Reached only for `custom`, which `validateWidgetDefinition` enforces:
+    // every other archetype has its body composed INTO the card, so unframing
+    // one would leave content with no heading and nothing owning its states.
+    //
+    // Nothing is wrapped around it at all -- not even a fragment with a class --
+    // so a component returning null leaves the grid cell genuinely empty and
+    // `empty:hidden` can collapse it. Anything drawn here to "help" would fill
+    // the cell and reinstate the blank row.
+    if (definition.chrome === "none") {
+      return (
+        <PluginSlot
+          path={definition.component}
+          props={{ widgetId: definition.id, slot, isFetching }}
+        />
+      );
+    }
+
     return (
       <WidgetCard
         {...shared}

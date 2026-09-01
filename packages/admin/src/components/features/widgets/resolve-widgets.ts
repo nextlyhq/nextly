@@ -213,6 +213,7 @@ function resolveOne(
     actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
     defaultOrder: meta.defaultOrder,
+    chrome: meta.chrome,
   };
 }
 
@@ -255,6 +256,7 @@ function resolveRegistered(
     actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
     defaultOrder: meta.defaultOrder,
+    chrome: meta.chrome,
   };
 }
 

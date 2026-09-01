@@ -326,3 +326,64 @@ describe("defaultOrder places a widget without depending on which channel it cam
     ).toThrow();
   });
 });
+
+describe("chrome decides whether the HOST frames the widget", () => {
+  const custom = {
+    id: "core/team",
+    title: "Team",
+    archetype: "custom" as const,
+    defaultSize: "lg" as const,
+    component: "core#TeamSummary",
+  };
+
+  it("defaults to being framed by leaving it unstated", () => {
+    // The compatibility bound: every widget shipping today states nothing and
+    // must keep the card it has.
+    expect(() => validateWidgetDefinition(custom)).not.toThrow();
+  });
+
+  it("lets a CUSTOM widget decline the frame", () => {
+    // A `custom` widget supplies its own component, so it can already be a
+    // designed surface -- a section with its own heading and rules. Framing one
+    // draws a second heading around the first.
+    expect(() =>
+      validateWidgetDefinition({ ...custom, chrome: "none" })
+    ).not.toThrow();
+  });
+
+  it("refuses to unframe an archetype CORE draws", () => {
+    // Core fills a metric/list/table/actions/text body and the card IS that
+    // body's surface -- its title, its footer, its busy state. Unframed, the
+    // content has no heading and nothing owning its states.
+    //
+    // The fixture deliberately omits `component`: spreading the custom one in
+    // made every case throw on `component is only valid for archetype "custom"`
+    // instead, so the assertion passed with no chrome rule present at all. The
+    // MESSAGE is asserted for the same reason -- `toThrow()` alone cannot tell
+    // which rule refused.
+    for (const [archetype, extra] of [
+      ["metric", { query: { source: "collection:posts", op: "count" } }],
+      ["list", { query: { source: "collection:posts", op: "find" } }],
+      ["table", { query: { source: "collection:posts", op: "find" } }],
+      ["actions", { actions: [{ label: "New", href: "/admin/users/create" }] }],
+      ["text", {}],
+    ] as const) {
+      expect(() =>
+        validateWidgetDefinition({
+          id: "core/x",
+          title: "X",
+          defaultSize: "lg",
+          archetype,
+          chrome: "none",
+          ...extra,
+        })
+      ).toThrow(/chrome/i);
+    }
+  });
+
+  it("refuses a chrome value outside the vocabulary", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...custom, chrome: "borderless" })
+    ).toThrow();
+  });
+});

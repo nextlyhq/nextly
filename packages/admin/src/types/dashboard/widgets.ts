@@ -26,6 +26,7 @@ import type {
   WidgetArchetype,
   WidgetQuery,
   WidgetSize,
+  WidgetChrome,
 } from "nextly/config";
 
 /**
@@ -104,4 +105,12 @@ export interface DashboardWidget {
    * and discarding it would make that a second derivation of the same fact.
    */
   defaultOrder?: number;
+  /**
+   * Whether the host frames this widget; `"card"` when unstated.
+   *
+   * `"none"` belongs to a widget that is already a designed surface -- core's
+   * dashboard sections carry their own heading and rules, so framing one draws
+   * a second heading around the first.
+   */
+  chrome?: WidgetChrome;
 }
