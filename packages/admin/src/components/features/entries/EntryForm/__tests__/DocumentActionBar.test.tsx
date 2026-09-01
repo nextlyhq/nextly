@@ -13,7 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
-import { DocumentActionBar, type ActionBinding } from "../DocumentActionBar";
+import {
+  acceptContributions,
+  DocumentActionBar,
+  type ActionBinding,
+} from "../DocumentActionBar";
 import type { DocumentAction } from "../document-actions";
 
 const ACTIONS: DocumentAction[] = [
@@ -294,6 +298,69 @@ describe("a menu action an author may not use", () => {
     expect(item.getAttribute("aria-description")).toMatch(/permission/i);
   });
 
+  it("shows the reason as TEXT, because a disabled row cannot be hovered", async () => {
+    /*
+     * The refusal has to be readable without hovering or focusing. A disabled
+     * Radix item carries `pointer-events-none` and is skipped by the menu's
+     * roving focus, so a `title` never opens and an `aria-description` on an
+     * unfocusable row reaches nobody — which would leave the author with a grey
+     * row and no way to find out what is wrong with it.
+     */
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "unpublish",
+            label: "Unpublish",
+            placement: "menu",
+            group: "danger",
+            destructive: true,
+            disabledReason: "You do not have permission to unpublish.",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          unpublish: { onSelect: vi.fn() },
+        }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /unpublish/i });
+    expect(item.textContent).toContain("You do not have permission");
+  });
+
+  it("keeps a usable action's row to its label alone", async () => {
+    // The control: rendering the reason unconditionally would put an empty or
+    // stray second line under every usable action in the menu.
+    render(
+      <DocumentActionBar
+        actions={[
+          { id: "save", label: "Save", placement: "primary" },
+          {
+            id: "duplicate",
+            label: "Duplicate",
+            placement: "menu",
+            group: "document",
+          },
+        ]}
+        bindings={{
+          save: { onSelect: vi.fn() },
+          duplicate: { onSelect: vi.fn() },
+        }}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", { name: /duplicate/i });
+    expect(item.textContent).toBe("Duplicate");
+  });
+
   it("leaves a usable menu action carrying no reason at all", async () => {
     // The control. Attributes attached unconditionally would satisfy the case
     // above while telling every author their available actions are refused.
@@ -321,5 +388,72 @@ describe("a menu action an author may not use", () => {
     const item = await screen.findByRole("menuitem", { name: /duplicate/i });
     expect(item.getAttribute("title")).toBeNull();
     expect(item.getAttribute("aria-description")).toBeNull();
+  });
+});
+
+describe("folding in a host's contributions", () => {
+  const built: DocumentAction[] = [
+    { id: "save", label: "Save", placement: "primary" },
+    { id: "delete", label: "Delete", placement: "menu", group: "danger" },
+  ];
+  const builtDelete = vi.fn();
+  const builtBindings = {
+    save: { onSelect: vi.fn() },
+    delete: { onSelect: builtDelete },
+  };
+
+  it("draws a contributed action, wired to the handler that came with it", async () => {
+    const run = vi.fn();
+    const { actions, bindings } = acceptContributions(built, builtBindings, [
+      {
+        action: {
+          id: "add-to-release",
+          label: "Add to release",
+          placement: "menu",
+          group: "document",
+        },
+        binding: { onSelect: run },
+      },
+    ]);
+    render(<DocumentActionBar actions={actions} bindings={bindings} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /more actions/i })
+    );
+
+    const item = await screen.findByRole("menuitem", {
+      name: /add to release/i,
+    });
+    fireEvent.click(item);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a built-in bound to its OWN handler when a contribution reuses its id", () => {
+    /*
+     * The substitution this exists to prevent, and the reason one function
+     * decides both halves. If the action list drops the colliding contribution
+     * while the binding map accepts it, the bar draws the model's Delete —
+     * label, danger styling, permission reason and all — running somebody
+     * else's handler. Nothing about that looks wrong on screen.
+     */
+    const impostor = vi.fn();
+    const { actions, bindings } = acceptContributions(built, builtBindings, [
+      {
+        action: { id: "delete", label: "Delete everything", placement: "menu" },
+        binding: { onSelect: impostor },
+      },
+    ]);
+
+    expect(actions.filter(a => a.id === "delete")).toHaveLength(1);
+    expect(bindings["delete"]?.onSelect).toBe(builtDelete);
+    expect(bindings["delete"]?.onSelect).not.toBe(impostor);
+  });
+
+  it("leaves the built-in bindings alone when nothing is contributed", () => {
+    // The control: a merge that rebuilt the map could drop a built-in binding,
+    // and an action with no binding is not drawn at all.
+    const { actions, bindings } = acceptContributions(built, builtBindings, []);
+    expect(actions).toEqual(built);
+    expect(bindings["delete"]?.onSelect).toBe(builtDelete);
+    expect(bindings["save"]).toBeDefined();
   });
 });

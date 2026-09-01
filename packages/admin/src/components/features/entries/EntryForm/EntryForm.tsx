@@ -15,7 +15,6 @@
  * @since 1.0.0
  */
 
-import type { ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import {
@@ -58,6 +57,7 @@ import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { AutosaveRecoveryBanner } from "./AutosaveRecoveryBanner";
+import type { ContributedAction } from "./DocumentActionBar";
 import {
   effectiveEntryStatus,
   isSlugPerLocale,
@@ -138,17 +138,6 @@ export interface EntryFormProps {
    */
   embedded?: boolean;
   /**
-   * Document-level actions the PAGE owns, rendered with the form's own actions.
-   *
-   * A release membership is a fact about this document, so its control belongs
-   * beside Save and Publish rather than in a bar of its own. It was in a bar of
-   * its own, spanning the full content measure — which put it underneath the
-   * sticky 320px side panel, where it could not be clicked and took the hover
-   * that should have gone to the panel. A page-owned node rather than a release
-   * import keeps this component unaware of releases, which is the same reason
-   * `toolbarSlot` exists for plugins.
-   */
-  /**
    * Opens this entry's API response.
    *
    * Supplied by the route, which is what knows how to navigate. Without it the
@@ -157,7 +146,21 @@ export interface EntryFormProps {
    * is a capability removed rather than replaced.
    */
   onViewApi?: () => void;
-  documentActions?: ReactNode;
+  /**
+   * Document-level actions the PAGE owns, folded in with the form's own.
+   *
+   * DESCRIPTIONS paired with handlers, not rendered controls. Adding a document
+   * to a release is a fact about this document, so its control belongs with
+   * Publish and Duplicate — but releases are the page's concern, and a form that
+   * imported them would have to import translations and every later one too.
+   *
+   * Describing rather than rendering is what leaves the model free to place the
+   * action, order it against the built-ins, and disable it with a reason. A
+   * rendered node fixes all three at its call site, and the one that matters is
+   * the last: a control that cannot say why it is unavailable has to disappear,
+   * which an author cannot tell from a feature that does not exist.
+   */
+  documentActions?: readonly ContributedAction[];
   /** Additional CSS classes for the form container */
   /**
    * i18n: translation mode — the language being translated FROM, the source
@@ -919,9 +922,9 @@ export function EntryForm({
                                     },
                                   })}
                               isCopyingLink={previewLink.isPending}
+                              contributedActions={documentActions}
                               toolbarSlot={
                                 <>
-                                  {documentActions}
                                   <EntryFormToolbarSlots
                                     context="collection"
                                     controllerField={controllerNames[0]}

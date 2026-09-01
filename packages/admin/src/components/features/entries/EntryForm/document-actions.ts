@@ -416,6 +416,51 @@ export function documentActions(state: DocumentActionState): DocumentAction[] {
 }
 
 /**
+ * The built-in actions plus the ones a host contributed, as one list.
+ *
+ * A host owns concerns this module must not import. Adding a document to a
+ * release is a fact about the document, so its control belongs with Publish and
+ * Duplicate — but releases are a feature of the page, not of the editor, and a
+ * model that knew about them would have to know about translations and every
+ * later one too. Contributing a DESCRIPTION keeps that knowledge with the host
+ * while the placement, grouping and ordering stay this module's answer.
+ *
+ * A BUILT-IN WINS a collision, and the contributed action is dropped. The
+ * built-ins are the verbs carrying the permission checks and the destructive
+ * flags, so letting a contribution replace `delete` or `publish` by reusing its
+ * id would let a plugin silently substitute its own behaviour for the one the
+ * model reasoned about. Losing a contributed action is visible — the control is
+ * missing — where a substituted one is not.
+ *
+ * Order is built-ins first, then contributions in the order given, so a host
+ * cannot push its own action above Publish by contributing early.
+ */
+export function withContributedActions(
+  built: readonly DocumentAction[],
+  contributed: readonly DocumentAction[]
+): DocumentAction[] {
+  /*
+   * `taken` GROWS as contributions are admitted, so the first of two
+   * contributions sharing an id wins and the second is dropped.
+   *
+   * Checking only against the built-ins would let both through, and the damage
+   * is not that a row appears twice. `acceptContributions` keys bindings by id,
+   * so the second contribution's handler overwrites the first — and BOTH rows,
+   * including the one still showing the first contribution's label and its
+   * destructive styling, would run the second one's operation. React would also
+   * be handed duplicate keys for them.
+   */
+  const taken = new Set(built.map(action => action.id));
+  const accepted: DocumentAction[] = [...built];
+  for (const action of contributed) {
+    if (taken.has(action.id)) continue;
+    taken.add(action.id);
+    accepted.push(action);
+  }
+  return accepted;
+}
+
+/**
  * The actions for one placement, in list order.
  *
  * Derived from {@link documentActions} rather than built beside it, so a

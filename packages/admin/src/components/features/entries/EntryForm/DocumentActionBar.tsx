@@ -35,7 +35,12 @@ import { Loader2, MoreHorizontal } from "lucide-react";
 
 import { cn } from "@admin/lib/utils";
 
-import { actionsAt, menuGroups, type DocumentAction } from "./document-actions";
+import {
+  actionsAt,
+  menuGroups,
+  withContributedActions,
+  type DocumentAction,
+} from "./document-actions";
 import { ToolbarLabel } from "./toolbar-density";
 
 /** What a host wires an action to, and why it might not run right now. */
@@ -64,6 +69,57 @@ export interface ActionBinding {
   disabledReason?: string;
 }
 
+/**
+ * An action a HOST supplies: what it is, and what it runs.
+ *
+ * The two travel together because a description with no binding is not drawn
+ * and a binding with no description has nowhere to go — so a host that provided
+ * one and forgot the other would get silence rather than an error. Pairing them
+ * makes the omission unrepresentable.
+ */
+export interface ContributedAction {
+  action: DocumentAction;
+  binding: ActionBinding;
+}
+
+/**
+ * The built-in actions and bindings with a host's contributions folded in.
+ *
+ * ONE rule decides both halves, and that is the whole point of this function.
+ * A built-in wins an id collision — the built-ins carry the permission checks
+ * and the destructive flags — and the two halves must agree about which
+ * contributions lost, or the surface draws a built-in verb wired to somebody
+ * else's handler. `Delete` drawn from the model and bound to a contribution is
+ * exactly the substitution the precedence exists to prevent, and nothing about
+ * it looks wrong on screen.
+ *
+ * Acceptance is DERIVED from the merge rather than recomputed beside it: a
+ * contribution is bound only if its own action object survived into the merged
+ * list. A second copy of the collision rule here would agree today and drift on
+ * the first change to either.
+ */
+export function acceptContributions(
+  built: readonly DocumentAction[],
+  builtBindings: Readonly<Record<string, ActionBinding | undefined>>,
+  contributed: readonly ContributedAction[]
+): {
+  actions: DocumentAction[];
+  bindings: Record<string, ActionBinding | undefined>;
+} {
+  const actions = withContributedActions(
+    built,
+    contributed.map(entry => entry.action)
+  );
+  const bindings: Record<string, ActionBinding | undefined> = {
+    ...builtBindings,
+  };
+  for (const entry of contributed) {
+    if (actions.includes(entry.action))
+      bindings[entry.action.id] = entry.binding;
+  }
+  return { actions, bindings };
+}
+
 export interface DocumentActionBarProps {
   actions: readonly DocumentAction[];
   /** Keyed by action id. An action with no entry is not drawn. */
@@ -78,11 +134,49 @@ export interface DocumentActionBarProps {
  *
  * Nothing when the action is usable, so a usable row carries no stray
  * attributes and a test asserting their absence means something.
+ *
+ * These attributes are a SUPPLEMENT to the visible line below, never the whole
+ * answer. A disabled Radix item carries `pointer-events-none` and is skipped by
+ * the menu's roving focus, so a `title` never opens and an `aria-description`
+ * on an unfocusable row is read by nobody. A refusal that only lives in these
+ * is a refusal the author cannot obtain.
  */
 function reasonAttributes(reason: string | undefined): Record<string, string> {
   return reason === undefined
     ? {}
     : { title: reason, "aria-description": reason };
+}
+
+/**
+ * A menu row: what the action is called, and — when it cannot be used — why.
+ *
+ * The reason is rendered as TEXT rather than left to a tooltip. A disabled row
+ * cannot be hovered or focused, so the explanation attached to it was
+ * unreachable by both pointer and keyboard; an author saw a grey row and no
+ * way to find out what was wrong with it, which is the "reads as broken rather
+ * than as forbidden" problem the reasons exist to solve, one step further on.
+ *
+ * The row stays genuinely `disabled` rather than being made focusable to carry
+ * a tooltip. These rows include Delete and Unpublish, and the refusals are
+ * permissions — a control that cannot fire is worth more than one that explains
+ * itself well.
+ */
+function ActionRow({
+  label,
+  reason,
+}: {
+  label: string;
+  reason: string | undefined;
+}) {
+  if (reason === undefined) return <>{label}</>;
+  return (
+    <span className="flex flex-col items-start gap-0.5">
+      <span>{label}</span>
+      <span className="text-xs font-normal text-muted-foreground">
+        {reason}
+      </span>
+    </span>
+  );
 }
 
 /** Both reasons an action may be unusable, or undefined when it is usable. */
@@ -203,7 +297,10 @@ export function DocumentActionBar({
                 */
                 {...reasonAttributes(reasonFor(action, binding))}
               >
-                {action.label}
+                <ActionRow
+                  label={action.label}
+                  reason={reasonFor(action, binding)}
+                />
               </DropdownMenuItem>
             ))}
             {/*
@@ -223,7 +320,10 @@ export function DocumentActionBar({
                 className="text-destructive focus:text-destructive"
                 {...reasonAttributes(reasonFor(action, binding))}
               >
-                {action.label}
+                <ActionRow
+                  label={action.label}
+                  reason={reasonFor(action, binding)}
+                />
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

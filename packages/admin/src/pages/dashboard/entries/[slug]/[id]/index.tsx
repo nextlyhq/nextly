@@ -20,7 +20,7 @@ import {
   EntryForm,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
-import { AddToReleaseButton } from "@admin/components/features/releases/AddToReleaseButton";
+import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
   CONTENT_PAGE_MEASURE,
@@ -277,6 +277,23 @@ export default function EditEntryPage({
   // the primary fetch above (same cache key) and needs no source copy.
   const isNonDefaultLocale =
     !!locale && !!defaultLocale && locale !== defaultLocale;
+  /*
+   * Called HERE, above this component's loading and error returns, because it
+   * is a hook and the page returns early several times below. What it produces
+   * is only read once those guards have passed; while the collection is still
+   * loading it reports no action, which is correct — there is nothing on screen
+   * to contribute one to.
+   */
+  const release = useAddToReleaseAction({
+    scopeKind: "collection",
+    scopeSlug: slug,
+    entryId: id,
+    // The same flag the editor's own publish controls read. A release member
+    // performs a publish or unpublish, and the route refuses a collection whose
+    // schema declares no lifecycle.
+    lifecycleEnabled: collection?.status,
+    onDefaultLocale: !isNonDefaultLocale,
+  });
   const { translateFrom, enterTranslationMode, exitTranslationMode } =
     useTranslationMode({ activeLocale: locale, defaultLocale });
   // The language the source is read AT. Translation mode names it explicitly;
@@ -547,6 +564,7 @@ export default function EditEntryPage({
           document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
           onDefaultLocale={!isNonDefaultLocale}
         />
+        {release.dialog}
         <EntryForm
           collection={collection as unknown as EntryFormCollection}
           entry={entry}
@@ -557,22 +575,12 @@ export default function EditEntryPage({
           onViewApi={() =>
             navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
           }
-          /* WITH the form's own actions, not in a bar above it. Adding a
-             document to a release is the same kind of act as publishing it, so
-             it belongs in the same cluster — and a full-width bar here ran
-             underneath the sticky side panel, which took both the click and the
-             hover. */
+          /* Contributed to the editor's action model, which places it in the
+             overflow menu beside Duplicate: scheduling a release is a
+             document-management act rather than a leading one, and the toolbar
+             is reserved for the verbs an author reaches for while writing. */
           documentActions={
-            <AddToReleaseButton
-              scopeKind="collection"
-              scopeSlug={slug}
-              entryId={id}
-              // The same flag the editor's own publish controls read. A release
-              // member performs a publish or unpublish, and the route refuses a
-              // collection whose schema declares no lifecycle.
-              lifecycleEnabled={collection.status === true}
-              onDefaultLocale={!isNonDefaultLocale}
-            />
+            release.contributed === null ? [] : [release.contributed]
           }
           locale={locale}
           onLocaleChange={changeLocale}
