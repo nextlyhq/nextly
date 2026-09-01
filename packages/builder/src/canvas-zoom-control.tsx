@@ -36,12 +36,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@nextlyhq/ui";
+import { Minus, Plus } from "lucide-react";
 import type * as React from "react";
 import { Fragment } from "react";
 
 import {
   FIT_ZOOM,
   ZOOM_STEPS,
+  steppedZoom,
   writeZoom,
   type CanvasZoom,
 } from "./canvas-zoom";
@@ -111,25 +113,60 @@ export function CanvasZoomControl({
 }: CanvasZoomControlProps): React.JSX.Element | null {
   if (onChange === undefined) return null;
   const shown = asPercent(appliedScale);
+
+  /*
+   * The steps this control can still take, so a button that cannot move says
+   * so rather than looking operable and doing nothing.
+   *
+   * Compared against the RESULT rather than against the current scale: at the
+   * top step `steppedZoom` returns the zoom it was given, and a disabled state
+   * derived from the scale alone would have to restate the step list to know
+   * that. One list decides both, and it is the one the button runs.
+   */
+  const zoomOut = steppedZoom(zoom, appliedScale, "out");
+  const zoomIn = steppedZoom(zoom, appliedScale, "in");
+  const canZoomOut = writeZoom(zoomOut) !== writeZoom(zoom);
+  const canZoomIn = writeZoom(zoomIn) !== writeZoom(zoom);
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        className="nx-zoom-control"
-        /*
-         * The accessible name carries the MODE as well as the number, because
-         * "89%" alone does not say whether it will move when a panel opens —
-         * and that is the whole difference between the two states.
-         */
-        aria-label={
-          zoom.kind === "fit"
-            ? `Canvas zoom: fitting, ${shown}`
-            : `Canvas zoom: ${shown}`
-        }
+    <div className="nx-zoom-stepper flex items-center gap-0.5">
+      {/*
+        A stepper AROUND the menu, not instead of it. The menu names the modes
+        — Fit is a mode rather than a number and cannot be stepped to — while
+        the buttons are for the adjustment an author makes repeatedly, which a
+        menu makes a three-action job every time.
+
+        `steppedZoom` already existed and was exported with no caller: the
+        capability was reachable from a host and not from the editor.
+      */}
+      <button
+        type="button"
+        onClick={() => onChange(zoomOut)}
+        disabled={!canZoomOut}
+        aria-label="Zoom out"
+        title="Zoom out"
+        className="focus-visible:ring-ring rounded p-1 disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
       >
-        <span aria-hidden="true">{shown}</span>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
-        {/* A RADIO group, so the open menu says which mode is active.
+        <Minus className="size-3.5" aria-hidden="true" />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          className="nx-zoom-control"
+          /*
+           * The accessible name carries the MODE as well as the number, because
+           * "89%" alone does not say whether it will move when a panel opens —
+           * and that is the whole difference between the two states.
+           */
+          aria-label={
+            zoom.kind === "fit"
+              ? `Canvas zoom: fitting, ${shown}`
+              : `Canvas zoom: ${shown}`
+          }
+        >
+          <span aria-hidden="true">{shown}</span>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {/* A RADIO group, so the open menu says which mode is active.
 
             The trigger cannot: Fit resolves to exactly 100% at the widest
             tier, which is the state an editor opens in, so "100%" is the same
@@ -143,23 +180,36 @@ export function CanvasZoomControl({
             step list. That is honest: the menu genuinely does not hold it, and
             marking the nearest step would claim the author chose something
             they did not. */}
-        <DropdownMenuRadioGroup
-          value={choiceValue(zoom)}
-          onValueChange={next => {
-            const choice = CHOICES.find(candidate => candidate.value === next);
-            if (choice !== undefined) onChange(choice.zoom);
-          }}
-        >
-          {CHOICES.map((choice, index) => (
-            <Fragment key={choice.value}>
-              {index === 1 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuRadioItem value={choice.value}>
-                {choice.label}
-              </DropdownMenuRadioItem>
-            </Fragment>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+          <DropdownMenuRadioGroup
+            value={choiceValue(zoom)}
+            onValueChange={next => {
+              const choice = CHOICES.find(
+                candidate => candidate.value === next
+              );
+              if (choice !== undefined) onChange(choice.zoom);
+            }}
+          >
+            {CHOICES.map((choice, index) => (
+              <Fragment key={choice.value}>
+                {index === 1 ? <DropdownMenuSeparator /> : null}
+                <DropdownMenuRadioItem value={choice.value}>
+                  {choice.label}
+                </DropdownMenuRadioItem>
+              </Fragment>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <button
+        type="button"
+        onClick={() => onChange(zoomIn)}
+        disabled={!canZoomIn}
+        aria-label="Zoom in"
+        title="Zoom in"
+        className="focus-visible:ring-ring rounded p-1 disabled:opacity-40 focus-visible:ring-2 focus-visible:outline-none"
+      >
+        <Plus className="size-3.5" aria-hidden="true" />
+      </button>
+    </div>
   );
 }

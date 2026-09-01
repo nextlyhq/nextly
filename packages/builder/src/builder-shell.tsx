@@ -16,6 +16,7 @@ import {
 } from "@nextlyhq/ui";
 import { cn } from "@nextlyhq/ui/utils";
 import {
+  ArrowLeft,
   Blocks,
   Braces,
   FileText,
@@ -905,9 +906,24 @@ function ShellRegions({
             type="button"
             onClick={onExit}
             data-builder-animates
-            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border px-3 py-1.5 text-sm font-medium focus-visible:ring-2 focus-visible:outline-none"
+            /*
+             * The NAME stays "Exit editor" while the label becomes a glyph.
+             * This is the only route back to the document — `ChromeSuppression`
+             * withholds the navigation rail from a surface that cannot be left,
+             * on the grounds that an author with unsaved work and no way out is
+             * the worst state the editor can reach — so it keeps a real
+             * accessible name and a tooltip rather than relying on the arrow
+             * being self-evident.
+             *
+             * An arrow rather than a cross: this returns to the document that
+             * opened the editor, and a cross reads as discarding rather than
+             * as going back.
+             */
+            aria-label="Exit editor"
+            title="Exit editor"
+            className="border-[color:var(--nx-builder-border)] focus-visible:ring-ring rounded-md border p-1.5 focus-visible:ring-2 focus-visible:outline-none"
           >
-            Exit editor
+            <ArrowLeft className="size-4" aria-hidden="true" />
           </button>
         ) : null}
         <div className="flex min-w-0 flex-1 items-center gap-2">{topBar}</div>
@@ -1134,7 +1150,7 @@ function ShellRegions({
                  * could not see would size the page to the region and paint it
                  * over the gap.
                  */
-                className="h-full overflow-auto p-6"
+                className="h-full overflow-auto p-4"
               >
                 {children}
               </section>

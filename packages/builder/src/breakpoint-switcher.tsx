@@ -37,6 +37,7 @@ import {
   type BreakpointSet,
 } from "@nextlyhq/blocks-engine";
 import { cn } from "@nextlyhq/ui/utils";
+import { Laptop, Monitor, Smartphone, Tablet } from "lucide-react";
 import * as React from "react";
 
 import { authoredBreakpoints } from "./breakpoints";
@@ -100,6 +101,26 @@ export interface BreakpointSwitcherProps {
  *
  * @experimental
  */
+/**
+ * The glyph for a tier, chosen by the WIDTH it applies at.
+ *
+ * Not by its name. A tier's label is whatever the site called it — "Tablet" on
+ * one site, "Kiosk" or "Watch" on another — so a lookup keyed by name answers
+ * for the three words somebody happened to use, and has nothing to say for
+ * every site that chose differently. The bound is what the tier actually
+ * means, and every tier carries one.
+ *
+ * The boundaries are the conventional device classes rather than anything this
+ * editor enforces: a tier may sit anywhere, and this only decides which of four
+ * pictures is least wrong for it.
+ */
+function tierIcon(bound: number | undefined) {
+  if (bound === undefined) return Monitor;
+  if (bound <= 640) return Smartphone;
+  if (bound <= 1024) return Tablet;
+  return Laptop;
+}
+
 /**
  * What an option is CALLED, width included.
  *
@@ -417,13 +438,30 @@ export function BreakpointSwitcher({
             tabIndex={index === activeIndex ? 0 : -1}
             onClick={() => onSelect(option.bound)}
             className={cn(
-              "rounded px-2 py-1 text-xs",
+              "inline-flex items-center gap-1 rounded px-2 py-1 text-xs",
               selected
                 ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground"
             )}
           >
-            <span aria-hidden="true">{option.label}</span>
+            {/*
+              The glyph carries every option; the WORD is kept for the selected
+              one alone.
+              
+              Icon-only throughout would take the tier's name off the screen
+              entirely in the commonest state: the width readout beside this is
+              deliberately empty while the selection already names the applying
+              tier, so with no label here nothing would name it. Two tiers can
+              also share a glyph — a site may define several narrow ones — and
+              then identical pictures would be the only thing to tell them
+              apart. Naming the selected one costs the width of one word and
+              answers both.
+            */}
+            {(() => {
+              const Glyph = tierIcon(option.bound);
+              return <Glyph className="size-3.5" aria-hidden="true" />;
+            })()}
+            {selected ? <span aria-hidden="true">{option.label}</span> : null}
           </button>
         );
       })}

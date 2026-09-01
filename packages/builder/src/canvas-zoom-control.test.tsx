@@ -35,6 +35,81 @@ function mount(props: Partial<React.ComponentProps<typeof CanvasZoomControl>>) {
   return { onChange };
 }
 
+/**
+ * The zoom trigger, named rather than taken as "the button".
+ *
+ * The control is a stepper around a menu, so a bare role query matches three
+ * elements. Naming it also keeps these assertions about the READOUT: a query
+ * that silently resolved to the minus button would still find a button and
+ * still read a `textContent`, and the failure would name a percentage rather
+ * than the element it came from.
+ */
+const trigger = () => screen.getByRole("button", { name: /canvas zoom/i });
+
+describe("the zoom stepper", () => {
+  it("steps to the next zoom out, and to the next in", () => {
+    /*
+     * `steppedZoom` already decided what the next step is and was exported
+     * with no caller — the capability was reachable from a host and not from
+     * the editor. These buttons are its first consumer, so this asserts the
+     * WIRING; the arithmetic has its own tests.
+     */
+    const onChange = vi.fn();
+    render(
+      <CanvasZoomControl
+        zoom={{ kind: "fixed", scale: 1 }}
+        appliedScale={1}
+        onChange={onChange}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /zoom out/i }));
+    expect(onChange).toHaveBeenCalledWith({ kind: "fixed", scale: 0.75 });
+
+    onChange.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: /zoom in/i }));
+    expect(onChange).toHaveBeenCalledWith({ kind: "fixed", scale: 1.5 });
+  });
+
+  it("disables the direction that has nowhere left to go", () => {
+    /*
+     * At the end of the list `steppedZoom` returns the zoom it was given, so a
+     * button left enabled would depress and change nothing — the shape that
+     * teaches an author a control is broken.
+     */
+    render(
+      <CanvasZoomControl
+        zoom={{ kind: "fixed", scale: 2 }}
+        appliedScale={2}
+        onChange={vi.fn()}
+      />
+    );
+    // The DOM property rather than a jest-dom matcher, which this package does
+    // not load — an unavailable matcher fails as a chai property error, which
+    // says nothing about the control.
+    const zoomIn = screen.getByRole("button", { name: /zoom in/i });
+    const zoomOut = screen.getByRole("button", { name: /zoom out/i });
+    expect((zoomIn as HTMLButtonElement).disabled).toBe(true);
+    expect((zoomOut as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("steps from the scale a FIT is currently painting at", () => {
+    // Fit is a mode, not a number, so stepping out of it starts from what it
+    // resolved to — otherwise the first press jumps somewhere unrelated to
+    // what is on screen.
+    const onChange = vi.fn();
+    render(
+      <CanvasZoomControl
+        zoom={FIT_ZOOM}
+        appliedScale={0.75}
+        onChange={onChange}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /zoom out/i }));
+    expect(onChange).toHaveBeenCalledWith({ kind: "fixed", scale: 0.5 });
+  });
+});
+
 describe("the canvas zoom control", () => {
   it("names the scale the canvas is PAINTING at while fitting", () => {
     /*
@@ -45,7 +120,7 @@ describe("the canvas zoom control", () => {
      */
     mount({ zoom: FIT_ZOOM, appliedScale: 0.595 });
 
-    expect(screen.getByRole("button").textContent).toBe("60%");
+    expect(trigger().textContent).toBe("60%");
   });
 
   it("says whether that number will move on its own", () => {
@@ -55,15 +130,11 @@ describe("the canvas zoom control", () => {
      * accessible name carries the mode; the visible text stays the number.
      */
     mount({ zoom: FIT_ZOOM, appliedScale: 0.6 });
-    expect(screen.getByRole("button").getAttribute("aria-label")).toContain(
-      "fitting"
-    );
+    expect(trigger().getAttribute("aria-label")).toContain("fitting");
 
     cleanup();
     mount({ zoom: { kind: "fixed", scale: 0.6 }, appliedScale: 0.6 });
-    expect(screen.getByRole("button").getAttribute("aria-label")).not.toContain(
-      "fitting"
-    );
+    expect(trigger().getAttribute("aria-label")).not.toContain("fitting");
   });
 
   it("renders nothing where nothing can act on a choice", () => {
@@ -91,7 +162,7 @@ describe("the canvas zoom control", () => {
      */
     const { onChange } = mount({ appliedScale: 1 });
 
-    fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse" });
+    fireEvent.pointerDown(trigger(), { pointerType: "mouse" });
     const item = screen.getByRole("menuitemradio", { name: "150%" });
     fireEvent.pointerUp(item, { pointerType: "mouse" });
 
@@ -106,7 +177,7 @@ describe("the canvas zoom control", () => {
      */
     const { onChange } = mount({ zoom: { kind: "fixed", scale: 2 } });
 
-    fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse" });
+    fireEvent.pointerDown(trigger(), { pointerType: "mouse" });
     fireEvent.pointerUp(screen.getByRole("menuitemradio", { name: "Fit" }), {
       pointerType: "mouse",
     });
@@ -122,7 +193,7 @@ describe("which zoom the open menu says is current", () => {
   }
 
   function open(): void {
-    fireEvent.pointerDown(screen.getByRole("button"), { pointerType: "mouse" });
+    fireEvent.pointerDown(trigger(), { pointerType: "mouse" });
   }
 
   it("marks FIT rather than the step it happens to resolve to", () => {
