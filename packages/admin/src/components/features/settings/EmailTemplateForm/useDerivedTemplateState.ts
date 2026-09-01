@@ -14,11 +14,12 @@
  * every template that does not author one, when the send path derives that
  * text from the body and delivers it.
  */
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 
 import { useDraftEmailTemplatePreview } from "@admin/hooks/queries/useEmailTemplates";
 import { useDebouncedValue } from "@admin/hooks/useDebouncedValue";
 import type {
+  DraftPreviewResult,
   DraftPreviewTemplate,
   EmailTemplateKind,
 } from "@admin/services/emailTemplateApi";
@@ -158,15 +159,30 @@ export function useDerivedTemplateState({
     enabled: sampleError === null,
   });
 
+  /*
+   * The last render that SUCCEEDED, held across a failure.
+   *
+   * `keepPreviousData` does not survive one: it supplies placeholder data only
+   * while a query is pending, so the moment an edited draft's request rejects
+   * the status becomes `error` and `data` becomes undefined. Falling back to
+   * empty strings there would blank the frame under the error banner — the
+   * author loses the render they were reading BECAUSE something went wrong,
+   * which is precisely when they need it. Written during render because it is
+   * a cache of a value this render already has, and re-running it is a no-op.
+   */
+  const lastRendered = useRef<DraftPreviewResult | null>(null);
+  if (preview !== undefined) lastRendered.current = preview;
+  const shown = preview ?? lastRendered.current;
+
   return {
     sampleText,
     sampleData,
     sampleError,
     unknownVariables,
-    previewHtml: preview?.html ?? "",
-    previewText: preview?.text ?? "",
-    previewSubject: preview?.subject ?? "",
-    isPreviewPending: isPending && preview === undefined,
+    previewHtml: shown?.html ?? "",
+    previewText: shown?.text ?? "",
+    previewSubject: shown?.subject ?? "",
+    isPreviewPending: isPending && shown === null,
     previewError: error ? error.message : null,
   };
 }

@@ -100,6 +100,44 @@ describe("the editor previews what the server renders", () => {
     });
   });
 
+  /*
+   * The transition, not the steady state. The rejection test above starts with
+   * a failing request, so it never HAS a good render to lose and passes either
+   * way — it cannot tell this regression from the intended behaviour. This one
+   * renders successfully first and then fails, which is the only ordering in
+   * which "the last good render survives" means anything.
+   */
+  it("keeps the last successful render visible when a later one fails", async () => {
+    previewDraft.mockResolvedValueOnce({
+      subject: "GOOD SUBJECT",
+      html: "<p>GOOD HTML</p>",
+      text: "GOOD TEXT",
+    });
+
+    const { result, rerender } = renderHook(
+      ({ subject }: { subject: string }) =>
+        useDerivedTemplateState({ ...INPUT, subject }),
+      { wrapper, initialProps: { subject: INPUT.subject } }
+    );
+
+    await waitFor(() => {
+      expect(result.current.previewHtml).toBe("<p>GOOD HTML</p>");
+    });
+
+    // A new key, whose render rejects.
+    previewDraft.mockRejectedValue(new Error("Preview endpoint unreachable"));
+    rerender({ subject: "Hi again {{userName}}" });
+
+    await waitFor(() => {
+      expect(result.current.previewError).toBe("Preview endpoint unreachable");
+    });
+    // The banner reports the failure; the frame still shows the last render
+    // the author was reading rather than going blank underneath it.
+    expect(result.current.previewHtml).toBe("<p>GOOD HTML</p>");
+    expect(result.current.previewText).toBe("GOOD TEXT");
+    expect(result.current.previewSubject).toBe("GOOD SUBJECT");
+  });
+
   it("does not render at all while the sample data is unparseable", async () => {
     previewDraft.mockResolvedValue({ subject: "", html: "", text: "" });
 
