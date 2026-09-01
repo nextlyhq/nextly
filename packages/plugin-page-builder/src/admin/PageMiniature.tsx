@@ -16,9 +16,24 @@
  * page is being shown a world that is not its own.
  *
  * A NESTED FORM. The entry screen is itself a `<form>`, and a page holding the
- * form block emits one too. Nested forms are invalid, so a parser closes the
- * outer one early — and entry fields after that point stop belonging to the
- * form that submits them. Silent, and it costs an author their edits.
+ * form block emits one too. Nested forms are invalid HTML, and the cost depends
+ * on how the document was built — which is worth stating exactly, because the
+ * two paths differ and only one of them is live here.
+ *
+ * PARSED from HTML source, the inner start tag is dropped and the inner
+ * `</form>` closes the OUTER form early. Measured in a browser on this exact
+ * shape: a control following the nested form ends up outside the outer form
+ * with `input.form === null` — no owner, so it submits nothing. This admin
+ * renders client-side and ships no form markup, so it does not take that path
+ * today; it would the moment any of this were server-rendered or hydrated.
+ *
+ * BUILT through the DOM, which is what React does here, a real nested form
+ * exists and controls keep their nearest-ancestor owner. What is live in that
+ * path is the page's own form being SUBMITTABLE from inside the entry form.
+ *
+ * A frame removes both, and removes the dependence on which path the admin
+ * happens to use — which is the part worth having, since that is not this
+ * module's decision to rely on.
  *
  * VIEWPORT UNITS. `50vw` measures the viewport, and composing an element at
  * 1280px does not make the viewport 1280px. In a 1600px admin window that block
