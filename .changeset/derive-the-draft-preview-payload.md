@@ -40,3 +40,9 @@ types-only entry point, so a consumer building the request derives its payload
 and its result from the canonical schema and the renderer's own output type. It
 pulls zod and nothing else — no DI container, no route handler — so a type-only
 import costs a browser bundle nothing.
+
+The published request type is the schema's INPUT rather than its output. The
+three fields that default to null are optional on the wire and required after
+parsing, so exporting the parsed shape as the request contract would reject
+payloads the endpoint accepts. Both are exposed: `DraftPreviewRequest` for a
+caller building a body, `DraftPreviewParsed` for a handler reading one.

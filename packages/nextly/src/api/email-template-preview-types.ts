@@ -16,5 +16,6 @@
 export {
   draftPreviewSchema,
   type DraftPreviewRequest,
+  type DraftPreviewParsed,
 } from "../domains/email/draft-preview-request";
 export type { RenderedTemplate } from "../domains/email/services/render-template";
