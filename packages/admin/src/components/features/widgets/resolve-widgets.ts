@@ -75,10 +75,17 @@ export interface ReadableWidgetDeclaration {
  * so a declaration describes a body core cannot produce in two ways, and a
  * component the author shipped beats both.
  *
- * It may declare no query: no request is made for it, no slot ever arrives, and
- * the card reads that absence as "still loading" for the life of the page.
- * `PluginAdminWidget` makes `query` optional and `component` required, so that
- * declaration is legal and the component is always there.
+ * It may declare no query where its archetype needs one: no request is made for
+ * it, no slot ever arrives, and the card reads that absence as "still loading"
+ * for the life of the page. A component-bearing widget may pair any archetype
+ * with any query, so this declaration is legal and the component is there to
+ * draw instead.
+ *
+ * The component is NO LONGER always there. `component` became conditional when
+ * a widget gained the ability to declare an archetype and a query and let the
+ * host draw it, so this branch stops firing for a declarative widget -- which
+ * is correct: there is nothing to fall back to, and the card says by name that
+ * the archetype is not drawn yet.
  *
  * Or it may name an archetype THIS RELEASE DOES NOT DRAW. `list`, `table`,
  * `text` and `actions` are declarable today and none of them has a renderer, so
@@ -104,8 +111,8 @@ function resolveArchetype(
  * A title with visible text, falling back to the widget's id.
  *
  * TRIMMED, not merely nullish-checked. `title: ""` and `title: "   "` are legal
- * for a contributed widget -- boot requires only a usable `id` and `component`
- * -- and both pass a `??`. The title is the card region's `aria-labelledby`
+ * for a contributed widget -- boot requires a usable `id` and a describable
+ * body, never a title -- and both pass a `??`. The title is the card region's `aria-labelledby`
  * target, so an empty one makes a landmark with no accessible name, which is
  * worse for a screen-reader user than having no landmark at all. The id is a
  * poor title and it NAMES the widget, which is the one thing a card in that

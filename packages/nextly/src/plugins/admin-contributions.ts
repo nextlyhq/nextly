@@ -1,4 +1,6 @@
 import type {
+  DataWidgetArchetype,
+  QuerylessWidgetArchetype,
   WidgetArchetype,
   WidgetQuery,
   WidgetSize,
@@ -142,13 +144,22 @@ export interface PluginAdminPage {
 }
 
 /**
- * The archetypes core draws ITSELF, from a validated query result.
+ * The archetypes core draws ITSELF.
  *
  * `custom` is excluded by definition: it is the archetype that means "the
  * plugin draws its own body", so it is the one that cannot describe a
  * host-drawn card.
+ *
+ * DERIVED from the two vocabularies in `domains/widgets/definition` rather than
+ * spelled as `Exclude<WidgetArchetype, "custom">`. That spelling looks
+ * equivalent and is not: it flattens a distinction core makes and this contract
+ * has to honour, since `text` and `actions` are drawn with NO query and the
+ * registry validator REFUSES one on them. Restating the rule here got it
+ * backwards and made those two undeclarable.
  */
-export type DeclarativeWidgetArchetype = Exclude<WidgetArchetype, "custom">;
+export type DeclarativeWidgetArchetype =
+  | DataWidgetArchetype
+  | QuerylessWidgetArchetype;
 
 /** Everything a contributed widget may carry whichever way it is drawn. */
 interface PluginAdminWidgetBase {
@@ -186,15 +197,15 @@ export interface PluginAdminCustomWidget extends PluginAdminWidgetBase {
 }
 
 /**
- * @experimental A widget the HOST draws, from an archetype and a query.
+ * @experimental A widget the HOST draws from a query result.
  *
- * No component, and that is the point. The pair is the unit: core draws every
- * archetype but `custom` FROM A QUERY RESULT, so an archetype without a query
- * describes a card core can never fill, and a query without an archetype
- * describes data with nothing to draw it as.
+ * The pair is the unit: core fills a `metric`, `table` or `list` FROM that
+ * result, so one declared without a query describes a card core can never fill
+ * -- no request is made for it, no slot ever arrives, and the grid reads that
+ * absence as still loading for the life of the page.
  */
-export interface PluginAdminDeclarativeWidget extends PluginAdminWidgetBase {
-  archetype: DeclarativeWidgetArchetype;
+export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
+  archetype: DataWidgetArchetype;
   /** The widget's data request, validated and executed server-side. */
   query: WidgetQuery;
   /**
@@ -203,6 +214,29 @@ export interface PluginAdminDeclarativeWidget extends PluginAdminWidgetBase {
    */
   component?: ComponentPath;
 }
+
+/**
+ * @experimental A widget the HOST draws WITHOUT asking for data.
+ *
+ * `text` and `actions` have no query, and the registry validator refuses one on
+ * them -- a query here would be a database read whose result nothing could
+ * draw. `never` rather than merely absent, so declaring one is a compile error
+ * at the point it is written instead of a boot failure later.
+ */
+export interface PluginAdminQuerylessWidget extends PluginAdminWidgetBase {
+  archetype: QuerylessWidgetArchetype;
+  query?: never;
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/** @experimental Either shape of a widget the host draws. */
+export type PluginAdminDeclarativeWidget =
+  | PluginAdminDataWidget
+  | PluginAdminQuerylessWidget;
 
 /**
  * @experimental A plugin-contributed dashboard widget, drawn one of two ways.
@@ -266,10 +300,10 @@ export interface PluginCollectionView {
  * by the host without running the plugin.
  *
  * Consumed: `menu`, `pages` + `settings`, `views`, `widgets`.
- * `widgets` is consumed twice over: the admin grid renders `component` and
- * `size`, and the server validates and executes `query`. The archetype-driven
- * grid that would render the rest is admin-side work tracked separately, which
- * is why `component` stays required (see `PluginAdminWidget`).
+ * `widgets` is consumed twice over: the admin grid draws the card and the
+ * server validates and executes `query`. `component` is CONDITIONAL -- required
+ * only for a widget the plugin draws itself -- because that archetype-driven
+ * grid now exists (see `PluginAdminWidget`).
  */
 export interface PluginAdminContributions {
   /** Sidebar navigation entries. */
@@ -279,8 +313,8 @@ export interface PluginAdminContributions {
   /** Plugin settings UI rendered at `/admin/plugins/<slug>`. */
   settings?: { component: ComponentPath };
   /**
-   * @experimental Dashboard widgets — now rendered by `PluginWidgetGrid`
-   * on the admin dashboard, permission-gated. Graduates per D55.
+   * @experimental Dashboard widgets — rendered by `WidgetGrid` on the admin
+   * dashboard, permission-gated. Graduates per D55.
    */
   widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug. */

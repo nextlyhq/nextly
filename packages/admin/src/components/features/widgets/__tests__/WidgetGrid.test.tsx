@@ -218,6 +218,57 @@ describe("WidgetGrid — collection and gating", () => {
     });
   });
 
+  it("spends no query on a widget nothing can draw", async () => {
+    // A declarative widget naming an archetype core has no renderer for, and
+    // shipping no component to draw it instead, resolves to a card reading
+    // "not rendered yet". Asking for its data would spend an access-checked
+    // read, and one of the batch's limited slots, on a result discarded on
+    // arrival -- on every mount and every window focus.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+
+    renderGrid();
+
+    // The card is drawn and says why, so the widget is not silently missing.
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
+    );
+    expect(screen.getByText(/not rendered yet/i)).toBeInTheDocument();
+    // And nothing was asked of the server on its behalf.
+    expect(protectedApi.post).not.toHaveBeenCalled();
+  });
+
+  it("DOES spend a query when a component can draw the result", async () => {
+    // The control, and the boundary: the same undrawable archetype WITH a
+    // component resolves to `custom`, the plugin's component consumes the slot,
+    // so the read is wanted. A grid that simply skipped undrawable archetypes
+    // would starve it.
+    registerComponents({ "@acme/admin#Recent": () => <div>recent body</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        component: "@acme/admin#Recent",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "list", items: [] } }],
+    });
+
+    renderGrid();
+
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("recent body")).toBeInTheDocument();
+  });
+
   it("puts a registered widget's query in the same batch as a contributed one", async () => {
     mockBranding = {
       plugins: [
@@ -697,6 +748,11 @@ describe("WidgetGrid — accessibility", () => {
     // A slot can be `ok` and still unrenderable: this release draws `metric`
     // and nothing else, and a metric handed a list payload refuses it. Counting
     // slots said every widget updated while both cards showed an error.
+    //
+    // `listy` is counted as a failure WITHOUT being queried: nothing can draw a
+    // `list` result in this release and it ships no component, so the grid does
+    // not ask -- which is why only two results come back for three widgets.
+    // The announcement still has to describe all three.
     mockBranding = brandingWith([
       {
         id: "listy",
@@ -720,7 +776,6 @@ describe("WidgetGrid — accessibility", () => {
     vi.mocked(protectedApi.post).mockResolvedValue({
       results: [
         { ok: true, result: { op: "list", items: [] } },
-        { ok: true, result: { op: "list", items: [] } },
         { ok: true, result: { op: "count", total: 4 } },
       ],
     });
@@ -731,6 +786,14 @@ describe("WidgetGrid — accessibility", () => {
         /1 of 3 widgets updated, 2 failed/i
       )
     );
+    // Two queries for three widgets, and the positional keying still lands each
+    // result on the widget that asked for it.
+    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
+      queries: [
+        { source: "collection:posts", op: "count" },
+        { source: "collection:pages", op: "count" },
+      ],
+    });
   });
 
   it("has exactly ONE live region for the whole grid", async () => {

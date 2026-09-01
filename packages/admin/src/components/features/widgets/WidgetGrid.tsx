@@ -30,7 +30,7 @@ import {
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
-import { resolveWidgetOutcome } from "./outcome";
+import { coreDrawsArchetype, resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
 import { WidgetRenderer } from "./WidgetRenderer";
@@ -91,7 +91,20 @@ export function WidgetGrid() {
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       widgets.flatMap(widget =>
-        widget.query ? [{ widgetId: widget.id, query: widget.query }] : []
+        // A query is only worth running if SOMETHING can draw its result. A
+        // widget naming an archetype core cannot draw yet, and shipping no
+        // component to draw it instead, resolves to a card that reads "not
+        // rendered yet" -- so asking for the data spends an access-checked
+        // read, and one of the batch's limited slots, on a result thrown away
+        // on arrival. `custom` always draws, because the plugin's component
+        // decides what to do with the slot.
+        //
+        // Asked of `coreDrawsArchetype` rather than listed here, so the read
+        // starts happening on its own the day core learns to draw one.
+        widget.query &&
+        (widget.archetype === "custom" || coreDrawsArchetype(widget.archetype))
+          ? [{ widgetId: widget.id, query: widget.query }]
+          : []
       ),
     [widgets]
   );

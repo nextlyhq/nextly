@@ -102,11 +102,28 @@ expectTypeOf<{
 // left the boot check as the only thing that ever said so.
 expectTypeOf<{ id: string }>().not.toMatchTypeOf<ContributedWidget>();
 
-// An archetype with no query describes a card core can never fill — no request
-// is made for it and no slot ever arrives.
+// A DATA archetype with no query describes a card core can never fill — no
+// request is made for it and no slot ever arrives.
 expectTypeOf<{
   id: string;
   archetype: "metric";
+}>().not.toMatchTypeOf<ContributedWidget>();
+
+// A QUERYLESS archetype is declarable with no query, because core draws `text`
+// and `actions` without asking for data. Spelling the declarative arm as
+// `Exclude<WidgetArchetype, "custom">` made these two undeclarable and
+// contradicted the registry validator, which REFUSES a query on them.
+expectTypeOf<{
+  id: string;
+  title: string;
+  archetype: "text";
+}>().toMatchTypeOf<ContributedWidget>();
+
+// And a query on one is refused where it is written, rather than at boot.
+expectTypeOf<{
+  id: string;
+  archetype: "actions";
+  query: { source: "collection:posts"; op: "count" };
 }>().not.toMatchTypeOf<ContributedWidget>();
 
 // `custom` is the one archetype that cannot be host-drawn, so it still requires

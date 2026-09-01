@@ -5,9 +5,9 @@ description: Contribute admin menu items, pages, settings, and collection-view o
 
 A plugin can extend the Nextly admin in two complementary ways:
 
-- **`contributes.admin`** — the *declarative* surface: menu entries, custom pages,
+- **`contributes.admin`** — the _declarative_ surface: menu entries, custom pages,
   a settings panel, and per-collection view overrides (D19–D23).
-- **`admin`** (on the plugin definition) — *placement & appearance*: where the
+- **`admin`** (on the plugin definition) — _placement & appearance_: where the
   plugin's items sit in the sidebar and how they look (D20).
 
 Both are `@public`. Admin **dashboard widgets** (`PluginAdminWidget`, D22) are rendered
@@ -127,12 +127,20 @@ means your styles do not depend on the host's build at all.
 
 ```jsonc
 // package.json
-{ "scripts": { "build:css": "nextly-build-admin-css src/admin.css dist/admin.css" } }
+{
+  "scripts": {
+    "build:css": "nextly-build-admin-css src/admin.css dist/admin.css",
+  },
+}
 ```
 
 ```ts
 // your plugin definition
-contributes: { admin: { styles: "@acme/plugin/dist/admin.css" } }
+contributes: {
+  admin: {
+    styles: "@acme/plugin/dist/admin.css";
+  }
+}
 ```
 
 Then side-effect-import the built file from your admin entry so the host app's bundler
@@ -182,13 +190,45 @@ contributes: {
 
 ## Dashboard widgets
 
+A widget is drawn one of two ways, and you pick by what you declare.
+
+### Let the host draw it
+
+Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
+runs the query for the signed-in user and renders the card:
+
 ```ts
 contributes: {
   admin: {
     widgets: [
       {
         id: "reports-summary",
-        component: "@acme/nextly-plugin-reports/admin#SummaryWidget",
+        title: "Published reports",
+        archetype: "metric",                 // metric | table | list | text | actions
+        defaultSize: "sm",                   // sm | md | lg | xl | full
+        query: { source: "collection:reports", op: "count" },
+        requiredPermission: "read-reports",  // client-gated
+      },
+    ],
+  },
+}
+```
+
+`text` and `actions` are drawn without data, so they take no `query` — declaring one is
+a type error. Every other archetype requires it.
+
+### Draw it yourself
+
+Ship a `component` and the host gives you the card's frame — header, footer, loading and
+error states — while you draw the body:
+
+```ts
+contributes: {
+  admin: {
+    widgets: [
+      {
+        id: "reports-chart",
+        component: "@acme/nextly-plugin-reports/admin#ChartWidget",
         size: "half",                        // "full" | "half"
         requiredPermission: "read-reports",  // client-gated
       },
@@ -197,13 +237,19 @@ contributes: {
 }
 ```
 
-Widgets declared in `contributes.admin.widgets` are rendered on the admin dashboard by
-`PluginWidgetGrid`, in a 12-column grid, and hidden from users who lack
-`requiredPermission`.
+A component-drawn widget may ALSO declare a `query`: the host runs it in the same batch
+and hands your component the result, so you do not fetch it again.
 
-The contract is still `@experimental` and is expected to grow: a title, a declarative
-query, a size beyond `full`/`half`, and a per-instance config schema. Pin your Nextly
-version while it settles.
+Widgets are rendered on the admin dashboard by `WidgetGrid`, in a 12-column grid that
+collapses to one column on small screens, and are hidden from users who lack
+`requiredPermission`. Every widget on the page is fetched in a single batched request.
+
+An archetype this version of Nextly does not draw yet reports itself in that card and
+leaves the rest of the dashboard alone, so a plugin built against a newer core degrades
+one card rather than breaking the admin.
+
+The contract is still `@experimental` and is expected to grow: charts, a per-instance
+config schema, and saved layouts. Pin your Nextly version while it settles.
 
 `requiredPermission` gates whether the widget renders. It does **not** constrain the data
 your widget reads — fetch through the access-controlled API so a viewer only ever sees
@@ -222,8 +268,8 @@ definePlugin({
   // ...
   admin: {
     placement: AdminPlacement.COLLECTIONS, // COLLECTIONS | SINGLES | USERS | SETTINGS | PLUGINS | STANDALONE
-    order: 10,                             // lower = higher; default 100
-    after: "collections",                  // anchor for STANDALONE icons
+    order: 10, // lower = higher; default 100
+    after: "collections", // anchor for STANDALONE icons
   },
 });
 ```

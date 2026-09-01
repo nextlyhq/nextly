@@ -17,7 +17,11 @@
  * @module plugins/validate-admin-widgets
  */
 
-import { WIDGET_ARCHETYPES } from "../domains/widgets/definition";
+import {
+  DATA_ARCHETYPES,
+  QUERYLESS_ARCHETYPES,
+  WIDGET_ARCHETYPES,
+} from "../domains/widgets/definition";
 import { getNextlyLogger } from "../observability/logger";
 
 import type { PluginAdminWidget } from "./admin-contributions";
@@ -48,18 +52,31 @@ function isUsableText(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
+/** Archetypes core fills from a query result, as a set for lookup. */
+const DATA_ARCHETYPE_SET: ReadonlySet<string> = new Set(DATA_ARCHETYPES);
+
+/** Archetypes core draws without asking for data. */
+const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
+  QUERYLESS_ARCHETYPES
+);
+
 /**
  * Whether this widget describes a body CORE can draw without the plugin.
  *
- * The archetype alone is not enough and that is the whole check. Every
- * archetype but `custom` is drawn FROM A QUERY RESULT, so one declared without
- * a query describes a card core can never fill: no request is made for it, no
- * slot ever arrives, and the grid reads that absence as "still loading" for the
- * life of the page. The pair is the unit that means something.
+ * DERIVED from core's two vocabularies rather than restated. Restating it is
+ * exactly how this went wrong once: "every archetype but `custom` needs a
+ * query" sounds right, and it made `text` and `actions` undeclarable while
+ * contradicting `validateWidgetDefinition`, which REFUSES a query on those two.
+ * One question, one implementation.
  *
- * The archetype is NOT checked against `WIDGET_ARCHETYPES` here, and that is
- * deliberate rather than an omission -- see `warnUnknownArchetype`. Refusing an
- * unrecognised one would abort plugin resolution for the whole install.
+ * So the pair is the unit for a DATA archetype and the archetype alone is the
+ * unit for a queryless one. A `metric` without a query describes a card core
+ * can never fill -- no request is made for it, no slot arrives, and the grid
+ * reads that absence as still loading for the life of the page.
+ *
+ * An archetype in NEITHER set is not judged here at all: it belongs to a newer
+ * core, and `warnUnknownArchetype` has already let it through. Requiring a
+ * query of it would be guessing which half of a vocabulary we do not have.
  *
  * `query` is checked for being an OBJECT and no further. What is inside it is
  * `validateWidgetQuery`'s job, at the point the query runs and against the
@@ -67,13 +84,19 @@ function isUsableText(value: unknown): value is string {
  * second opinion that can disagree with the one that decides.
  */
 function describesDrawableBody(widget: Record<string, unknown>): boolean {
-  return (
-    typeof widget.archetype === "string" &&
-    widget.archetype !== "custom" &&
-    widget.archetype.trim() !== "" &&
-    typeof widget.query === "object" &&
-    widget.query !== null
-  );
+  const archetype = widget.archetype;
+  if (typeof archetype !== "string" || archetype === "custom") return false;
+
+  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) return true;
+
+  if (DATA_ARCHETYPE_SET.has(archetype)) {
+    return typeof widget.query === "object" && widget.query !== null;
+  }
+
+  // Unrecognised, and therefore a newer core's. Accepted for the same reason
+  // `warnUnknownArchetype` does not throw: the card reports itself, and the
+  // install stands.
+  return true;
 }
 
 /**
@@ -98,10 +121,19 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
  * Logged rather than swallowed, because the other reachable cause is a typo,
  * and "metrics" for "metric" is a mistake whose card reads "not rendered yet"
  * -- a sentence that suggests waiting rather than fixing.
+ *
+ * Called from `assertAdminWidgets` and NOWHERE else, which is the boot gate and
+ * runs once. `validatedAdminWidgets` is the wrong home for it despite being
+ * where the check would naturally sit: `buildPluginAdminMeta` calls it on every
+ * `/api/admin-meta` request, that route is public and unauthenticated because
+ * the sign-in screen renders before a session exists, and the responses are
+ * `no-store`. One mistyped archetype would have written a warning line per
+ * anonymous request, forever -- burying the one occurrence that says something
+ * under a stream of identical ones.
  */
 function warnUnknownArchetype(
   pluginName: string,
-  widget: Record<string, unknown>
+  widget: { id?: unknown; archetype?: unknown }
 ): void {
   const archetype = widget.archetype;
   if (typeof archetype !== "string") return;
@@ -196,7 +228,6 @@ export function validatedAdminWidgets(
     if (undrawable !== undefined) {
       throw adminWidgetShapeError(plugin.name, label, undrawable);
     }
-    warnUnknownArchetype(plugin.name, serializable);
     publishable.push(serializable as unknown as PluginAdminWidget);
   }
   return publishable;
@@ -211,5 +242,12 @@ export function validatedAdminWidgets(
  * that answers 500 — boot is where that is still cheap to say.
  */
 export function assertAdminWidgets(plugins: PluginDefinition[]): void {
-  for (const plugin of plugins) validatedAdminWidgets(plugin);
+  for (const plugin of plugins) {
+    // The widgets that survived, so the warning describes what will actually be
+    // published rather than what was declared.
+    const widgets = validatedAdminWidgets(plugin) ?? [];
+    for (const widget of widgets) {
+      warnUnknownArchetype(plugin.name, widget);
+    }
+  }
 }
