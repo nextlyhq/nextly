@@ -44,6 +44,7 @@ export interface WebhookTableProps {
 /** Columns pinned as always-visible in the column toggle. */
 const ALWAYS_VISIBLE = new Set(["name"]);
 
+/** Static column definitions declared at module scope to avoid re-creation on render. */
 const WEBHOOK_COLUMNS: NextlyColumn<WebhookEndpointSummary>[] = [
   {
     name: "name",
@@ -105,6 +106,7 @@ const WEBHOOK_COLUMNS: NextlyColumn<WebhookEndpointSummary>[] = [
   },
 ];
 
+/** Builds the action items available on each row based on granted permissions. */
 function buildWebhookRowActions(
   webhook: WebhookEndpointSummary,
   handlers: Omit<WebhookTableProps, "data" | "isLoading">
