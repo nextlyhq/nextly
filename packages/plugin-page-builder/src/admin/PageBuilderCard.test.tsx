@@ -96,8 +96,8 @@ describe("PageBuilderCard", () => {
       <PageBuilderCard {...base} document={doc(2)} styleState="pending" />
     );
 
+    // No frame at all, so there is no document holding the page either.
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.textContent).not.toContain("Block 0");
   });
 
   it("draws the page once the site style has resolved", () => {
@@ -105,8 +105,10 @@ describe("PageBuilderCard", () => {
       <PageBuilderCard {...base} document={doc(2)} styleState="ready" />
     );
 
-    expect(container.querySelector(MINIATURE)).not.toBeNull();
-    expect(container.textContent).toContain("Block 0");
+    const frame = container.querySelector<HTMLIFrameElement>(MINIATURE);
+
+    expect(frame).not.toBeNull();
+    expect(frame?.srcdoc).toContain("Block 0");
   });
 
   it("still reports what the page holds while the style is pending", () => {
@@ -131,8 +133,8 @@ describe("PageBuilderCard", () => {
       <PageBuilderCard {...base} document={doc(2)} styleState="unavailable" />
     );
 
+    // No frame at all, so there is no document holding the page either.
     expect(container.querySelector(MINIATURE)).toBeNull();
-    expect(container.textContent).not.toContain("Block 0");
   });
 
   it("says why, rather than showing an empty frame", () => {

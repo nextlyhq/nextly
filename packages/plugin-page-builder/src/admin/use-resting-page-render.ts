@@ -15,10 +15,9 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/use-resting-page-render
  */
-import { previewContainerFor } from "@nextlyhq/blocks-engine";
 import type { PageRendererProps } from "@nextlyhq/blocks-react";
 import { usePluginClientConfig } from "@nextlyhq/plugin-sdk/admin";
-import { useId, useMemo } from "react";
+import { useMemo } from "react";
 
 import { siteSheet } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
@@ -54,32 +53,22 @@ export function useRestingPageRender(source: string): RestingPageRender {
 
   const { siteStyle, pending, error } = useSiteStyle(configStyle);
 
-  /*
-   * A container name for THIS field's box.
-   *
-   * From `useId` rather than the field's path: two blocks fields on one form
-   * would otherwise compile against one name, and a name is what a container
-   * query resolves by — so the second box would answer to the first one's
-   * width.
-   */
-  const containerId = useId();
-  const previewContainer = useMemo(
-    () => previewContainerFor(containerId),
-    [containerId]
-  );
-
   const render = useMemo(
     () =>
       pageRenderInputs({
         siteStyle,
         clientConfig,
-        previewContainer,
+        // NONE. The card draws the page in a frame with a viewport of its
+        // own, so plain `@media` already answers for the composed width — which
+        // is what the published page does. A named container here would emit
+        // rules whose container is declared nowhere inside that frame.
+        previewContainer: undefined,
         // Deliberately unset. This surface shows the page as PUBLISHED, and a
         // class alternative beside each pseudo-class rule would let it paint a
         // hover appearance nobody is causing.
         limits: readDocumentLimits(clientConfig),
       }),
-    [siteStyle, clientConfig, previewContainer]
+    [siteStyle, clientConfig]
   );
 
   return {
