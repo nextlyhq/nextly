@@ -188,16 +188,6 @@ function validateId(d: Partial<WidgetDefinition>): void {
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
-  // A title is optional on a contribution and required on a definition, but a
-  // BLANK one is meaningless to both -- the card would be labelled with
-  // whitespace, and resolution's fallback to the id never fires because the
-  // field is technically present.
-  if (widget.title !== undefined) {
-    if (typeof widget.title !== "string" || widget.title.trim() === "") {
-      return "title, when given, must be non-empty";
-    }
-  }
-
   // An unknown size is the sharpest of these: `widgetSpanClass` falls back to
   // full width, so the card silently spans the grid rather than reporting
   // anything an author could search for.
@@ -221,7 +211,19 @@ export function widgetValueProblem(
   // `actions` belongs to the archetype named for it. Elsewhere the admin never
   // reads the array, so declaring one is a shortcut list the author believes
   // they published and nobody can reach.
-  if (widget.actions !== undefined && widget.archetype !== "actions") {
+  //
+  // Only when this core RECOGNISES the archetype. The rule is a statement about
+  // a vocabulary, so applying it to a name from a newer core judges a shape
+  // this core has never seen -- and refusing there aborts the whole plugin
+  // install in exactly the version-skew case unknown archetypes are tolerated
+  // for. The registry never meets one, because it refuses unknown archetypes
+  // outright; the contributions channel does, deliberately.
+  if (
+    widget.actions !== undefined &&
+    typeof widget.archetype === "string" &&
+    WIDGET_ARCHETYPES.includes(widget.archetype as WidgetArchetype) &&
+    widget.archetype !== "actions"
+  ) {
     return 'actions are only valid for archetype "actions"';
   }
 
@@ -251,9 +253,14 @@ function sizeRangeProblem(widget: Record<string, unknown>): string | undefined {
 }
 
 function validateTitle(d: Partial<WidgetDefinition>): void {
-  // REQUIRED here, unlike on a contribution: this is the resolved widget, and
-  // the blank case is the shared rule's.
-  if (d.title === undefined) fail(`${d.id}: title is required`);
+  // Channel-specific, and deliberately not shared. This is the RESOLVED widget,
+  // so a blank title is a card labelled with whitespace. A contribution is a
+  // declaration: `resolveTitle` trims it and falls back to the id, so the same
+  // value renders a correctly named card there and refusing it would turn a
+  // working card into a failed plugin install.
+  if (typeof d.title !== "string" || d.title.trim() === "") {
+    fail(`${d.id}: title is required`);
+  }
 }
 
 /** Confirms `archetype` is one of the known values. */

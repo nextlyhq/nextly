@@ -34,6 +34,16 @@ const asPlugin = (widget: unknown): PluginDefinition =>
     contributes: { admin: { widgets: [widget] } },
   }) as unknown as PluginDefinition;
 
+/** The refusal's message, for asserting WHICH rule refused. */
+function reasonFrom(run: () => void): string {
+  try {
+    run();
+    return "";
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
 function refuses(run: () => void): boolean {
   try {
     run();
@@ -58,7 +68,7 @@ const DECLARED_DIFFERENCES: Array<{
     case: "an archetype this core does not know",
     why: "refusing aborts the whole plugin install over one card; the grid reports it per-card instead",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "bogus",
       defaultSize: "sm",
@@ -69,7 +79,7 @@ const DECLARED_DIFFERENCES: Array<{
     case: "a component beside a non-custom archetype",
     why: "that is the FALLBACK body for an archetype an older admin cannot draw",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "text",
       defaultSize: "sm",
@@ -80,7 +90,7 @@ const DECLARED_DIFFERENCES: Array<{
     case: "no title",
     why: "`PluginAdminWidgetBase` types it optional; resolution falls back to the id",
     widget: {
-      id: "a",
+      id: "acme/thing",
       archetype: "custom",
       defaultSize: "sm",
       component: "p#X",
@@ -89,16 +99,18 @@ const DECLARED_DIFFERENCES: Array<{
   {
     case: "no defaultSize",
     why: "typed optional on a contribution; resolution supplies one",
-    widget: { id: "a", title: "T", archetype: "custom", component: "p#X" },
-  },
-];
-
-/** Rules that must hold identically on both sides. */
-const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
-  {
-    case: "blank title",
     widget: {
-      id: "a",
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      component: "p#X",
+    },
+  },
+  {
+    case: "a blank title",
+    why: "`resolveTitle` trims it and falls back to the id, so the card renders correctly named; refusing turns a working card into a failed install",
+    widget: {
+      id: "acme/thing",
       title: "   ",
       archetype: "custom",
       defaultSize: "sm",
@@ -106,9 +118,40 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
     },
   },
   {
+    case: "an id that is not namespace/name",
+    why: "widget ids are plugin-local and a contribution names its own; the registry is installation-wide and needs the namespace to keep two plugins apart",
+    widget: {
+      id: "stats",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+    },
+  },
+  {
+    case: "a component with no archetype at all",
+    why: "a contribution shipping a component IS its body; the archetype is what the registry uses to decide who draws it",
+    widget: { id: "acme/thing", title: "T", component: "p#X" },
+  },
+  {
+    case: "actions on an archetype this core does not know",
+    why: "the placement rule states THIS core's vocabulary, so applying it to a newer core's archetype would abort the install over a shape we cannot judge",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "timeline",
+      defaultSize: "sm",
+      actions: [{ label: "L", href: "/admin/users/create" }],
+    },
+  },
+];
+
+/** Rules that must hold identically on both sides. */
+const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
+  {
     case: "defaultSize outside the vocabulary",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "custom",
       defaultSize: "enormous",
@@ -118,7 +161,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
     case: "minSize above defaultSize",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "custom",
       defaultSize: "sm",
@@ -129,7 +172,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
     case: "defaultHeight outside the vocabulary",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "custom",
       defaultSize: "sm",
@@ -140,7 +183,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
     case: "actions on an archetype that is not actions",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "text",
       defaultSize: "sm",
@@ -150,7 +193,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
     case: "a malformed shortcut",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "actions",
       defaultSize: "sm",
@@ -159,12 +202,17 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a data archetype with no query",
-    widget: { id: "a", title: "T", archetype: "metric", defaultSize: "sm" },
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "metric",
+      defaultSize: "sm",
+    },
   },
   {
     case: "a query on a queryless archetype",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "text",
       defaultSize: "sm",
@@ -174,7 +222,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
     case: "a non-finite defaultOrder",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "custom",
       defaultSize: "sm",
@@ -185,7 +233,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
     case: "chrome none on an archetype core draws",
     widget: {
-      id: "a",
+      id: "acme/thing",
       title: "T",
       archetype: "metric",
       defaultSize: "sm",
@@ -205,6 +253,15 @@ describe("the registry and contributions channels agree except where declared", 
       registry: true,
       contributions: true,
     });
+
+    // And that the registry refused for the reason the row NAMES. Every fixture
+    // once carried a bare id, which `validateId` refuses before any value rule
+    // runs -- so the registry half was green for every row whatever the rule
+    // under test did, and deleting a registry rule would not have moved it. A
+    // pair of booleans cannot see that; only the message can.
+    expect(reasonFrom(() => validateWidgetDefinition(widget))).not.toMatch(
+      /id must be namespace/
+    );
   });
 
   it.each(DECLARED_DIFFERENCES)(

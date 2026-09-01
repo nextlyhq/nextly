@@ -18,6 +18,7 @@
 "@nextlyhq/plugin-seo": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
