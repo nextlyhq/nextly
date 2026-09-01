@@ -256,3 +256,54 @@ describe("resolveDashboardWidgets", () => {
     expect(widgets[0].title).toBe("From the registry");
   });
 });
+
+describe("defaultOrder decides position, and only where it is stated", () => {
+  const card = (id: string, extra: Record<string, unknown> = {}) =>
+    ({
+      id,
+      title: id,
+      archetype: "text",
+      defaultSize: "sm",
+      ...extra,
+    }) as unknown as RegisteredWidgetMeta;
+
+  const ids = (widgets: { id: string }[]) => widgets.map(w => w.id);
+
+  it("lifts a stating widget above one that states nothing", () => {
+    // The registry channel is read AFTER contributions, so `last` would
+    // otherwise be last whatever it declared -- which is the accident this
+    // field exists to remove.
+    const widgets = resolveDashboardWidgets(
+      contributing([card("contributed-a"), card("contributed-b")]),
+      [card("last", { defaultOrder: 0 })],
+      allow
+    );
+    expect(ids(widgets)).toEqual(["last", "contributed-a", "contributed-b"]);
+  });
+
+  it("orders several statements among themselves, ascending", () => {
+    const widgets = resolveDashboardWidgets(
+      contributing([
+        card("third", { defaultOrder: 3 }),
+        card("first", { defaultOrder: -1 }),
+        card("second", { defaultOrder: 1.5 }),
+      ]),
+      [],
+      allow
+    );
+    expect(ids(widgets)).toEqual(["first", "second", "third"]);
+  });
+
+  it("leaves widgets that state nothing in the order they already had", () => {
+    // The compatibility bound, and the reason the sort has to be STABLE: every
+    // widget shipping today declares no order, so an unstable comparator would
+    // rearrange every existing dashboard while every assertion above still
+    // passed.
+    const widgets = resolveDashboardWidgets(
+      contributing([card("a"), card("b"), card("c"), card("d")]),
+      [],
+      allow
+    );
+    expect(ids(widgets)).toEqual(["a", "b", "c", "d"]);
+  });
+});

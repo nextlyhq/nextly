@@ -212,6 +212,7 @@ function resolveOne(
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
+    defaultOrder: meta.defaultOrder,
   };
 }
 
@@ -253,6 +254,7 @@ function resolveRegistered(
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
+    defaultOrder: meta.defaultOrder,
   };
 }
 
@@ -395,5 +397,21 @@ export function resolveDashboardWidgets(
     )
   );
 
-  return [...contributed, ...registrations];
+  // ONE sort over both channels, after the merge and the permission gate, so a
+  // widget's position does not depend on which of the two declared it. That
+  // dependency was the defect: registrations are appended after contributions,
+  // so a card crossed the grid when its author moved it between channels
+  // without changing anything about the card.
+  //
+  // STABLE, which `Array.prototype.sort` has guaranteed since ES2019 and which
+  // the whole compatibility story rests on: every widget shipping today states
+  // no order, so they all compare equal and keep the arrangement they have.
+  // Sorting by `?? 0` instead would order them against each other arbitrarily
+  // -- rearranging every existing dashboard while every assertion about a
+  // STATED order still passed.
+  return [...contributed, ...registrations].sort(
+    (a, b) =>
+      (a.defaultOrder ?? Number.MAX_SAFE_INTEGER) -
+      (b.defaultOrder ?? Number.MAX_SAFE_INTEGER)
+  );
 }
