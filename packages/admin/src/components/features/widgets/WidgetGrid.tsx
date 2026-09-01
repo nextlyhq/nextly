@@ -30,7 +30,7 @@ import {
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
 
-import { coreDrawsArchetype, resolveWidgetOutcome } from "./outcome";
+import { coreDraws, resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
 import { WidgetRenderer } from "./WidgetRenderer";
@@ -99,10 +99,12 @@ export function WidgetGrid() {
         // on arrival. `custom` always draws, because the plugin's component
         // decides what to do with the slot.
         //
-        // Asked of `coreDrawsArchetype` rather than listed here, so the read
-        // starts happening on its own the day core learns to draw one.
-        widget.query &&
-        (widget.archetype === "custom" || coreDrawsArchetype(widget.archetype))
+        // Asked of `coreDraws` rather than listed here, so the read starts
+        // happening on its own the day core learns to draw one -- and asked of
+        // the whole DECLARATION, not just the archetype, because a renderer
+        // that will refuse this particular widget makes the read just as
+        // wasted as no renderer at all.
+        widget.query && (widget.archetype === "custom" || coreDraws(widget))
           ? [{ widgetId: widget.id, query: widget.query }]
           : []
       ),

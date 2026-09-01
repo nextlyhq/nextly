@@ -19,7 +19,7 @@ import type {
 } from "@admin/types/branding";
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
-import { coreDrawsArchetype } from "./outcome";
+import { coreDraws } from "./outcome";
 import { legacySizeToWidgetSize } from "./sizes";
 
 /**
@@ -91,14 +91,17 @@ export interface ReadableWidgetDeclaration {
  * `text` and `actions` are declarable today and none of them has a renderer, so
  * a widget naming one had its component discarded in favour of the sentence
  * "the list widget archetype is not rendered yet" -- an error where a working
- * card was available. Asked of `coreDrawsArchetype` rather than listed here, so
- * the fallback stops applying on its own the day core learns to draw one.
+ * card was available. Asked of `coreDraws` rather than listed here, so the
+ * fallback stops applying on its own the day core learns to draw one -- and
+ * asked of the whole DECLARATION, because a renderer that refuses this
+ * particular widget leaves the contributed component the only thing that can
+ * draw it, exactly as a missing renderer does.
  */
 function resolveArchetype(
   meta: ReadableWidgetDeclaration
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
-    const undrawable = !meta.query || !coreDrawsArchetype(meta.archetype);
+    const undrawable = !meta.query || !coreDraws(meta);
     if (meta.archetype !== "custom" && undrawable && meta.component) {
       return "custom";
     }

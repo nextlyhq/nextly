@@ -20,7 +20,7 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import type { ArchetypeBody } from "./types";
+import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /** How many rows a card of this size can show without becoming a table. */
 const MAX_ROWS = 5;
@@ -47,6 +47,22 @@ function asText(value: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * A list needs to know which field heads each row, and only `select` says.
+ *
+ * Judged from the DECLARATION, before any request is made. The same refusal
+ * used to arrive only after the query had run: the grid batched the widget
+ * because its archetype had a renderer, the server performed an unprojected
+ * read and shipped whole documents to the browser, and the card then threw them
+ * away to print this sentence -- on every mount and every window focus.
+ */
+export const listAccepts: ArchetypeAccepts = definition => {
+  const select = definition.query?.select ?? [];
+  if (select.length > 0) return undefined;
+  const name = definition.title ?? "This list widget";
+  return `"${name}" is a list widget whose query selects no fields, so there is nothing to show in each row.`;
+};
+
 export const listBody: ArchetypeBody = (result, definition) => {
   if (result.op !== "list") {
     return {
@@ -58,10 +74,11 @@ export const listBody: ArchetypeBody = (result, definition) => {
   const select = definition.query?.select ?? [];
   const [labelField, detailField] = select;
   if (!labelField) {
-    return {
-      ok: false,
-      message: `"${definition.title}" is a list widget whose query selects no fields, so there is nothing to show in each row.`,
-    };
+    // Unreachable through the grid, which declines this declaration before it
+    // batches. Kept because a body must be safe to call on its own -- a test,
+    // or a future caller that has a result in hand -- and because the sentence
+    // is one thing said in one place.
+    return { ok: false, message: listAccepts(definition) ?? "" };
   }
 
   if (result.items.length === 0) {
