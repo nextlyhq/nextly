@@ -5142,7 +5142,9 @@ export class CollectionMutationService extends BaseService {
   }
 
   async updateEntry(
-    params: {
+    // Named `rawParams` because the body must not read it: the wildcard locale
+    // is resolved away into `params` at the top of the method. See there.
+    rawParams: {
       collectionName: string;
       entryId: string;
       user?: UserContext;
@@ -5179,6 +5181,51 @@ export class CollectionMutationService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ): Promise<CollectionServiceResult> {
+    // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale, and the
+    // body of this method must never see it as one. Resolved here, once, so the
+    // fourteen places below that read `params.locale` keep receiving a real
+    // locale or nothing — a wildcard threaded through them would reach
+    // `resolveRequestedLocale`, the version capture and the event payloads as if
+    // it named a language.
+    //
+    // Document-wide is exactly what the wildcard means, so it degrades to the
+    // unlocalized write (`locale: undefined`): the main row's `status` moves and
+    // is NOT stripped the way a non-default locale's write strips it. The only
+    // thing the wildcard adds is the companion sweep at the write itself.
+    const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
+    const params = sweepAllLocales
+      ? { ...rawParams, locale: undefined }
+      : rawParams;
+
+    // The wildcard moves a LIFECYCLE and nothing else.
+    //
+    // Strapi's document service admits `"*"` on publish/unpublish/delete/
+    // discardDraft and deliberately withholds it from `update`, because "write
+    // these values into every language" is a different and far more destructive
+    // operation than "move this document's lifecycle across every language" —
+    // the first would copy one language's prose over all the others. Nextly has
+    // one door for both, so the distinction has to be enforced here rather than
+    // by having two doors.
+    //
+    // Refused rather than narrowed to the status: silently ignoring the other
+    // fields would report success for a write that did not happen.
+    if (sweepAllLocales) {
+      const named = Object.keys(body);
+      const statusOnly = named.length === 1 && named[0] === "status";
+      if (!statusOnly) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `locale '${EVERY_LOCALE}' moves the publication status of every ` +
+            `language and writes nothing else, so it accepts a 'status' patch ` +
+            `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
+            `To write field values, name the language they belong to.`,
+          data: null,
+        };
+      }
+    }
+
     // Set once the outbox event is appended (below); lets the catch report a
     // committed-but-hook-failed update as `eventRecorded` even when `success` is
     // false. Declared out here so both the success and catch returns see it.
@@ -6432,6 +6479,40 @@ export class CollectionMutationService extends BaseService {
               localizedUpdate.writeLocale,
               localizedUpdate.companionData
             );
+          }
+
+          // {@link EVERY_LOCALE}: carry the lifecycle to the languages the write
+          // above did not name.
+          //
+          // The upsert reaches ONE companion row — the write locale's. That is
+          // the whole of the defect this sweep closes: a document-wide takedown
+          // moved the main row and the default language and left every other
+          // translation live, so a site went on serving German content the
+          // editor had unpublished.
+          //
+          // In the SAME transaction as the main-row write, so a reader never
+          // observes the document half-moved. An UPDATE across every row rather
+          // than an upsert per language: a language with no companion row has no
+          // translation, and inventing one to mark it published would create the
+          // very row whose absence means "not translated".
+          //
+          // Runs after the upsert so the write locale's row exists first and the
+          // sweep finds it — it then rewrites that row with the value it already
+          // holds, which is why this is safe to run unconditionally rather than
+          // excluding the write locale.
+          if (
+            sweepAllLocales &&
+            !storeAsWorkingDraft &&
+            localizedUpdate &&
+            localizedUpdate.hasStatus &&
+            typeof localizedUpdate.companionData._status === "string"
+          ) {
+            await this.writeCompanionStatus(tx, {
+              companionTableName: localizedUpdate.companionTableName,
+              parentId: params.entryId,
+              status: localizedUpdate.companionData._status,
+              locale: EVERY_LOCALE,
+            });
           }
 
           // Clone per attempt: saveComponentDataInTransaction mutates the

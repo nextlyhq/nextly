@@ -77,12 +77,17 @@ import { readComponentSubtrees } from "../../field-groups/read-component-subtree
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
+  COMPANION_PARENT_COLUMN,
+  COMPANION_STATUS_COLUMN,
+} from "../../i18n/companion-columns";
+import {
   isBlank,
   companionRowExists,
   populateCompanionFields,
   readCompanionLocaleStatus,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -326,9 +331,41 @@ export class SingleMutationService extends BaseService {
   async update(
     slug: string,
     data: Record<string, unknown>,
-    options: UpdateSingleOptions = {}
+    // Named `rawOptions` because the body must not read it: the wildcard locale
+    // is resolved away into `options` immediately below. See there.
+    rawOptions: UpdateSingleOptions = {}
   ): Promise<SingleResult> {
+    // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale. Resolved
+    // once, here, so the twenty-odd places below that derive from
+    // `options.locale` — `writeLocale`, the snapshot locale, the event payloads
+    // — keep receiving a real locale or nothing. Mirrors the collection write
+    // path exactly, because a Single scheduled in a release must behave the way
+    // an entry scheduled in the same release behaves.
+    const sweepAllLocales = rawOptions.locale === EVERY_LOCALE;
+    const options: UpdateSingleOptions = sweepAllLocales
+      ? { ...rawOptions, locale: undefined }
+      : rawOptions;
+
     this.logger.debug("Updating Single document", { slug, options });
+
+    // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
+    // `updateEntry` for why Strapi withholds `"*"` from its update method and
+    // why Nextly, having one door for both, has to enforce the split here.
+    if (sweepAllLocales) {
+      const named = Object.keys(data);
+      const statusOnly = named.length === 1 && named[0] === "status";
+      if (!statusOnly) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `locale '${EVERY_LOCALE}' moves the publication status of every ` +
+            `language and writes nothing else, so it accepts a 'status' patch ` +
+            `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
+            `To write field values, name the language they belong to.`,
+        };
+      }
+    }
 
     // Set true once the update transaction commits with a real write (which
     // always appends the outbox event); lets the catch and the `!updated`
@@ -1687,6 +1724,42 @@ export class SingleMutationService extends BaseService {
                   row[f.column] = companionData[f.column];
                 }
               }
+            }
+
+            // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
+            // write above did not name.
+            //
+            // The write above reaches ONE companion row. Without this a
+            // scheduled takedown of a localized Single would leave every
+            // translation of it live — the same defect the collection path
+            // carried, and it has to be closed in both places because a release
+            // member holds either kind.
+            //
+            // Same transaction as the main-row write, and an UPDATE rather than
+            // an upsert: a language with no companion row has no translation,
+            // and creating one to mark it published would invent the row whose
+            // absence is the record that it was never translated.
+            if (
+              sweepAllLocales &&
+              !holdEdit &&
+              companion &&
+              companionPhysicallyExists &&
+              companion.hasStatus &&
+              companionStatus !== undefined
+            ) {
+              await tx.update(
+                companion.companionTableName,
+                { [COMPANION_STATUS_COLUMN]: companionStatus },
+                {
+                  and: [
+                    {
+                      column: COMPANION_PARENT_COLUMN,
+                      op: "=",
+                      value: existingDoc.id,
+                    },
+                  ],
+                }
+              );
             }
 
             // Capture a version snapshot atomically with the write when the single
