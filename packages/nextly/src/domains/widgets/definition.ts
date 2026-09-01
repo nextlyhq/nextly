@@ -306,14 +306,26 @@ function validateActions(d: Partial<WidgetDefinition>): void {
     fail(`${d.id}: archetype "actions" requires a non-empty actions array`);
   }
 
-  for (const [index, action] of d.actions.entries()) {
-    const at = `${d.id}: action #${index}`;
-    if (typeof action?.label !== "string" || action.label.trim() === "") {
-      fail(`${at} requires a non-empty label`);
-    }
-    if (typeof action.href !== "string" || action.href.trim() === "") {
-      fail(`${at} requires a non-empty href`);
-    }
+  d.actions.forEach((action, index) =>
+    validateAction(action, `${d.id}: action #${index}`)
+  );
+}
+
+/**
+ * One shortcut, checked for the two fields that make it a link.
+ *
+ * Separate from the archetype rule above because they are different questions:
+ * whether this widget should have actions at all, and whether a given action is
+ * usable. A label is what the reader clicks and an href is where it goes;
+ * neither has a sensible default, and a blank one is a shortcut that looks
+ * broken rather than absent.
+ */
+function validateAction(action: WidgetAction | undefined, at: string): void {
+  if (typeof action?.label !== "string" || action.label.trim() === "") {
+    fail(`${at} requires a non-empty label`);
+  }
+  if (typeof action.href !== "string" || action.href.trim() === "") {
+    fail(`${at} requires a non-empty href`);
   }
 }
 
