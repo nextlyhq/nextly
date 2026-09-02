@@ -2977,6 +2977,10 @@ describe("a per-side property is drawn as a box", () => {
     ) as HTMLElement | null;
   }
 
+  /** The element carrying the box arrangement, which is INSIDE the property. */
+  const frameOf = (box: HTMLElement | null) =>
+    box?.querySelector(".nx-style-inspector__side-box") as HTMLElement | null;
+
   it("marks each side with WHICH side it is, not with its position", () => {
     /*
      * The property the stylesheet places on. The heading, a form selector and
@@ -2985,7 +2989,7 @@ describe("a per-side property is drawn as a box", () => {
      */
     const box = mountWithOrientation(LTR);
 
-    expect(box?.getAttribute("data-sides")).toBe("logical");
+    expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
     expect(
       Array.from(box?.querySelectorAll("[data-side]") ?? [], field =>
         field.getAttribute("data-side")
@@ -3006,8 +3010,17 @@ describe("a per-side property is drawn as a box", () => {
       direction: "rtl",
     });
 
-    expect(box?.style.writingMode).toBe("vertical-rl");
-    expect(box?.style.direction).toBe("rtl");
+    /*
+     * Read as custom properties, which is how they are handed over: applied
+     * inline they would outrank every selector, and the narrow fallback could
+     * only take the axes back by shouting.
+     */
+    expect(frameOf(box)?.style.getPropertyValue("--nx-side-writing-mode")).toBe(
+      "vertical-rl"
+    );
+    expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
+      "rtl"
+    );
   });
 
   it("draws ROWS, not a box, when the element's axes are unknown", () => {
@@ -3023,7 +3036,7 @@ describe("a per-side property is drawn as a box", () => {
      */
     const box = mountWithOrientation(undefined);
 
-    expect(box?.getAttribute("data-sides")).toBeNull();
+    expect(frameOf(box)).toBeNull();
     expect(box?.querySelectorAll("[data-side]").length).toBe(0);
     // The sides are still all there and still named — the fallback is a layout
     // change, never a control that goes missing.
@@ -3073,7 +3086,9 @@ describe("a per-side property is drawn as a box", () => {
     const box = document.querySelector(
       '[data-property="padding"]'
     ) as HTMLElement | null;
-    expect(box?.getAttribute("data-sides")).toBe("logical");
-    expect(box?.style.direction).toBe("rtl");
+    expect(frameOf(box)?.getAttribute("data-sides")).toBe("logical");
+    expect(frameOf(box)?.style.getPropertyValue("--nx-side-direction")).toBe(
+      "rtl"
+    );
   });
 });

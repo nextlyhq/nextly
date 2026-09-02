@@ -121,7 +121,7 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
-import { sideBoxFor, sideOf } from "./style-sides";
+import { sideBoxFor, sideOf, type SideBox } from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -858,6 +858,65 @@ interface StyleFieldSurroundings {
   onChooseForm: ChooseForm;
 }
 
+/**
+ * The element that carries the box arrangement, wrapping ONLY the four sides.
+ *
+ * Its own element rather than the property container, and that is the whole
+ * point of it. The container also holds the property's heading, the form
+ * selectors and the notice for a withdrawn property, and those must go on
+ * reading in the PANEL's axes. Putting the edited element's `writing-mode` on
+ * the container rotated everything inside it: in a vertical writing mode the
+ * row reserved above the diagram becomes a physical column beside it, so the
+ * heading ends up next to the box rather than over it, and the narrow fallback
+ * — which stacks the sides with `flex-direction: column` — runs sideways.
+ *
+ * Scoped here, the axes reach exactly what they are about: the grid whose
+ * columns and rows ARE the inline and block axes of the element being edited.
+ *
+ * A plain wrapper when there is no box, so the fields stay direct children of
+ * the property in the ordinary case and nothing about the row layout changes.
+ *
+ * @param props - the settled box decision and the fields to place
+ * @returns the sides, framed if they are a box
+ */
+function SideBoxFrame({
+  box,
+  children,
+}: {
+  box: SideBox;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  if (!box.boxed || box.axes === undefined) return <>{children}</>;
+  return (
+    <div
+      className="nx-style-inspector__side-box"
+      // Read by the stylesheet, which owns the arrangement.
+      data-sides="logical"
+      /*
+       * The EDITED ELEMENT's axes, so this grid's own placement resolves in
+       * them: columns run along the inline axis and rows along the block axis,
+       * so column one is the inline start in either direction and a vertical
+       * mode transposes the pair — with no table of physical edges written here
+       * to keep in step with CSS.
+       *
+       * Passed as custom PROPERTIES rather than applied as `writing-mode` and
+       * `direction` directly. An inline declaration outranks every selector, so
+       * the stylesheet could then only take the axes back by shouting; handed
+       * over as values, the property that uses them is set by a rule, and the
+       * narrow fallback overrides it by ordinary cascade order.
+       */
+      style={
+        {
+          "--nx-side-writing-mode": box.axes.writingMode,
+          "--nx-side-direction": box.axes.direction,
+        } as React.CSSProperties
+      }
+    >
+      {children}
+    </div>
+  );
+}
+
 /** One catalog group, as a section that opens onto its properties. */
 function StyleSectionItem({
   section,
@@ -954,25 +1013,6 @@ function StylePropertyFields({
     <div
       className="nx-style-inspector__property"
       data-property={property.property}
-      // Read by the stylesheet, which owns the box arrangement.
-      data-sides={box.boxed ? "logical" : undefined}
-      /*
-       * The EDITED ELEMENT's axes, put on the grid so its own placement
-       * resolves in them: grid columns run along the inline axis and rows along
-       * the block axis, so column one is the inline start in either direction
-       * and a vertical mode transposes the pair — with no table of physical
-       * edges here to keep in step with CSS. The children set these back to the
-       * panel's own so their text still reads normally.
-       */
-      style={
-        box.axes === undefined
-          ? undefined
-          : {
-              writingMode: box.axes
-                .writingMode as React.CSSProperties["writingMode"],
-              direction: box.axes.direction as React.CSSProperties["direction"],
-            }
-      }
     >
       {many ? (
         <p
@@ -1019,37 +1059,39 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      {box.controls.map(control => (
-        <StyleControlField
-          // The ADDRESS, not just the position: a host switching state or
-          // breakpoint leaves this field mounted, and where the old and new
-          // addresses hold the same value — both unset, most often — the
-          // synchronisation effect does not run either. An unfinished draft
-          // from the base breakpoint would then commit into the hover state.
-          key={[state, breakpoint, property.property, ...control.path].join(
-            "."
-          )}
-          control={control}
-          side={sideOf(box, control)}
-          label={
-            many
-              ? fieldLabel(control.path[control.path.length - 1] ?? "")
-              : property.label
-          }
-          summary={many ? undefined : property.summary}
-          propertyLabel={property.label}
-          clearOnly={!property.offered}
-          nodeId={nodeId}
-          state={state}
-          breakpoint={breakpoint}
-          editor={editor}
-          policy={policy}
-          tokens={tokens}
-          prefersDark={prefersDark}
-          provenanceOf={provenanceOf}
-          editing={editing}
-        />
-      ))}
+      <SideBoxFrame box={box}>
+        {box.controls.map(control => (
+          <StyleControlField
+            // The ADDRESS, not just the position: a host switching state or
+            // breakpoint leaves this field mounted, and where the old and new
+            // addresses hold the same value — both unset, most often — the
+            // synchronisation effect does not run either. An unfinished draft
+            // from the base breakpoint would then commit into the hover state.
+            key={[state, breakpoint, property.property, ...control.path].join(
+              "."
+            )}
+            control={control}
+            side={sideOf(box, control)}
+            label={
+              many
+                ? fieldLabel(control.path[control.path.length - 1] ?? "")
+                : property.label
+            }
+            summary={many ? undefined : property.summary}
+            propertyLabel={property.label}
+            clearOnly={!property.offered}
+            nodeId={nodeId}
+            state={state}
+            breakpoint={breakpoint}
+            editor={editor}
+            policy={policy}
+            tokens={tokens}
+            prefersDark={prefersDark}
+            provenanceOf={provenanceOf}
+            editing={editing}
+          />
+        ))}
+      </SideBoxFrame>
     </div>
   );
 }

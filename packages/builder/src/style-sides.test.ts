@@ -64,8 +64,8 @@ describe("logicalSideGroup", () => {
    *
    * A property offering the four sides AND something else would otherwise be
    * grouped, and the box has exactly four places — so the fifth control would
-   * be dropped from the panel with nothing to say it had gone. Found by
-   * removing the count guard and watching every other case still pass.
+   * be dropped from the panel with nothing to say it had gone. The names alone
+   * cannot refuse that set, which is why the count is checked as well.
    */
   it("declines a set that holds the four sides and something more", () => {
     const extra = [

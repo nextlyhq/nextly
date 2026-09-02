@@ -557,10 +557,11 @@
    * must go on reading the way the rest of this panel reads.
    *
    * Declared rather than measured, because this is a fact about the admin
-   * interface rather than about any site. When the admin itself becomes
-   * translatable — `task:admin-interface-i18n` covers the RTL half — these move
-   * with it here, in one place, instead of every rule that resets an axis
-   * carrying its own guess.
+   * interface rather than about any site: the chrome runs left to right and
+   * horizontally, whatever the page being edited does. Should the interface
+   * itself ever run right to left, these two values are what changes — here, in
+   * one place, instead of every rule that resets an axis carrying its own
+   * guess.
    */
   --nx-chrome-writing-mode: horizontal-tb;
   --nx-chrome-direction: ltr;
@@ -682,36 +683,6 @@
   .nx-inspector__field > *,
   .nx-inspector__field > label {
     grid-column: 1;
-  }
-
-  /*
-   * The box gives up and becomes rows, at the same width and for the same
-   * reason: three columns of a control that has already lost its label column
-   * leaves each side about a third of a rail that was too narrow for two.
-   *
-   * The labels come BACK when it does. Their words are hidden only because
-   * position is saying which edge each field is, and once the fields are
-   * stacked nothing is saying it — four unlabelled inputs would be worse than
-   * either layout. This is the one place the clip is undone, which is why it
-   * lives beside the rule that stacks them rather than in the box's own block.
-   */
-  .nx-style-inspector__property[data-sides="logical"] {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .nx-style-inspector__property[data-sides="logical"]::before {
-    display: none;
-  }
-
-  .nx-style-inspector__property[data-sides="logical"]
-    .nx-style-inspector__field-label-text {
-    position: static;
-    width: auto;
-    height: auto;
-    overflow: visible;
-    clip-path: none;
-    white-space: normal;
   }
 }
 
@@ -2861,34 +2832,21 @@
  * The panel draws this only where it could READ that orientation; where it
  * could not, the fields stay ordinary rows that name their side in words.
  */
-.nx-style-inspector__property[data-sides="logical"] {
+.nx-style-inspector__side-box {
+  /*
+   * The edited element's axes, handed over by the panel as values.
+   *
+   * Used through a rule rather than applied inline, so the narrow fallback
+   * below can take them back by ordinary cascade order — an inline
+   * `writing-mode` outranks every selector, and the fallback could then only
+   * win by shouting.
+   */
+  writing-mode: var(--nx-side-writing-mode, horizontal-tb);
+  direction: var(--nx-side-direction, ltr);
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 0.25rem;
   align-items: center;
-}
-
-/*
- * Everything that is NOT a side spans the whole box, and the sides start on
- * ROW TWO so that spanning lands in the right place.
- *
- * The property's heading, a form selector and the notice for a withdrawn
- * property are all siblings of the four sides. Given no placement at all they
- * are auto-placed into whichever single cell is free — the heading into the
- * box's top-left corner — where a sentence gets a third of the panel and the
- * row grows into a tall wrapped sliver. Given a column span and no row, they
- * are placed after every explicitly-placed item instead, which puts the
- * property's own heading UNDERNEATH its box.
- *
- * Leaving row one empty is what resolves both: a full-width item cannot fit in
- * the partially-filled rows the sides occupy, so the heading takes row one and
- * anything after it lands below the box, each spanning the full width. The
- * sides say which row they are in rather than relying on that, because their
- * arrangement is the picture and it must not depend on how many siblings
- * happen to precede them.
- */
-.nx-style-inspector__property[data-sides="logical"] > *:not([data-side]) {
-  grid-column: 1 / -1;
 }
 
 /*
@@ -2899,21 +2857,20 @@
  * every side the moment one appears. Each field says which side it draws and
  * this reads it, which is also why these selectors stay shallow.
  */
-.nx-style-inspector__property[data-sides="logical"] > [data-side="blockStart"] {
-  grid-area: 2 / 2;
+.nx-style-inspector__side-box > [data-side="blockStart"] {
+  grid-area: 1 / 2;
 }
 
-.nx-style-inspector__property[data-sides="logical"]
-  > [data-side="inlineStart"] {
-  grid-area: 3 / 1;
+.nx-style-inspector__side-box > [data-side="inlineStart"] {
+  grid-area: 2 / 1;
 }
 
-.nx-style-inspector__property[data-sides="logical"] > [data-side="inlineEnd"] {
-  grid-area: 3 / 3;
+.nx-style-inspector__side-box > [data-side="inlineEnd"] {
+  grid-area: 2 / 3;
 }
 
-.nx-style-inspector__property[data-sides="logical"] > [data-side="blockEnd"] {
-  grid-area: 4 / 2;
+.nx-style-inspector__side-box > [data-side="blockEnd"] {
+  grid-area: 3 / 2;
 }
 
 /*
@@ -2924,12 +2881,11 @@
  * which says whether the side is authored or inherited and is not something
  * position can tell anyone, so the dot stays and the text is clipped around it.
  */
-.nx-style-inspector__property[data-sides="logical"] > [data-side] {
+.nx-style-inspector__side-box > [data-side] {
   display: block;
 }
 
-.nx-style-inspector__property[data-sides="logical"]
-  .nx-style-inspector__field-label-text {
+.nx-style-inspector__side-box .nx-style-inspector__field-label-text {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -2955,7 +2911,7 @@
  * fallbacks apply only if the box is somehow drawn without them, and they are
  * the ordinary case rather than an assumption about the site.
  */
-.nx-style-inspector__property[data-sides="logical"] > * {
+.nx-style-inspector__side-box > * {
   writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
   direction: var(--nx-chrome-direction, ltr);
 }
@@ -2969,9 +2925,9 @@
  * arrangement a screen reader is already given in words, by the label each
  * field keeps.
  */
-.nx-style-inspector__property[data-sides="logical"]::before {
+.nx-style-inspector__side-box::before {
   content: "";
-  grid-area: 3 / 2;
+  grid-area: 2 / 2;
   align-self: stretch;
   min-height: 1.25rem;
   border: 1px dashed var(--nx-border);
@@ -2993,13 +2949,58 @@
  * the quantity the whole 96px. Only inside a box: a full-width row has room for
  * both and reads better with them on one line.
  */
-.nx-style-inspector__property[data-sides="logical"]
-  .nx-style-inspector__numeric {
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
   flex-direction: column;
   align-items: stretch;
   gap: 0.125rem;
 }
 
-.nx-style-inspector__property[data-sides="logical"] .nx-style-inspector__unit {
+.nx-style-inspector__side-box .nx-style-inspector__unit {
   width: 100%;
+}
+
+/*
+ * Below the width where three columns of a control can be read, the box gives
+ * up and becomes rows.
+ *
+ * AFTER the box's own rules, and that is the whole reason this block sits at
+ * the end of the file rather than beside the field's stacking query it shares a
+ * threshold with. These selectors have the same specificity as the ones they
+ * override, so order decides: written earlier, the base rule below would
+ * restore `display: grid` and the label rule would restore the clipping, and
+ * what an author got at a narrow rail was a cramped grid with neither its
+ * centre diagram nor visible labels — the fallback declared and not delivered.
+ *
+ * The labels come BACK when it stacks. Their words are hidden only because
+ * position is saying which edge each field is, and once the fields are in a
+ * column nothing is saying it; four unlabelled inputs would be worse than
+ * either layout.
+ *
+ * The PANEL's axes come back too. The box carries the edited element's writing
+ * mode so its grid resolves there, and `flex-direction: column` would follow
+ * that same block axis — which is horizontal in a vertical writing mode, so the
+ * promised stack would run sideways. Plain declarations suffice because the
+ * element's axes are used through a rule rather than applied inline, so this
+ * one wins on order alone.
+ */
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-style-inspector__side-box {
+    display: flex;
+    flex-direction: column;
+    writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+    direction: var(--nx-chrome-direction, ltr);
+  }
+
+  .nx-style-inspector__side-box::before {
+    display: none;
+  }
+
+  .nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
 }

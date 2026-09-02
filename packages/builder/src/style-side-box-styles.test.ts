@@ -64,14 +64,14 @@ function ruleBody(selector: string, after = ""): string {
   return FLAT.slice(start, close);
 }
 
-const BOX = '.nx-style-inspector__property[data-sides="logical"]';
+const BOX = ".nx-style-inspector__side-box";
 
 describe("the box places sides by identity", () => {
   it.each([
-    ["blockStart", "2 / 2"],
-    ["inlineStart", "3 / 1"],
-    ["inlineEnd", "3 / 3"],
-    ["blockEnd", "4 / 2"],
+    ["blockStart", "1 / 2"],
+    ["inlineStart", "2 / 1"],
+    ["inlineEnd", "2 / 3"],
+    ["blockEnd", "3 / 2"],
   ])("puts %s at row/column %s", (side, area) => {
     /*
      * Placed by WHICH SIDE the field is, never by its position among the
@@ -95,36 +95,25 @@ describe("the box places sides by identity", () => {
     expect(FLAT).not.toContain(`${BOX} > .nx-inspector__field:nth-of-type`);
     expect(FLAT).not.toContain(`${BOX} > *:nth-child`);
   });
-
-  it("leaves row one free, so a spanning heading lands ABOVE the box", () => {
-    /*
-     * A full-width item with no row is placed after every explicitly-placed
-     * one, which puts the property's own heading UNDERNEATH its box. The sides
-     * start on row two so the first full-width row is above them.
-     *
-     * Measured in a browser before this was so: the heading rendered below the
-     * diagram it names.
-     */
-    expect(ruleBody(`${BOX} > [data-side="blockStart"]`)).toContain(
-      "grid-area: 2 /"
-    );
-  });
-
-  it("spans everything that is NOT a side across the whole box", () => {
-    /*
-     * Without a placement these are auto-placed into whichever cell is free —
-     * the heading into the top-left corner and the notice beside it, where a
-     * sentence gets a third of the panel and the first row grows into a tall
-     * wrapped sliver. Addressed as "not a side" so a sibling added later is
-     * spanned rather than scattered.
-     */
-    expect(ruleBody(`${BOX} > *:not([data-side])`)).toContain(
-      "grid-column: 1 / -1"
-    );
-  });
 });
 
 describe("the box keeps its contents readable", () => {
+  it("uses the element's axes through a RULE, not an inline declaration", () => {
+    /*
+     * An inline `writing-mode` outranks every selector, so the narrow fallback
+     * could only take the axes back by shouting — and the reviewed cap on
+     * `!important` in this codebase exists precisely to stop that becoming the
+     * ordinary way to override something. Handed over as values instead, the
+     * property is set by this rule and the fallback wins on order.
+     */
+    // Anchored on the box's own comment: this selector now carries two rules,
+    // the default and the narrow fallback, and the helper refuses to guess.
+    const box = ruleBody(BOX, "A per-side property drawn as the box");
+
+    expect(box).toContain("writing-mode: var(--nx-side-writing-mode");
+    expect(box).toContain("direction: var(--nx-side-direction");
+  });
+
   it("puts the children back into the PANEL's axes", () => {
     /*
      * The grid carries the edited element's writing mode so its placement
@@ -168,5 +157,45 @@ describe("the box keeps its contents readable", () => {
     ).toContain("clip-path: inset(50%)");
     // And NOT the label itself, which would take the dot with it.
     expect(FLAT).not.toContain(`${BOX} > [data-side] > :first-child {`);
+  });
+});
+
+describe("the narrow fallback actually wins", () => {
+  it("is declared AFTER the rules it overrides", () => {
+    /*
+     * Order, not merely presence. These selectors have the same specificity as
+     * the box's own, so whichever comes last in the sheet decides — and written
+     * earlier the base rule restores `display: grid` and the label rule restores
+     * the clipping. What an author then gets at a narrow rail is a cramped grid
+     * with neither its centre diagram nor visible labels: the fallback declared
+     * and not delivered, with every assertion about its declarations passing.
+     */
+    const boxDisplay = FLAT.indexOf("A per-side property drawn as the box");
+    // The box's OWN fallback, not the field-stacking query that shares its
+    // threshold and appears earlier: `indexOf` finds that one and would compare
+    // against a block with nothing to do with this.
+    const fallback = FLAT.indexOf(`${BOX} { display: flex`);
+    expect(boxDisplay).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(boxDisplay);
+  });
+
+  it("puts the PANEL's axes back, so a stacked column runs downward", () => {
+    /*
+     * The box carries the edited element's writing mode so its grid resolves
+     * there, and `flex-direction: column` follows that same block axis — which
+     * is HORIZONTAL in a vertical writing mode, so the promised stack would run
+     * sideways. The axes arrive as an inline style, which no selector can
+     * outrank, so this is the one place the sheet must shout.
+     */
+    const fallback = FLAT.slice(FLAT.indexOf(`${BOX} { display: flex`));
+    expect(fallback).toContain("flex-direction: column");
+    expect(fallback).toContain(
+      "writing-mode: var(--nx-chrome-writing-mode, horizontal-tb)"
+    );
+    expect(fallback).toContain("direction: var(--nx-chrome-direction, ltr)");
+    // And WITHOUT shouting: the cap on `!important` here is a real constraint,
+    // and needing one would have meant the axes were applied in the wrong place.
+    expect(fallback).not.toContain("!important");
   });
 });

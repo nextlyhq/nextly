@@ -13,7 +13,7 @@
  *
  * @module use-canvas-reading.test
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -171,5 +171,58 @@ describe("reading the axes from the same element", () => {
 
     expect(screen.getByTestId("tag").textContent).toBe("h1");
     expect(screen.getByTestId("axes").textContent).toBe("unknown");
+  });
+});
+
+describe("keeping the axes current when nothing in the tree moves", () => {
+  const REAL = window.getComputedStyle.bind(window);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(globalThis, "ResizeObserver");
+  });
+
+  it("re-reads when the canvas RESIZES, which no tree mutation reports", () => {
+    /*
+     * Writing mode and direction are inherited and can be set by a media or
+     * container query, so dragging the canvas across one of its own breakpoints
+     * changes the answer while adding, removing and re-marking no element. The
+     * tree observer has nothing to report, and without this the box goes on
+     * pointing at the edges the previous width implied.
+     *
+     * `ResizeObserver` is not implemented by jsdom, so it is supplied here and
+     * its callback driven by hand — which is also why the hook checks for it
+     * rather than assuming it.
+     */
+    let fire: (() => void) | undefined;
+    class FakeResizeObserver {
+      constructor(callback: () => void) {
+        fire = callback;
+      }
+      observe() {}
+      disconnect() {}
+    }
+    Reflect.set(globalThis, "ResizeObserver", FakeResizeObserver);
+
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<h1 data-nx-node="n1">A title</h1>';
+    const drawn = canvas.firstElementChild as HTMLElement;
+    let axes = { writingMode: "horizontal-tb", direction: "ltr" };
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === drawn
+        ? (axes as unknown as CSSStyleDeclaration)
+        : REAL(element, pseudo)) as typeof window.getComputedStyle);
+
+    render(<Reader root={canvas} />);
+    expect(screen.getByTestId("axes").textContent).toBe("horizontal-tb/ltr");
+
+    // The width crosses a breakpoint: the SAME element now computes differently.
+    axes = { writingMode: "horizontal-tb", direction: "rtl" };
+    act(() => fire?.());
+
+    expect(screen.getByTestId("axes").textContent).toBe("horizontal-tb/rtl");
   });
 });

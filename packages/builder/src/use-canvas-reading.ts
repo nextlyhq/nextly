@@ -20,8 +20,7 @@
  * hold a subscription to the DOM. Passed down as an answer, exactly as
  * `cascade` and `breakpoints` are.
  *
- * OBSERVED rather than read once on a dependency change, and that is
- * load-bearing. The canvas mounts only after styles have loaded while the
+ * OBSERVED on two axes, and both are load-bearing. The canvas mounts only after styles have loaded while the
  * inspector stays mounted throughout, and a block whose `render` returns a
  * promise commits a Suspense fallback first and its real root later — in both
  * cases the marked element does not exist when an effect first runs. A one-shot
@@ -102,7 +101,28 @@ export function useCanvasReading(
     read();
 
     if (canvasRoot == null) return;
-    return observeRenderedTree(canvasRoot, read);
+    const stopTree = observeRenderedTree(canvasRoot, read);
+    /*
+     * Also on RESIZE, because the axes can change with nothing in the tree
+     * moving at all. Writing mode and direction are inherited and can be set by
+     * a media or container query, so dragging the canvas across one of its own
+     * breakpoints changes the answer while adding, removing and re-marking no
+     * element — and the tree observer, which watches structure and the node id,
+     * has nothing to report. The box would then keep pointing at the edges the
+     * previous width implied.
+     *
+     * The canvas itself is the box being measured, so its own resize is the
+     * event: a query that matters here is answered by the canvas's width, and
+     * the admin window changing without the canvas changing cannot alter what a
+     * rule inside it matched.
+     */
+    const canObserveSize = typeof ResizeObserver === "function";
+    const sizes = canObserveSize ? new ResizeObserver(read) : undefined;
+    sizes?.observe(canvasRoot);
+    return () => {
+      stopTree?.();
+      sizes?.disconnect();
+    };
   }, [canvasRoot, selectedId, document]);
 
   return reading;
