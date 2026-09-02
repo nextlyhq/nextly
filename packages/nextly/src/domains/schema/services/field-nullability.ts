@@ -40,28 +40,33 @@ export function fieldAdmitsNull(field: object): boolean {
  * `unknown` is returned untouched: it already admits null, and `unknown | null`
  * would be noise in a file a user reads.
  *
- * **`contributed` is about PROVENANCE, not syntax.** Union binds looser than
- * almost everything, so concatenation is safe for every type this module
- * builds itself. It is not safe for a type a plugin's `codegen.tsType`
- * returned, which may be any expression: a conditional binds the union to its
- * FALSE branch, leaving the true branch rejecting null, and a function type
- * takes it onto the RETURN.
+ * `contributed` says the expression came from a plugin's `codegen.tsType`
+ * callback rather than from this module, and it decides two things.
  *
- * An earlier version tested the expression for `=>` and `" extends "`. That is
- * a scan over syntax, and it has the unbounded surface AGENTS.md warns about —
- * a conditional formatted with a newline after `extends` slips straight
- * through it, which is exactly how it was caught. Provenance is a boundary
- * instead: an expression from outside is bracketed because of where it came
- * from, so no formatting can evade it and no future type-level syntax can
- * either. `zod-generator.ts` has always done this with its contributed
- * expressions; this is the type side agreeing.
+ * **Brackets.** Union binds looser than almost everything, so concatenation is
+ * safe for every type built here. An arbitrary expression may bind looser
+ * still: a conditional attaches the union to its FALSE branch, leaving the true
+ * branch rejecting null, and a function type attaches it to the RETURN.
+ * Deciding by provenance rather than by inspecting the text means no formatting
+ * of the expression, and no type-level syntax added later, can change the
+ * answer.
+ *
+ * **A newline before the closing bracket.** A contributed expression may end in
+ * a line comment, and `//` runs to the end of its line, so `(Foo // why)` would
+ * swallow the bracket and leave a generated file that does not compile. The
+ * break puts the bracket beyond the comment's reach.
+ *
+ * `zod-generator.ts` brackets its own contributed expressions for the first of
+ * these reasons.
  */
 export function nullableTypeExpression(
   tsType: string,
   options: { contributed: boolean } = { contributed: false }
 ): string {
   if (tsType === "unknown") return tsType;
-  return options.contributed ? `(${tsType}) | null` : `${tsType} | null`;
+  return options.contributed
+    ? `(\n    ${tsType}\n  ) | null`
+    : `${tsType} | null`;
 }
 
 /**

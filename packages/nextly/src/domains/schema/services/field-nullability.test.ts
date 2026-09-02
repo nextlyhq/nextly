@@ -45,9 +45,9 @@ describe("nullableTypeExpression", () => {
     // because it matched a pattern — which is what a formatting change evades.
     expect(
       nullableTypeExpression("A extends B ? X : Y", { contributed: true })
-    ).toBe("(A extends B ? X : Y) | null");
+    ).toBe("(\n    A extends B ? X : Y\n  ) | null");
     expect(nullableTypeExpression("() => X", { contributed: true })).toBe(
-      "(() => X) | null"
+      "(\n    () => X\n  ) | null"
     );
   });
 
@@ -58,7 +58,7 @@ describe("nullableTypeExpression", () => {
     // now.
     expect(
       nullableTypeExpression("T extends\n  U ? X : Y", { contributed: true })
-    ).toBe("(T extends\n  U ? X : Y) | null");
+    ).toBe("(\n    T extends\n  U ? X : Y\n  ) | null");
   });
 
   it("leaves a type this module built itself unbracketed", () => {
@@ -66,6 +66,19 @@ describe("nullableTypeExpression", () => {
     expect(nullableTypeExpression("Rating<5>", { contributed: false })).toBe(
       "Rating<5> | null"
     );
+  });
+
+  it("keeps the closing bracket out of a trailing line comment's reach", () => {
+    // `//` runs to the end of its line, so a bracket placed after a contributed
+    // expression on the SAME line would be commented out and the generated file
+    // would not compile.
+    const rendered = nullableTypeExpression("Foo // why", {
+      contributed: true,
+    });
+
+    const lastLine = rendered.split("\n").at(-1) ?? "";
+    expect(lastLine).toContain(") | null");
+    expect(lastLine).not.toContain("//");
   });
 });
 

@@ -759,6 +759,28 @@ export class TypeGenerator {
   // ============================================================
 
   /**
+   * The type a plugin states for this field, recorded as an emission so the
+   * imports it names reach the generated file.
+   *
+   * `undefined` means the plugin renders nothing of its own. That is also what
+   * tells a caller the type it ends up with was built here rather than
+   * contributed, so one call answers both what the type is and where it came
+   * from — and a change to what counts as contributed lands in one place.
+   */
+  private adoptContributedType(
+    field: Parameters<typeof pluginTsType>[0]
+  ): string | undefined {
+    const contributed = pluginTsType(field);
+    if (contributed === undefined) return undefined;
+    this.pluginExpressions.set(field, contributed);
+    this.pluginEmissions.push({
+      expression: contributed,
+      imported: pluginDeclaredImportNames(field, "tsImports"),
+    });
+    return contributed;
+  }
+
+  /**
    * Generates a TypeScript type string for a single field.
    */
   private generateFieldType(
@@ -857,13 +879,8 @@ export class TypeGenerator {
     // state its own rendering; asked once, because the callback is plugin code
     // and nothing requires it to be pure.
     else {
-      const contributed = pluginTsType(field);
+      const contributed = this.adoptContributedType(field);
       if (contributed !== undefined) {
-        this.pluginExpressions.set(field, contributed);
-        this.pluginEmissions.push({
-          expression: contributed,
-          imported: pluginDeclaredImportNames(field, "tsImports"),
-        });
         tsType = contributed;
         fromPlugin = true;
       } else {
@@ -958,13 +975,8 @@ export class TypeGenerator {
         // registry says it stores. `string` remains the fallback only for a
         // type nothing in the process knows about, which is what a UI-authored
         // field of a since-removed plugin type is.
-        const contributed = pluginTsType(field);
+        const contributed = this.adoptContributedType(field);
         if (contributed !== undefined) {
-          this.pluginExpressions.set(field, contributed);
-          this.pluginEmissions.push({
-            expression: contributed,
-            imported: pluginDeclaredImportNames(field, "tsImports"),
-          });
           tsType = contributed;
           fromPlugin = true;
           break;
