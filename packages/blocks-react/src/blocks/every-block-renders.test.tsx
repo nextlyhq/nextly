@@ -30,12 +30,6 @@
  * directly. Doing the same here is what makes the three async blocks testable at
  * all rather than silently exempt.
  *
- * That mattered concretely. The first version of this file asserted the block's
- * type class against the whole rendered page — which contains the compiled
- * `<style>` — so every block carrying `baseStyles` passed on its CSS rule while
- * emitting no element whatever. `core/collection-loop` was the only failure, and
- * only because it declares no base styles.
- *
  * ## What it does NOT claim
  *
  * That a block looks right. A block can render perfectly and still look broken

@@ -22,9 +22,11 @@
  * prop NAME against the block that declares it. So `src` written as `scr` passes
  * validation and renders nothing, and that check lives here.
  */
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
+import type { BlockRenderArgs, PageContext } from "@nextlyhq/blocks-react";
 import type { BlockNode, NestingSource } from "@nextlyhq/blocks-engine";
 import { validateDocument } from "@nextlyhq/blocks-engine";
 
@@ -39,7 +41,18 @@ interface Definition {
   parent?: readonly string[];
   props?: Record<string, unknown>;
   slots?: Record<string, { allow?: readonly string[] } | undefined>;
+  render(args: BlockRenderArgs<never>): unknown;
 }
+
+/**
+ * The class this harness passes in and looks for.
+ *
+ * A marker of its own rather than the block's real type class, which also
+ * appears in a compiled stylesheet — so looking for that would be satisfied by
+ * CSS for a node that emitted no element. Nothing else can put this string in
+ * the markup.
+ */
+const MARKER = "nx-kitchen-sink-marker";
 
 const DEFINITIONS = coreBlocks as unknown as Definition[];
 const BY_NAME = new Map(DEFINITIONS.map(block => [block.name, block]));
@@ -177,6 +190,104 @@ describe("the kitchen-sink document", () => {
     expect(
       [...new Set(undeclared)],
       `the page writes props no block declares, which are dropped on read`
+    ).toEqual([]);
+  });
+
+  it.each(NODES.map(node => [`${node.type}#${node.id}`, node] as const))(
+    "%s renders its own element from the props THIS fixture gives it",
+    async (_label, node) => {
+      /*
+       * The check the key comparison above cannot make, and the one that
+       * matters most on a page whose purpose is to be looked at.
+       *
+       * A declared prop can be present, correctly named, and still wrong — `src`
+       * deleted from the embed, or written as `42` — and every other case here
+       * stays green: `validateDocument` accepts the props object, no key is
+       * undeclared, and `every-block-renders` exercises the block's own
+       * `example` rather than this document. The node then renders nothing and
+       * the page has an invisible hole.
+       *
+       * So each node is rendered with ITS OWN stored props. `render` is awaited
+       * because `core/image`, `core/button` and `core/collection-loop` are async
+       * — driven through `PageRenderer` and `renderToStaticMarkup` all three emit
+       * an empty body, which would make this pass by rendering nothing.
+       *
+       * Containers are given an empty slot: a container that draws its own box
+       * is what is being asserted, not the children it would hold.
+       */
+      const definition = BY_NAME.get(node.type);
+      expect(
+        definition,
+        `${node.type} is not a registered block`
+      ).toBeDefined();
+
+      const context: PageContext = {
+        entry: null,
+        data: { find: () => Promise.resolve({ items: [], total: 0 }) },
+        resolveMedia: () => Promise.resolve(null),
+        resolveEntryPath: () => Promise.resolve(null),
+      };
+      const element = await (definition as Definition).render({
+        props: node.props,
+        node,
+        className: MARKER,
+        partClass: () => "",
+        ctx: context,
+        renderSlot: () => null,
+      } as unknown as BlockRenderArgs<never>);
+
+      const markup =
+        element === null || element === undefined
+          ? ""
+          : renderToStaticMarkup(element as never);
+
+      expect(
+        markup,
+        `${node.type}#${node.id} rendered nothing from its own props, so this ` +
+          `page has a hole where that block should be`
+      ).toContain(MARKER);
+    }
+  );
+
+  it("stores no slot name its block does not declare", () => {
+    /*
+     * A slot key nothing declares is invisible to every other check here.
+     * `validateDocument` asks only whether a slot value is an array, and
+     * `canNestInSlot` reads the `undefined` returned for an unknown slot as no
+     * restriction — so `children` misspelled `childen` validates cleanly.
+     *
+     * `PageRenderer` asks for the DECLARED slot, so that subtree is silently
+     * dropped from the page while this file's walk still counts every type in it
+     * toward completeness. The page would then be missing blocks that the
+     * completeness case reports as present.
+     */
+    const undeclared = NODES.flatMap(node => {
+      const declared = BY_NAME.get(node.type)?.slots ?? {};
+      return Object.keys(node.slots ?? {})
+        .filter(slot => !Object.hasOwn(declared, slot))
+        .map(slot => `${node.type}#${node.id} stores slot "${slot}"`);
+    });
+
+    expect(undeclared).toEqual([]);
+  });
+
+  it("carries NO authored styles, which is the page's whole premise", () => {
+    /*
+     * The invariant the fixture is built on, asserted rather than described. A
+     * block library is judged by what an author gets before styling anything, so
+     * a node given a `styles` object turns this page from a view of the defaults
+     * into a hand-styled result — hiding exactly the class of defect it exists to
+     * show, while every other check here stays green because authored styles are
+     * perfectly valid.
+     */
+    const styled = NODES.filter(
+      node => (node as { styles?: unknown }).styles !== undefined
+    ).map(node => `${node.type}#${node.id}`);
+
+    expect(
+      styled,
+      `${styled.join(", ")} carry authored styles, so this page no longer shows ` +
+        `what a block does on its own`
     ).toEqual([]);
   });
 

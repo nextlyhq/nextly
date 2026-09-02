@@ -272,16 +272,46 @@ async function seedBlockPages(nextly: BlockPageStore) {
   });
   if (existing.meta.total > 0) return { created: 0 };
 
-  await nextly.create({
-    collection: "block-pages",
-    data: {
-      title: KITCHEN_SINK_TITLE,
-      slug: KITCHEN_SINK_SLUG,
-      content: KITCHEN_SINK_DOCUMENT,
-      status: "published",
-    },
-  });
+  try {
+    await nextly.create({
+      collection: "block-pages",
+      data: {
+        title: KITCHEN_SINK_TITLE,
+        slug: KITCHEN_SINK_SLUG,
+        content: KITCHEN_SINK_DOCUMENT,
+        status: "published",
+      },
+    });
+  } catch (error) {
+    /*
+     * The find above and this create are two operations, and `slug` carries a
+     * database-level unique constraint — so two seed runs starting together can
+     * both find nothing and the loser's insert is refused. Reaching that is
+     * ordinary rather than exotic: booting the app runs a seed, and a
+     * contributor running `db:seed` beside it is the race.
+     *
+     * Refused for THAT reason means the page is already there, which is the
+     * outcome this function exists to reach, so it is not a failure. Pinned to
+     * the code rather than swallowing everything: a bare catch here would claim
+     * "already seeded" about a dropped connection or a validation error, and the
+     * seed would report success having written nothing.
+     *
+     * Measured rather than assumed — inserting this slug twice against the dev
+     * database throws `NextlyError` with `code: "DUPLICATE"` and status 409.
+     */
+    if (!isDuplicateRefusal(error)) throw error;
+    return { created: 0 };
+  }
   return { created: 1 };
+}
+
+/** Whether a create was refused because the row is already there. */
+function isDuplicateRefusal(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "DUPLICATE"
+  );
 }
 
 export async function seedForce(): Promise<SeedResult> {
