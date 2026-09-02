@@ -9,6 +9,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { MigrationStatus } from "../../../schemas/dynamic-collections/types";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive";
@@ -28,6 +29,7 @@ import {
   readIndexNames,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
+import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
 import { resolveBuilderWebhooks } from "../../webhooks/builder-webhooks";
 
@@ -355,12 +357,28 @@ export class DynamicCollectionService extends BaseService {
     // fresh collection, no data to seed, no main-table columns to drop). Without
     // this, a UI-created localized collection has nowhere to store per-language
     // values and every language shares the main columns.
-    const fullMigrationSQL = data.localized
+    const withCompanion = data.localized
       ? this.appendCompanionCreateSQL(migrationSQL, normalizedName, tableName, {
           fields: userDefinedFields,
           status: data.status === true,
         })
       : migrationSQL;
+
+    // 🔴 The committed migration has to carry the REGISTRY ROW as well as the
+    // table. This file is replayed against a database that has never seen the
+    // Schema Builder -- production -- where the `dynamic_collections` row this
+    // service writes locally does not exist. Without the upsert the deploy gets
+    // the table and no row at all, and the collection is absent from the admin
+    // rather than merely stale.
+    //
+    // Built by the SAME builder `migrate:create` uses, not a second statement
+    // that would have to agree with it. The two authoring paths are otherwise
+    // disjoint -- this one writes no `meta/` snapshot, so `migrate:create` never
+    // sees its tables -- which is exactly why each has to be self-sufficient.
+    const fullMigrationSQL = this.appendMetadataUpsertSQL(
+      withCompanion,
+      this.manifestEntityFor(normalizedName, data, userDefinedFields)
+    );
 
     const schemaHash = this.generateSchemaHash(userDefinedFields);
 
@@ -422,6 +440,67 @@ export class DynamicCollectionService extends BaseService {
    * fresh localized collection's migration. Returns the original SQL unchanged when
    * the collection has no translatable fields (nothing to store per-locale).
    */
+  /**
+   * Append the `dynamic_collections` upsert that recreates this collection's
+   * registry row when the migration is replayed elsewhere.
+   *
+   * Separated with the breakpoint marker for the same reason the companion
+   * CREATE is: the runner splits on it, and a driver with multi-statements
+   * disabled rejects a combined chunk.
+   *
+   * The upsert conflicts on `slug` and leaves `id`, `table_name`, `source` and
+   * `migration_status` to the INSERT, so replaying it against a database that
+   * already holds the row -- this one, in development -- refreshes the fields
+   * and labels without renaming the row or overwriting a status the runtime
+   * owns.
+   */
+  /**
+   * This collection as the manifest describes it, which is what the metadata
+   * upsert is built from.
+   *
+   * 🔴 Every optional value is passed STRAIGHT THROUGH, `undefined` included,
+   * rather than being conditionally spread in. The upsert builder hands each to
+   * its own literal helper -- `versionsLiteral`, `revalidateLiteral`,
+   * `webhooksLiteral` -- which decide what an absent flag means, and
+   * `JSON.stringify` drops an undefined member, so an omitted key and a
+   * present-but-undefined one produce the same row. Spreading conditionally
+   * bought nothing and put six branches on this mapping.
+   *
+   * The BOOLEAN forms, not the resolved objects this service stores: the
+   * builder runs the same `resolveBuilder*` helpers itself, so handing it the
+   * resolved form would resolve twice and could write a row `migrate:create`
+   * would not.
+   */
+  private manifestEntityFor(
+    slug: string,
+    data: CreateCollectionInput,
+    fields: FieldDefinition[]
+  ): UiSchemaEntity {
+    return {
+      slug,
+      labels: data.labels ?? {
+        singular: data.label || slug,
+        plural: (data.label || slug) + "s",
+      },
+      admin: { useAsTitle: data.useAsTitle, group: data.group?.toLowerCase() },
+      status: data.status === true,
+      localized: data.localized === true,
+      versions: data.versions,
+      versionsMaxPerDoc: data.versionsMaxPerDoc,
+      revalidate: data.revalidate,
+      webhooks: data.webhooks,
+      fields: fields as unknown as UiSchemaEntity["fields"],
+    };
+  }
+
+  private appendMetadataUpsertSQL(
+    migrationSQL: string,
+    entity: UiSchemaEntity
+  ): string {
+    const upsert = buildCollectionMetadataUpsert(entity, this.adapter.dialect);
+    return `${migrationSQL}\n--> statement-breakpoint\n${upsert}`;
+  }
+
   private appendCompanionCreateSQL(
     migrationSQL: string,
     slug: string,
