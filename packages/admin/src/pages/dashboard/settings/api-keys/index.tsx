@@ -14,7 +14,9 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { SearchBar } from "@admin/components/shared/search-bar";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useApiKeys } from "@admin/hooks/queries/useApiKeys";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { navigateTo } from "@admin/lib/navigation";
+import { mayPerformApiKeyAction } from "@admin/lib/permissions/api-key-actions";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
 // ============================================================
@@ -22,6 +24,7 @@ import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 // ============================================================
 
 const ApiKeysContent: React.FC = () => {
+  const { hasPermission } = useCurrentUserPermissions();
   // Fetch keys
   const { data, isLoading, isError, error } = useApiKeys();
 
@@ -80,6 +83,8 @@ const ApiKeysContent: React.FC = () => {
         isLoading={isLoading}
         onEdit={handleEdit}
         onRevoke={handleRevoke}
+        canEdit={mayPerformApiKeyAction("update", hasPermission)}
+        canRevoke={mayPerformApiKeyAction("delete", hasPermission)}
       />
 
       {/* Revoke dialog */}
@@ -97,6 +102,7 @@ const ApiKeysContent: React.FC = () => {
 // ============================================================
 
 const ApiKeysPage: React.FC = () => {
+  const { hasPermission } = useCurrentUserPermissions();
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer width="wide">
@@ -105,13 +111,19 @@ const ApiKeysPage: React.FC = () => {
           description="Manage secure access keys for API integrations"
           crumb="API Keys"
           actions={
-            <Button
-              size="md"
-              onClick={() => navigateTo(ROUTES.SETTINGS_API_KEYS_CREATE)}
-            >
-              <Plus className="h-4 w-4" />
-              <span>Create API Key</span>
-            </Button>
+            // The list is open to a reader holding only `read-api-keys`, and
+            // the create route answers to `create-api-keys` or the update
+            // umbrella. Offering the button to everyone admitted here would
+            // send a reader to a page that turns them away.
+            mayPerformApiKeyAction("create", hasPermission) ? (
+              <Button
+                size="md"
+                onClick={() => navigateTo(ROUTES.SETTINGS_API_KEYS_CREATE)}
+              >
+                <Plus className="h-4 w-4" />
+                <span>Create API Key</span>
+              </Button>
+            ) : undefined
           }
         >
           <ApiKeysContent />

@@ -42,6 +42,10 @@ describe("resolveSettingsLanding", () => {
     );
   });
 
+  /**
+   * The unchanged case. General Settings answers to `manage-settings`, so this
+   * reader lands on the panel's first entry rather than being routed past it.
+   */
   it("still sends a settings manager to General", () => {
     expect(resolveSettingsLanding(only("manage-settings"))).toBe(
       ROUTES.SETTINGS
@@ -82,22 +86,37 @@ describe("resolveSettingsLanding", () => {
     );
   });
 
+  /**
+   * The webhooks route is an any-of over the three webhook grants, so reading
+   * alone opens it and the panel may offer it.
+   */
   it("sends a webhook reader to Webhooks", () => {
     expect(resolveSettingsLanding(only("read-webhooks"))).toBe(
       ROUTES.SETTINGS_WEBHOOKS
     );
   });
 
+  /**
+   * User Management sits in the panel but answers to its own grants, which the
+   * rail consults separately — so a reader holding only `read-users` still has
+   * a destination here.
+   */
   it("sends a user reader to Users", () => {
     expect(resolveSettingsLanding(only("read-users"))).toBe(ROUTES.USERS);
   });
 
+  /** The same for roles, which is a separate grant from users. */
   it("sends a role reader to Roles", () => {
     expect(resolveSettingsLanding(only("read-roles"))).toBe(
       ROUTES.SECURITY_ROLES
     );
   });
 
+  /**
+   * The fallthrough itself, asked directly. It is unreachable for anyone the
+   * panel admits — the assertions below prove that — so this pins the shape of
+   * the answer for a reader who holds nothing at all.
+   */
   it("falls back to the panel for a reader with no destination", () => {
     expect(resolveSettingsLanding(only())).toBe(ROUTES.SETTINGS);
   });

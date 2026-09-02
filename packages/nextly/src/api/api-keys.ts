@@ -26,6 +26,10 @@ import { z } from "zod";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import {
+  apiKeyPermissionsFor,
+  type ApiKeyOperation,
+} from "../domains/auth/api-key-policy";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -50,14 +54,11 @@ async function getApiKeyService(): Promise<ApiKeyService> {
   return container.get<ApiKeyService>("apiKeyService");
 }
 
-async function requireApiKeyPermission(
-  req: Request,
-  action: "create" | "read" | "update" | "delete"
-) {
-  return requireAnyPermission(req, [
-    { action, resource: "api-keys" },
-    { action: "update", resource: "api-keys" },
-  ]);
+async function requireApiKeyPermission(req: Request, action: ApiKeyOperation) {
+  // The policy is declared once, in `domains/auth/api-key-policy`, because the
+  // admin's route guards and controls gate on the same question and drifted
+  // from it before.
+  return requireAnyPermission(req, apiKeyPermissionsFor(action));
 }
 
 /**
