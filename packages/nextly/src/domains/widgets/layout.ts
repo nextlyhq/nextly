@@ -344,6 +344,13 @@ function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
 export function defaultPlacements(
   widgets: readonly PlaceableWidget[]
 ): WidgetPlacement[] {
+  // 🔴 NOT capped here, deliberately. The submission limit belongs to what a
+  // CALLER may send, and this materialization is caller-independent by design:
+  // positions come from a placement's index in the sorted whole-registry set,
+  // and the carried half depends on that. Capping here let widgets a caller
+  // cannot even see consume the allowance -- two hundred denied widgets ahead
+  // of an ungated one produced an empty dashboard for that reader. The cap is
+  // applied to the visible partition instead, where the limit actually bites.
   return [...widgets].sort(byDeclaredOrder).map((widget, index) => ({
     id: widget.id,
     widgetId: widget.id,

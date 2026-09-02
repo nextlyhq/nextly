@@ -25,7 +25,6 @@ import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { RequestContext } from "../services/shared";
 import { canonicalMimeType } from "../services/upload-validation/mime";
-import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
 import {
   matchesWebFontSignature,
   WEB_FONT_MIME_TYPES,
@@ -130,29 +129,30 @@ export async function handleServeMediaBytes(
    * including the local one this route was supposed to work on first.
    */
   /*
-   * A bound that only ever grows, because every input to it is unreliable in a
-   * different direction and none can be trusted alone:
+   * Bounded by the object, never by configuration.
    *
-   * - `DEFAULT_READ_MAX_BYTES` is the floor: the bound this route has applied
-   *   for its whole existence. Keeping it means no configuration change can
-   *   make an object that was servable yesterday unservable today, which no
-   *   number derived from present state can promise.
-   * - The row's recorded size covers an object larger than that floor. It is
-   *   the only input describing THIS object, but a row written before the size
-   *   was taken from the validated bytes can understate what it points at, so
-   *   it cannot be the bound on its own.
-   * - The configured cap covers an install that raised it: a font accepted
-   *   moments earlier under a 20mb policy is larger than the floor and larger
-   *   than nothing else here would allow.
+   * The row's recorded size is what every write path stores — the media
+   * services record the length of the bytes they actually wrote — so for any
+   * object this product accepted it IS the object's size, and reading up to it
+   * is reading the whole file.
    *
-   * Taking the largest is what makes the three failure modes disjoint. Lower
-   * any one of them and some legitimately stored font stops being served —
-   * measured, one per case, in this route's tests.
+   * `DEFAULT_READ_MAX_BYTES` is the floor beneath it, covering rows written
+   * before the stored size was taken from the validated bytes: those can
+   * record less than they point at, and a bound trusting one would refuse the
+   * file it describes.
+   *
+   * The configured upload cap is deliberately NOT an input. It states what may
+   * be written next, so including it let a later change to that setting shrink
+   * the bound and strand an object already stored — the failure this route has
+   * no way to explain and no way to recover from. Leaving it out is what makes
+   * the bound depend on nothing an administrator can lower, and it costs
+   * nothing: a font accepted under a raised cap is recorded at its true length,
+   * which the first term already covers.
    */
   const bytes = await readStoredMediaBytes(
     getMediaStorage().getAdapterForCollection(MEDIA_COLLECTION),
     media.filename,
-    Math.max(DEFAULT_READ_MAX_BYTES, media.size, resolveUploadPolicy().maxSize)
+    Math.max(DEFAULT_READ_MAX_BYTES, media.size)
   );
   // The row outlived its object. Same answer as a row that never existed,
   // because from outside they are the same thing: there is no font here.

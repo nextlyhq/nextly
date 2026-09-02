@@ -116,14 +116,30 @@ export function ArrangedCell({
           were themselves faded, which is the opposite of what the comment
           beside it promised. A hidden card is dimmed so it is not mistaken for
           a live one; the controls that act on it stay legible. */}
-      <div className={cn(row.hidden && "opacity-50")}>
+      {row.hidden ? (
+        <div className="opacity-50">
+          <WidgetRenderer
+            definition={widget}
+            slot={slot}
+            updatedAt={updatedAt}
+            isFetching={isFetching}
+          />
+        </div>
+      ) : (
+        // 🔴 A DIRECT child when nothing is dimmed, because the cell's
+        // `empty:hidden` reads `:empty` -- which counts element children, not
+        // rendered output. An always-present wrapper made every cell non-empty,
+        // so a widget that drew NOTHING stopped collapsing and left a full-width
+        // blank slot with its margins. Nothing is lost by branching: a hidden
+        // card is only ever drawn while editing, where the controls above are
+        // themselves a child and the cell can never be empty anyway.
         <WidgetRenderer
           definition={widget}
           slot={slot}
           updatedAt={updatedAt}
           isFetching={isFetching}
         />
-      </div>
+      )}
     </SortableWidgetCell>
   );
 }

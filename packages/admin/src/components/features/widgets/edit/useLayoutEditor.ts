@@ -20,6 +20,7 @@
  * @module components/features/widgets/edit/useLayoutEditor
  */
 
+import { MAX_PLACEMENTS } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
@@ -46,6 +47,17 @@ export interface LayoutEditor {
   placements: WidgetPlacement[];
   /** Widget ids offered by the "add" picker. */
   available: string[];
+  /**
+   * Whether this arrangement already holds as many cards as a write may carry.
+   *
+   * 🔴 Exposed rather than left for the picker to compute, and refused in
+   * {@link LayoutEditor.add} rather than only rendered. An install declaring
+   * more widgets than one submission may hold offers the surplus through
+   * `available`, so every one of those buttons built a draft the server was
+   * always going to refuse -- and the reader met a generic "could not be
+   * saved" with nothing naming a limit they had not knowingly reached.
+   */
+  atCapacity: boolean;
   hasUnsavedChanges: boolean;
   isSaving: boolean;
   /**
@@ -124,7 +136,17 @@ export function useLayoutEditor(
       scope: current.scope,
     });
   }, [layout.layout]);
-  const cancel = useCallback(() => setDraft(null), []);
+  // 🔴 The failed-write state goes with the draft, because the message it
+  // renders describes the draft. After a non-conflict failure the chrome says
+  // "your changes are still here -- try again"; Cancel discarded them and left
+  // that sentence on screen, pointing at nothing, and it was still there when
+  // the reader next entered edit mode. A mutation error outlives the thing it
+  // is about unless something clears it.
+  const cancel = useCallback(() => {
+    setDraft(null);
+    layout.save.reset();
+    layout.reset.reset();
+  }, [layout]);
 
   const save = useCallback(() => {
     if (!draft) return;
@@ -214,18 +236,20 @@ export function useLayoutEditor(
 
   const add = useCallback(
     (widgetId: string) =>
-      setDraft(current =>
-        current
-          ? {
-              ...current,
-              placements: addPlacement(
-                current.placements,
-                widgetId,
-                geometryFor(widgetId)
-              ),
-            }
-          : current
-      ),
+      setDraft(current => {
+        if (!current) return current;
+        // The capacity refusal lives in `addPlacement`, which is the one path
+        // every add takes and is pure, so it can be asserted directly. Stating
+        // it again here would be a second answer to drift from.
+        return {
+          ...current,
+          placements: addPlacement(
+            current.placements,
+            widgetId,
+            geometryFor(widgetId)
+          ),
+        };
+      }),
     [geometryFor]
   );
 
@@ -251,6 +275,7 @@ export function useLayoutEditor(
     isEditing: draft !== null,
     placements,
     available,
+    atCapacity: placements.length >= MAX_PLACEMENTS,
     hasUnsavedChanges: draft !== null && hasChanges(server, draft.placements),
     isSaving: layout.save.isPending || layout.reset.isPending,
     isConflict: layout.isConflict,

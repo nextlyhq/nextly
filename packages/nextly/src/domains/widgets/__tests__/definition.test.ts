@@ -245,10 +245,28 @@ describe("defaultHeight is checked against the height vocabulary", () => {
     ).toThrow(/defaultHeight must be one of short, tall/);
   });
 
-  it("refuses a non-string height", () => {
+  it("refuses a non-string height, on SHAPE rather than vocabulary", () => {
+    // The shape rule is shared by both declaration channels — a height is a
+    // string in every version — so it is checked before the closed vocabulary,
+    // which is the registry's alone. The message says which of the two refused.
     expect(() =>
       validateWidgetDefinition({ ...valid, defaultHeight: 2 })
-    ).toThrow(/defaultHeight must be one of/);
+    ).toThrow(/defaultHeight, when given, must be a string/);
+  });
+
+  it("refuses a BLANK height", () => {
+    // Blank names no height in any version, so it is shape rather than
+    // vocabulary — and it is refused rather than read as absent, because the
+    // two channels disagreed about which it was.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultHeight: "" })
+    ).toThrow(/defaultHeight, when given, must not be empty/);
+  });
+
+  it("refuses a BLANK size for the same reason", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultSize: "" })
+    ).toThrow(/defaultSize, when given, must not be empty/);
   });
 });
 

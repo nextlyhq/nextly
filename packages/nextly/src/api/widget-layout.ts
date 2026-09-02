@@ -43,6 +43,7 @@ import { container } from "../di";
 import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
 import {
   MAX_LAYOUT_BYTES,
+  MAX_PLACEMENTS,
   defaultPlacements,
   layoutSizeProblem,
   mergePreservingHidden,
@@ -147,8 +148,22 @@ function visibleDefaults(
   widgets: readonly CanonicalWidget[]
 ): WidgetPlacement[] {
   const visibleIds = new Set(widgets.map(widget => widget.id));
-  return partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
-    .visible;
+  return (
+    partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
+      .visible // 🔴 The submission cap applies HERE, to what this caller can actually
+      // send, rather than to the materialization above. `layoutSizeProblem`
+      // refuses a submission over `MAX_PLACEMENTS`, so an install declaring
+      // more than that answered the read with a default the reader's first
+      // gesture could never save -- the dashboard was simply not arrangeable.
+      //
+      // On the visible half rather than the whole set, because the whole set
+      // includes widgets this caller may not know exist: capping before the
+      // partition let two hundred denied widgets exhaust the allowance and
+      // hand an ungated one an empty dashboard. Positions still come from the
+      // whole-registry materialization, so nothing about the carried half
+      // moves. The surplus is offered through `available`.
+      .slice(0, MAX_PLACEMENTS)
+  );
 }
 
 /**

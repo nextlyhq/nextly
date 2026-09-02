@@ -132,8 +132,16 @@ export function canonicalWidgets(
   const byId = new Map<string, CanonicalWidget>();
   // Contributions first, so a registration with the same id merges over one
   // rather than being dropped by it.
+  //
+  // 🔴 FIRST WINS among contributions, which is the admin's rule and was not
+  // this one's. Widget ids are plugin-local, so two enabled plugins can ship the
+  // same one; `resolveDashboardWidgets` walks declarations in order and keeps
+  // the first renderable, while `set` here kept the LAST. Where the two
+  // declarations differ in permission, size or order, the layout endpoint then
+  // filtered and placed one plugin's widget while the grid drew the other's --
+  // a card taking another plugin's geometry, or vanishing.
   for (const widget of contributed) {
-    if (widget.id) byId.set(widget.id, widget);
+    if (widget.id && !byId.has(widget.id)) byId.set(widget.id, widget);
   }
   for (const definition of listWidgets()) {
     const registration = fromRegistration(definition);

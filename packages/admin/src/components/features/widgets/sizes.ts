@@ -84,13 +84,10 @@ export function widgetSpanClass(size: string | undefined): string {
 /**
  * The deprecated `size?: "full" | "half"` alias, as a real size.
  *
- * Plugin declarations still carry it, and `half` meant "6 of 12" — which is
- * `lg` in the enum. Mapping it here rather than at the call site is what stops
- * the old vocabulary reaching the span map, where it would miss and silently
- * become full width for every half widget on the dashboard.
+ * Re-exported from core rather than defined here. The server reduces the same
+ * contributed declaration to a canonical summary and has to read the same
+ * alias, so the mapping belongs beside the vocabulary it translates into --
+ * where both callers can ask it. Kept exported from this module because this is
+ * where the dashboard's size questions are answered from.
  */
-export function legacySizeToWidgetSize(
-  size: "full" | "half" | undefined
-): WidgetSize {
-  return size === "half" ? "lg" : "full";
-}
+export { legacySizeToWidgetSize } from "nextly/config";

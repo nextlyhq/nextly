@@ -87,6 +87,21 @@ describe("the canonical widget set", () => {
     expect(merged[0]).not.toHaveProperty("requiredPermission");
   });
 
+  it("keeps the FIRST of two contributions sharing an id", () => {
+    // 🔴 Widget ids are plugin-local, so two enabled plugins can ship the same
+    // one. `resolveDashboardWidgets` walks declarations in order and keeps the
+    // first renderable; this kept the LAST, so the layout endpoint placed one
+    // plugin's widget while the grid drew the other's -- a card wearing another
+    // plugin's geometry, or filtered away by a permission it never declared.
+    const merged = canonicalWidgets([
+      { id: "dup/two", defaultOrder: 1, requiredPermission: "read-a" },
+      { id: "dup/two", defaultOrder: 99, requiredPermission: "read-b" },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].defaultOrder).toBe(1);
+    expect(merged[0].requiredPermission).toBe("read-a");
+  });
+
   it("carries the fields placement reads, from a registration", () => {
     registerWidget(
       registered({

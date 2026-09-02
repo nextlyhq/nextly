@@ -138,22 +138,52 @@ describe("the public byte route", () => {
     expect(await response.text()).toBe("");
   });
 
-  it("reads up to the size the installation agreed to STORE", async () => {
+  it("reads up to the size the row records, above the floor", async () => {
     /*
-     * The serving bound was a constant while the upload cap is configurable,
-     * so a font accepted at 12MB under a 20mb policy was refused by this route
-     * on every request — permanently, with a 413 the author cannot act on.
+     * A font larger than the floor serves because the row says how large it
+     * is. Every write path records the length of the bytes it actually wrote,
+     * so for anything this product accepted that number IS the object.
      */
-    container.registerSingleton("config", () => ({
-      security: { limits: { fileSize: "20mb" } },
-    }));
-    storedAs("font/woff2");
+    storedAs("font/woff2", 12 * 1024 * 1024);
 
     expect((await getRaw("m1")).status).toBe(200);
-    expect(mocks.adapter.read).toHaveBeenCalledWith(
-      "2026/04/face.woff2",
-      expect.objectContaining({ maxBytes: 20 * 1024 * 1024 })
-    );
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(12 * 1024 * 1024);
+    expect(options.maxBytes).toBeGreaterThan(DEFAULT_READ_MAX_BYTES);
+  });
+
+  it("does not let a LOWERED upload cap shrink the bound", async () => {
+    /*
+     * The property, asserted directly rather than inferred from a pair of
+     * cases: the configured cap is not an input, so no change to it can strand
+     * an object already stored. Read twice over the same row, with the cap
+     * raised and then lowered past the object, and the bound does not move.
+     *
+     * Both halves are needed. A bound that ignored the row would also hold
+     * still here, which is why the size sits above the floor.
+     */
+    const sizes: number[] = [];
+    for (const fileSize of ["20mb", "1mb"]) {
+      container.clear();
+      container.registerSingleton("config", () => ({
+        security: { limits: { fileSize } },
+      }));
+      mocks.adapter.read.mockClear();
+      storedAs("font/woff2", 12 * 1024 * 1024);
+
+      expect((await getRaw("m1")).status).toBe(200);
+      const [, options] = mocks.adapter.read.mock.calls[0] as [
+        string,
+        { maxBytes: number },
+      ];
+      sizes.push(options.maxBytes);
+    }
+
+    expect(sizes[0]).toBe(12 * 1024 * 1024);
+    expect(sizes[1]).toBe(sizes[0]);
   });
 
   it("still serves a font STORED under a cap the install has since lowered", async () => {
@@ -207,12 +237,12 @@ describe("the public byte route", () => {
     expect(options.maxBytes).toBeGreaterThan(2 * 1024 * 1024);
   });
 
-  it("keeps the configured cap when the row understates its object", async () => {
+  it("keeps the floor when the row understates its object", async () => {
     /*
-     * The other term, and the reason the bound is not the row's size alone: a
-     * row written before the size was taken from the validated bytes can
-     * record less than the object holds, and trusting it would refuse the file
-     * the wider cap exists to serve.
+     * The reason the bound is not the row alone. A row written before the
+     * stored size came from the validated bytes can record less than it points
+     * at — `LegacyMediaService.uploadMedia` persists what the caller declared —
+     * and a bound trusting that number refuses the file it describes.
      */
     container.registerSingleton("config", () => ({
       security: { limits: { fileSize: "20mb" } },
@@ -224,9 +254,7 @@ describe("the public byte route", () => {
       string,
       { maxBytes: number },
     ];
-    expect(options.maxBytes).toBe(20 * 1024 * 1024);
-    // Above the floor, so this case is the policy term and not the constant.
-    expect(options.maxBytes).toBeGreaterThan(DEFAULT_READ_MAX_BYTES);
+    expect(options.maxBytes).toBe(DEFAULT_READ_MAX_BYTES);
   });
 
   it("falls back to the default bound when no cap is configured", async () => {
