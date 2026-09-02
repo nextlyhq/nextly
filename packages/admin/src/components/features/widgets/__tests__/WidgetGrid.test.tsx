@@ -109,6 +109,28 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * Live regions the GRID owns, excluding the one dnd-kit contributes.
+ *
+ * dnd-kit's `DndContext` renders exactly one hidden `role="status"` region of
+ * its own, and it is not optional: it is what narrates pick up, move over, drop
+ * and cancel to a screen reader, which is the whole reason a drag is usable
+ * without sight. Counting it would make "the grid announces once" and
+ * "the drag announces at all" mutually exclusive.
+ *
+ * Excluded BY ITS OWN ID rather than by loosening the count to two. A bare
+ * `toHaveLength(2)` would keep passing if the grid grew a second announcer of
+ * its own and dnd-kit's disappeared, which is the pair of mistakes this
+ * invariant exists to catch.
+ */
+function gridLiveRegions(container: HTMLElement): Element[] {
+  return [
+    ...container.querySelectorAll(
+      '[aria-live], [role="status"], [role="alert"]'
+    ),
+  ].filter(node => !node.id.startsWith("DndLiveRegion"));
+}
+
 describe("WidgetGrid — collection and gating", () => {
   it("renders nothing when no plugin contributes a widget", () => {
     mockBranding = {
@@ -1054,9 +1076,7 @@ describe("WidgetGrid — accessibility", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("widget-card-error")).toHaveLength(3)
     );
-    expect(
-      container.querySelectorAll('[aria-live], [role="status"], [role="alert"]')
-    ).toHaveLength(1);
+    expect(gridLiveRegions(container)).toHaveLength(1);
   });
 
   it("counts a card that cannot RENDER as failed, not as updated", async () => {
@@ -1137,7 +1157,7 @@ describe("WidgetGrid — accessibility", () => {
     await waitFor(() =>
       expect(screen.getByTestId("widget-cell-posts")).toHaveTextContent("1")
     );
-    expect(container.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(gridLiveRegions(container)).toHaveLength(1);
   });
 
   it("announces once for the batch, not once per widget", async () => {

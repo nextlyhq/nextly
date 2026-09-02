@@ -36,6 +36,7 @@ import {
   callerHoldsPermission,
   type ReadAccessCaller,
 } from "../auth/entity-read-access";
+import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
@@ -345,31 +346,50 @@ function readScope(body: Record<string, unknown>): string {
   return scope;
 }
 
-export const putWidgetLayout = withErrorHandler(async (req: Request) => {
+/**
+ * Authenticate a WRITE to the layout, and refuse the callers who may never make
+ * one.
+ *
+ * Shared by both mutating verbs because they share the reason, not merely the
+ * code. Two copies of a precondition agree until one is edited, and the edit
+ * that matters here is the one that relaxes it — an api-key refusal present on
+ * the save and absent from the reset would let a key discard its minter's
+ * arrangement while being unable to change it.
+ *
+ * 🔴 Refuses BEFORE the body is read, and before anything is parsed, resolved
+ * or constructed. This is a precondition, not a defensive check: a caller that
+ * can never perform the operation must be refused on that ground, and refused
+ * first. Placed after the body, a malformed payload came back as a validation
+ * error — telling a caller which FIELD it got wrong on a request it was never
+ * allowed to make, and paying for the parse in order to say so.
+ *
+ * A dashboard arrangement is one person's personalization of their own admin
+ * screen, and an API key has no screen. Refused rather than gated behind a
+ * permission slug, because no grant would make it meaningful: the key would be
+ * acting on the layout of whoever minted it. Reading stays open — it tells a
+ * key nothing it could not already ask the registry.
+ *
+ * Read off the AUTH CONTEXT rather than the resolved caller, because that is
+ * available here and the resolved caller is not: resolving one is a database
+ * read, which is exactly the work this refusal exists to avoid doing.
+ */
+async function authenticateLayoutWrite(
+  req: Request,
+  intent: string
+): Promise<AuthContext> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  // 🔴 BEFORE the body is read, and before anything is parsed, resolved or
-  // constructed. This is a precondition, not a defensive check: a caller that
-  // can never perform this operation must be refused on that ground, and
-  // refused first. Placed after the body it answered a malformed payload with a
-  // validation error — telling a caller which FIELD it got wrong on a request
-  // it was never allowed to make, and paying for the parse to say so.
-  //
-  // A dashboard arrangement is one person's personalization of their own admin
-  // screen, and an API key has no screen. Refused rather than gated behind a
-  // permission slug, because no grant would make it meaningful: the key would
-  // be rewriting the layout of whoever minted it. Reading stays open — it tells
-  // a key nothing it could not already ask the registry.
-  //
-  // Read off the auth context rather than the resolved caller, because that is
-  // available here and the resolved caller is not: resolving it is a database
-  // read, which is work this refusal exists to avoid doing.
   if (auth.authMethod === "api-key") {
     throw NextlyError.forbidden({
-      logContext: { reason: "an api key may not write a dashboard layout" },
+      logContext: { reason: `an api key may not ${intent} a dashboard layout` },
     });
   }
+  return auth;
+}
+
+export const putWidgetLayout = withErrorHandler(async (req: Request) => {
+  const auth = await authenticateLayoutWrite(req, "write");
 
   // Bounded BEFORE it is buffered. `req.json()` reads the whole body first, so
   // a quota checked on the parsed result has already paid for the memory and
@@ -532,14 +552,7 @@ function firstDuplicateId(
  * its minter's.
  */
 export const deleteWidgetLayout = withErrorHandler(async (req: Request) => {
-  const auth = await requireAuthentication(req);
-  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
-
-  if (auth.authMethod === "api-key") {
-    throw NextlyError.forbidden({
-      logContext: { reason: "an api key may not reset a dashboard layout" },
-    });
-  }
+  const auth = await authenticateLayoutWrite(req, "reset");
 
   const service = await getLayoutService();
   const caller = readAccessCaller(await readCaller(auth));
