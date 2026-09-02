@@ -78,7 +78,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../di/container";
 import { ServiceContainer } from "../services";
-import { resolveClaimedMimeType } from "../services/upload-validation/web-fonts";
+import { UploadValidator } from "../services/upload-validation";
+import type { SecurityBlockLike } from "../services/upload-validation";
+import { resolveClaimedMimeType } from "../services/upload-validation/mime";
 import type { Media } from "../types/media";
 import { UploadMediaInputSchema } from "../types/media";
 
@@ -217,7 +219,38 @@ export async function uploadMediaAction(
       };
     }
 
-    // 5. Upload via MediaService
+    /*
+     * 5. The CONFIGURED validator, before anything is stored.
+     *
+     * `ServiceContainer.media` is the legacy service, which never runs it — so
+     * this path enforced no allowlist, no magic-byte comparison and no
+     * sanitisation, while the mounted REST handler enforced all three. An
+     * install excluding a format through `security.uploads` had that policy
+     * apply to one entry point and not this one, and what lands here becomes
+     * anonymously retrievable through the byte route.
+     *
+     * Built the way `register-media` builds it, from the same config, so the
+     * two paths cannot answer differently.
+     */
+    const securityConfig = container.has("config")
+      ? container.get<{ security?: SecurityBlockLike }>("config")?.security
+      : undefined;
+    const validation = await new UploadValidator(securityConfig).validate({
+      buffer,
+      filename: file.name,
+      mimeType: claimedMimeType,
+    });
+    if (!validation.ok) {
+      // The public message only. `logContext` carries the sniffed type and the
+      // sizes, which are operator detail and never travel to a caller.
+      return {
+        success: false,
+        error: validation.errors[0]?.message ?? "Upload rejected.",
+        statusCode: 400,
+      };
+    }
+
+    // 6. Upload via MediaService
     const services = getServices();
     const result = await services.media.uploadMedia(parseResult.data);
 

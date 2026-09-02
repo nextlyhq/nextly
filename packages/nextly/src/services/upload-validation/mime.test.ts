@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   BLOCKED_MIME_TYPES,
+  DEFAULT_ACCEPTED_FORMATS,
   DEFAULT_ALLOWED_MIME_TYPES,
   resolveAllowlist,
+  resolveClaimedMimeType,
   validateMimeType,
 } from "./mime";
 
@@ -105,5 +107,65 @@ describe("validateMimeType", () => {
     const r = validateMimeType("application/zip", allowlist);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("not-allowed");
+  });
+});
+
+describe("inferring a type the client could not name", () => {
+  it("infers EVERY accepted format from its suffix, not only fonts", () => {
+    /*
+     * A browser reports no type for anything its platform does not register,
+     * and the dropzone offers each of these by suffix — so a file it accepts
+     * locally and the server then refuses for having no type is the defect
+     * fonts had, wearing another extension. Enumerated from the table, so a
+     * format added there is covered without editing this.
+     */
+    expect(DEFAULT_ACCEPTED_FORMATS.length).toBeGreaterThan(0);
+
+    for (const format of DEFAULT_ACCEPTED_FORMATS) {
+      // Fonts answer to their signature, which the font suite covers; here the
+      // question is only whether the NAME is understood at all.
+      const bytes = format.mimeType.startsWith("font/")
+        ? Buffer.concat([Buffer.from("wOF2", "ascii"), Buffer.alloc(16)])
+        : Buffer.from("bytes");
+      const first = format.extensions[0] ?? "";
+      const resolved = resolveClaimedMimeType(`file${first}`, "", bytes);
+
+      if (format.mimeType.startsWith("font/")) continue;
+      expect(resolved).toBe(format.mimeType);
+    }
+  });
+
+  it("infers nothing for a suffix the server does not accept", () => {
+    // The control: an inferrer that named everything would satisfy the case
+    // above while inventing a type for whatever a caller chose to send.
+    expect(resolveClaimedMimeType("payload.exe", "", Buffer.from("MZ"))).toBe(
+      ""
+    );
+    expect(
+      resolveClaimedMimeType(
+        "archive.zip",
+        "application/octet-stream",
+        Buffer.from("PK")
+      )
+    ).toBe("application/octet-stream");
+  });
+});
+
+describe("a configured allowlist naming a font by an older spelling", () => {
+  it("canonicalises it, so an upload's claim can meet it", () => {
+    /*
+     * An upload's claim arrives canonicalised. A full override holding the
+     * legacy spelling would keep it, and the two never meet — the install
+     * advertises a format it then refuses with MIME_NOT_ALLOWED.
+     */
+    const resolved = resolveAllowlist(["application/x-font-woff"], undefined);
+    expect(resolved).toContain("font/woff");
+    expect(resolved).not.toContain("application/x-font-woff");
+  });
+
+  it("leaves a non-font entry exactly as configured", () => {
+    // The control: a resolver rewriting every entry would satisfy the case
+    // above while silently changing what an install said it accepts.
+    expect(resolveAllowlist(["image/heic"], undefined)).toEqual(["image/heic"]);
   });
 });

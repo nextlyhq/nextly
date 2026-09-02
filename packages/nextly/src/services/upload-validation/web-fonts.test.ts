@@ -11,9 +11,9 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_ALLOWED_MIME_TYPES } from "./mime";
+import { resolveClaimedMimeType } from "./mime";
 import {
   matchesWebFontSignature,
-  resolveClaimedMimeType,
   WEB_FONT_FORMATS,
   WEB_FONT_MIME_TYPES,
   webFontMimeFromFilename,
