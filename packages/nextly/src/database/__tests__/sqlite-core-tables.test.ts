@@ -21,7 +21,10 @@ import { getTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
 import * as sqliteBundle from "../../schemas/_dialect-bundles/sqlite";
-import { generateSqliteCoreTableStatements } from "../sqlite-core-tables";
+import {
+  generateSqliteCoreTableStatements,
+  replayableSqliteCoreStatements,
+} from "../sqlite-core-tables";
 
 /** One table as the canonical Drizzle schema declares it. */
 interface SchemaTable {
@@ -291,4 +294,55 @@ describe("the SQLite bootstrap DDL", () => {
       ).toEqual([]);
     }
   );
+
+  /**
+   * What a replay over an EXISTING database may run.
+   *
+   * The field-group registry has two spellings and the reader prefers the
+   * legacy one whenever it is present, so creating it beside a migrated
+   * registry does not add a table — it points every reader at an empty one.
+   * A fresh database has chosen neither and takes the full set.
+   */
+  describe("the statements safe to replay", () => {
+    const legacy = '"dynamic_components"';
+
+    it("keeps the legacy registry for a database that never migrated", () => {
+      const statements = replayableSqliteCoreStatements({
+        hasMigratedFieldGroupRegistry: false,
+      });
+      expect(statements.some(s => s.includes(legacy))).toBe(true);
+      expect(statements).toEqual(generateSqliteCoreTableStatements());
+    });
+
+    it("omits the legacy registry for a database that migrated", () => {
+      const statements = replayableSqliteCoreStatements({
+        hasMigratedFieldGroupRegistry: true,
+      });
+      expect(statements.some(s => s.includes(legacy))).toBe(false);
+    });
+
+    /**
+     * Its indexes go with it. A CREATE INDEX naming a table this replay did
+     * not create fails, and a swallowed failure per statement would hide it.
+     */
+    it("omits the legacy registry's indexes too", () => {
+      const statements = replayableSqliteCoreStatements({
+        hasMigratedFieldGroupRegistry: true,
+      });
+      expect(statements.filter(s => s.includes("dynamic_components"))).toEqual(
+        []
+      );
+    });
+
+    it("narrows nothing else", () => {
+      const full = generateSqliteCoreTableStatements();
+      const replay = replayableSqliteCoreStatements({
+        hasMigratedFieldGroupRegistry: true,
+      });
+      const removed = full.filter(s => !replay.includes(s));
+      // Exactly the registry table and its five indexes.
+      expect(removed.length).toBe(6);
+      expect(removed.every(s => s.includes("dynamic_components"))).toBe(true);
+    });
+  });
 });
