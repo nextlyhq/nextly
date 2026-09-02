@@ -2522,6 +2522,9 @@ const DASHBOARD_ROUTES: Readonly<
   PUT: {
     layout: { operation: "update", method: "putWidgetLayout" },
   },
+  DELETE: {
+    layout: { operation: "delete", method: "deleteWidgetLayout" },
+  },
 };
 
 /**
@@ -2532,6 +2535,7 @@ const DASHBOARD_ROUTES: Readonly<
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout
  *   PUT  /api/dashboard/layout         → putWidgetLayout
+ *   DELETE /api/dashboard/layout       → deleteWidgetLayout
  *   POST /api/dashboard/query          → postWidgetQuery
  *
  * All require authentication (no specific permission). Handlers manage their

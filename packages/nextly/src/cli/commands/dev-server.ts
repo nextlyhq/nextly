@@ -89,6 +89,34 @@ import type { ResolvedDevOptions } from "./db-sync";
  * This step is only needed when `--seed` is passed, because seeding requires
  * these tables to exist.
  */
+/**
+ * Run the SQLite core bootstrap statements against this database.
+ *
+ * Every statement is IF NOT EXISTS, so this both creates a fresh database and
+ * tops up an existing one, and the two callers below want exactly that.
+ *
+ * A statement that fails because the object is already there is the benign
+ * case and stays silent. Branch on the IMMEDIATE message only: a wrapped
+ * failure whose cause chain happens to mention "already exists" is a different
+ * error and must not be swallowed.
+ */
+async function applyCoreStatements(
+  drizzleAdapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<void> {
+  for (const statement of generateSqliteCoreTableStatements()) {
+    try {
+      await drizzleAdapter.executeQuery(statement);
+    } catch (error) {
+      if (!immediateMessage(error).includes("already exists")) {
+        logger.debug(
+          `Table creation statement failed: ${describeError(error)}`
+        );
+      }
+    }
+  }
+}
+
 export async function ensureCoreTables(
   adapter: CLIDatabaseAdapter,
   _options: ResolvedDevOptions,
@@ -98,11 +126,30 @@ export async function ensureCoreTables(
   const drizzleAdapter = adapter as unknown as DrizzleAdapter;
   const dialect = drizzleAdapter.getCapabilities().dialect;
 
-  // Quick check: if the "users" table already exists, core tables are present
+  // Quick check: if the "users" table already exists, core tables are present.
+  //
+  // "Present" is not "current". Every statement in the SQLite bootstrap is
+  // IF NOT EXISTS, and the set grows as the schema declares new tables and
+  // indexes — so a database created by an earlier version has the tables this
+  // check looks for and lacks whatever was added since. Returning here left
+  // `nextly db:sync`, the documented recovery command, unable to supply them:
+  // the only path that runs these statements was the one taken by a database
+  // that did not exist yet.
+  //
+  // So an existing SQLite database is reconciled rather than skipped. The
+  // statements are idempotent and re-running them adds only what is absent.
+  // It does NOT repair a table whose COLUMNS drifted: SQLite skips a CREATE
+  // TABLE wholesale once the table exists, which needs a migration rather than
+  // this pass.
   try {
     const usersExists = await drizzleAdapter.tableExists("users");
     if (usersExists) {
-      logger.debug("Core tables already exist, skipping ensureCoreTables");
+      if (dialect === "sqlite") {
+        await applyCoreStatements(drizzleAdapter, logger);
+        logger.debug("Core tables reconciled");
+      } else {
+        logger.debug("Core tables already exist, skipping ensureCoreTables");
+      }
       return;
     }
   } catch {
@@ -136,21 +183,7 @@ export async function ensureCoreTables(
 
     if (dialect === "sqlite") {
       logger.debug("Falling back to raw SQL table creation for SQLite...");
-      const statements = generateSqliteCoreTableStatements();
-      for (const statement of statements) {
-        try {
-          await drizzleAdapter.executeQuery(statement);
-        } catch (error) {
-          // Branch on the immediate message only: a wrapped failure whose
-          // cause chain happens to mention "already exists" is not the benign
-          // duplicate-table case and must not be silenced.
-          if (!immediateMessage(error).includes("already exists")) {
-            logger.debug(
-              `Table creation statement failed: ${describeError(error)}`
-            );
-          }
-        }
-      }
+      await applyCoreStatements(drizzleAdapter, logger);
 
       // Also create system tables (dynamic_collections, etc.)
       try {
