@@ -550,6 +550,21 @@
  * layout instead of its own.
  */
 .nx-inspector {
+  /*
+   * The CHROME's own axes, declared once because one thing needs to put them
+   * back: the box of logical sides takes the EDITED ELEMENT's writing mode so
+   * its grid places each side on the right edge, and the controls inside it
+   * must go on reading the way the rest of this panel reads.
+   *
+   * Declared rather than measured, because this is a fact about the admin
+   * interface rather than about any site: the chrome runs left to right and
+   * horizontally, whatever the page being edited does. Should the interface
+   * itself ever run right to left, these two values are what changes — here, in
+   * one place, instead of every rule that resets an axis carrying its own
+   * guess.
+   */
+  --nx-chrome-writing-mode: horizontal-tb;
+  --nx-chrome-direction: ltr;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -2796,4 +2811,201 @@
 
 .nx-notices__dismiss {
   flex: 0 0 auto;
+}
+
+/*
+ * A per-side property drawn as the box it describes.
+ *
+ * `margin` and `padding` are one property each with four sides, and as four
+ * stacked rows they say nothing about which edge is which — an author reads
+ * four labels to answer what a diagram answers at a glance.
+ *
+ * ORIENTED BY THE EDITED ELEMENT, not by this panel. The element's axes reach
+ * this grid as the custom properties the rule below reads, and grid placement
+ * resolves in them: columns run along the inline axis and rows along the block
+ * axis, so `grid-column: 1` is the inline START edge in a right-to-left page as
+ * well as a left-to-right one, and a vertical writing mode transposes the pair
+ * without a single physical edge being named here. A layout written with `left`
+ * and `right` would have looked correct in an English admin and pointed at the
+ * opposite edge on an Arabic site.
+ *
+ * Values rather than an applied `writing-mode`, so the narrow fallback at the
+ * end of this file can take the axes back on cascade order: an inline
+ * declaration outranks every selector, and the fallback could then only win by
+ * shouting.
+ *
+ * The panel draws this only where it could READ that orientation; where it
+ * could not, the fields stay ordinary rows that name their side in words.
+ */
+.nx-style-inspector__side-box {
+  /*
+   * The edited element's axes, handed over by the panel as values.
+   *
+   * Used through a rule rather than applied inline, so the narrow fallback
+   * below can take them back by ordinary cascade order — an inline
+   * `writing-mode` outranks every selector, and the fallback could then only
+   * win by shouting.
+   */
+  writing-mode: var(--nx-side-writing-mode, horizontal-tb);
+  direction: var(--nx-side-direction, ltr);
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+/*
+ * The sides, placed by WHICH SIDE THEY ARE.
+ *
+ * Not by their position among the children: that list varies with the heading,
+ * the form selectors and the notice above, so a rule counting elements moves
+ * every side the moment one appears. Each field says which side it draws and
+ * this reads it, which is also why these selectors stay shallow.
+ */
+.nx-style-inspector__side-box > [data-side="blockStart"] {
+  grid-area: 1 / 2;
+}
+
+.nx-style-inspector__side-box > [data-side="inlineStart"] {
+  grid-area: 2 / 1;
+}
+
+.nx-style-inspector__side-box > [data-side="inlineEnd"] {
+  grid-area: 2 / 3;
+}
+
+.nx-style-inspector__side-box > [data-side="blockEnd"] {
+  grid-area: 3 / 2;
+}
+
+/*
+ * A side is a control alone: no label column, and the text of its label hidden.
+ *
+ * Position is what tells a sighted author which edge this is, so the words are
+ * noise here — but only the WORDS. The label still carries the provenance dot,
+ * which says whether the side is authored or inherited and is not something
+ * position can tell anyone, so the dot stays and the text is clipped around it.
+ */
+.nx-style-inspector__side-box > [data-side] {
+  display: block;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The children read in the PANEL's axes, not the element's.
+ *
+ * The grid above is set to the edited element's writing mode so its placement
+ * resolves there. That mode is inherited, so without this a vertical-writing
+ * page would rotate the text inside every input and menu in the box — the
+ * orientation is meant to decide where a control sits, never how its own
+ * content reads.
+ *
+ * The panel's own axes are passed in rather than written here as `ltr`: the
+ * admin interface is translatable, so a fixed answer would reverse every
+ * control in this box on the day the admin itself runs right-to-left. The
+ * fallbacks apply only if the box is somehow drawn without them, and they are
+ * the ordinary case rather than an assumption about the site.
+ */
+.nx-style-inspector__side-box > * {
+  writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+  direction: var(--nx-chrome-direction, ltr);
+}
+
+/*
+ * The middle of the box, which is what makes the four fields read as edges.
+ *
+ * Without it they are four inputs in a three-column grid with a hole, and the
+ * arrangement has to be inferred. A pseudo-element rather than a child, so the
+ * shape costs no markup and nothing announces it: the box is a picture of an
+ * arrangement a screen reader is already given in words, by the label each
+ * field keeps.
+ */
+.nx-style-inspector__side-box::before {
+  content: "";
+  grid-area: 2 / 2;
+  align-self: stretch;
+  min-height: 1.25rem;
+  border: 1px dashed var(--nx-border);
+  border-radius: 0.25rem;
+}
+
+/*
+ * A measurement STACKS inside a box: the quantity above, the unit under it.
+ *
+ * Beside each other they do not fit. A side is a third of a rail rather than a
+ * whole one, and the unit menu is about 66px of intrinsic width — a trigger
+ * showing two or three characters plus its chevron and padding — which leaves
+ * the quantity around 26px, or two characters, in the very field an author
+ * types into. Lowering the menu's `min-width` cannot recover that, because the
+ * width is its CONTENT rather than its minimum.
+ *
+ * So the two halves take turns on the width instead of splitting it, which
+ * costs a row of height in a control that is three rows tall already and gives
+ * the quantity the whole 96px. Only inside a box: a full-width row has room for
+ * both and reads better with them on one line.
+ */
+.nx-style-inspector__side-box .nx-style-inspector__numeric {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.125rem;
+}
+
+.nx-style-inspector__side-box .nx-style-inspector__unit {
+  width: 100%;
+}
+
+/*
+ * Below the width where three columns of a control can be read, the box gives
+ * up and becomes rows.
+ *
+ * AFTER the box's own rules, and that is the whole reason this block sits at
+ * the end of the file rather than beside the field's stacking query it shares a
+ * threshold with. These selectors have the same specificity as the ones they
+ * override, so order decides: written earlier, the base rule below would
+ * restore `display: grid` and the label rule would restore the clipping, and
+ * what an author got at a narrow rail was a cramped grid with neither its
+ * centre diagram nor visible labels — the fallback declared and not delivered.
+ *
+ * The labels come BACK when it stacks. Their words are hidden only because
+ * position is saying which edge each field is, and once the fields are in a
+ * column nothing is saying it; four unlabelled inputs would be worse than
+ * either layout.
+ *
+ * The PANEL's axes come back too. The box carries the edited element's writing
+ * mode so its grid resolves there, and `flex-direction: column` would follow
+ * that same block axis — which is horizontal in a vertical writing mode, so the
+ * promised stack would run sideways. Plain declarations suffice because the
+ * element's axes are used through a rule rather than applied inline, so this
+ * one wins on order alone.
+ */
+@container nx-inspector-fields (max-width: 18rem) {
+  .nx-style-inspector__side-box {
+    display: flex;
+    flex-direction: column;
+    writing-mode: var(--nx-chrome-writing-mode, horizontal-tb);
+    direction: var(--nx-chrome-direction, ltr);
+  }
+
+  .nx-style-inspector__side-box::before {
+    display: none;
+  }
+
+  .nx-style-inspector__side-box .nx-style-inspector__field-label-text {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
 }
