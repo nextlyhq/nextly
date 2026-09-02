@@ -2233,6 +2233,79 @@ describe("reloadNextlyConfig", () => {
       expect(edited).not.toHaveBeenCalled();
     });
 
+    it("holds hooks back when the post-DDL sync REPORTS a failure rather than throwing", async () => {
+      // 🔴 The same sync answers two ways. A rejection was already handled; a
+      // per-collection failure RESOLVES with `errors[]`, and the post-DDL path
+      // read only the rejection -- so a partial failure published handlers
+      // against a field tree the registry had not accepted, which is exactly
+      // what the test above exists to prevent for the other shape.
+      const registry = getHookRegistry();
+      const original = vi.fn(() => undefined);
+      const edited = vi.fn(() => undefined);
+      const { reloadNextlyConfig } = await import("../reload-config");
+
+      // An additive second collection, so this reload reaches the POST-DDL
+      // landing rather than the metadata-only one. Without it the sync under
+      // test is not the one that runs.
+      const withAdditive = (hook: () => undefined) => ({
+        collections: [
+          settledCollection({ afterRead: [hook] }),
+          {
+            slug: "hookauthors",
+            tableName: "dc_hookauthors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      });
+      const settleBoth = (): void => {
+        introspectSpy.mockResolvedValue(
+          buildSnapshot([
+            {
+              name: TABLE,
+              columns: [
+                ...reservedColumns(TABLE),
+                { name: "body", type: "text", nullable: true },
+              ],
+            },
+            {
+              name: "dc_hookauthors",
+              columns: reservedColumns("dc_hookauthors"),
+            },
+          ])
+        );
+      };
+
+      settleBoth();
+      loadConfigSpy.mockResolvedValue({ config: withAdditive(original) });
+      await reloadNextlyConfig({ resolver: buildResolver() });
+      // The control: a healthy reload of the SAME shape installs the handler,
+      // so the assertion below is about the reported failure rather than about
+      // this path never publishing at all.
+      expect(registry.getHookCount("afterRead", SLUG)).toBe(1);
+
+      settleBoth();
+      loadConfigSpy.mockResolvedValue({ config: withAdditive(edited) });
+      await reloadNextlyConfig({
+        resolver: buildResolver({
+          collectionSyncResult: {
+            created: [],
+            updated: [],
+            unchanged: [],
+            errors: [{ slug: SLUG, error: "write failed" }],
+          },
+        }),
+      });
+
+      await registry.execute("afterRead", {
+        collection: SLUG,
+        operation: "read",
+        data: {},
+        context: {},
+      });
+      expect(original).toHaveBeenCalledTimes(1);
+      expect(edited).not.toHaveBeenCalled();
+    });
+
     it("holds hooks back when a metadata-only sync fails", async () => {
       // The no-DDL path has its own sync, and it keeps the prior snapshot for
       // whatever it could not persist -- so those entities still validate and

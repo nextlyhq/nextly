@@ -2385,6 +2385,21 @@ async function applyReload(opts?: {
           .filter(entity => entity.startsWith("collection:"))
           .map(entity => entity.slice("collection:".length))
       );
+
+      // 🔴 The same reading the metadata-only landing makes, because this is
+      // the same sync answering the same way. A per-collection failure RESOLVES
+      // with `errors[]` rather than rejecting, so a `catch` alone sees a partial
+      // failure as a clean pass -- and `collectionSynced` gates two things that
+      // must not act on metadata the registry did not accept: the recording
+      // policies, and the hook publication below. Both would then run against a
+      // field tree that is not the one stored.
+      const failedCollections = syncFailedSlugs(collectionSync);
+      if (failedCollections.length > 0) {
+        collectionSynced = false;
+        logger?.warn(
+          `[Nextly HMR] collection metadata sync failed for ${failedCollections.join(", ")}`
+        );
+      }
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.
