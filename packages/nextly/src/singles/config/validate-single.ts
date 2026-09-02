@@ -29,6 +29,8 @@ import {
 } from "../../domains/schema/services/field-column-descriptor";
 import {
   isLifecycleSystemColumn,
+  lifecycleDeclaredNameMessage,
+  lifecycleReservesDeclaredName,
   isOwnableSystemColumn,
   isReservedSystemColumn,
 } from "../../lib/system-columns";
@@ -357,6 +359,14 @@ function validateFields(
     // Everything below is about columns, so a field that occupies none is exempt. A component or
     // a many-to-many named `Title` takes over nothing: its values live in its own table and its
     // payload key stays `Title`, distinct from the system field's `title`.
+    if (lifecycleReservesDeclaredName(name, "single", lifecycleEnabled)) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: lifecycleDeclaredNameMessage(name),
+        code: "FIELD_NAME_LIFECYCLE_RESERVED",
+      });
+      return;
+    }
     if (!fieldProducesColumn(candidate)) return;
     // A field may take over `title` or `slug` — the documented "user wins" behaviour — but only
     // under the column's own name. `Title` reaches the same column while staying a different

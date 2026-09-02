@@ -1312,8 +1312,20 @@ ${properties}
       omitFields.push("createdAt", "updatedAt");
     }
 
+    // The lifecycle column is NOT NULL with a default, so a read always has a
+    // value and the interface states it as required. A CREATE may omit it and
+    // take the default, so it is dropped from the `Omit` and reintroduced as an
+    // optional member rather than inherited as a required one.
+    const createOmits = hasLifecycleStatus(collection)
+      ? [...omitFields, "status"]
+      : omitFields;
+    const createBase = `Omit<${interfaceName}, ${createOmits.map(f => `"${f}"`).join(" | ")}>`;
     lines.push(
-      `export type ${interfaceName}CreateInput = Omit<${interfaceName}, ${omitFields.map(f => `"${f}"`).join(" | ")}>;`
+      `export type ${interfaceName}CreateInput = ${
+        hasLifecycleStatus(collection)
+          ? `${createBase} & { status?: ${interfaceName}["status"] }`
+          : createBase
+      };`
     );
     lines.push("");
 

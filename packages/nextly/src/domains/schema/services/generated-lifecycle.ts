@@ -46,3 +46,16 @@ export function lifecycleStatusZodMember(): string {
   const values = LIFECYCLE_STATUSES.map(status => `"${status}"`).join(", ");
   return `  status: z.enum([${values}]),`;
 }
+
+/**
+ * How a generated create schema closes its `omit({...})` call.
+ *
+ * A create may omit the status and take the column's default, while the base
+ * schema requires it because a read always carries one — so the create schema
+ * marks that one key partial.
+ */
+export function lifecycleCreateSchemaClosing(record: {
+  status?: boolean;
+}): string {
+  return hasLifecycleStatus(record) ? `}).partial({ status: true });` : `});`;
+}

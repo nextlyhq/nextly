@@ -40,6 +40,7 @@ import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collectio
 import { fieldAdmitsNull } from "./field-nullability";
 import {
   hasLifecycleStatus,
+  lifecycleCreateSchemaClosing,
   lifecycleStatusZodMember,
 } from "./generated-lifecycle";
 import {
@@ -391,7 +392,7 @@ export class ZodGenerator {
     for (const field of omitFields) {
       lines.push(`  ${field}: true,`);
     }
-    lines.push(`});`);
+    lines.push(lifecycleCreateSchemaClosing(collection));
     lines.push("");
 
     // Update input schema (all optional except id)
