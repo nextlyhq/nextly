@@ -127,6 +127,7 @@ function putReq(body: unknown): Request {
 
 interface LayoutPayload {
   placements?: WidgetPlacement[];
+  available?: string[];
   version?: number;
   source?: string;
   scope?: string;
@@ -268,6 +269,79 @@ describe("GET /api/dashboard/layout", () => {
     // that is still there -- turning a recoverable bad row into a dashboard
     // that can never be saved.
     expect(body.version).toBe(7);
+  });
+});
+
+describe("a widget registered after the reader last saved", () => {
+  it("is not inserted into their arrangement", async () => {
+    // The product decision: a newly installed plugin's card is never pushed
+    // into somebody's saved layout behind their back.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/new" }));
+    stored = {
+      version: 3,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["core/a"]);
+  });
+
+  it("is still named, so it can be added", async () => {
+    // 🔴 "Not auto-added" only works if it is ADDABLE. Without this the widget
+    // was discoverable from nothing: absent from every read, absent from the
+    // snapshot the next write persisted, and the reader with no way to learn it
+    // existed at all.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/new" }));
+    stored = {
+      version: 3,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.available).toEqual(["core/new"]);
+  });
+
+  it("names nothing this caller may not see", async () => {
+    // The unplaced set is drawn from the widgets already filtered by
+    // permission, so it cannot become the disclosure the placements avoid.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(
+      widget({ id: "core/gated", requiredPermission: "read-secrets" })
+    );
+    callerHoldsPermission.mockResolvedValue(false);
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+      ]),
+    };
+
+    const res = await getWidgetLayout(getReq());
+    const raw = await res.clone().text();
+    const body = await bodyOf(res);
+
+    expect(body.available).toEqual([]);
+    expect(raw).not.toContain("gated");
+  });
+
+  it("names nothing when the reader has no stored row", async () => {
+    // Every visible widget is placed by the default arrangement, so there is
+    // nothing left to offer.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/b" }));
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.available).toEqual([]);
+    expect(body.placements).toHaveLength(2);
   });
 });
 

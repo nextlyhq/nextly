@@ -147,7 +147,14 @@ function layoutSuite(
       // fine -- an absent row is a legal answer -- and fail on every save with
       // a database length error. The key is a digest instead, so the scope's
       // own length cannot reach the column at all.
-      const long = "u".repeat(400);
+      // 191, which is the widest a real user id can be: MySQL's `users.id` is
+      // `varchar(191)` and so is this table's `scope_id` there. A longer
+      // fixture is not a stronger test, it is a value no caller can produce —
+      // and MySQL 8's strict mode rejects the insert, so the leg fails on the
+      // fixture rather than on the property. 191 still proves the point the
+      // test exists for: spelled into the key as `user:${scopeId}` it would be
+      // 196 characters against a `varchar(191)` primary key.
+      const long = "u".repeat(191);
       await service.saveLayout("user", long, [placement({ id: "long" })], 0);
       expect(
         (await service.getLayout("user", long)).layout?.placements[0].id

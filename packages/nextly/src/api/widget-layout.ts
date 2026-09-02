@@ -265,9 +265,30 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       ).visible
     : visibleDefaults(widgets);
 
+  // Widgets this caller may see and has not placed. A stored arrangement is a
+  // full snapshot, so a widget registered AFTER the reader last saved has no
+  // placement in it and appears nowhere in `placements` — which is correct, and
+  // is the decision this product has taken: a newly installed plugin's card is
+  // never inserted into somebody's arrangement behind their back.
+  //
+  // 🔴 But "not auto-added" only works if it is ADDABLE, and without this the
+  // widget was discoverable from nothing: the card was absent from every read,
+  // the next write persisted a snapshot that still lacked it, and the reader
+  // had no way to learn it existed. Naming the unplaced set is what makes the
+  // prompt possible, and it costs nothing to a client that ignores it.
+  //
+  // Ids only. Titles and icons already reach the admin through the widget
+  // metadata it renders from; what only this endpoint can answer is WHICH of
+  // them this caller is allowed to know about.
+  const placed = new Set(placements.map(placement => placement.widgetId));
+  const available = widgets
+    .map(widget => widget.id)
+    .filter(id => !placed.has(id));
+
   return respondData(
     {
       placements,
+      available,
       version: stored.version,
       source,
       scope: visibilityToken(widgets.map(w => w.id)),

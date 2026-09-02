@@ -5,17 +5,25 @@
  * the reader sees the registry's own order, which is exactly today's behaviour
  * — so shipping this table changes nothing for anybody until they move a card.
  *
- * ## Why `id` is a composite string
+ * ## Why `id` is a digest
  *
- * `id` holds `scopeKind:scopeId` rather than the table carrying a composite
- * primary key, matching `schemas/document-lock/postgres.ts`. The layout is
- * always addressed by an exact scope, never scanned by one half of the key, so
- * a composite key would buy nothing a derived string does not already give —
- * and one column is one thing for a future role layer to key on.
+ * `id` holds a sha256 of `scopeKind:scopeId` rather than that string spelled
+ * out. The readable form does not fit: this column is `varchar(191)` — the
+ * width MySQL will index for a utf8mb4 key — while a user id is itself
+ * `varchar(191)` on MySQL and unbounded `text` on PostgreSQL, so `user:` plus
+ * an id past 186 characters overruns the key. Those accounts could read the
+ * endpoint, because an absent row is a legal answer, and failed on every save.
  *
- * `scope_kind` is a COLUMN as well as a prefix of the id, so the two halves stay
- * readable to an operator and to any future sweep ("every role default") that
- * has to find rows without knowing their ids.
+ * 🔴 Do NOT construct this key by hand. A readable `user:<id>` matches no
+ * stored row, so a cleanup query or a migration written from an out-of-date
+ * reading of this comment silently affects nothing. `layoutRowId` in
+ * `schemas/widget-layout/index.ts` is the one derivation, and every reader,
+ * writer and deleter goes through it — which is also what lets the user
+ * deletion path address a row without importing the layout service.
+ *
+ * `scope_kind` and `scope_id` remain as their own readable columns, so an
+ * operator can still see whose row this is.
+ *
  *
  * ## Why the scope kind is in the key on day one
  *
