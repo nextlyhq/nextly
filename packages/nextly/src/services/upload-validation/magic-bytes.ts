@@ -15,12 +15,15 @@
 
 import { isSvgMimeType } from "../../storage/svg-security";
 
+import { matchesWebFontSignature } from "./web-fonts";
+
 export type MagicByteResult =
   | { ok: true }
   | {
       ok: false;
       reason:
         | "svg-claim-without-svg-content"
+        | "font-claim-without-font-content"
         | "xml-content-non-svg-claim"
         | "general-mismatch";
       sniffedMime?: string;
@@ -46,6 +49,18 @@ export async function detectAndCompareMime(
     return looksLikeSvg(buffer)
       ? { ok: true }
       : { ok: false, reason: "svg-claim-without-svg-content" };
+  }
+
+  /*
+   * Checked against the signature directly, because `file-type` recognises
+   * neither WOFF nor WOFF2 — so an unidentified buffer below is trusted, and a
+   * font claim would be the one claim that reaches the store unverified. It is
+   * also the claim most worth verifying: the public byte route serves these
+   * types to anonymous callers, and the type itself may have been inferred
+   * from a filename rather than sent by anyone.
+   */
+  if (!matchesWebFontSignature(buffer, claimedMime)) {
+    return { ok: false, reason: "font-claim-without-font-content" };
   }
 
   const { fileTypeFromBuffer } = await import("file-type");

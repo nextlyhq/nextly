@@ -239,3 +239,26 @@ export type {
 // naturally configures. Sharing the one substitution rule keeps a template and
 // a function from drifting into two different addresses for the same entry.
 export { previewUrlFromTemplate } from "./domains/collections/services/preview-url-resolver";
+
+// The web font formats, for the same reason MAX_QUERIES_PER_REQUEST is here: a
+// second copy on the client is a copy that drifts. The admin dropzone decides
+// in the BROWSER what a person may drag, before any request exists, so a format
+// this server accepts and that map omits is one nobody can upload — and one the
+// map admits and the server refuses is a rejection an author only sees after
+// the upload. Its module has no imports, so taking it here costs a
+// `nextly.config.ts` nothing.
+export {
+  WEB_FONT_FORMATS,
+  WEB_FONT_MIME_TYPES,
+  webFontMimeFromFilename,
+} from "./services/upload-validation/web-fonts";
+// The formats an upload may carry, with the suffixes they wear on disk. The
+// admin's dropzone decides in the BROWSER what may be dragged, and a list of
+// its own drifts from this one — which is how a picker comes to advertise a
+// format the server refuses and refuse one the server accepts.
+export {
+  DEFAULT_ACCEPTED_FORMATS,
+  DEFAULT_ALLOWED_MIME_TYPES,
+} from "./services/upload-validation/mime";
+export type { AcceptedFormat } from "./services/upload-validation/mime";
+export type { WebFontFormat } from "./services/upload-validation/web-fonts";

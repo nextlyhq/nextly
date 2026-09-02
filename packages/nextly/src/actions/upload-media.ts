@@ -78,6 +78,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../di/container";
 import { ServiceContainer } from "../services";
+import { resolveClaimedMimeType } from "../services/upload-validation/web-fonts";
 import type { Media } from "../types/media";
 import { UploadMediaInputSchema } from "../types/media";
 
@@ -185,10 +186,23 @@ export async function uploadMediaAction(
     const buffer = Buffer.from(arrayBuffer);
 
     // 4. Validate input
+    /*
+     * A browser reports no type for formats its platform does not register,
+     * fonts among them, so the name fills it in. Only a known font name
+     * resolves and the claim still meets the magic-byte check downstream, so
+     * this narrows what a caller must send rather than widening what is
+     * believed.
+     */
+    const claimedMimeType = resolveClaimedMimeType(
+      file.name,
+      file.type,
+      buffer
+    );
+
     const parseResult = UploadMediaInputSchema.safeParse({
       file: buffer,
       filename: file.name,
-      mimeType: file.type,
+      mimeType: claimedMimeType,
       size: file.size,
       uploadedBy: options.uploadedBy,
     });

@@ -70,9 +70,11 @@ import type {
   ListMediaOptions,
 } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
+import { resolveClaimedMimeType } from "../services/upload-validation/web-fonts";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
 import { executeBulkDelete } from "./media-bulk";
+import { handleServeMediaBytes } from "./media-raw";
 import { readJsonBody } from "./read-json-body";
 import {
   respondAction,
@@ -252,6 +254,7 @@ interface ParsedMediaRoute {
     | "update-media"
     | "delete-media"
     | "move-media"
+    | "serve-media-bytes"
     | "bulk-delete-media"
     | "list-folders"
     | "create-folder"
@@ -312,6 +315,12 @@ function parseMediaRoute(
       return { type: "not-found" };
     }
 
+    return { type: "not-found" };
+  }
+
+  if (segments.length === 2 && segments[1] === "raw") {
+    if (method === "GET")
+      return { type: "serve-media-bytes", mediaId: segments[0] };
     return { type: "not-found" };
   }
 
@@ -419,7 +428,7 @@ async function handleUploadMedia(
   const input = {
     file: buffer,
     filename: file.name,
-    mimeType: file.type,
+    mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
     size: file.size,
     uploadedBy: uploadedByEnsured,
   };
@@ -437,7 +446,12 @@ async function handleUploadMedia(
     {
       buffer,
       filename: file.name,
-      mimeType: file.type,
+      // The same resolution the schema was given above. Validating one value
+      // and storing another means the record can carry a type nothing checked.
+      // The value the schema ACCEPTED, not a second resolution of the same
+      // question. Two calls can diverge under any later edit, and the one that
+      // reaches storage would be the one nothing checked.
+      mimeType: input.mimeType,
       size: file.size,
       folderId: folderId || undefined,
     },
@@ -674,6 +688,18 @@ export function createMediaHandlers(options?: MediaHandlerOptions) {
       async (request: Request, ctx: RouteContext): Promise<Response> => {
         const resolvedParams = await ctx.params;
         const route = parseMediaRoute(resolvedParams.path, "GET");
+        /*
+         * Answered BEFORE the gate, and deliberately: a browser fetching a
+         * font carries no session, so on a gated mount this route would
+         * otherwise answer 401 and the page would fall back to another face.
+         * What keeps that safe is that the handler serves only the publicly
+         * servable mime types and 404s everything else — the whole of its
+         * access control, stated in one place.
+         */
+        if (route.type === "serve-media-bytes") {
+          await ensureInitialized();
+          return await handleServeMediaBytes(route.mediaId!);
+        }
         const gate = await gateMediaRoute(
           request,
           route,

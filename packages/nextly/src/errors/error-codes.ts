@@ -47,6 +47,11 @@ export const NEXTLY_ERROR_STATUS = {
   // caller can act on that difference: a gateway timeout is worth retrying, an
   // internal error is not.
   STORAGE_READ_TIMEOUT: 504,
+  // The store answered, and answered badly. 502 rather than 500 because the
+  // fault is UPSTREAM of this process: a caller can retry it, and an operator
+  // reading the log needs to look at the bucket rather than at this service.
+  // Distinct from the timeout above, which never got an answer at all.
+  STORAGE_READ_UNREACHABLE: 502,
   MAGIC_BYTE_MISMATCH: 400,
   SVG_SANITIZATION_FAILED: 400,
   UNSUPPORTED_FOR_BACKEND: 415,
