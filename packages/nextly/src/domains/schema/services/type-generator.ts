@@ -48,6 +48,10 @@ import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group
 
 import { renderFieldMember } from "./field-nullability";
 import {
+  hasLifecycleStatus,
+  lifecycleStatusMember,
+} from "./generated-lifecycle";
+import {
   asScalarStorageField,
   pluginDeclaredImportNames,
   asStorageEquivalentField,
@@ -500,6 +504,12 @@ export class TypeGenerator {
       lines.push("  updatedAt: string;");
     }
 
+    // The publish lifecycle, when this collection declares one. Without it a
+    // consumer of these types cannot tell a draft from a published entry.
+    if (hasLifecycleStatus(collection)) {
+      lines.push(lifecycleStatusMember());
+    }
+
     lines.push("}");
 
     return {
@@ -578,6 +588,11 @@ export class TypeGenerator {
 
     // Singles always have updatedAt (no createdAt)
     lines.push("  updatedAt: string;");
+
+    // A Single declares the lifecycle on the same flag a collection does.
+    if (hasLifecycleStatus(single)) {
+      lines.push(lifecycleStatusMember());
+    }
 
     lines.push("}");
 

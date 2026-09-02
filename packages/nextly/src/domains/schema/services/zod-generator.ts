@@ -39,6 +39,10 @@ import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collectio
 
 import { fieldAdmitsNull } from "./field-nullability";
 import {
+  hasLifecycleStatus,
+  lifecycleStatusZodMember,
+} from "./generated-lifecycle";
+import {
   asScalarStorageField,
   pluginDeclaredImportNames,
   isPluginDataField,
@@ -354,6 +358,12 @@ export class ZodGenerator {
     if (collection.timestamps) {
       lines.push(`  createdAt: z.string().datetime(),`);
       lines.push(`  updatedAt: z.string().datetime(),`);
+    }
+
+    // The same lifecycle the TypeScript interface declares, so a payload valid
+    // against one is valid against the other.
+    if (hasLifecycleStatus(collection)) {
+      lines.push(lifecycleStatusZodMember());
     }
 
     lines.push(`});`);
