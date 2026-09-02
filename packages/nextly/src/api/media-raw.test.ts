@@ -167,16 +167,44 @@ describe("the public byte route", () => {
     container.registerSingleton("config", () => ({
       security: { limits: { fileSize: "1mb" } },
     }));
-    storedAs("font/woff2", 2 * 1024 * 1024);
+    // Above the floor, so the row is what carries this case rather than the
+    // constant underneath it.
+    storedAs("font/woff2", 12 * 1024 * 1024);
 
     expect((await getRaw("m1")).status).toBe(200);
     const [, options] = mocks.adapter.read.mock.calls[0] as [
       string,
       { maxBytes: number },
     ];
-    expect(options.maxBytes).toBe(2 * 1024 * 1024);
+    expect(options.maxBytes).toBe(12 * 1024 * 1024);
     // Not the lowered policy, which would have refused the stored object.
     expect(options.maxBytes).not.toBe(1024 * 1024);
+  });
+
+  it("serves a legacy row that UNDERSTATES its object under a lowered cap", async () => {
+    /*
+     * The combination the other cases miss when taken one at a time. A row
+     * written before the size came from the validated bytes can record less
+     * than the object holds — `LegacyMediaService.uploadMedia` persists what
+     * the caller declared — and if the install has since lowered its cap below
+     * the real size, BOTH of the state-derived numbers sit under the object.
+     *
+     * The floor is what answers this: it is not derived from present state, so
+     * no configuration change and no bad row can push it down.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "1mb" } },
+    }));
+    // 2MB of object, recorded as one byte.
+    storedAs("font/woff2", 1);
+
+    expect((await getRaw("m1")).status).toBe(200);
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(DEFAULT_READ_MAX_BYTES);
+    expect(options.maxBytes).toBeGreaterThan(2 * 1024 * 1024);
   });
 
   it("keeps the configured cap when the row understates its object", async () => {
@@ -197,6 +225,8 @@ describe("the public byte route", () => {
       { maxBytes: number },
     ];
     expect(options.maxBytes).toBe(20 * 1024 * 1024);
+    // Above the floor, so this case is the policy term and not the constant.
+    expect(options.maxBytes).toBeGreaterThan(DEFAULT_READ_MAX_BYTES);
   });
 
   it("falls back to the default bound when no cap is configured", async () => {

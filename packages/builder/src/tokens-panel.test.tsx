@@ -1292,6 +1292,61 @@ describe("the panel explains itself and shows the whole set", () => {
     expect(slots.every(slot => slot.childElementCount === 0)).toBe(true);
   });
 
+  it("draws NOTHING for a reference spelled with a CSS escape", () => {
+    /*
+     * The same rule as the case above, asked of a spelling the old guard could
+     * not see.
+     *
+     * A CSS function token is an identifier immediately followed by `(`, read
+     * DECODED — so `v\61 r(--nx-measure-wide)` is a `var()` to a browser. The
+     * panel matched `/var\s*\(/i` against the RAW text, so this was previewed
+     * and resolved against the panel's own `--nx-*` properties, which is exactly
+     * the false preview the guard exists to prevent. The admin namespace is the
+     * point: it resolves HERE and no published page emits it, so the preview
+     * would have been confidently wrong rather than merely absent.
+     *
+     * The question is now asked of `referencesCustomProperty`, which parses and
+     * compares decoded function names, so a reference nested in a `calc()` or a
+     * fallback is caught too.
+     */
+    mount({
+      tokens: [
+        {
+          name: "size.escaped",
+          kind: "dimension",
+          values: { light: "v\\61 r(--nx-measure-wide)" },
+        },
+        {
+          name: "size.nested",
+          kind: "dimension",
+          values: { light: "calc(v\\61 r(--nx-measure-wide) * 2)" },
+        },
+      ],
+    });
+
+    expect(document.querySelector(".nx-tokens__bar")).toBeNull();
+    // The slot is still there and EMPTY, so the column does not go ragged —
+    // refusing to draw is not the same as dropping the row.
+    const slots = Array.from(document.querySelectorAll(".nx-tokens__preview"));
+    expect(slots.length).toBe(2);
+    expect(slots.every(slot => slot.childElementCount === 0)).toBe(true);
+  });
+
+  it("still draws a plain value, so the refusal is about references", () => {
+    /*
+     * The must-differ control. Every assertion above passes by finding nothing,
+     * so a change that stopped previewing dimensions entirely — or a predicate
+     * that answered TRUE for everything — would satisfy them all.
+     */
+    mount({
+      tokens: [
+        { name: "size.plain", kind: "dimension", values: { light: "2rem" } },
+      ],
+    });
+
+    expect(document.querySelector(".nx-tokens__bar")).not.toBeNull();
+  });
+
   it("draws no preview for a token the ENGINE refuses to write", () => {
     /*
      * Preview eligibility is the engine's verdict, not a second rule here. A

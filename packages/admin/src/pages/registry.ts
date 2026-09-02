@@ -11,6 +11,7 @@ import {
   collectionContentSection,
   overridableBy,
 } from "../lib/navigation/section-resolvers";
+import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
 
@@ -465,7 +466,11 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.SETTINGS_API_KEYS_CREATE]: {
     component: CreateApiKeyPage,
     type: "private",
-    requiredPermission: "create-api-keys",
+    // The endpoint accepts `create-api-keys` OR the `update-api-keys`
+    // umbrella, so the route does too. Guarding on the narrower grant alone
+    // turned the Create control into a door that closed on a holder the API
+    // would have served.
+    requiredPermission: apiKeyGrantsFor("create"),
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_EDIT]: {
