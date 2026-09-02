@@ -37,6 +37,7 @@ import {
 } from "../../../collections/fields/guards";
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
 
+import { fieldAdmitsNull } from "./field-nullability";
 import {
   asScalarStorageField,
   pluginDeclaredImportNames,
@@ -416,9 +417,6 @@ export class ZodGenerator {
     let zodSchema: string;
     const modifiers: string[] = [];
 
-    // Handle required/optional
-    const isRequired = "required" in field && field.required;
-
     // Text fields
     if (isTextField(field)) {
       zodSchema = this.buildTextSchema(field);
@@ -531,10 +529,15 @@ export class ZodGenerator {
     // Apply modifiers
     const schemaWithModifiers = zodSchema + modifiers.join("");
 
-    // Apply optional if not required
-    const finalSchema = isRequired
-      ? schemaWithModifiers
-      : `${schemaWithModifiers}.optional()`;
+    // `.nullish()`, not `.optional()`: a non-required field is a nullable
+    // column, so the API accepts null and a read hands it back. `.optional()`
+    // admits undefined ONLY, so the validator generated from this schema
+    // rejected a payload the same generator's TypeScript type declared legal
+    // and the API accepted. The nullability answer comes from
+    // `fieldAdmitsNull` so the two artifacts cannot drift apart again.
+    const finalSchema = fieldAdmitsNull(field)
+      ? `${schemaWithModifiers}.nullish()`
+      : schemaWithModifiers;
 
     return `  ${fieldName}: ${finalSchema},`;
   }

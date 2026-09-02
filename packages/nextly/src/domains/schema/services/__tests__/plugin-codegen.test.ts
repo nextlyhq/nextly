@@ -82,6 +82,46 @@ describe("plugin field types in the TypeScript generator", () => {
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
   });
 
+  it("parenthesizes a contributed conditional type before unioning null", () => {
+    // A plugin's `tsType` is an arbitrary type expression. Concatenating
+    // ` | null` onto a CONDITIONAL binds the union to its false branch, so the
+    // true branch goes on rejecting null while the column can return it —
+    // `A extends B ? X : Y | null` parses as `A extends B ? X : (Y | null)`.
+    // The zod generator already wraps contributed expressions for the same
+    // reason; this is the type side of that.
+    registerFieldType({
+      type: "conditional-thing",
+      storage: "json",
+      component: "@acme/c/admin#Input",
+      codegen: { tsType: () => "T extends string ? number : boolean" },
+    });
+
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "payload", type: "conditional-thing" }]),
+    ]);
+
+    expect(file.code).toContain(
+      "payload?: (T extends string ? number : boolean) | null;"
+    );
+  });
+
+  it("parenthesizes a contributed function type, whose return would take the union", () => {
+    // `() => X | null` makes the RETURN nullable and leaves the field itself
+    // non-null, which is the opposite of the claim.
+    registerFieldType({
+      type: "callback-thing",
+      storage: "json",
+      component: "@acme/cb/admin#Input",
+      codegen: { tsType: () => "() => number" },
+    });
+
+    const file = new TypeGenerator().generateTypesFile([
+      collection([{ name: "handler", type: "callback-thing" }]),
+    ]);
+
+    expect(file.code).toContain("handler?: (() => number) | null;");
+  });
+
   it("gives a user field its declared option under the declared name", () => {
     registerFieldType({
       type: "scaled",
@@ -1257,13 +1297,13 @@ describe("plugin field types in the Zod generator", () => {
     });
 
     // The modifier is appended as text, so an unparenthesized ternary would
-    // take `.optional()` onto its last branch only and leave the first
+    // take `.nullish()` onto its last branch only and leave the first
     // required.
     const code = new ZodGenerator().generateSchema(
       collection([{ name: "e", type: "either" }])
     ).code;
 
-    expect(code).toContain("(cond ? z.string() : z.number()).optional()");
+    expect(code).toContain("(cond ? z.string() : z.number()).nullish()");
   });
 
   it("reserves a global the Zod file itself relies on", () => {
