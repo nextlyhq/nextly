@@ -135,27 +135,48 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
  * config from the top means: a layout group appended below cannot displace the
  * field it shadows.
  */
-function exposedFields(
-  fields: Array<{ name: string; type: string; label?: string }>
-): WidgetSourceField[] {
+/**
+ * The declarations a source actually CARRIES, one per name.
+ *
+ * 🔴 Split out so every question about a field is asked of the SAME
+ * declaration. A collection may declare one name twice, and the two need not
+ * agree: `tags` as `hasMany` and then `tags` as a scalar is a legal config. The
+ * exposed field list kept the first of those while the printable-title filter
+ * was asked of the RAW list, where the second one also gets a vote -- so a name
+ * whose retained declaration stores an array could be nominated as the title,
+ * and the list card printed an array where a name belongs.
+ *
+ * Hidden types are dropped BEFORE a name is claimed, which is deliberate and is
+ * why "first" here means first EXPOSED: a name first declared as a
+ * never-exposed type and later as text is carried by the later declaration,
+ * because the earlier one was never a candidate to begin with.
+ */
+function retainedDeclarations<T extends { name: string; type: string }>(
+  fields: readonly T[]
+): T[] {
   const taken = new Set<string>();
-  const exposed: WidgetSourceField[] = [];
+  const kept: T[] = [];
   for (const field of fields) {
     if (NEVER_EXPOSED_FIELD_TYPES.has(field.type)) continue;
     if (taken.has(field.name)) continue;
     taken.add(field.name);
-    // The label travels with the field. This function REBUILDS each entry
-    // rather than passing it through -- `type` is mapped into the source
-    // vocabulary here -- so anything not named is dropped, which is how the
-    // label went missing between the collection registry and the source in the
-    // first place.
-    exposed.push({
-      name: field.name,
-      type: toSourceType(field.type),
-      ...(field.label !== undefined && { label: field.label }),
-    });
+    kept.push(field);
   }
-  return exposed;
+  return kept;
+}
+
+function exposedFields(
+  fields: Array<{ name: string; type: string; label?: string }>
+): WidgetSourceField[] {
+  // The label travels with the field. This function REBUILDS each entry rather
+  // than passing it through -- `type` is mapped into the source vocabulary
+  // here -- so anything not named is dropped, which is how the label went
+  // missing between the collection registry and the source in the first place.
+  return retainedDeclarations(fields).map(field => ({
+    name: field.name,
+    type: toSourceType(field.type),
+    ...(field.label !== undefined && { label: field.label }),
+  }));
 }
 
 /** One collection, in the shape a widget source is built from. */
@@ -221,8 +242,12 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   // list does not behave that way either: it reads the VALUE and falls back
   // when the nominated one is not readable text. This is that same behaviour,
   // decided from the declaration instead of from a row.
+  //
+  // Asked of the RETAINED declarations, not of `collection.fields`. A duplicate
+  // name's later declaration is not the one this source carries, so letting it
+  // answer here would qualify a name whose actual declaration stores an array.
   const printable = new Set(
-    collection.fields
+    retainedDeclarations(collection.fields)
       .filter(
         field => PRINTABLE_FIELD_TYPES.has(field.type) && field.hasMany !== true
       )

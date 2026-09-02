@@ -348,6 +348,28 @@ describe("what a source calls itself, and which field names its rows", () => {
     expect(getSource("collection:posts")?.titleField).toBe("title");
   });
 
+  it("judges a DUPLICATE name by the declaration the source carries", () => {
+    // 🔴 Two questions about one name have to be asked of ONE declaration. A
+    // collection may declare `tags` twice and the two need not agree; the
+    // source keeps the FIRST, which here stores an array. Asking the printable
+    // filter of the raw list let the second, scalar declaration vote, so `tags`
+    // qualified as a title while the field the source actually carries is the
+    // `hasMany` one -- and the card prints an array where a name belongs.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "tags",
+        fields: [
+          { name: "tags", type: "text", hasMany: true },
+          { name: "tags", type: "text" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
   it("accepts a single-valued field of the same type", () => {
     // The control: without it the refusal above is satisfied by an allowlist
     // that rejects `text` outright.

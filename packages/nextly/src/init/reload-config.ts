@@ -2275,9 +2275,29 @@ async function applyReload(opts?: {
       // snapshot, because the snapshot answers "did this table exist before the
       // apply": the right question for a table the pipeline CREATED and the wrong
       // one for a table it ALTERED.
-      const migrated = new Set<string>(rewrittenSlugs(collectionSync));
+      //
+      // 🔴 A DEFERRED collection is excluded from BOTH halves, and the metadata
+      // sync cannot tell you which those are. `deferredEntities` holds a target
+      // whose diff threw -- omitted from `desiredCollections` outright, so the
+      // apply never carried its DDL -- and one whose change classified unsafe,
+      // where auto-apply is deliberately skipped and the terminal says so. In
+      // both cases the reload SAW the collection and decided not to migrate it.
+      //
+      // The sync payload, though, is built from every configured collection, so
+      // a deferred collection whose fields changed still comes back in
+      // `updated`. Marking that `applied` would state the opposite of what the
+      // reload just decided -- and, through the same queryability check this
+      // commit exists to feed, publish cards against the shape the reload
+      // explicitly declined to apply.
+      const isDeferred = (slug: string): boolean =>
+        deferredEntities.has(`collection:${slug}`);
+      const migrated = new Set<string>(
+        rewrittenSlugs(collectionSync).filter(slug => !isDeferred(slug))
+      );
       for (const target of targets) {
-        if (!liveByTable.has(target.tableName)) migrated.add(target.slug);
+        if (!liveByTable.has(target.tableName) && !isDeferred(target.slug)) {
+          migrated.add(target.slug);
+        }
       }
       for (const slug of migrated) {
         try {

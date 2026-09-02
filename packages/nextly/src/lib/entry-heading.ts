@@ -19,12 +19,23 @@
  * @module lib/entry-heading
  */
 
+import { COMMON_TITLE_FIELDS } from "../domains/collections/entry-title";
+
 /**
  * The first candidate that is a usable heading, else `fallback`.
  *
  * Candidates, in descending preference: the collection's configured title
- * field, then a `title` field, then a `name` field. An absent `titleField`
- * simply starts the walk at `title`.
+ * field, then each conventional title name in {@link COMMON_TITLE_FIELDS}. An
+ * absent `titleField` simply starts the walk at `title`.
+ *
+ * 🔴 The conventional names are IMPORTED rather than written out, and the two
+ * spellings disagreeing is exactly what the paragraph above promised could not
+ * happen. This walked `title` then `name`; the field-level rule that decides
+ * which column a list or a generated card SELECTS also accepts `label`,
+ * `subject` and `heading`. A collection naming its entries with `subject` was
+ * therefore titled correctly on the dashboard and shown as a bare id in the
+ * activity feed -- one question, two answers, which is the condition this
+ * module exists to prevent.
  *
  * An EMPTY string is skipped rather than returned. `??` only skips `null` and
  * `undefined`, so an untitled draft used to render as no heading at all --
@@ -42,8 +53,7 @@ export function entryHeading<TFallback extends string | undefined>(
 ): string | TFallback {
   const candidates = [
     titleField ? data[titleField] : undefined,
-    data.title,
-    data.name,
+    ...COMMON_TITLE_FIELDS.map(name => data[name]),
   ];
   for (const candidate of candidates) {
     if (typeof candidate === "string" && candidate.length > 0) return candidate;

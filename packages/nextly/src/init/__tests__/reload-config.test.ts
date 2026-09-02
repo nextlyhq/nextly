@@ -544,6 +544,73 @@ describe("reloadNextlyConfig", () => {
     );
   });
 
+  it("does NOT mark a DEFERRED collection 'applied' in a mixed batch", async () => {
+    // A batch can apply one collection's safe change while REFUSING another's.
+    // The refused one goes into `deferredEntities` and its DDL never runs --
+    // but the metadata sync is built from every configured collection, so a
+    // deferred collection whose fields changed still comes back in `updated`.
+    // Marking it 'applied' from that list would state the opposite of what the
+    // reload just decided, and publish its cards against the shape the reload
+    // declined to apply.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          // REFUSED: live `active` is text, the config declares a checkbox --
+          // a column type change the gate defers rather than applies.
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+          // APPLIED: purely additive, so this reload reaches the post-DDL
+          // commit at all. Without it the deferred branch bails earlier and
+          // the marking under test is never reached.
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_books",
+          columns: [
+            ...reservedColumns("dc_books"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    // The sync reports BOTH as rewritten -- which is exactly the trap: its
+    // payload is every configured collection, so it cannot know one was
+    // deferred.
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: ["books", "authors"],
+        unchanged: [],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    // The control that this reload reached the post-DDL commit rather than
+    // bailing on the deferred branch, which withholds for its own reason.
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "authors",
+      "applied"
+    );
+    expect(
+      resolver.updateCollectionMigrationStatusSpy
+    ).not.toHaveBeenCalledWith("books", "applied");
+  });
+
   it("leaves an UNCHANGED collection's migration status alone", async () => {
     // The control the assertion above needs: marking every target 'applied'
     // would pass that test too, and would overwrite a status that legitimately
