@@ -11,6 +11,7 @@
  */
 
 import { DEFAULT_RETENTION_MS } from "nextly/api/jobs-list-types";
+import type { JobListItem as ServerJobListItem } from "nextly/api/jobs-list-types";
 
 export {
   ATTENTION_STATES,
@@ -19,8 +20,25 @@ export {
   jobNeedsAttention,
   storedStatesFor,
   type JobDisplayStatus,
-  type JobListItem,
 } from "nextly/api/jobs-list-types";
+
+/**
+ * A job as the ADMIN receives it, which is not quite what the server emits.
+ *
+ * Identical to the published row except for `status`, which is a plain string
+ * here. The core's union describes what the CURRENT server sends and is right
+ * about that; a client is a different position, because during a rolling deploy
+ * a newer server sends a status this bundle was built before. Typing the field
+ * as the union would say that cannot happen, which is the claim every guard in
+ * this feature exists because it is false.
+ *
+ * So the widening is where the uncertainty actually is — at the boundary — and
+ * the union stays available as {@link JobDisplayStatus} for the exhaustive
+ * presentation map, which is the place a closed set is correct.
+ */
+export type JobListItem = Omit<ServerJobListItem, "status"> & {
+  status: string;
+};
 
 /**
  * What the list read accepts.
