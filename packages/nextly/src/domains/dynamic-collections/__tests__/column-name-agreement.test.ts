@@ -23,9 +23,9 @@ import {
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 import { defineCollection } from "../../../collections/config/define-collection";
+import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { validateCollectionConfig } from "../../../collections/config/validate-config";
 import { defineSingle } from "../../../singles/config/define-single";
-import { validateSingleConfig } from "../../../singles/config/validate-single";
 import { DynamicCollectionSchemaService } from "../services/dynamic-collection-schema-service";
 
 /** Names that reach a column, including the shapes the Builder refuses but code paths allow. */
@@ -459,6 +459,36 @@ describe("the publish lifecycle owns its columns while it is on", () => {
       } as never).errors ?? []
     ).filter(e => e.code === "FIELD_NAME_LIFECYCLE_RESERVED").length;
   }
+
+  it("refuses a column-less status field on a SINGLE as well", () => {
+    // The Single validator carries the same column-less exemption and emits the
+    // same lifecycle member, so the collision is identical there. One rule,
+    // asked by both, rather than the check living only where it was first
+    // noticed.
+    const singleErrors = (fields: unknown[], status: boolean) =>
+      (
+        validateSingleConfig({
+          slug: "settings",
+          label: "Settings",
+          status,
+          fields,
+        } as never).errors ?? []
+      ).filter(e => e.code === "FIELD_NAME_LIFECYCLE_RESERVED").length;
+
+    const manyToMany = [
+      {
+        type: "relationship",
+        name: "status",
+        relationTo: "tags",
+        options: { relationType: "manyToMany" },
+      },
+    ];
+
+    expect({
+      on: singleErrors(manyToMany, true),
+      off: singleErrors(manyToMany, false),
+    }).toEqual({ on: 1, off: 0 });
+  });
 
   it("refuses a COLUMN-LESS status field too, because the artifacts declare one", () => {
     // A many-to-many keeps its values in its own table, so the column-collision

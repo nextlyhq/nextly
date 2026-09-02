@@ -480,6 +480,36 @@ export function isLifecycleSystemColumn(
   );
 }
 
+/**
+ * Whether the lifecycle already emits a member under this DECLARED name.
+ *
+ * Distinct from the column question. A field that occupies no column — a
+ * component, a many-to-many — is exempt from every column rule because its
+ * values live in its own table, but it keeps its declared name as its payload
+ * key and as its member in the generated types and schemas. The lifecycle emits
+ * a member under the column's own name, so the two are declared twice there
+ * even though they never share a column.
+ *
+ * Matched on the declared name rather than the converted column, because that
+ * is the key the artifacts emit: a column-less `Status` stays a distinct member
+ * and is left alone, while a column-producing one is caught by the column rule.
+ *
+ * Stated once because both the collection and the Single validator ask it, and
+ * an answer written twice is one that can drift.
+ */
+export function lifecycleReservesDeclaredName(
+  name: string,
+  entity: SystemColumnEntity,
+  lifecycleEnabled: boolean
+): boolean {
+  return lifecycleEnabled && isLifecycleSystemColumn(name, entity);
+}
+
+/** The refusal both validators report for {@link lifecycleReservesDeclaredName}. */
+export function lifecycleDeclaredNameMessage(name: string): string {
+  return `Field name '${name}' is owned by the Draft/Published lifecycle and would be declared twice in the generated types. Rename the field, or turn the lifecycle off`;
+}
+
 /** The names a validator on `surface` refuses for an author's own field. */
 export function reservedSystemFieldNames(
   surface: ReservationSurface
