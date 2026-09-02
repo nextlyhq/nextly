@@ -460,6 +460,32 @@ describe("the publish lifecycle owns its columns while it is on", () => {
     ).filter(e => e.code === "FIELD_NAME_LIFECYCLE_RESERVED").length;
   }
 
+  it("refuses a COLUMN-LESS status field too, because the artifacts declare one", () => {
+    // A many-to-many keeps its values in its own table, so the column-collision
+    // rule exempts it and returns before the column-based lifecycle check. The
+    // generated interface and the generated schema each still declare a
+    // `status` member under that name, so the field and the lifecycle are
+    // emitted twice and the generated file does not compile.
+    // `options.relationType` is what `usesJunctionTable` reads; a top-level
+    // `hasMany` still produces a column and would be caught by the ordinary
+    // column rule instead, leaving this case unexercised.
+    const manyToMany = [
+      {
+        type: "relationship",
+        name: "status",
+        relationTo: "tags",
+        options: { relationType: "manyToMany" },
+      },
+    ];
+
+    expect({
+      on: lifecycleErrors(manyToMany, true),
+      // The control: with the lifecycle off nothing emits a status member, so
+      // the name is ordinary and must stay accepted.
+      off: lifecycleErrors(manyToMany, false),
+    }).toEqual({ on: 1, off: 0 });
+  });
+
   it("refuses a status field only when the lifecycle is enabled", () => {
     // Measured across all three generators: with the lifecycle ON a `status` field duplicates the
     // column in the created table AND the diff's desired state, so the table cannot be created.
