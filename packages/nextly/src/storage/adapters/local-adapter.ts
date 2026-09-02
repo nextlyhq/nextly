@@ -27,7 +27,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { resolveReadBounds } from "../fetch-stored-bytes";
+import { resolveReadBounds, withDeadline } from "../fetch-stored-bytes";
 import { StorageReadTooLargeError } from "../read-errors";
 import type {
   UploadOptions,
@@ -51,6 +51,51 @@ export interface LocalAdapterConfig {
 
 // Track whether we've already added to .gitignore this session
 let gitignoreUpdated = false;
+
+// ============================================================
+// Reading
+// ============================================================
+
+/** How much of a file one `read` syscall pulls into memory. */
+const READ_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Buffer an open file, refusing it once more than `maxBytes` has arrived.
+ *
+ * Counted as it ARRIVES rather than taken from the size the descriptor
+ * reported, because the two disagree exactly where the cap matters: a file
+ * still being appended to answers honestly about its size and grows anyway,
+ * and a path whose metadata cannot describe its contents at all — a FIFO
+ * reports zero bytes and delivers as many as its writer sends — passes any
+ * cap on the strength of that zero.
+ *
+ * @param handle - An open descriptor, whose position this advances
+ * @param filePath - The caller's path, carried only in the refusal
+ * @param maxBytes - The cap this read runs under
+ */
+async function readCounted(
+  handle: fs.FileHandle,
+  filePath: string,
+  maxBytes: number
+): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  let received = 0;
+
+  for (;;) {
+    const { bytesRead } = await handle.read(chunk, 0, READ_CHUNK_BYTES, null);
+    if (bytesRead === 0) break;
+
+    received += bytesRead;
+    if (received > maxBytes) {
+      throw new StorageReadTooLargeError(filePath, maxBytes, received);
+    }
+    // Copied, because the next iteration reads back into the same buffer.
+    chunks.push(Buffer.from(chunk.subarray(0, bytesRead)));
+  }
+
+  return Buffer.concat(chunks);
+}
 
 // ============================================================
 // Adapter Implementation
@@ -181,12 +226,16 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
    *
    * Returns the file buffer, or `null` if the file is not found.
    *
-   * Honours the caller's cap, which matters MORE here than anywhere else: this
-   * is the default backend, so a bound the cloud adapters keep and this one
-   * ignores is a bound that does nothing in the commonest deployment. Checked
-   * against the file's size before reading, because `readFile` buffers the
-   * whole thing — a cap enforced afterwards has already spent the memory it
-   * exists to save.
+   * Honours the caller's bounds, which matters MORE here than anywhere else:
+   * this is the default backend, so a bound the cloud adapters keep and this
+   * one ignores is a bound that does nothing in the commonest deployment.
+   *
+   * Both bounds are enforced against ONE open descriptor. Resolving the name,
+   * asking for its size and then reading it again by name resolves the same
+   * name three times: a file replaced in between is read under a cap measured
+   * on the file it displaced, and one appended to in between is buffered whole
+   * however small it was when asked. The descriptor settles the first, and
+   * counting the bytes as they arrive settles the second.
    */
   async read(
     filePath: string,
@@ -211,32 +260,75 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
      */
     const bounds = resolveReadBounds(options);
 
-    let size: number;
-    try {
-      size = (await fs.stat(fullPath)).size;
-    } catch {
-      return null;
-    }
-
     /*
-     * Thrown rather than returned as `null`, because refusing a file that IS
-     * there is not the same answer as not finding one — and a caller told
-     * `null` would go on to treat a present file as missing.
+     * RACED rather than cancelled, which is the only bound available to it: a
+     * filesystem call runs on the libuv threadpool and takes no signal, so a
+     * `basePath` on an unresponsive network mount blocks `open` and `read`
+     * with nothing to interrupt them. The work below keeps running and closes
+     * its own descriptor whichever side wins; what the race buys is that
+     * `read` answers within the deadline it advertised instead of holding its
+     * caller for as long as the mount stays down.
      */
-    if (size > bounds.maxBytes) {
-      throw new StorageReadTooLargeError(filePath, bounds.maxBytes, size);
-    }
-
-    try {
-      return await fs.readFile(fullPath);
-    } catch {
-      return null;
-    }
+    const work = this.readWithinCap(fullPath, filePath, bounds.maxBytes);
+    /*
+     * A lost race rejects the caller from `withDeadline` and leaves this
+     * promise to settle with nobody attached — an unhandled rejection for a
+     * read whose outcome has already been reported.
+     */
+    void work.catch(() => undefined);
+    return await withDeadline(work, AbortSignal.timeout(bounds.timeoutMs));
   }
 
   // ============================================================
   // Private Helpers
   // ============================================================
+
+  /**
+   * Read one opened file, refusing it the moment it exceeds the cap.
+   *
+   * Split out so the whole descriptor lifetime — open, size, read, close —
+   * sits inside a single promise the caller can race, and so the close in its
+   * `finally` still runs when that race has already answered the caller.
+   *
+   * @param fullPath - Absolute path, already validated against `basePath`
+   * @param filePath - The caller's path, carried only in the refusal
+   * @param maxBytes - The cap this read runs under
+   */
+  private async readWithinCap(
+    fullPath: string,
+    filePath: string,
+    maxBytes: number
+  ): Promise<Buffer | null> {
+    const handle = await fs.open(fullPath, "r").catch(() => null);
+    // A missing file, and every other reason opening one fails — the same
+    // answer this method gave when it resolved the name a second time.
+    if (handle === null) return null;
+
+    try {
+      /*
+       * A cheap refusal from the descriptor's OWN metadata, so an oversized
+       * file costs one fstat rather than a walk up to the cap. It cannot stand
+       * alone, which is why the counting below is not redundant with it.
+       */
+      const { size } = await handle.stat();
+      if (size > maxBytes) {
+        /*
+         * Thrown rather than returned as `null`, because refusing a file that
+         * IS there is not the same answer as not finding one — and a caller
+         * told `null` would go on to treat a present file as missing.
+         */
+        throw new StorageReadTooLargeError(filePath, maxBytes, size);
+      }
+      return await readCounted(handle, filePath, maxBytes);
+    } catch (error) {
+      // The refusal is an answer about a file that exists, so it travels;
+      // everything else keeps reading as absence, unchanged.
+      if (error instanceof StorageReadTooLargeError) throw error;
+      return null;
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
 
   /**
    * Resolve a relative file path to an absolute path within basePath.

@@ -7,11 +7,19 @@
  * exactly the shape the option had before: advertised on the contract, honoured
  * by some backends, silently inert on the default.
  *
+ * The deadline is tested through a FIFO, which is the one thing a test can
+ * make behave like the stalled network mount this bound exists for: opening
+ * one for reading blocks until a writer arrives, and a filesystem call takes
+ * no abort signal, so nothing else in the process can interrupt it.
+ *
  * @module storage/adapters/local-read-cap.test
  */
+import { execFile } from "node:child_process";
+import { createWriteStream } from "node:fs";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -71,6 +79,69 @@ describe("LocalStorageAdapter.read bounds", () => {
     await writeFile(join(base, "big.txt"), "x".repeat(500));
     const bytes = await adapter.read("big.txt");
     expect(bytes?.length).toBe(500);
+  });
+
+  it("REFUSES bytes past the cap even when the metadata says zero", async () => {
+    /*
+     * The cap has to hold against what ARRIVES, not against what `stat`
+     * reported a moment earlier. A FIFO makes that gap total rather than
+     * racy: it reports a size of zero and then delivers whatever its writer
+     * sends, so a cap taken from metadata passes it unconditionally.
+     *
+     * Its control is "REFUSES a file larger than the cap" above, which fails
+     * if the refusal stops working at all; this one fails only when the
+     * refusal is being decided by the wrong number.
+     */
+    const pipe = join(base, "pipe");
+    await promisify(execFile)("mkfifo", [pipe]);
+
+    // Started before the writer, because opening either end of a FIFO blocks
+    // until the other end is open.
+    const reading = adapter.read("pipe", { maxBytes: 1000, timeoutMs: 5000 });
+    const writer = createWriteStream(pipe);
+    // The reader refuses and closes mid-stream, so the write end breaks; that
+    // is the expected end of this pipe, not a failure of the case.
+    writer.on("error", () => undefined);
+    writer.end(Buffer.alloc(200_000));
+
+    const outcome = await reading.then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
+    // NOT the 200_000 bytes it was sent, which is what a metadata-only cap
+    // would have buffered and returned.
+    expect(Buffer.isBuffer(outcome)).toBe(false);
+  });
+
+  it("gives up on a read that never gets going, rather than hanging", async () => {
+    /*
+     * A FIFO with no writer stands in for the `basePath` on an unresponsive
+     * mount: `open` blocks in the threadpool, takes no signal, and cannot be
+     * interrupted — so the deadline can only be honoured by racing it.
+     */
+    const stalled = join(base, "stalled");
+    await promisify(execFile)("mkfifo", [stalled]);
+
+    const outcome = await adapter.read("stalled", { timeoutMs: 50 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+
+    expect((outcome as Error).name).toBe("TimeoutError");
+    // NOT null: a backend that cannot be reached has said nothing about
+    // whether the file is there, and a caller told `null` would treat it as
+    // deleted and write a replacement over a file still sitting on the mount.
+    expect(outcome).not.toBeNull();
+
+    /*
+     * The abandoned `open` still holds a libuv threadpool thread, which it
+     * keeps for the life of the process unless a writer turns up. Released
+     * here so this case cannot starve the ones after it.
+     */
+    const releasing = createWriteStream(stalled);
+    releasing.on("error", () => undefined);
+    releasing.end();
   });
 
   it("still answers null for a file that is not there", async () => {
