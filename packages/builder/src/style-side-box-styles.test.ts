@@ -185,8 +185,13 @@ describe("the narrow fallback actually wins", () => {
      * The box carries the edited element's writing mode so its grid resolves
      * there, and `flex-direction: column` follows that same block axis — which
      * is HORIZONTAL in a vertical writing mode, so the promised stack would run
-     * sideways. The axes arrive as an inline style, which no selector can
-     * outrank, so this is the one place the sheet must shout.
+     * sideways.
+     *
+     * Plain declarations are enough because the element's axes are used through
+     * a rule rather than applied inline: this block is later in the sheet and
+     * carries the same specificity, so it wins on order. Had they been applied
+     * inline, no selector could have outranked them and the sheet would have
+     * had to shout — which is what the last assertion here refuses.
      */
     const fallback = FLAT.slice(FLAT.indexOf(`${BOX} { display: flex`));
     expect(fallback).toContain("flex-direction: column");

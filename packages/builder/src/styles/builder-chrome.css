@@ -2820,14 +2820,19 @@
  * stacked rows they say nothing about which edge is which — an author reads
  * four labels to answer what a diagram answers at a glance.
  *
- * ORIENTED BY THE EDITED ELEMENT, not by this panel. The element's own
- * `writing-mode` and `direction` are set on this grid inline, and grid
- * placement resolves in them: columns run along the inline axis and rows along
- * the block axis, so `grid-column: 1` is the inline START edge in a
- * right-to-left page as well as a left-to-right one, and a vertical writing
- * mode transposes the pair without a single physical edge being named here. A
- * layout written with `left` and `right` would have looked correct in an
- * English admin and pointed at the opposite edge on an Arabic site.
+ * ORIENTED BY THE EDITED ELEMENT, not by this panel. The element's axes reach
+ * this grid as the custom properties the rule below reads, and grid placement
+ * resolves in them: columns run along the inline axis and rows along the block
+ * axis, so `grid-column: 1` is the inline START edge in a right-to-left page as
+ * well as a left-to-right one, and a vertical writing mode transposes the pair
+ * without a single physical edge being named here. A layout written with `left`
+ * and `right` would have looked correct in an English admin and pointed at the
+ * opposite edge on an Arabic site.
+ *
+ * Values rather than an applied `writing-mode`, so the narrow fallback at the
+ * end of this file can take the axes back on cascade order: an inline
+ * declaration outranks every selector, and the fallback could then only win by
+ * shouting.
  *
  * The panel draws this only where it could READ that orientation; where it
  * could not, the fields stay ordinary rows that name their side in words.
