@@ -299,6 +299,7 @@ export async function ensureCoreTables(
   // recreate the spelling it had just moved away from. The exclusion in
   // `db-sync.ts` is acquired only after this function returns, so it is too
   // late to help.
+  let pushFailed = false;
   await withMigrationExcluded(
     {
       adapter: drizzleAdapter,
@@ -308,6 +309,16 @@ export async function ensureCoreTables(
       releaseOnInterrupt: true,
     },
     async () => {
+      // Resolved again, INSIDE the exclusion. The reading above happened before
+      // the lock was held, so a migration completing in between would leave the
+      // push naming the spelling that was just moved away from — and the push
+      // is the one caller that creates rather than retargets. Re-reading here
+      // costs one catalog query and is the only value the push may trust.
+      const pushRegistry = await resolveRegistryTable(drizzleAdapter, logger);
+      if (pushRegistry === null) {
+        pushFailed = true;
+        return;
+      }
       // F8 PR 2: use the freshPushSchema helper for the static-tables push.
       // No diff, no prompts, no journal — this is fresh-DB setup, not a user
       // schema change. Behavior matches the legacy DrizzlePushService.apply
@@ -355,14 +366,23 @@ export async function ensureCoreTables(
 
           logger.success("Core tables created (fallback)");
         } else {
-          logger.error(
-            "Core tables not found. Please run `nextly migrate` first to create the database schema."
-          );
-          process.exit(1);
+          // Recorded, not exited. `process.exit` here terminates from inside
+          // the exclusion's callback, so its `finally` never runs and the claim
+          // stays live until the 120-second lease expires — refusing the very
+          // `nextly migrate` this message tells the operator to run. The exit
+          // happens after the exclusion has unwound.
+          pushFailed = true;
         }
       }
     }
   );
+
+  if (pushFailed) {
+    logger.error(
+      "Core tables not found. Please run `nextly migrate` first to create the database schema."
+    );
+    process.exit(1);
+  }
 }
 
 // ============================================================================
