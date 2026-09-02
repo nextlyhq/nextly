@@ -22,6 +22,7 @@ import {
   safeFetch,
   SafeFetchError,
   DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_RESPONSE_BYTES,
 } from "../utils/validate-external-url";
 
 import { StorageReadTooLargeError } from "./read-errors";
@@ -112,15 +113,13 @@ export async function fetchStoredBytes(
      * An unknown status does NOT translate. It means the failure arrived before
      * any status did, so nothing here can say the object was oversized.
      */
-    const oversizedObject =
-      error instanceof SafeFetchError &&
-      error.reason === "response-too-large" &&
-      error.status !== undefined &&
-      error.status >= 200 &&
-      error.status < 300;
-
-    if (oversizedObject && options?.maxBytes !== undefined) {
-      throw new StorageReadTooLargeError(context, options.maxBytes);
+    const verdict = classifyFetchFailure(error);
+    if (verdict === "absent") return null;
+    if (verdict === "oversized") {
+      throw new StorageReadTooLargeError(
+        context,
+        resolveReadBounds(options).maxBytes
+      );
     }
     throw error;
   }
@@ -149,8 +148,64 @@ export async function fetchStoredBytes(
   return Buffer.from(await response.arrayBuffer());
 }
 
+/**
+ * What a failed fetch actually says about the object.
+ *
+ * Its own function because the three answers are the whole point of this module
+ * and they are easy to collapse into each other — each collapse having been a
+ * real defect here rather than a hypothetical:
+ *
+ * - ABSENT. A 404 is absence whatever size its body was. `safeFetch` caps while
+ *   buffering, so a verbose CDN error page raises before a `Response` exists
+ *   and the status check further down is never reached; the object is still
+ *   gone, and must not become an error because the page explaining it was long.
+ * - OVERSIZED. Only a SUCCESSFUL response that blew the cap. A failed response
+ *   can exceed it too, and translating on the reason alone reported a backend
+ *   outage as "your file is too big" — a cause the author would act on, wrongly.
+ * - UNKNOWN. Everything else, including a too-large refusal carrying NO status:
+ *   that means the failure arrived before any status did, which says nothing
+ *   about whether the object was oversized.
+ */
+function classifyFetchFailure(
+  error: unknown
+): "absent" | "oversized" | "unknown" {
+  if (!(error instanceof SafeFetchError)) return "unknown";
+  if (error.status === 404) return "absent";
+  const successful =
+    error.status !== undefined && error.status >= 200 && error.status < 300;
+  return error.reason === "response-too-large" && successful
+    ? "oversized"
+    : "unknown";
+}
+
 /** The deadline a stored read runs under when the caller names none. */
 export const DEFAULT_READ_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
+
+/** The byte cap a stored read runs under when the caller names none. */
+export const DEFAULT_READ_MAX_BYTES = DEFAULT_MAX_RESPONSE_BYTES;
+
+/**
+ * The bounds a read actually runs under, defaults filled in.
+ *
+ * ONE place, because every adapter needs the same answer and the ones that
+ * derived it themselves diverged: the URL-backed pair inherited `safeFetch`'s
+ * cap and deadline for free, while the local and S3 adapters — which never
+ * touch `safeFetch` — applied NO bound at all when the caller named none.
+ * `StorageReadOptions` promises the default either way, and a production caller
+ * reading media without options got it from two of four backends.
+ *
+ * Filling the defaults here rather than per adapter is what makes the promise
+ * true by construction rather than by four implementations agreeing.
+ */
+export function resolveReadBounds(options?: StorageReadOptions): {
+  maxBytes: number;
+  timeoutMs: number;
+} {
+  return {
+    maxBytes: options?.maxBytes ?? DEFAULT_READ_MAX_BYTES,
+    timeoutMs: options?.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS,
+  };
+}
 
 /**
  * Stop waiting on a promise once the deadline fires.

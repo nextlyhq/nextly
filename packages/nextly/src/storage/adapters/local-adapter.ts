@@ -27,6 +27,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { resolveReadBounds } from "../fetch-stored-bytes";
 import { StorageReadTooLargeError } from "../read-errors";
 import type {
   UploadOptions,
@@ -201,6 +202,15 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
       return null;
     }
 
+    /*
+     * The DEFAULTS apply here too, which is the whole reason this goes through
+     * the shared resolver. A caller naming no cap still gets one — the media
+     * pipeline reads without options — and before this the URL-backed adapters
+     * inherited a bound from `safeFetch` while this one, the default backend,
+     * had none at all.
+     */
+    const bounds = resolveReadBounds(options);
+
     let size: number;
     try {
       size = (await fs.stat(fullPath)).size;
@@ -213,8 +223,8 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
      * there is not the same answer as not finding one — and a caller told
      * `null` would go on to treat a present file as missing.
      */
-    if (options?.maxBytes !== undefined && size > options.maxBytes) {
-      throw new StorageReadTooLargeError(filePath, options.maxBytes, size);
+    if (size > bounds.maxBytes) {
+      throw new StorageReadTooLargeError(filePath, bounds.maxBytes, size);
     }
 
     try {

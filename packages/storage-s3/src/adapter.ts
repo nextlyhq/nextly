@@ -59,6 +59,7 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   type PutObjectCommandInput,
+  type GetObjectCommandOutput,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -72,6 +73,7 @@ import type {
   FileMetadata,
   BulkDeleteResult,
 } from "nextly/storage";
+import { resolveReadBounds } from "nextly/storage/fetch-stored-bytes";
 import { StorageReadTooLargeError } from "nextly/storage/read-errors";
 
 import type { S3StorageConfig, ResolvedS3Config } from "./types";
@@ -101,10 +103,18 @@ import type { S3StorageConfig, ResolvedS3Config } from "./types";
  * stalls mid-transfer is exactly the case a request-only deadline misses.
  */
 function abortAfter(options?: StorageReadOptions): {
-  abortSignal?: AbortSignal;
+  abortSignal: AbortSignal;
 } {
-  if (options?.timeoutMs === undefined) return {};
-  return { abortSignal: AbortSignal.timeout(options.timeoutMs) };
+  /*
+   * ALWAYS a signal, defaulted through the shared resolver.
+   * `StorageReadOptions` promises the deadline whether or not a caller names
+   * one, and the URL-backed adapters keep that promise by inheriting
+   * `safeFetch`'s. Returning nothing here left the no-options read — which is
+   * what the media pipeline does — able to hang on a stalled bucket forever.
+   */
+  return {
+    abortSignal: AbortSignal.timeout(resolveReadBounds(options).timeoutMs),
+  };
 }
 
 export class S3StorageAdapter implements IStorageAdapter {
@@ -498,8 +508,10 @@ export class S3StorageAdapter implements IStorageAdapter {
        * than discover the size after paying for it — which is what an
        * attachment path does when it checks a size only after buffering.
        */
-      this.refuseOverCap(filePath, response.ContentLength, options?.maxBytes);
-      return Buffer.from(await response.Body.transformToByteArray());
+      const cap = resolveReadBounds(options).maxBytes;
+      // Cheap refusal first, where the store told us the size up front.
+      this.refuseOverCap(filePath, response.ContentLength, cap);
+      return await this.readCapped(filePath, response.Body, cap);
     } catch (error: unknown) {
       /*
        * Only an OBJECT-level absence becomes `null`. `isNotFoundError` treats
@@ -628,6 +640,56 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @param error - Error to check
    * @returns true if error indicates file not found
    */
+  /**
+   * The object's bytes, refusing once more than `cap` have actually arrived.
+   *
+   * `ContentLength` is OPTIONAL in the SDK's response type, and this adapter
+   * explicitly supports MinIO, R2 and other compatible services — any of which
+   * may omit it or report it wrongly. A preflight check against metadata is
+   * therefore a courtesy that fails OPEN: trusting it alone leaves the cap
+   * unenforced exactly where an unusual backend is involved, which is where a
+   * caller most needs it.
+   *
+   * Counted while consuming, so an oversized body is abandoned partway rather
+   * than after it has all been buffered — the cap exists to bound memory, and
+   * one applied after `transformToByteArray` has already spent it.
+   *
+   * Falls back to buffering when the body is not async-iterable, which the SDK
+   * types permit. Stated rather than hidden: on that path the cap bounds what a
+   * caller RECEIVES rather than what the process allocates.
+   */
+  private async readCapped(
+    filePath: string,
+    body: NonNullable<GetObjectCommandOutput["Body"]>,
+    cap: number
+  ): Promise<Buffer> {
+    /*
+     * Probed rather than assumed. The SDK types the body as a union whose Node
+     * member is async-iterable and whose browser members are not, and this
+     * package supports compatible services whose transport may differ — so the
+     * capability is read off the value in hand instead of from the type.
+     */
+    const iterable = body as Partial<AsyncIterable<Uint8Array>>;
+    if (typeof iterable[Symbol.asyncIterator] !== "function") {
+      const whole = Buffer.from(await body.transformToByteArray());
+      if (whole.byteLength > cap) {
+        throw new StorageReadTooLargeError(filePath, cap, whole.byteLength);
+      }
+      return whole;
+    }
+
+    const chunks: Buffer[] = [];
+    let received = 0;
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
+      received += chunk.byteLength;
+      if (received > cap) {
+        throw new StorageReadTooLargeError(filePath, cap, received);
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
   /**
    * Refuse a read whose object is already known to exceed the caller's cap.
    *

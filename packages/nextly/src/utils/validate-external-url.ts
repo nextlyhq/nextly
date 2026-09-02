@@ -236,7 +236,14 @@ export async function validateExternalUrl(
 }
 
 /** Default response body cap: reject anything larger before buffering it all. */
-const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MiB
+/**
+ * How many bytes a bounded external read may buffer, absent a caller's own cap.
+ *
+ * Exported for the same reason as the deadline below: an adapter that never
+ * touches `safeFetch` still owes callers this default, and restating the number
+ * gives the tree two that drift.
+ */
+export const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MiB
 /** Default overall deadline covering DNS + connect + TLS + response. */
 /**
  * How long a bounded external read may take, absent a caller's own limit.

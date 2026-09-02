@@ -13,7 +13,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../errors/nextly-error";
-import { fetchStoredBytes } from "./fetch-stored-bytes";
+import {
+  fetchStoredBytes,
+  resolveReadBounds,
+  DEFAULT_READ_MAX_BYTES,
+  DEFAULT_READ_TIMEOUT_MS,
+} from "./fetch-stored-bytes";
 import { safeFetch, SafeFetchError } from "../utils/validate-external-url";
 import { isStorageReadTooLarge } from "./read-errors";
 
@@ -121,6 +126,22 @@ describe("reading a stored object over HTTP", () => {
     expect(outcome).toBeInstanceOf(SafeFetchError);
   });
 
+  it("answers null for a 404 whose ERROR PAGE blew the cap", async () => {
+    /*
+     * `safeFetch` caps while buffering, so a verbose CDN 404 page raises before
+     * a `Response` exists — and the `status === 404` check further down is
+     * never reached. The object is still gone, which is an ordinary answer this
+     * contract has a value for; it must not become an error because the page
+     * explaining it was long.
+     */
+    vi.mocked(safeFetch).mockRejectedValueOnce(
+      new SafeFetchError("too large", URL_, "response-too-large", 404)
+    );
+    expect(
+      await fetchStoredBytes(URL_, "f.woff2", "Test", { maxBytes: 10 })
+    ).toBeNull();
+  });
+
   it("does not translate when no status arrived at all", async () => {
     /*
      * Absence means "not known", never "was a success". A failure that happened
@@ -191,5 +212,48 @@ describe("reading a stored object over HTTP", () => {
     const options = vi.mocked(safeFetch).mock.calls[0]?.[1] ?? {};
     expect("maxResponseBytes" in options).toBe(false);
     expect("timeoutMs" in options).toBe(false);
+  });
+});
+
+describe("the bounds a read runs under", () => {
+  it("fills BOTH defaults when the caller names neither", () => {
+    /*
+     * The promise `StorageReadOptions` makes. It is asserted here rather than
+     * through an adapter because every adapter now asks this one function — and
+     * the defect it replaces was four implementations disagreeing: the
+     * URL-backed pair inherited `safeFetch`'s cap and deadline for free while
+     * local and S3, which never touch `safeFetch`, applied neither.
+     *
+     * Measured: removing these defaults broke NO adapter test, because every
+     * one of them passes an explicit bound. This is the case that fires.
+     */
+    expect(resolveReadBounds()).toEqual({
+      maxBytes: DEFAULT_READ_MAX_BYTES,
+      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
+    });
+    expect(resolveReadBounds({})).toEqual({
+      maxBytes: DEFAULT_READ_MAX_BYTES,
+      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
+    });
+  });
+
+  it("lets a caller override either bound independently", () => {
+    // The control: a resolver that ignored its argument would satisfy the case
+    // above perfectly while discarding every limit a caller set.
+    expect(resolveReadBounds({ maxBytes: 7 })).toEqual({
+      maxBytes: 7,
+      timeoutMs: DEFAULT_READ_TIMEOUT_MS,
+    });
+    expect(resolveReadBounds({ timeoutMs: 9 })).toEqual({
+      maxBytes: DEFAULT_READ_MAX_BYTES,
+      timeoutMs: 9,
+    });
+  });
+
+  it("defaults to the SAME numbers safeFetch uses, not a second copy", () => {
+    // Two spellings of one default agree today and drift the first time either
+    // is tuned, so these are the fetch layer's own constants re-exported.
+    expect(DEFAULT_READ_MAX_BYTES).toBe(10 * 1024 * 1024);
+    expect(DEFAULT_READ_TIMEOUT_MS).toBe(30_000);
   });
 });

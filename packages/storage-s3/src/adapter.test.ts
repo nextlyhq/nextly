@@ -57,12 +57,30 @@ function adapterWithSend(): {
   return { adapter, send };
 }
 
-/** A `GetObject` response body, in the shape the SDK's stream exposes. */
-function body(bytes: string): {
+/**
+ * A `GetObject` body in the shape the Node SDK exposes: async-iterable, and
+ * also able to buffer itself.
+ *
+ * Iterable because that is the path the adapter takes — it counts bytes as they
+ * arrive rather than trusting `ContentLength`, which compatible services may
+ * omit or misreport. `transformToByteArray` stays on it so the non-iterable
+ * fallback can be exercised by a body that omits the iterator.
+ */
+function body(
+  bytes: string,
+  chunkSize = 1024
+): {
   transformToByteArray: () => Promise<Uint8Array>;
+  [Symbol.asyncIterator]: () => AsyncGenerator<Uint8Array>;
 } {
+  const encoded = new TextEncoder().encode(bytes);
   return {
-    transformToByteArray: async () => new TextEncoder().encode(bytes),
+    transformToByteArray: async () => encoded,
+    async *[Symbol.asyncIterator]() {
+      for (let at = 0; at < encoded.length; at += chunkSize) {
+        yield encoded.subarray(at, at + chunkSize);
+      }
+    },
   };
 }
 
@@ -180,16 +198,54 @@ describe("S3StorageAdapter.read", () => {
     expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
-  it("attaches no signal when the caller named no deadline", async () => {
-    // The control for the case above: a `read` that always attached a signal
-    // would satisfy it while ignoring what the caller actually asked for.
+  it("still bounds the read when the caller named NO deadline", async () => {
+    /*
+     * This case previously asserted the opposite and so locked the defect in.
+     * `StorageReadOptions` promises the deadline whether or not a caller names
+     * one, and the URL-backed adapters keep that promise by inheriting
+     * `safeFetch`'s — while this one, reached by the media pipeline with no
+     * options at all, had none.
+     */
     const { adapter, send } = adapterWithSend();
     send.mockResolvedValueOnce({ Body: body("x"), ContentLength: 1 });
     await adapter.read("f.woff2");
     const options = send.mock.calls[0]?.[1] as
       | { abortSignal?: AbortSignal }
       | undefined;
-    expect(options?.abortSignal).toBeUndefined();
+    expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("REFUSES an oversized body when the store reported no length at all", async () => {
+    /*
+     * `ContentLength` is optional in the SDK response, and MinIO/R2 and other
+     * compatible services may omit it or report it wrongly — so a preflight
+     * check against metadata fails OPEN exactly where an unusual backend is
+     * involved. The cap is counted against bytes that actually arrive.
+     */
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("x".repeat(500), 100) });
+
+    const outcome = await adapter.read("big.bin", { maxBytes: 150 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
+  });
+
+  it("REFUSES a body larger than a LYING ContentLength", async () => {
+    // The sharper half: metadata that is present but wrong passes the
+    // preflight, so only counting what arrives can catch it.
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({
+      Body: body("x".repeat(500), 100),
+      ContentLength: 5,
+    });
+
+    const outcome = await adapter.read("liar.bin", { maxBytes: 150 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
   });
 
   it("answers an empty buffer for a zero-byte object, not null", async () => {

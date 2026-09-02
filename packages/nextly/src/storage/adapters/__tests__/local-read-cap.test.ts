@@ -60,9 +60,14 @@ describe("LocalStorageAdapter.read bounds", () => {
     expect(outcome).not.toBeNull();
   });
 
-  it("reads without a cap when the caller names none", async () => {
-    // The control for the refusal above: an adapter that refused every bounded
-    // read would satisfy it while ignoring what the caller asked for.
+  it("reads under the DEFAULT cap when the caller names none", async () => {
+    /*
+     * Not "without a cap": naming none now means the shared default, the same
+     * one `safeFetch` gives the URL-backed adapters. This file is far under it,
+     * so it reads — which is also the control for the refusal above, since an
+     * adapter refusing every bounded read would satisfy that case while
+     * ignoring what the caller asked for.
+     */
     await writeFile(join(base, "big.txt"), "x".repeat(500));
     const bytes = await adapter.read("big.txt");
     expect(bytes?.length).toBe(500);
