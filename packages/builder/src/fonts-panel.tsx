@@ -49,6 +49,7 @@ import {
   tokenSummary,
 } from "./font-library";
 import type { FamilyReading, FontTokenRow } from "./font-library";
+import { CSS_NUMBER } from "./style-numeric";
 
 export interface FontsPanelProps {
   /**
@@ -404,37 +405,23 @@ function isUsableWeight(weight: string): boolean {
 function weightValue(part: string): number | undefined {
   if (part === "normal") return 400;
   if (part === "bold") return 700;
-  // The spelling is checked BEFORE the conversion, because the conversion is
-  // what loses the difference: `Number` and CSS read different languages.
+  /*
+   * The spelling is judged BEFORE the conversion, because the conversion is
+   * what loses the difference. `Number("0x190")` is 400, so a bound checked
+   * afterwards passes while the descriptor still carries `0x190` — measured in
+   * a browser, `font-weight: 0x190` and `font-weight: 400.` are both dropped
+   * from an `@font-face` rule, and the face then matches at a weight nobody
+   * chose.
+   *
+   * The grammar itself is {@link style-numeric}'s, which the numeric style
+   * controls already judge against. A second copy of one question is what this
+   * file would otherwise be adding, and the two would agree until one of them
+   * was corrected.
+   */
   if (!CSS_NUMBER.test(part)) return undefined;
   const value = Number(part);
   return value >= 1 && value <= 1000 ? value : undefined;
 }
-
-/**
- * A CSS `<number>`: an optional sign, digits with an optional fraction, and an
- * optional exponent.
- *
- * A decimal point must be FOLLOWED BY A DIGIT. The tokenizer consumes `.` only
- * when a digit comes next, so `400.` ends the number at `400` and leaves the
- * point as a separate token — which the descriptor grammar does not admit.
- * Measured in a browser: `font-weight: 400.` inside `@font-face` is dropped,
- * while `400.0` and `400.5` are kept.
- *
- * `Number` was doing this job and reads a LARGER language than CSS does, which
- * fails in the silent direction: `0x190` converts to 400 and passes any bound
- * checked afterwards, while the string stored in the descriptor is still
- * `0x190` — which CSS cannot parse, so the browser drops the declaration and
- * matches the face at a weight nobody chose. Measured, the three radix
- * prefixes `0x`, `0b` and `0o` all reach that outcome.
- *
- * Written to the CSS grammar rather than as a list of JavaScript's extras, so
- * a spelling nobody enumerated is refused rather than admitted. The forms CSS
- * does allow are kept, and they are not exotic: `1e3`, `.5e3`, `400.` and
- * `+400` are all valid `<number>` tokens and all reach here through the free
- * text field.
- */
-const CSS_NUMBER = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
 
 /**
  * A key that separates the faces a family is really split into.

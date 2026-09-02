@@ -12,6 +12,7 @@ import { STYLE_CATALOG, type StyleLeaf } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
 import {
+  CSS_NUMBER,
   measurementOf,
   steppedValue,
   toggleOptionsFor,
@@ -57,6 +58,48 @@ const Z_INDEX: StyleLeaf = (() => {
   if (arm === undefined) throw new Error("position.zIndex has no number arm");
   return arm as unknown as StyleLeaf;
 })();
+
+describe("the CSS number grammar", () => {
+  /*
+   * Its docblock states three properties and nothing asserted any of them, so
+   * a correction to the pattern could quietly change what every consumer
+   * accepts. Two consumers now share it — the numeric style controls and the
+   * fonts panel's `font-weight` field — and the second reaches a stylesheet,
+   * where a spelling CSS cannot parse costs the whole declaration.
+   */
+  it("refuses the radix spellings `Number` accepts", () => {
+    // Each converts to a finite number in range, so a bounds check applied
+    // after conversion passes while the stored string stays unparseable.
+    for (const spelling of ["0x190", "0b110001000", "0o620"]) {
+      expect(CSS_NUMBER.test(spelling), spelling).toBe(false);
+      expect(Number.isFinite(Number(spelling)), `${spelling} via Number`).toBe(
+        true
+      );
+    }
+  });
+
+  it("requires a digit AFTER a decimal point", () => {
+    // The tokenizer consumes `.` only when a digit follows, so `400.` is a
+    // number followed by a stray delimiter rather than a number.
+    expect(CSS_NUMBER.test("400.")).toBe(false);
+    expect(CSS_NUMBER.test("400.0")).toBe(true);
+    expect(CSS_NUMBER.test(".5")).toBe(true);
+  });
+
+  it("keeps the sign and exponent forms, which CSS does allow", () => {
+    // The control. A pattern narrowed to plain digits refuses every one of
+    // these, and each is a spelling a free-text field really receives.
+    for (const spelling of ["400", "+400", "-400", "1e3", "1E3", ".5e3"]) {
+      expect(CSS_NUMBER.test(spelling), spelling).toBe(true);
+    }
+  });
+
+  it("refuses what is not a number at all", () => {
+    for (const spelling of ["", ".", "1e", "4_00", "Infinity", "70O"]) {
+      expect(CSS_NUMBER.test(spelling), spelling).toBe(false);
+    }
+  });
+});
 
 describe("what a measurement is", () => {
   it("decomposes a single measurement into its number and unit", () => {
