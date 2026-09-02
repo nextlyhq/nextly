@@ -8,10 +8,7 @@ import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
-import {
-  API_KEYS_LIST_PERMISSIONS,
-  SIDEBAR_NAVIGATION,
-} from "@admin/constants/navigation";
+import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
@@ -36,7 +33,13 @@ import {
   hasPluginsSection,
   hasVisiblePluginCollection,
 } from "./lib/has-plugins-section";
+import {
+  canAccessApiKeys,
+  canAccessWebhooks,
+  hasSettingsSection as hasSettingsSectionHelper,
+} from "./lib/has-settings-section";
 import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
+import { placeStandalonePlugins } from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
@@ -93,80 +96,25 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     });
   }, [standalonePlugins, readableResources, capabilities.canViewSettings]);
 
-  // Build dynamic menu items for standalone plugins, positioned by `after` + `order`
+  // Standalone plugins take their place in the rail by the anchor they declare.
+  // The placement rule lives in `lib/` with the other rail decisions; what stays
+  // here is the icon resolution, which needs this module's icon registry.
   const filteredMenuItems = useMemo(() => {
-    const ID_TO_ANCHOR: Record<string, string> = {
-      dashboard: "dashboard",
-      collections: "collections",
-      singles: "singles",
-      media: "media",
-      plugins: "plugins",
-      settings: "settings",
-    };
-
-    if (visibleStandalonePlugins.length === 0) return baseMenuItems;
-
     const iconMap = Icons as unknown as Record<string, React.ElementType>;
-
-    const byAnchor = new Map<
-      string,
-      Array<{ item: MainMenuItem; order: number }>
-    >();
-    for (const sp of visibleStandalonePlugins) {
-      const slug = pluginSlug(sp.name);
-      // A menu item stores an ElementType rendered as `<Icon className=… />`,
-      // so this surface cannot show an image. It says so rather than resolving
-      // an asset and discarding it, which would also discard the lucide name a
-      // plugin declared alongside the asset for precisely this surface.
-      const resolved = resolvePluginIcon(sp, {
-        fallback: "Database",
-        allowAsset: false,
-      });
-      const iconName = resolved.name;
-      const IconComponent = iconMap[iconName] || Database;
-      // The former top-level Users icon is gone; User Management now lives
-      // under Settings, so a plugin still declaring `after: "users"` is anchored
-      // next to Settings instead of falling through to the end of the rail.
-      const rawAnchor = sp.after || "plugins";
-      const anchor = rawAnchor === "users" ? "settings" : rawAnchor;
-
-      const entry = {
-        item: {
-          id: `standalone-${slug}` as MainMenuCategory,
-          label: sp.appearance?.label || sp.name,
-          icon: IconComponent,
-          href: "#",
-        },
-        order: sp.order ?? 100,
-      };
-
-      if (!byAnchor.has(anchor)) byAnchor.set(anchor, []);
-      byAnchor.get(anchor)!.push(entry);
-    }
-
-    for (const group of byAnchor.values()) {
-      group.sort((a, b) => a.order - b.order);
-    }
-
-    const result: MainMenuItem[] = [];
-    for (const item of baseMenuItems) {
-      result.push(item);
-      const anchor = ID_TO_ANCHOR[item.id];
-      if (anchor && byAnchor.has(anchor)) {
-        for (const { item: standaloneItem } of byAnchor.get(anchor)!) {
-          result.push(standaloneItem);
-        }
-        byAnchor.delete(anchor);
-      }
-    }
-
-    for (const group of byAnchor.values()) {
-      for (const { item: standaloneItem } of group) {
-        result.push(standaloneItem);
-      }
-    }
-
-    return result;
+    return placeStandalonePlugins(baseMenuItems, visibleStandalonePlugins, {
+      slugOf: pluginSlug,
+      iconFor: plugin => {
+        // A menu item stores an ElementType rendered as `<Icon className=… />`,
+        // so this surface cannot show an image. It says so rather than
+        // resolving an asset and discarding it, which would also discard the
+        // lucide name a plugin declared alongside the asset for this surface.
+        const resolved = resolvePluginIcon(plugin, {
+          fallback: "Database",
+          allowAsset: false,
+        });
+        return iconMap[resolved.name] || Database;
+      },
+    });
   }, [baseMenuItems, visibleStandalonePlugins]);
 
   // Fetch data for automatic navigation
@@ -244,27 +192,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const hasMediaSection = hasPermissionDataPending
     ? true
     : capabilities.canViewMedia;
-  // What OPENS the list, not every grant naming the resource: `create-` and
-  // `delete-api-keys` act through the API without listing, so showing the entry
-  // to them offered a link that turned them away.
-  const canAccessApiKeys = API_KEYS_LIST_PERMISSIONS.some(hasPermission);
-  // Any webhook grant reveals the link, matching the list route: read/update
-  // view the list, create reaches the create form from it.
-  const canAccessWebhooks =
-    hasPermission("read-webhooks") ||
-    hasPermission("update-webhooks") ||
-    hasPermission("create-webhooks");
-  // Settings now also hosts User Management (Users, User Fields, Roles), so a
-  // user whose only access is users/roles must still see the Settings icon.
-  const hasSettingsSection = hasPermissionDataPending
-    ? true
-    : capabilities.canViewSettings ||
-      capabilities.canManageEmailProviders ||
-      capabilities.canManageEmailTemplates ||
-      canAccessApiKeys ||
-      canAccessWebhooks ||
-      capabilities.canViewUsers ||
-      capabilities.canViewRoles;
+  const apiKeysReachable = canAccessApiKeys(hasPermission);
+  const webhooksReachable = canAccessWebhooks(hasPermission);
+  const hasSettingsSection = hasSettingsSectionHelper(capabilities, {
+    isPending: hasPermissionDataPending,
+    hasPermission,
+  });
   const hasBuildersSection = showBuilder;
 
   const visibleMenuItems = useMemo(
@@ -373,8 +306,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   // manage-settings and returns 403.
   const settingsHref = resolveSettingsLanding({
     hasPermission,
-    canAccessApiKeys,
-    canAccessWebhooks,
+    canAccessApiKeys: apiKeysReachable,
+    canAccessWebhooks: webhooksReachable,
   });
 
   const resolveItemHref = (item: MainMenuItem): string =>
@@ -527,8 +460,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           onPluginSearchChange: setPluginSearch,
           isActive,
           hasPermission,
-          canAccessApiKeys,
-          canAccessWebhooks,
+          canAccessApiKeys: apiKeysReachable,
+          canAccessWebhooks: webhooksReachable,
           pluginCollectionsForSection,
           showBuilder,
         }}
