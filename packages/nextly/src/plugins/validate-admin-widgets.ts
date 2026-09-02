@@ -17,6 +17,7 @@
  * @module plugins/validate-admin-widgets
  */
 
+import type { CanonicalWidget } from "../domains/widgets/canonical";
 import {
   actionProblem,
   chromeProblem,
@@ -412,4 +413,97 @@ export function assertAdminWidgets(plugins: PluginDefinition[]): void {
       warnUnknownArchetype(plugin.name, widget);
     }
   }
+}
+
+/**
+ * Every contributed widget across every plugin, reduced to the summary layout
+ * resolution reads.
+ *
+ * Built from `validatedAdminWidgets`, which is the same reduction admin-meta
+ * publishes — so the server's canonical set and the payload the admin renders
+ * from cannot disagree about which contributed widgets exist. A plugin whose
+ * declaration this validator refuses contributes nothing here, exactly as it
+ * contributes nothing to the admin.
+ *
+ * Reads the fields WITHOUT narrowing them: a contribution may come from a
+ * plugin built against a newer core, so `defaultSize` is copied as whatever
+ * string it is rather than checked against this core's vocabulary. Refusing an
+ * unknown one here would drop the whole card from the arrangement over a value
+ * the admin already survives.
+ */
+/** A contributed field, when it is a usable string. */
+function contributedText(
+  declaration: Record<string, unknown>,
+  field: string
+): string | undefined {
+  const value = declaration[field];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * One contributed declaration, reduced to the summary layout resolution reads,
+ * or `undefined` when it carries no usable id.
+ *
+ * Reads the fields WITHOUT narrowing them: a contribution may come from a
+ * plugin built against a newer core, so `defaultSize` is copied as whatever
+ * string it is rather than checked against this core's vocabulary. Refusing an
+ * unknown one here would drop the whole card from the arrangement over a value
+ * the admin already survives.
+ */
+function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
+  const declaration = widget as unknown as Record<string, unknown>;
+  const id = contributedText(declaration, "id");
+  if (id === undefined) return undefined;
+
+  const requiredPermission = contributedText(declaration, "requiredPermission");
+  const defaultSize = contributedText(declaration, "defaultSize");
+  const defaultHeight = contributedText(declaration, "defaultHeight");
+  const defaultOrder = declaration.defaultOrder;
+
+  return {
+    id,
+    ...(requiredPermission === undefined ? {} : { requiredPermission }),
+    ...(defaultSize === undefined ? {} : { defaultSize }),
+    ...(defaultHeight === undefined ? {} : { defaultHeight }),
+    // `Number.isFinite`, so a `NaN` or an infinity a plugin computed cannot
+    // become a sort key that puts the card nowhere in particular.
+    ...(typeof defaultOrder === "number" && Number.isFinite(defaultOrder)
+      ? { defaultOrder }
+      : {}),
+  };
+}
+
+/**
+ * Every contributed widget across every plugin, reduced to the summary layout
+ * resolution reads.
+ *
+ * Built from `validatedAdminWidgets`, which is the same reduction admin-meta
+ * publishes — so the server's canonical set and the payload the admin renders
+ * from cannot disagree about which contributed widgets exist. A plugin whose
+ * declaration that validator refuses contributes nothing here, exactly as it
+ * contributes nothing to the admin.
+ */
+export function contributedWidgetSummaries(
+  plugins: readonly PluginDefinition[]
+): CanonicalWidget[] {
+  return plugins.flatMap(plugin =>
+    // 🔴 Disabled plugins contribute NOTHING, matching `buildPluginAdminMeta`,
+    // which withholds every behavioural admin surface — menu, pages, settings,
+    // widgets — from a plugin the config has switched off. Without this the two
+    // answers drifted: the layout endpoint put a disabled plugin's widget ids
+    // into default placements, into `available` and into the scope token, while
+    // the admin had no declaration to draw any of them with. Ghost cards the
+    // reader could arrange and never see.
+    //
+    // `enabled !== false` rather than `enabled === true`, because the field is
+    // optional and its absence means enabled — the same reading admin-meta,
+    // `reload-config` and the field-type registry each apply.
+    plugin.enabled === false
+      ? []
+      : (validatedAdminWidgets(plugin) ?? [])
+          .map(toSummary)
+          .filter(
+            (summary): summary is CanonicalWidget => summary !== undefined
+          )
+  );
 }
