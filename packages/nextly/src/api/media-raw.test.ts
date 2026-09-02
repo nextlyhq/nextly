@@ -77,11 +77,12 @@ async function getRaw(
   );
 }
 
-function storedAs(mimeType: string): void {
+function storedAs(mimeType: string, size = WOFF2_BYTES.length): void {
   mocks.mediaService.findById.mockResolvedValue({
     id: "m1",
     filename: "2026/04/face.woff2",
     mimeType,
+    size,
   });
 }
 
@@ -153,6 +154,49 @@ describe("the public byte route", () => {
       "2026/04/face.woff2",
       expect.objectContaining({ maxBytes: 20 * 1024 * 1024 })
     );
+  });
+
+  it("still serves a font STORED under a cap the install has since lowered", async () => {
+    /*
+     * The policy governs what may be written next; it does not describe what
+     * was accepted historically. An install that lowers `fileSize` would
+     * otherwise strand every larger font already in the store — permanently,
+     * on a route that cannot explain itself — so the row's own size is part
+     * of the bound.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "1mb" } },
+    }));
+    storedAs("font/woff2", 2 * 1024 * 1024);
+
+    expect((await getRaw("m1")).status).toBe(200);
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(2 * 1024 * 1024);
+    // Not the lowered policy, which would have refused the stored object.
+    expect(options.maxBytes).not.toBe(1024 * 1024);
+  });
+
+  it("keeps the configured cap when the row understates its object", async () => {
+    /*
+     * The other term, and the reason the bound is not the row's size alone: a
+     * row written before the size was taken from the validated bytes can
+     * record less than the object holds, and trusting it would refuse the file
+     * the wider cap exists to serve.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "20mb" } },
+    }));
+    storedAs("font/woff2", 1);
+
+    expect((await getRaw("m1")).status).toBe(200);
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(20 * 1024 * 1024);
   });
 
   it("falls back to the default bound when no cap is configured", async () => {

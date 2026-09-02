@@ -40,6 +40,7 @@ import { MediaService } from "../../../services/media";
 import type { RequestContext } from "../../../services/shared";
 import type { WebhookFastDrainScheduler } from "../after-drain";
 import type { WebhookEvent } from "../types";
+import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
 
 let current: TestNextly | undefined;
 
@@ -97,7 +98,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const result = await media.uploadMedia(
       {
-        file: Buffer.from("not-really-an-image"),
+        file: pdfDocument("not-really-an-image"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 19,
@@ -124,7 +125,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfDocument("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -154,7 +155,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfDocument("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -184,7 +185,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfDocument("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -218,7 +219,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfDocument("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -252,7 +253,7 @@ describe("webhook outbox capture — media (integration)", () => {
     await seedUser(current!, "editor-7");
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -287,7 +288,7 @@ describe("webhook outbox capture — media (integration)", () => {
     await seedUser(current!, "editor-7");
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -321,7 +322,7 @@ describe("webhook outbox capture — media (integration)", () => {
     });
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -356,7 +357,7 @@ describe("webhook outbox capture — media (integration)", () => {
     });
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -403,7 +404,7 @@ describe("webhook outbox capture — media (integration)", () => {
 
     await legacy.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfDocument("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -427,7 +428,7 @@ describe("webhook outbox capture — media (integration)", () => {
 
     await current!.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -452,7 +453,7 @@ describe("webhook outbox capture — media (integration)", () => {
 
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,

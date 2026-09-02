@@ -129,19 +129,26 @@ export async function handleServeMediaBytes(
    * including the local one this route was supposed to work on first.
    */
   /*
-   * Bounded by the number of bytes this installation agreed to STORE. A
-   * constant here was smaller than a configured `security.limits.fileSize`,
-   * so a font accepted at upload became one this route refused on every
-   * request — permanently, and with a 413 the author cannot act on.
+   * The smallest bound that cannot refuse an object this product legitimately
+   * stored, which needs BOTH terms:
    *
-   * The upload cap is the only defensible bound: below it the product refuses
-   * to hand back what it took, and there is no separate question this route
-   * answers that the policy has not already answered.
+   * - The row's own recorded size, because the policy describes what may be
+   *   written NEXT and not what was accepted historically. Lowering
+   *   `security.limits.fileSize` would otherwise strand every larger font
+   *   already in the store, permanently, on a route with no way to say so.
+   * - The current cap, because a row written before the size was taken from
+   *   the validated bytes can understate its object, and a bound that trusts
+   *   an understated number refuses the very file it was widened to serve.
+   *
+   * A constant was neither, and refused a font accepted moments earlier under
+   * a configured cap larger than it. Both numbers are written by this product
+   * rather than supplied by a caller: the media services record the length of
+   * the bytes they actually stored.
    */
   const bytes = await readStoredMediaBytes(
     getMediaStorage().getAdapterForCollection(MEDIA_COLLECTION),
     media.filename,
-    resolveUploadPolicy().maxSize
+    Math.max(media.size, resolveUploadPolicy().maxSize)
   );
   // The row outlived its object. Same answer as a row that never existed,
   // because from outside they are the same thing: there is no font here.
