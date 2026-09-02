@@ -29,6 +29,15 @@ export {
  */
 export interface ListJobsParams {
   limit?: number;
+  /**
+   * Restrict to one registered task.
+   *
+   * Sent to the server rather than applied to the result, because the endpoint
+   * returns the most recent N rows: filtering afterwards filters a window a
+   * busier task may already have filled, and this task's failure would be
+   * missing from a result that looks complete.
+   */
+  slug?: string;
 }
 
 /** The window sizes the screen offers. The endpoint's own ceiling is 200. */

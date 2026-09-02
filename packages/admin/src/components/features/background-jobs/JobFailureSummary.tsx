@@ -83,9 +83,38 @@ export const JobFailureSummary: React.FC<JobFailureSummaryProps> = ({
   limit = 50,
 }) => {
   const canRead = useCan("manage-background-jobs");
-  const { data } = useJobs({ limit }, { enabled: canRead });
+  // Narrowed by the SERVER when a task is named. Filtering the global window
+  // here would filter rows a busier task had already crowded out, so this
+  // notice would stay silent about exactly the failure it was mounted to
+  // report.
+  const { data, isError } = useJobs(
+    { limit, ...(slug === undefined ? {} : { slug }) },
+    { enabled: canRead }
+  );
 
-  if (!canRead || !data) return null;
+  if (!canRead) return null;
+
+  /*
+   * A read that FAILED is not a read that found nothing.
+   *
+   * Collapsing them renders the same silence in both cases, which tells an
+   * operator that nothing needs attention when the truth is that nothing could
+   * be checked — the one wrong answer a safety notice must not give. Said
+   * quietly, because it is a degraded monitor rather than a failed job.
+   */
+  if (isError) {
+    return (
+      <Alert variant="warning" role="status">
+        <AlertTitle>Background job status unavailable</AlertTitle>
+        <AlertDescription>
+          The queue could not be read, so this page cannot say whether anything
+          failed.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (!data) return null;
 
   const failures = jobsNeedingAttention(data.items, slug);
   if (failures.length === 0) return null;

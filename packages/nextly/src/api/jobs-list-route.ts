@@ -47,6 +47,18 @@ import { withErrorHandler } from "./with-error-handler";
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
+/**
+ * The task to restrict the window to, or `undefined` for every task.
+ *
+ * Read as an opaque string and passed to the query, never interpolated: the
+ * repository parameterises it. An empty value is "no filter" rather than a task
+ * named "", which is what a form submitting a blank field sends.
+ */
+function readSlug(request: Request): string | undefined {
+  const raw = new URL(request.url).searchParams.get("slug");
+  return raw === null || raw.length === 0 ? undefined : raw;
+}
+
 /** Clamped rather than refused: a caller asking for too much gets the ceiling. */
 function readLimit(request: Request): number {
   const raw = new URL(request.url).searchParams.get("limit");
@@ -90,7 +102,20 @@ export const listJobsRoute = withErrorHandler(async (request: Request) => {
    * an operator reading "showing the most recent 50 of more" would go looking
    * for jobs that are not there.
    */
-  const window = await repository.listRecent({ limit: limit + 1 });
+  const slug = readSlug(request);
+  /*
+   * The slug is applied by the QUERY, not after it.
+   *
+   * This endpoint returns the most recent N rows, so a caller that fetched the
+   * global window and filtered it afterwards would be filtering rows a busier
+   * task had already crowded out: its own task's failure would be missing from
+   * a result that looks complete. The filter has to happen before the limit or
+   * it does not happen at all.
+   */
+  const window = await repository.listRecent({
+    limit: limit + 1,
+    ...(slug === undefined ? {} : { slug }),
+  });
   const hasNext = window.length > limit;
   const rows = hasNext ? window.slice(0, limit) : window;
   const now = new Date();

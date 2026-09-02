@@ -18,6 +18,8 @@ import type { JobListItem, ListJobsParams } from "../types/jobs";
 function toQuery(params: ListJobsParams): string {
   const search = new URLSearchParams();
   if (params.limit !== undefined) search.set("limit", String(params.limit));
+  // A blank slug is "no filter"; only a non-empty value narrows the query.
+  if (params.slug) search.set("slug", params.slug);
   const query = search.toString();
   return query ? `?${query}` : "";
 }

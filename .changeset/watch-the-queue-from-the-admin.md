@@ -57,15 +57,26 @@ because otherwise fifty rows read as the whole story. And it states the
 seven-day retention, because a list that silently forgets is one an operator
 reads as proof a job never ran.
 
-The Settings rail entry now opens for the background-jobs grant. It is a
-capability list that decides whether the panel appears at all, separate from the
-gate on each destination inside it, so an operator holding only
-`manage-background-jobs` passed the inner gate and was stopped by the outer one
-— the page reachable only by typing its URL, with nothing erroring to say so.
-That list is a second enumeration of the settings navigation, which is why the
-omission was possible; deriving the rail from the panel's own visible
-destinations is the real repair and is filed separately, because it means
-reworking a component this change has no other business in.
+The grants that reveal the Settings panel are now read off the panel itself.
+A capability list decides whether the rail entry appears at all, separate from
+the gate on each destination inside it, and it was maintained by hand beside the
+navigation table — so Background Jobs was added to one side only, its own gate
+passed, and an operator holding just `manage-background-jobs` was stopped by the
+rail above it, with the page reachable solely by typing its URL and nothing
+erroring to say so. The list is now derived from the navigation, so a
+destination added to the panel reveals it by construction and the same omission
+cannot be made twice.
+
+The failure summary asks the SERVER for one task's jobs. It was fetching the
+global recent window and filtering it, which filters rows a busier task has
+already crowded out: mounted beside a release, it would have stayed silent about
+that release's failure whenever webhook deliveries were noisier. The endpoint
+takes a `slug` and narrows in the query, before the limit.
+
+A failed read no longer looks like a healthy queue. When the request errors
+there is no data, and rendering nothing there is exactly what "nothing failed"
+renders — telling an operator that nothing needs attention when the truth is
+that nothing could be checked. It now says the queue could not be read.
 
 Retention is presented as the DEFAULT, not as the installation's policy. A host
 passing `retentionMs` to `runJobsPass` keeps rows for another period, and `null`

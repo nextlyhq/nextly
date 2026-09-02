@@ -108,6 +108,32 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
     );
   });
 
+  it("reveals Settings for EVERY destination the panel declares", () => {
+    /*
+     * The general form, and the specific case above is one instance of it.
+     * The capability that opens the rail is derived from `SETTINGS_NAV`, so a
+     * destination added to the panel reveals it by construction — which is the
+     * property that failed when the list was maintained by hand and Background
+     * Jobs was added to one side only.
+     *
+     * User Management is excluded because those destinations answer to their
+     * own capabilities, which the rail consults separately.
+     */
+    const gated = SETTINGS_NAV.filter(group => group.id !== "users")
+      .flatMap(group => group.items)
+      .filter(item => item.gate.kind === "permission");
+    for (const item of gated) {
+      const permission =
+        item.gate.kind === "permission" ? item.gate.permission : "";
+      expect(
+        buildCapabilities([permission], false).canViewSettings,
+        `${item.id} (${permission})`
+      ).toBe(true);
+    }
+    // The premise: this walked real destinations, not an empty list.
+    expect(gated.length).toBeGreaterThan(3);
+  });
+
   it("keeps revealing it for the grants it always revealed for", () => {
     // Adding to this list must not narrow it. One representative grant per
     // group it already covered.

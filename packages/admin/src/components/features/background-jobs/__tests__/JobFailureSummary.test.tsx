@@ -49,6 +49,7 @@ function job(overrides: Partial<JobListItem> = {}): JobListItem {
 
 const holding = (items: JobListItem[], hasNext = false) => ({
   data: { items, meta: { hasNext } },
+  isError: false,
 });
 
 describe("jobsNeedingAttention", () => {
@@ -135,6 +136,31 @@ describe("JobFailureSummary", () => {
     const alert = screen.getByRole("status");
     expect(alert).toHaveTextContent(/2 background jobs failed/i);
     expect(alert).not.toHaveTextContent(/At least/i);
+  });
+
+  it("says the queue could not be READ rather than that nothing failed", () => {
+    /*
+     * The dangerous collapse. When the request fails React Query supplies no
+     * data, and returning null there renders exactly what a healthy queue with
+     * no failures renders. On a release page that silence reads as "nothing
+     * needs attention" when the truth is that nothing could be checked — the
+     * one answer a safety notice must never give.
+     */
+    useJobs.mockReturnValue({ data: undefined, isError: true });
+    render(<JobFailureSummary />);
+    expect(screen.getByRole("status")).toHaveTextContent(/could not be read/i);
+  });
+
+  it("asks the SERVER for one task rather than filtering the window", () => {
+    // Filtering afterwards filters a window a busier task may already have
+    // filled, so this task's failure would be missing from a result that looks
+    // complete.
+    useJobs.mockReturnValue(holding([]));
+    render(<JobFailureSummary slug="releases:drain" />);
+    expect(useJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: "releases:drain" }),
+      expect.anything()
+    );
   });
 
   it("renders NOTHING when every job is fine", () => {

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { SETTINGS_NAV } from "../components/layout/sidebar/lib/settings-nav";
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
@@ -56,6 +57,55 @@ type SystemCapabilities = Omit<
  * generic `action-resource` lookup finds nothing and answers false for a caller
  * who holds the grant.
  */
+/** Any grant that reaches the API-keys screen; the panel gates it as a capability. */
+const API_KEY_SLUGS = [
+  "read-api-keys",
+  "create-api-keys",
+  "update-api-keys",
+  "delete-api-keys",
+] as const;
+
+/** Any grant that reaches the webhooks screen, for the same reason. */
+const WEBHOOK_SLUGS = [
+  "read-webhooks",
+  "update-webhooks",
+  "create-webhooks",
+] as const;
+
+/**
+ * The grants that reveal the Settings panel, READ OFF the panel itself.
+ *
+ * This was a hand-written list beside `SETTINGS_NAV`, and the duplication was
+ * not theoretical: Background Jobs was added to the panel, its own gate passed,
+ * and the rail above it stayed suppressed for anyone holding only that grant —
+ * the page reachable solely by typing its URL, with nothing erroring to say so.
+ * A destination added to the table now reveals the panel by construction, so
+ * the same omission cannot be made twice.
+ *
+ * User Management is excluded deliberately. Those destinations answer to
+ * `canViewUsers` and `canViewRoles`, which are separate capabilities the rail
+ * already consults, and folding them in here would widen every other consumer
+ * of `canViewSettings` to anybody who may read users.
+ */
+function settingsPanelSlugs(): string[] {
+  const slugs = new Set<string>();
+  for (const group of SETTINGS_NAV) {
+    if (group.id === "users") continue;
+    for (const item of group.items) {
+      if (item.gate.kind === "permission") {
+        slugs.add(item.gate.permission);
+        continue;
+      }
+      for (const slug of item.gate.capability === "apiKeys"
+        ? API_KEY_SLUGS
+        : WEBHOOK_SLUGS) {
+        slugs.add(slug);
+      }
+    }
+  }
+  return [...slugs];
+}
+
 const SYSTEM_CAPABILITY_SLUGS: Record<
   keyof SystemCapabilities,
   readonly string[]
@@ -63,26 +113,8 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
   canViewUsers: ["read-users"],
   canViewRoles: ["read-roles"],
   canViewMedia: ["read-media", "manage-media"],
-  canViewSettings: [
-    "manage-settings",
-    "read-api-keys",
-    "create-api-keys",
-    "update-api-keys",
-    "delete-api-keys",
-    "manage-email-providers",
-    "manage-email-templates",
-    // Background Jobs lives in the Settings panel, so its grant has to reveal
-    // the panel. Without it the destination passes its own gate while the rail
-    // entry above stays suppressed, and an authorized operator has no way in
-    // short of typing the URL — with nothing erroring to say so.
-    //
-    // This list is a second enumeration of `SETTINGS_NAV`, which is why the
-    // omission was possible at all; deriving the rail from the panel's visible
-    // destinations is the real repair and is filed separately, because it means
-    // reworking a 504-line component that this change has no other business in.
-    "manage-background-jobs",
-  ],
-  canViewWebhooks: ["read-webhooks", "update-webhooks", "create-webhooks"],
+  canViewSettings: settingsPanelSlugs(),
+  canViewWebhooks: [...WEBHOOK_SLUGS],
   // Read alone. Unlike webhooks, assembling and publishing releases do not
   // reveal the section on their own — the list is a read, and a caller who may
   // create one but not read them would land on a page that shows nothing.
