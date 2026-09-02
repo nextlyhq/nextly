@@ -603,10 +603,15 @@
  * would let the longest label in a group set the indent for every other one, so
  * the controls in Typography and the controls in Spacing would start at
  * different places and stop reading as columns at all.
+ *
+ * Its width is what the longest ORDINARY label needs rather than a round
+ * number: the logical side names — "Block start", "Inline start" — are the
+ * longest the catalog produces, and at a narrower column they wrap onto two
+ * lines, which puts the row back to the height the stacked layout had.
  */
 .nx-inspector__field {
   display: grid;
-  grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
   align-items: center;
   column-gap: 0.5rem;
   row-gap: 0.25rem;
