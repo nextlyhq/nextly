@@ -124,7 +124,17 @@ export function useLayoutEditor(
       scope: current.scope,
     });
   }, [layout.layout]);
-  const cancel = useCallback(() => setDraft(null), []);
+  // 🔴 The failed-write state goes with the draft, because the message it
+  // renders describes the draft. After a non-conflict failure the chrome says
+  // "your changes are still here -- try again"; Cancel discarded them and left
+  // that sentence on screen, pointing at nothing, and it was still there when
+  // the reader next entered edit mode. A mutation error outlives the thing it
+  // is about unless something clears it.
+  const cancel = useCallback(() => {
+    setDraft(null);
+    layout.save.reset();
+    layout.reset.reset();
+  }, [layout]);
 
   const save = useCallback(() => {
     if (!draft) return;

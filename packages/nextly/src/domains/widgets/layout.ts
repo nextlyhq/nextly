@@ -344,23 +344,38 @@ function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
 export function defaultPlacements(
   widgets: readonly PlaceableWidget[]
 ): WidgetPlacement[] {
-  return [...widgets].sort(byDeclaredOrder).map((widget, index) => ({
-    id: widget.id,
-    widgetId: widget.id,
-    order: index * DEFAULT_ORDER_STEP,
-    hidden: false,
-    // The declared geometry travels WITH the placement, rather than being left
-    // for a reader to look up. A placement is a persisted arrangement, and an
-    // arrangement that omits its own size is not one: the first save would
-    // store a row with no `size`, so a later change to the plugin's
-    // `defaultSize` would silently resize what the reader was told is their
-    // saved layout. Copied as strings, because a newer plugin's value is a
-    // shape this core has to survive rather than a vocabulary it can check.
-    size: widget.defaultSize,
-    ...(widget.defaultHeight === undefined
-      ? {}
-      : { height: widget.defaultHeight }),
-  }));
+  // 🔴 CAPPED at the same ceiling a write is. Nothing bounds how many widgets a
+  // registry and a plugin set can declare between them, and `layoutSizeProblem`
+  // refuses a submission above `MAX_PLACEMENTS` -- so an install past that
+  // number answered the read with a default arrangement that could never be
+  // saved. The first gesture a reader made was refused, deterministically, with
+  // nothing on screen explaining a limit they had not reached themselves: the
+  // dashboard was simply not arrangeable. A default that the write contract
+  // rejects is not a default, so this one stays inside it.
+  //
+  // Sorted BEFORE the cap, so which widgets survive follows the declared order
+  // rather than registration order. The surplus is still offered through
+  // `available`, so a reader can place one by removing another.
+  return [...widgets]
+    .sort(byDeclaredOrder)
+    .slice(0, MAX_PLACEMENTS)
+    .map((widget, index) => ({
+      id: widget.id,
+      widgetId: widget.id,
+      order: index * DEFAULT_ORDER_STEP,
+      hidden: false,
+      // The declared geometry travels WITH the placement, rather than being left
+      // for a reader to look up. A placement is a persisted arrangement, and an
+      // arrangement that omits its own size is not one: the first save would
+      // store a row with no `size`, so a later change to the plugin's
+      // `defaultSize` would silently resize what the reader was told is their
+      // saved layout. Copied as strings, because a newer plugin's value is a
+      // shape this core has to survive rather than a vocabulary it can check.
+      size: widget.defaultSize,
+      ...(widget.defaultHeight === undefined
+        ? {}
+        : { height: widget.defaultHeight }),
+    }));
 }
 
 /**

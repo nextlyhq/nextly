@@ -423,3 +423,27 @@ describe("config nesting", () => {
     );
   });
 });
+
+describe("a default layout the write contract would refuse", () => {
+  it("stops at the ceiling a submission is bounded by", () => {
+    // 🔴 Nothing bounds how many widgets a registry and a plugin set declare
+    // between them, and `layoutSizeProblem` refuses a submission above
+    // MAX_PLACEMENTS. Uncapped, an install past that number answered the read
+    // with a default arrangement no save could ever accept: the reader's first
+    // gesture was refused, deterministically, and the dashboard was simply not
+    // arrangeable.
+    const widgets = Array.from({ length: MAX_PLACEMENTS + 25 }, (_, i) =>
+      widget({ id: `core/w${i}`, defaultOrder: i })
+    );
+    const placements = defaultPlacements(widgets);
+
+    expect(placements).toHaveLength(MAX_PLACEMENTS);
+    expect(layoutSizeProblem(placements)).toBeUndefined();
+    // Sorted BEFORE the cap, so which cards survive follows the declared order
+    // rather than whatever order the registry happened to be read in.
+    expect(placements[0].widgetId).toBe("core/w0");
+    expect(placements[MAX_PLACEMENTS - 1].widgetId).toBe(
+      `core/w${MAX_PLACEMENTS - 1}`
+    );
+  });
+});

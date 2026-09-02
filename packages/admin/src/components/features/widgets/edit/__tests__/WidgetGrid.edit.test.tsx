@@ -9,6 +9,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
+import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 import type { AdminBranding } from "@admin/types/branding";
 import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
@@ -41,7 +42,10 @@ vi.mock("@admin/lib/api/protectedApi", () => ({
 const api = vi.mocked(protectedApi);
 
 /** Three registered widgets, drawn by a component so no query is issued. */
-function branding(ids: string[]): AdminBranding {
+function branding(
+  ids: string[],
+  patch: Record<string, Record<string, unknown>> = {}
+): AdminBranding {
   return {
     widgets: ids.map(id => ({
       id,
@@ -49,6 +53,7 @@ function branding(ids: string[]): AdminBranding {
       archetype: "custom",
       defaultSize: "full",
       component: "core#Whatever",
+      ...patch[id],
     })),
   } as unknown as AdminBranding;
 }
@@ -533,6 +538,114 @@ describe("a conflict", () => {
     // The draft is gone, so the reader is out of edit mode rather than looking
     // at server rows they believe are still theirs to save.
     expect(screen.getByTestId("dashboard-edit-begin")).toBeInTheDocument();
+  });
+});
+
+describe("a widget that draws nothing", () => {
+  it("leaves its grid cell with no children, so `empty:hidden` can collapse it", () => {
+    // 🔴 The cell hides itself through CSS `:empty`, which counts ELEMENT
+    // CHILDREN rather than rendered output -- so an always-present wrapper
+    // around the body made every cell non-empty and a widget that drew nothing
+    // became a full-width blank slot with its margins. jsdom applies no
+    // stylesheet, so the assertion is on the property the rule keys off rather
+    // than on the resulting visibility: childless is exactly what `:empty`
+    // means.
+    registerCoreComponent("core#Nothing", () => null);
+    mockBranding = {
+      widgets: [
+        {
+          id: "core/silent",
+          title: "Silent",
+          archetype: "custom",
+          defaultSize: "full",
+          // Unframed, which is the only way a body reaches the cell without a
+          // card around it -- and the case core's conditional sections use.
+          chrome: "none",
+          component: "core#Nothing",
+        },
+      ],
+    } as unknown as AdminBranding;
+    layoutResponse = layout([{ id: "p1", widgetId: "core/silent", order: 0 }]);
+    renderGrid();
+
+    const cell = screen.getByTestId("widget-cell-core/silent");
+    expect(cell.childElementCount).toBe(0);
+  });
+
+  it("DOES fill its cell when the same widget is framed", () => {
+    // The control. Without it the assertion above is satisfied by a grid that
+    // rendered nothing at all, or by a testid pointing at the wrong element.
+    registerCoreComponent("core#Nothing", () => null);
+    mockBranding = {
+      widgets: [
+        {
+          id: "core/framed",
+          title: "Framed",
+          archetype: "custom",
+          defaultSize: "full",
+          component: "core#Nothing",
+        },
+      ],
+    } as unknown as AdminBranding;
+    layoutResponse = layout([{ id: "p1", widgetId: "core/framed", order: 0 }]);
+    renderGrid();
+
+    expect(
+      screen.getByTestId("widget-cell-core/framed").childElementCount
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("re-adding a card the reader removed", () => {
+  it("brings back the DECLARED height, not just the width", async () => {
+    // 🔴 `defaultPlacements` copies a declared `defaultHeight` onto the initial
+    // placement, and the geometry source handed to `addPlacement` returned only
+    // the size -- so removing a tall card and adding it back produced one with
+    // no stated height, and the next save persisted that. A declared geometry
+    // was lost permanently through a gesture that reads as undoable.
+    mockBranding = branding(["core/a", "core/b"], {
+      "core/b": { defaultHeight: "tall" },
+    });
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0 },
+      { id: "p2", widgetId: "core/b", order: 10, size: "full" },
+    ]);
+    renderGrid();
+    const user = await beginEditing();
+
+    await user.click(screen.getAllByTestId("widget-remove")[1]);
+    await user.click(await screen.findByTestId("add-widget-core/b"));
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    const sent = api.put.mock.calls[0][1] as {
+      placements: Array<{ widgetId: string; height?: string }>;
+    };
+    const readded = sent.placements.find(p => p.widgetId === "core/b");
+    expect(readded).toBeDefined();
+    expect(readded?.height).toBe("tall");
+  });
+});
+
+describe("cancelling after a write failed", () => {
+  it("takes the failure message with the draft", async () => {
+    // 🔴 The message says "your changes are still here -- try again", which
+    // describes the draft. Cancel discarded the draft and left the sentence on
+    // screen pointing at nothing, and it was still there the next time the
+    // reader entered edit mode.
+    api.put.mockRejectedValue(new Error("network"));
+    renderGrid();
+    const user = await beginEditing();
+
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+    await screen.findByTestId("dashboard-edit-error");
+
+    await user.click(screen.getByTestId("dashboard-edit-cancel"));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("dashboard-edit-error")).toBeNull()
+    );
   });
 });
 

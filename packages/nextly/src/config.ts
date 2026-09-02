@@ -220,6 +220,12 @@ export type {
   WidgetChrome,
 } from "./domains/widgets/definition";
 export type { WidgetQuery } from "./domains/widgets/query";
+// A VALUE, and for the same reason as the batch limit below: the admin resolves
+// a contributed widget's deprecated `size` alias into the enum, and so does the
+// server when it reduces the same declaration to a canonical summary. Two
+// copies of that mapping is two answers to one question, and the copies had
+// already drifted -- only one of them existed.
+export { legacySizeToWidgetSize } from "./domains/widgets/definition";
 // A VALUE, and the only one in this block. The admin batches a dashboard's
 // widgets into requests `POST /api/dashboard/query` will accept, so it needs the
 // number that endpoint refuses above -- and a second copy of it on the client

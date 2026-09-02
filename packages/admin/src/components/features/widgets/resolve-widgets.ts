@@ -14,6 +14,7 @@
 import type {
   WidgetAction,
   WidgetArchetype,
+  WidgetHeight,
   WidgetQuery,
   WidgetSize,
   WidgetChrome,
@@ -85,6 +86,7 @@ export interface ReadableWidgetDeclaration {
   category?: string;
   archetype?: WidgetArchetype;
   defaultSize?: WidgetSize;
+  defaultHeight?: WidgetHeight;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
   query?: WidgetQuery;
@@ -211,6 +213,7 @@ function resolveOne(
     // enum wins where both are declared, because a plugin that adopted the new
     // field meant it.
     size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
+    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
@@ -254,6 +257,7 @@ function resolveRegistered(
     icon: meta.icon,
     archetype: meta.archetype,
     size: meta.defaultSize,
+    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
@@ -300,6 +304,11 @@ function mergeCollision(
     icon: registration.icon ?? contribution.icon,
     archetype: registration.archetype,
     defaultSize: registration.defaultSize,
+    // The registry wins where it states one, exactly as `defaultOrder` and
+    // `chrome` do below. Named in this list rather than left out because the
+    // list IS the contract: a field missing from it is dropped silently, and a
+    // merged widget would lose the height its contribution declared.
+    defaultHeight: registration.defaultHeight ?? contribution.defaultHeight,
     minSize: registration.minSize,
     maxSize: registration.maxSize,
     // The contributed size is the FALLBACK, read only when the registration

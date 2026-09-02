@@ -17,6 +17,26 @@ import type { WidgetQuery } from "./query";
 export const WIDGET_SIZES = ["sm", "md", "lg", "xl", "full"] as const;
 export type WidgetSize = (typeof WIDGET_SIZES)[number];
 
+/**
+ * The deprecated `size?: "full" | "half"` alias, as a real size.
+ *
+ * Contributed declarations still carry it, and `half` meant "6 of 12" -- which
+ * is `lg` in the enum.
+ *
+ * 🔴 It lives HERE, beside the vocabulary it translates into, rather than in
+ * the admin where it was first written. Both the admin's resolver and the
+ * server's canonical summary have to read a legacy declaration, and the second
+ * one did not: it read `defaultSize` only, so a contribution declaring the alias
+ * produced a default placement with NO size while the grid rendered it at half
+ * width. The first save then stored an arrangement whose geometry disagreed
+ * with what the reader was looking at. One translation, asked by both.
+ */
+export function legacySizeToWidgetSize(
+  size: "full" | "half" | undefined
+): WidgetSize {
+  return size === "half" ? "lg" : "full";
+}
+
 /** Vertical step. Two values, because ragged card bottoms are the tell of a cheap grid. */
 export const WIDGET_HEIGHTS = ["short", "tall"] as const;
 export type WidgetHeight = (typeof WIDGET_HEIGHTS)[number];
