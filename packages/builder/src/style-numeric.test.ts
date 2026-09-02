@@ -280,7 +280,46 @@ describe("a toggle is a projection of a keyword leaf", () => {
     expect(toggleOptionsFor(two)).toEqual(["normal", "italic"]);
   });
 
-  it("declines a vocabulary that does not fit in two buttons", () => {
+  /*
+   * Three fits too. The rule was never "two is special" — the docblock's own
+   * condition is that the WHOLE vocabulary fits in the control, so a keyword
+   * offering three short values is offered whole rather than folded into a menu
+   * an author has to open to see three words.
+   */
+  it("offers all three when the whole vocabulary is three short keywords", () => {
+    const three = {
+      kind: "keyword",
+      values: ["normal", "italic", "oblique"],
+    } as unknown as StyleLeaf;
+
+    expect(toggleOptionsFor(three)).toEqual(["normal", "italic", "oblique"]);
+  });
+
+  /*
+   * Length decides as well as count, because the control is a row in a rail an
+   * author can drag narrow. Three long words do not fit side by side, and a
+   * segmented control that wraps to three lines is worse than the menu it
+   * replaced — it takes more height AND still has to be read word by word.
+   */
+  it("declines three keywords too long to sit side by side", () => {
+    const long = {
+      kind: "keyword",
+      values: ["nowrap", "wrap", "wrap-reverse-and-then-some"],
+    } as unknown as StyleLeaf;
+
+    expect(toggleOptionsFor(long)).toBeUndefined();
+  });
+
+  it("declines a vocabulary of four, whatever its length", () => {
+    const four = {
+      kind: "keyword",
+      values: ["a", "b", "c", "d"],
+    } as unknown as StyleLeaf;
+
+    expect(toggleOptionsFor(four)).toBeUndefined();
+  });
+
+  it("declines a vocabulary that does not fit in the control", () => {
     // `display` has many values; drawing two of them would hide the rest.
     const display = entry("display").shape as unknown as StyleLeaf;
     expect(toggleOptionsFor(display)).toBeUndefined();
