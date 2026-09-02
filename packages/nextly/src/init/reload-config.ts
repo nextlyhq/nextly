@@ -1883,33 +1883,6 @@ async function applyReload(opts?: {
     }
   }
 
-  // 🔴 Published BEFORE either branch below returns, and on every reload, so the
-  // set describes THIS reload rather than whichever one last got far enough to
-  // say something. A reload that refuses a collection's DDL still writes that
-  // collection's new field list to the registry, because the sync payload is
-  // built from the whole config -- so anything deciding what a query may NAME
-  // has to know the difference between metadata that landed and metadata that
-  // merely persisted. Nothing else carries that: `migration_status` is written
-  // by paths that never deferred anything, which is what makes it unable to
-  // answer this.
-  //
-  // Replacing the set rather than adding to it is what makes a later successful
-  // reload clear a refusal, with nobody having to remember to.
-  //
-  // Imported dynamically rather than at the top of the module: this file sits in
-  // `init/` and the widget source refresh reaches the DI container, so a static
-  // edge from here would add to the import cycles the repository already
-  // carries. The call is on an async path that has already awaited several
-  // times, so the cost is a resolved module lookup.
-  const { setDeferredCollections } = await import(
-    "../domains/widgets/collection-sources"
-  );
-  setDeferredCollections(
-    [...deferredEntities]
-      .filter(entity => entity.startsWith("collection:"))
-      .map(entity => entity.slice("collection:".length))
-  );
-
   // No schema (DDL) changes to apply. Registry-only metadata (versions,
   // localized, status, labels, description) can still have changed, and it does
   // not surface as a schema diff — so run the idempotent metadata sync before
@@ -1954,6 +1927,24 @@ async function applyReload(opts?: {
         newConfig,
         logger
       );
+      // Every diff was zero-op and the sync ran, so the stored field lists and
+      // the physical tables are in step: nothing is ahead of its table, and a
+      // refusal recorded by an earlier reload is over. Gated on the sync having
+      // SUCCEEDED -- a failed one leaves the metadata wherever it was, which is
+      // not a statement that anything caught up.
+      //
+      // The mirror of this is the deliberate absence of any publish on the
+      // OTHER `!hasChanges` path. There the sync is skipped precisely so that
+      // refused `fields` are not persisted, so nothing moved ahead of its table
+      // and nothing landed either. Replacing the set there would clear a
+      // refusal an earlier reload correctly recorded, and take working cards
+      // away for the rest of the session.
+      if (synced.collections) {
+        const { setDeferredCollections } = await import(
+          "../domains/widgets/collection-sources"
+        );
+        setDeferredCollections([]);
+      }
       // Publish each scope's (possibly toggled) recording policy ONLY when that
       // scope's metadata sync succeeded — a `webhooks` change surfaces as no
       // schema diff, so this is the path a live opt-out/opt-in toggle flows
@@ -2333,6 +2324,28 @@ async function applyReload(opts?: {
           // Non-fatal: migration status is metadata only.
         }
       }
+
+      // 🔴 Published HERE, on the path where the metadata sync actually ran,
+      // and not before the branch above. The sync writes the new field list for
+      // every configured collection, so a collection whose DDL this reload
+      // refused now has metadata its table never received -- that, and only
+      // that, is what a consumer deciding what a query may NAME has to be told.
+      //
+      // Computing it earlier looked equivalent and was not: a reload carrying
+      // ONLY a refused change never reaches this sync at all, so its registry
+      // still describes the unchanged table, and announcing a deferral for it
+      // would withhold cards that work.
+      //
+      // Replacing the set is what lets a later reload lift a refusal: every
+      // collection not named here had its DDL applied in the same pass.
+      const { setDeferredCollections } = await import(
+        "../domains/widgets/collection-sources"
+      );
+      setDeferredCollections(
+        [...deferredEntities]
+          .filter(entity => entity.startsWith("collection:"))
+          .map(entity => entity.slice("collection:".length))
+      );
     } catch {
       // Non-fatal: DDL was applied; metadata sync failed. The next boot
       // or HMR cycle will retry via registerServices.
