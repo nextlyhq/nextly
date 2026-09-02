@@ -58,8 +58,18 @@ function schemaColumns(): Map<string, Set<string>> {
     } catch {
       continue;
     }
+    // Two call shapes, and missing the second is how this guard went blind.
+    // `sqliteTable("t", { ... })` closes its column object at column 0 (`\n});`)
+    // while `sqliteTable(\n  "t",\n  { ... },\n  t => [...])` closes it at two
+    // spaces (`\n  }`). A pattern anchored to the indented form silently
+    // discovered NOTHING in a single-argument schema file -- so the table was
+    // absent from `schemas` entirely, `missing` came back empty, and the
+    // "creates every core table" assertion below passed while the table it was
+    // written to catch had no DDL at all. The closing brace is matched at
+    // either indent, and `TABLES_EXPECTED` below is the control that keeps this
+    // honest rather than a comment promising it.
     for (const m of source.matchAll(
-      /sqliteTable\(\s*"([a-z_]+)"\s*,\s*\{([\s\S]*?)\n {2}\}/g
+      /sqliteTable\(\s*"([a-z_]+)"\s*,\s*\{([\s\S]*?)\n {0,2}\}/g
     )) {
       tables.set(
         m[1],
@@ -78,11 +88,40 @@ describe("the SQLite bootstrap DDL", () => {
   const ddl = ddlColumns();
   const schemas = schemaColumns();
 
+  /**
+   * Tables whose discovery is asserted BY NAME.
+   *
+   * A size floor is not enough, and that is not hypothetical: the extractor
+   * matched 30-odd tables while missing `nextly_widget_layout` completely,
+   * because that file writes its columns in the single-argument call shape.
+   * Every count-based check stayed green and the table shipped with no
+   * bootstrap DDL.
+   *
+   * So the control names one schema of EACH call shape. A future extractor
+   * change that stops seeing either one fails here, where the message says
+   * which, rather than silently narrowing what the rest of this file compares.
+   */
+  const TABLES_EXPECTED = [
+    // `sqliteTable(\n  "t",\n  { ... },\n  t => [...])` -- indented close.
+    "nextly_document_lock",
+    // `sqliteTable("t", { ... })` -- closes at column 0.
+    "nextly_widget_layout",
+  ];
+
   it("reads back as tables at all", () => {
     // Both halves are parsed out of source text, so a parser that quietly
     // matched nothing would make every comparison below vacuously true.
     expect(ddl.size).toBeGreaterThan(10);
     expect(schemas.size).toBeGreaterThan(10);
+  });
+
+  it.each(TABLES_EXPECTED)("discovers %s in the schema sources", table => {
+    expect(
+      schemas.has(table),
+      `the schema extractor did not find ${table}. Every comparison in this ` +
+        "file iterates what it found, so a table it cannot see is not " +
+        "checked against the bootstrap DDL at all -- it passes by absence."
+    ).toBe(true);
   });
 
   /**
@@ -101,6 +140,17 @@ describe("the SQLite bootstrap DDL", () => {
    */
   const NOT_BOOTSTRAPPED = new Set([
     "activity_log",
+    // These two were not a decision either: they were INVISIBLE. The schema
+    // extractor above could not see a `sqliteTable("t", { ... })` written as a
+    // single argument, so neither table reached `schemas` and neither could
+    // ever appear in `missing`. Widening the pattern surfaced them, and they
+    // are recorded here rather than given DDL in the same change that found
+    // them -- transcribing `site_settings` by hand is how this file drifts, and
+    // it is the drift this suite exists to catch. Both are real gaps: a
+    // database built from this fallback has no general settings and no
+    // migration lock.
+    "nextly_field_group_lock",
+    "site_settings",
     "api_keys",
     "audit_log",
     "dynamic_collections",

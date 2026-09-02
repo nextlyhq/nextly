@@ -2488,11 +2488,50 @@ function parseTranslationRoutes(
 }
 
 /**
+ * Every `/api/dashboard` route, as a table keyed by verb and then by id.
+ *
+ * A table rather than a ladder of `if`s. The ladder's cyclomatic complexity
+ * grew with the route count and tripped the repository's threshold at the
+ * sixth route, and each new arm restated four lines of the same object literal
+ * — so a route added under the wrong `operation` looked exactly like one added
+ * under the right one.
+ */
+const DASHBOARD_ROUTES: Readonly<
+  Record<
+    string,
+    Readonly<
+      Record<
+        string,
+        { operation: NonNullable<ParsedRoute["operation"]>; method: string }
+      >
+    >
+  >
+> = {
+  GET: {
+    stats: { operation: "list", method: "getDashboardStats" },
+    "recent-entries": {
+      operation: "list",
+      method: "getDashboardRecentEntries",
+    },
+    activity: { operation: "list", method: "getDashboardActivity" },
+    layout: { operation: "list", method: "getWidgetLayout" },
+  },
+  POST: {
+    query: { operation: "list", method: "postWidgetQuery" },
+  },
+  PUT: {
+    layout: { operation: "update", method: "putWidgetLayout" },
+  },
+};
+
+/**
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
+ *   GET  /api/dashboard/layout         → getWidgetLayout
+ *   PUT  /api/dashboard/layout         → putWidgetLayout
  *   POST /api/dashboard/query          → postWidgetQuery
  *
  * All require authentication (no specific permission). Handlers manage their
@@ -2510,50 +2549,26 @@ function parseDashboardRoutes(
   // `/api/dashboard/query/extra` reach the widget-query executor. Segments
   // are contiguous, so a truthy `subresource` is the only way a sub-id or
   // anything past it could exist — the same shape `parseJobRoutes` uses.
-  if (subresource) return null;
+  if (subresource || id === undefined) return null;
 
-  if (httpMethod === "POST") {
-    if (id === "query") {
-      return {
-        service: "dashboard",
-        operation: "list",
-        method: "postWidgetQuery",
-        routeParams,
-      };
-    }
-    return null;
-  }
+  // 🔴 `Object.hasOwn` on BOTH lookups, because both keys come off the URL.
+  // A plain `TABLE[key]` reaches `Object.prototype`, so `OPTIONS` is safely
+  // absent but `constructor` is not: `DASHBOARD_ROUTES.constructor` is a
+  // function, and `.constructor.constructor` a truthy object, so
+  // `/api/dashboard/constructor` would get past a bare presence check and
+  // dispatch on `route.method` read off `Object`. This is the same hole the
+  // widget span-class and archetype tables already closed.
+  if (!Object.hasOwn(DASHBOARD_ROUTES, httpMethod)) return null;
+  const byId = DASHBOARD_ROUTES[httpMethod];
+  if (!Object.hasOwn(byId, id)) return null;
 
-  if (httpMethod !== "GET") return null;
-
-  if (id === "stats") {
-    return {
-      service: "dashboard",
-      operation: "list",
-      method: "getDashboardStats",
-      routeParams,
-    };
-  }
-
-  if (id === "recent-entries") {
-    return {
-      service: "dashboard",
-      operation: "list",
-      method: "getDashboardRecentEntries",
-      routeParams,
-    };
-  }
-
-  if (id === "activity") {
-    return {
-      service: "dashboard",
-      operation: "list",
-      method: "getDashboardActivity",
-      routeParams,
-    };
-  }
-
-  return null;
+  const route = byId[id];
+  return {
+    service: "dashboard",
+    operation: route.operation,
+    method: route.method,
+    routeParams,
+  };
 }
 
 // ============================================================================

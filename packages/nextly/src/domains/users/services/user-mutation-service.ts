@@ -44,6 +44,11 @@ import type {
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import {
+  layoutRowId,
+  widgetLayoutTables,
+  WIDGET_LAYOUT_TABLE,
+} from "../../../schemas/widget-layout";
 import { BaseService } from "../../../services/base-service";
 import type { EmailService } from "../../../services/email/email-service";
 import { ServiceContainer } from "../../../services/index";
@@ -1502,6 +1507,30 @@ export class UserMutationService extends BaseService {
     } catch {
       mediaExists = true;
     }
+
+    // The account's dashboard arrangement, probed out here for the same reason
+    // as the three above: a failed statement aborts an open Postgres
+    // transaction and there would be no way back.
+    //
+    // The row carries the account's identifier and its opaque per-placement
+    // configuration, and nothing else removes it — `scope_id` holds a user id
+    // by convention rather than by a foreign key, precisely so a future role
+    // scope can share the table. Left behind, that configuration outlives the
+    // person indefinitely, and an external identity provider that reuses an
+    // identifier hands the replacement account its predecessor's dashboard.
+    //
+    // An unanswerable probe is treated as PRESENT, matching the media and
+    // deliveries decisions above: attempting the delete against a genuinely
+    // absent table fails the statement and takes the deletion with it, which is
+    // the invariant those two protect — an account is never removed while data
+    // belonging to it is left behind. Databases without the table exist, since
+    // the SQLite fallback bootstrap created a subset of the core tables.
+    let widgetLayoutExists: boolean;
+    try {
+      widgetLayoutExists = await this.adapter.tableExists(WIDGET_LAYOUT_TABLE);
+    } catch {
+      widgetLayoutExists = true;
+    }
     // The two answer a legacy shape differently, because what happens to an
     // un-erased row differs. A legacy `activity_log` still cascades from the
     // account, so its rows go with the deletion and there is nothing left to
@@ -1587,6 +1616,19 @@ export class UserMutationService extends BaseService {
 
         // Delete user accounts
         await txDb.delete(accounts).where(eq(accounts.userId, userId));
+
+        // And the dashboard arrangement, addressed by the SAME derivation the
+        // layout service writes with rather than by a second spelling of the
+        // key — two derivations of one identifier agree until one is edited,
+        // and the failure here is silent: the delete matches no row, the
+        // account goes, and the layout stays.
+        if (widgetLayoutExists) {
+          const layoutTable = widgetLayoutTables(this.dialect)
+            .nextlyWidgetLayout as unknown as { id: Column };
+          await txDb
+            .delete(layoutTable)
+            .where(eq(layoutTable.id, layoutRowId("user", String(userId))));
+        }
 
         // Strip the person out of the audit trail while leaving the trail
         // standing. `activity_log.user_id` carries no foreign key precisely so

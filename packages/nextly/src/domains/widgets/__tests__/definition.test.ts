@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateWidgetDefinition } from "../definition";
+import { validateWidgetDefinition, widgetValueProblem } from "../definition";
 
 const valid = {
   id: "core/recent-entries",
@@ -385,5 +385,32 @@ describe("chrome decides whether the HOST frames the widget", () => {
     expect(() =>
       validateWidgetDefinition({ ...custom, chrome: "borderless" })
     ).toThrow();
+  });
+});
+
+describe("a declared permission", () => {
+  it("is refused when it is not a string", () => {
+    // The field was declared and never checked, and the gap failed OPEN: the
+    // dashboard's server filter reads "not a string" as "no permission
+    // declared", so a widget whose author wrote `requiredPermission: { read:
+    // true }` was gated for nobody and returned to every authenticated caller.
+    // Refusing the declaration is the only place the mistake is still visible
+    // to the person who made it.
+    expect(widgetValueProblem({ requiredPermission: { read: true } })).toMatch(
+      /requiredPermission, when given, must be a string/
+    );
+    expect(widgetValueProblem({ requiredPermission: 42 })).toMatch(
+      /requiredPermission/
+    );
+  });
+
+  it("accepts a slug this core has never minted", () => {
+    // Shape, not vocabulary. A newer core may mint new slugs; it cannot make a
+    // slug stop being a string, and refusing an unknown one here would abort a
+    // whole plugin install over a permission this core has not learned yet.
+    expect(
+      widgetValueProblem({ requiredPermission: "invent-something" })
+    ).toBeUndefined();
+    expect(widgetValueProblem({})).toBeUndefined();
   });
 });

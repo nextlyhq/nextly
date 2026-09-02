@@ -84,6 +84,7 @@ import {
   redeliverWebhookDelivery,
   drainWebhooks,
 } from "./api/webhooks";
+import { getWidgetLayout, putWidgetLayout } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -486,6 +487,10 @@ async function handleDashboardRequest(
       return getDashboardActivity(req);
     case "postWidgetQuery":
       return postWidgetQuery(req);
+    case "getWidgetLayout":
+      return getWidgetLayout(req);
+    case "putWidgetLayout":
+      return putWidgetLayout(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
@@ -1104,8 +1109,8 @@ async function handleServiceRequest(
   // ==================== DASHBOARD DIRECT DISPATCH ====================
   // Dashboard handlers own their auth (requireAuthentication). Intercepting
   // here keeps the pattern consistent with API keys and general settings; the
-  // GET endpoints have no body, and postWidgetQuery reads its own via
-  // req.json() before anything else touches the stream.
+  // GET endpoints have no body, and postWidgetQuery and putWidgetLayout read
+  // their own via req.json() before anything else touches the stream.
   if (service === "dashboard") {
     return handleDashboardRequest(req, method);
   }

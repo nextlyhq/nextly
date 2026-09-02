@@ -32,6 +32,7 @@ export { users, accounts, sessions } from "../users/postgres";
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/postgres";
 export { nextlyDocumentLock } from "../document-lock/postgres";
+export { nextlyWidgetLayout } from "../widget-layout/postgres";
 
 // Auth tokens.
 export {

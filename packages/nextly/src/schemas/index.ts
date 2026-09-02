@@ -68,6 +68,7 @@ import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
+import { widgetLayoutTables } from "./widget-layout";
 
 // =============================================================================
 // Public API — populated incrementally by Plan A tasks 4–14.
@@ -200,6 +201,12 @@ export function getCoreSchema(
     ...Object.values(releasesTables(dialect)),
     ...Object.values(jobsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
+    // `nextly_widget_layout` — one row per reader who has arranged the
+    // dashboard. Declared here for the same reason as every table above: the
+    // snapshot is the set `nextly migrate` pushes, so a table outside it is
+    // never created on a real installation however completely its own module
+    // declares it.
+    ...Object.values(widgetLayoutTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -284,6 +291,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   // snapshot, so the drift check proposes adding it again on every run.
   "nextly_field_group_lock",
   "nextly_document_lock",
+  "nextly_widget_layout",
   "dynamic_collections",
   "dynamic_singles",
   STORAGE_FORMAT.registryTable,

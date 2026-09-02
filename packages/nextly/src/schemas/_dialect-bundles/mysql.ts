@@ -17,6 +17,7 @@ export { users, accounts, sessions } from "../users/mysql";
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
 export { nextlyDocumentLock } from "../document-lock/mysql";
+export { nextlyWidgetLayout } from "../widget-layout/mysql";
 
 export {
   emailVerificationTokens,
