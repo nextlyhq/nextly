@@ -50,8 +50,6 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
-import type { WidgetDefinition } from "./definition";
-
 /**
  * The shape this core writes and understands.
  *
@@ -88,6 +86,23 @@ export interface WidgetPlacement {
 export interface StoredLayout {
   schemaVersion: number;
   placements: WidgetPlacement[];
+}
+
+/**
+ * What placing a widget actually reads from its declaration.
+ *
+ * Four fields, and deliberately not `WidgetDefinition`. A widget reaches the
+ * dashboard by two channels whose shapes differ — a registration is a resolved
+ * widget and carries `title` and `archetype`, a contribution may carry neither
+ * — and placement needs none of the fields they disagree about. Typing this on
+ * what it reads lets both satisfy it without either being cast into the other's
+ * shape, which is where an invented `title` would have come from.
+ */
+export interface PlaceableWidget {
+  id: string;
+  defaultOrder?: number;
+  defaultSize?: string;
+  defaultHeight?: string;
 }
 
 /** How far apart default placements sit, so one can be inserted between two. */
@@ -306,7 +321,7 @@ export function serializeLayout(
  * Two unstated widgets compare as `NaN`, which `Array.prototype.sort` treats as
  * "leave them alone", so they keep registration order.
  */
-function byDeclaredOrder(a: WidgetDefinition, b: WidgetDefinition): number {
+function byDeclaredOrder(a: PlaceableWidget, b: PlaceableWidget): number {
   return (
     (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
     (b.defaultOrder ?? Number.POSITIVE_INFINITY)
@@ -327,7 +342,7 @@ function byDeclaredOrder(a: WidgetDefinition, b: WidgetDefinition): number {
  * has to re-key on every fetch.
  */
 export function defaultPlacements(
-  widgets: readonly WidgetDefinition[]
+  widgets: readonly PlaceableWidget[]
 ): WidgetPlacement[] {
   return [...widgets].sort(byDeclaredOrder).map((widget, index) => ({
     id: widget.id,
@@ -406,7 +421,16 @@ export function mergePreservingHidden(
   invisible: readonly WidgetPlacement[]
 ): WidgetPlacement[] {
   const taken = new Set(submitted.map(placement => placement.id));
-  const carried = invisible.map(placement => {
+  // What is left for carried placements after the caller's own snapshot. Never
+  // negative: a submission at the cap leaves nothing, and `slice(0, 0)` is the
+  // empty carry rather than a `slice` that means "everything".
+  const room = Math.max(0, MAX_STORED_PLACEMENTS - submitted.length);
+  // Oldest-positioned first, so the cap keeps a stable, order-derived subset
+  // rather than whichever ones happened to arrive last.
+  const bounded = [...invisible]
+    .sort((a, b) => a.order - b.order)
+    .slice(0, room);
+  const carried = bounded.map(placement => {
     if (!taken.has(placement.id)) {
       taken.add(placement.id);
       return placement;
@@ -435,6 +459,28 @@ export function mergePreservingHidden(
  * without any caller ever meeting the dialect's own edge.
  */
 export const MAX_PLACEMENTS = 200;
+
+/**
+ * The ceiling on the row as STORED, carried placements included.
+ *
+ * 🔴 `MAX_PLACEMENTS` bounds one submission and therefore bounds nothing about
+ * the row: `mergePreservingHidden` retains placements from every earlier
+ * visibility set, so a reader who repeatedly saves a full arrangement and then
+ * loses access to those widgets appends another hidden group each time. The
+ * accumulation is unbounded, and at the dialect's own ceiling an otherwise
+ * valid write starts failing — which puts the acceptance boundary back where a
+ * caller can measure hidden data against it.
+ *
+ * Bounded by DROPPING the surplus rather than by refusing the write, and that
+ * choice is the whole point. A refusal would depend on how much hidden data
+ * there is, which is the oracle; a silent cap depends only on a constant, so
+ * every submission under the caller's own budget is accepted whatever is behind
+ * it. The cost is real and worth stating: past this many placements, the
+ * least-recently-positioned hidden cards are forgotten. Twice a full
+ * arrangement, so no reader reaches it by arranging their dashboard — only by
+ * accumulating hidden groups, which is the case being bounded.
+ */
+export const MAX_STORED_PLACEMENTS = MAX_PLACEMENTS * 2;
 export const MAX_LAYOUT_BYTES = 32 * 1024;
 
 /**

@@ -1,8 +1,8 @@
 /**
  * `/api/dashboard` routes.
  *
- * Six routes, none deeper than the top-level id segment (`stats`,
- * `recent-entries`, `activity`, `query`, and `layout` under two verbs). The
+ * Seven routes, none deeper than the top-level id segment (`stats`,
+ * `recent-entries`, `activity`, `query`, and `layout` under three verbs). The
  * risk this file pins: a longer path must 404 rather than match one of them
  * and silently drop the tail, which would let `/api/dashboard/query/extra`
  * reach the widget-query executor as if it were the bare route.
@@ -58,12 +58,15 @@ describe("dashboard routes", () => {
     expect(parseRestRoute(["dashboard", "unknown"], "GET")).toEqual({});
   });
 
-  it("resolves the layout route under both of its verbs", () => {
+  it("resolves the layout route under each of its verbs", () => {
     expect(parseRestRoute(["dashboard", "layout"], "GET")).toMatchObject({
       method: "getWidgetLayout",
     });
     expect(parseRestRoute(["dashboard", "layout"], "PUT")).toMatchObject({
       method: "putWidgetLayout",
+    });
+    expect(parseRestRoute(["dashboard", "layout"], "DELETE")).toMatchObject({
+      method: "deleteWidgetLayout",
     });
   });
 
@@ -74,6 +77,11 @@ describe("dashboard routes", () => {
     expect(
       parseRestRoute(["dashboard", "layout", "extra"], "GET").method
     ).not.toBe("getWidgetLayout");
+  });
+
+  it("rejects a DELETE to an id other than layout", () => {
+    expect(parseRestRoute(["dashboard", "stats"], "DELETE")).toEqual({});
+    expect(parseRestRoute(["dashboard", "query"], "DELETE")).toEqual({});
   });
 
   it("rejects a PUT to an id other than layout", () => {
@@ -116,7 +124,6 @@ describe("dashboard routes", () => {
   it("rejects a verb none of the routes declare", () => {
     expect(parseRestRoute(["dashboard", "stats"], "DELETE")).toEqual({});
     expect(parseRestRoute(["dashboard", "query"], "PATCH")).toEqual({});
-    expect(parseRestRoute(["dashboard", "layout"], "DELETE")).toEqual({});
     expect(parseRestRoute(["dashboard", "layout"], "POST")).toEqual({});
   });
 });

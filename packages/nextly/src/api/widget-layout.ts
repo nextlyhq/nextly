@@ -36,10 +36,11 @@ import {
   callerHoldsPermission,
   type ReadAccessCaller,
 } from "../auth/entity-read-access";
+import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import type { WidgetDefinition } from "../domains/widgets/definition";
+import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
 import {
   MAX_LAYOUT_BYTES,
   defaultPlacements,
@@ -50,7 +51,6 @@ import {
   visibilityToken,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
-import { listWidgets } from "../domains/widgets/registry";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
@@ -65,6 +65,7 @@ import {
 } from "./authenticated-read";
 import { readBoundedJsonBody } from "./read-json-body";
 import {
+  respondAction,
   respondData,
   respondMutation,
   SKIP_DATE_FORMATTING_HEADER,
@@ -122,7 +123,7 @@ function carriedPlacements(
   if (storedPlacements) {
     return partitionPlacements(storedPlacements, visibleIds).invisible;
   }
-  return partitionPlacements(defaultPlacements(listWidgets()), visibleIds)
+  return partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
     .invisible;
 }
 
@@ -143,10 +144,10 @@ function carriedPlacements(
  * materializations that agree only while nothing is hidden.
  */
 function visibleDefaults(
-  widgets: readonly WidgetDefinition[]
+  widgets: readonly CanonicalWidget[]
 ): WidgetPlacement[] {
   const visibleIds = new Set(widgets.map(widget => widget.id));
-  return partitionPlacements(defaultPlacements(listWidgets()), visibleIds)
+  return partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
     .visible;
 }
 
@@ -181,8 +182,8 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  */
 async function visibleWidgets(
   caller: ReadAccessCaller
-): Promise<WidgetDefinition[]> {
-  const all = listWidgets();
+): Promise<CanonicalWidget[]> {
+  const all = allWidgets();
 
   const slugs = [
     ...new Set(
@@ -226,7 +227,7 @@ async function visibleWidgets(
  * `typeof` on a value already in hand costs nothing.
  */
 function isVisibleTo(
-  widget: WidgetDefinition,
+  widget: CanonicalWidget,
   verdicts: ReadonlyMap<string, boolean>
 ): boolean {
   const slug: unknown = widget.requiredPermission;
@@ -345,31 +346,50 @@ function readScope(body: Record<string, unknown>): string {
   return scope;
 }
 
-export const putWidgetLayout = withErrorHandler(async (req: Request) => {
+/**
+ * Authenticate a WRITE to the layout, and refuse the callers who may never make
+ * one.
+ *
+ * Shared by both mutating verbs because they share the reason, not merely the
+ * code. Two copies of a precondition agree until one is edited, and the edit
+ * that matters here is the one that relaxes it — an api-key refusal present on
+ * the save and absent from the reset would let a key discard its minter's
+ * arrangement while being unable to change it.
+ *
+ * 🔴 Refuses BEFORE the body is read, and before anything is parsed, resolved
+ * or constructed. This is a precondition, not a defensive check: a caller that
+ * can never perform the operation must be refused on that ground, and refused
+ * first. Placed after the body, a malformed payload came back as a validation
+ * error — telling a caller which FIELD it got wrong on a request it was never
+ * allowed to make, and paying for the parse in order to say so.
+ *
+ * A dashboard arrangement is one person's personalization of their own admin
+ * screen, and an API key has no screen. Refused rather than gated behind a
+ * permission slug, because no grant would make it meaningful: the key would be
+ * acting on the layout of whoever minted it. Reading stays open — it tells a
+ * key nothing it could not already ask the registry.
+ *
+ * Read off the AUTH CONTEXT rather than the resolved caller, because that is
+ * available here and the resolved caller is not: resolving one is a database
+ * read, which is exactly the work this refusal exists to avoid doing.
+ */
+async function authenticateLayoutWrite(
+  req: Request,
+  intent: string
+): Promise<AuthContext> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
-  // 🔴 BEFORE the body is read, and before anything is parsed, resolved or
-  // constructed. This is a precondition, not a defensive check: a caller that
-  // can never perform this operation must be refused on that ground, and
-  // refused first. Placed after the body it answered a malformed payload with a
-  // validation error — telling a caller which FIELD it got wrong on a request
-  // it was never allowed to make, and paying for the parse to say so.
-  //
-  // A dashboard arrangement is one person's personalization of their own admin
-  // screen, and an API key has no screen. Refused rather than gated behind a
-  // permission slug, because no grant would make it meaningful: the key would
-  // be rewriting the layout of whoever minted it. Reading stays open — it tells
-  // a key nothing it could not already ask the registry.
-  //
-  // Read off the auth context rather than the resolved caller, because that is
-  // available here and the resolved caller is not: resolving it is a database
-  // read, which is work this refusal exists to avoid doing.
   if (auth.authMethod === "api-key") {
     throw NextlyError.forbidden({
-      logContext: { reason: "an api key may not write a dashboard layout" },
+      logContext: { reason: `an api key may not ${intent} a dashboard layout` },
     });
   }
+  return auth;
+}
+
+export const putWidgetLayout = withErrorHandler(async (req: Request) => {
+  const auth = await authenticateLayoutWrite(req, "write");
 
   // Bounded BEFORE it is buffered. `req.json()` reads the whole body first, so
   // a quota checked on the parsed result has already paid for the memory and
@@ -479,10 +499,18 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // `respondMutation`, not `respondData`: this is a write, and every write in
   // this package answers `{ message, item }`. A bespoke top-level shape would
   // be one the shared client parser cannot read at all.
+  // Sorted the way a GET sorts, not echoed in submission order. A valid PUT may
+  // list placements in any array order — only each `order` field is validated —
+  // and the stored row is normalized by `partitionPlacements` on the next read.
+  // Echoing the raw array made this response a SECOND representation of the
+  // same arrangement: a client trusting it to chain another edit without
+  // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
+  const echoed = [...submitted].sort((a, b) => a.order - b.order);
+
   return respondMutation(
     "Dashboard layout saved.",
     {
-      placements: submitted,
+      placements: echoed,
       version,
       source: "own" satisfies LayoutSource,
       // Echoed so a client can make a second edit without a round trip. It is
@@ -506,3 +534,39 @@ function firstDuplicateId(
   }
   return undefined;
 }
+
+/**
+ * DELETE `/api/dashboard/layout` — put the dashboard back to the registry's
+ * own order.
+ *
+ * Removes the row rather than writing the current defaults into it, and the
+ * difference is the whole point. A written snapshot freezes today's defaults
+ * into the reader's arrangement, so a widget added later, or a `defaultOrder`
+ * a plugin changes later, never reaches them again — the reader would be
+ * "reset" onto a layout that stops tracking the thing it was reset to. With no
+ * row, resolution falls through to the live registry on every read, which is
+ * what a default IS.
+ *
+ * Refused for an API key on the same ground as the write: a dashboard
+ * arrangement belongs to a person, and a key resetting one would be discarding
+ * its minter's.
+ */
+export const deleteWidgetLayout = withErrorHandler(async (req: Request) => {
+  const auth = await authenticateLayoutWrite(req, "reset");
+
+  const service = await getLayoutService();
+  const caller = readAccessCaller(await readCaller(auth));
+  await service.deleteLayout(SCOPE_KIND, caller.userId);
+
+  // No version echoed, because there is no row to hold one: the next read
+  // answers 0 and `source: "default"`, which is the state the caller asked to
+  // be in. Returning a version here would hand a client a number to send back
+  // in a guard that now has nothing to guard.
+  return respondAction(
+    "Dashboard layout reset.",
+    {},
+    {
+      headers: OPAQUE_CONFIG_HEADERS,
+    }
+  );
+});
