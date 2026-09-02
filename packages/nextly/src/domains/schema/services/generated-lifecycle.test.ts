@@ -99,3 +99,43 @@ describe("a Single", () => {
     expect(ts).toContain('  status: "draft" | "published";');
   });
 });
+
+describe("create inputs may omit the status", () => {
+  // The column is NOT NULL with a default of 'draft', so a create that says
+  // nothing about the lifecycle is accepted and stored as a draft. The base
+  // interface states it as REQUIRED because a read always carries one, and the
+  // create artifacts are derived from that interface -- so without this the
+  // generated type and validator would both reject `{ title: "A" }`, which the
+  // runtime accepts.
+  it("drops it from the TypeScript Omit and re-adds it optional", () => {
+    const ts = new TypeGenerator().generateTypesFile([collection(true)]).code;
+
+    expect(ts).toMatch(/CreateInput = Omit<\w+, [^>]*"status">/);
+    expect(ts).toMatch(/& \{ status\?: \w+\["status"\] \}/);
+  });
+
+  it("marks it partial in the Zod create schema", () => {
+    const zod = new ZodGenerator().generateSchema(collection(true)).code;
+
+    expect(zod).toContain("CreateInputSchema");
+    expect(zod).toContain(".partial({ status: true })");
+  });
+
+  it("leaves the create artifacts alone when there is no lifecycle", () => {
+    // The default state again: a collection without the lifecycle must not gain
+    // a status omission or a partial that names a member it does not have.
+    const ts = new TypeGenerator().generateTypesFile([collection()]).code;
+    const zod = new ZodGenerator().generateSchema(collection()).code;
+
+    expect(ts).not.toContain('"status"');
+    expect(zod).not.toContain(".partial({ status: true })");
+  });
+
+  it("still requires it on the base artifacts, which describe a read", () => {
+    const ts = new TypeGenerator().generateTypesFile([collection(true)]).code;
+    const zod = new ZodGenerator().generateSchema(collection(true)).code;
+
+    expect(ts).toContain('  status: "draft" | "published";');
+    expect(zod).toContain('  status: z.enum(["draft", "published"]),');
+  });
+});

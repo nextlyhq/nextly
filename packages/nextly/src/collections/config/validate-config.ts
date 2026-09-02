@@ -576,6 +576,24 @@ function validateFields(
     // Everything below is about columns, so a field that occupies none is exempt. A component or
     // a many-to-many named `Title` takes over nothing: its values live in its own table and its
     // payload key stays `Title`, distinct from the system field's `title`.
+    // The lifecycle is emitted into the generated artifacts as well as into the
+    // table: the interface and the Zod schema each declare a `status` member
+    // under the column's own name. A column-less field keeps its DECLARED name
+    // as its payload key and as its generated member, so the two collide there
+    // even though they never share a column — and the column-based exemption
+    // immediately below cannot see that, because it is about columns.
+    //
+    // Matched on the declared name rather than the converted column, because
+    // that is the key the artifacts emit: a column-less `Status` stays a
+    // distinct member and is left alone.
+    if (lifecycleEnabled && isLifecycleSystemColumn(name, "collection")) {
+      errors.push({
+        path: `${path}[${index}].name`,
+        message: `Field name '${name}' is owned by the Draft/Published lifecycle and would be declared twice in the generated types. Rename the field, or turn the lifecycle off`,
+        code: "FIELD_NAME_LIFECYCLE_RESERVED",
+      });
+      return;
+    }
     if (!fieldProducesColumn(candidate)) return;
     // A field may take over `title` or `slug` — that is the documented "user wins" behaviour —
     // but only under the column's own name. `Title` reaches the same column while staying a
