@@ -25,9 +25,10 @@ describe("entryHeading", () => {
   it("walks the SAME conventional names the field-level rule accepts", () => {
     // 🔴 One question, one answer. The rule that decides which column a list or
     // a generated card SELECTS accepts `label`, `subject` and `heading` beside
-    // `title` and `name`; this walk stopped at `name`. A collection naming its
-    // entries with `subject` was therefore titled correctly on the dashboard
-    // and shown as a bare id in the activity feed.
+    // `title` and `name`, and this walk has to accept the same set: a
+    // collection naming its entries with `subject` takes that field as its
+    // title on the dashboard, and a shorter walk answers the activity feed with
+    // a bare id for the same entry.
     expect(entryHeading({ subject: "Re: hello" }, null, "id-1")).toBe(
       "Re: hello"
     );

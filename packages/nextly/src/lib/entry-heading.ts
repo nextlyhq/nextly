@@ -28,14 +28,14 @@ import { COMMON_TITLE_FIELDS } from "../domains/collections/entry-title";
  * field, then each conventional title name in {@link COMMON_TITLE_FIELDS}. An
  * absent `titleField` simply starts the walk at `title`.
  *
- * 🔴 The conventional names are IMPORTED rather than written out, and the two
- * spellings disagreeing is exactly what the paragraph above promised could not
- * happen. This walked `title` then `name`; the field-level rule that decides
- * which column a list or a generated card SELECTS also accepts `label`,
- * `subject` and `heading`. A collection naming its entries with `subject` was
- * therefore titled correctly on the dashboard and shown as a bare id in the
- * activity feed -- one question, two answers, which is the condition this
- * module exists to prevent.
+ * 🔴 The conventional names are IMPORTED rather than written out here, so this
+ * walk and the field-level rule that decides which column a list or a generated
+ * card SELECTS cannot disagree about which names count. Two spellings of one
+ * list is precisely the drift the paragraph above says this module exists to
+ * prevent, and it would be invisible: a collection naming its entries with
+ * `subject` gets that field as its title on the dashboard, and a walk that
+ * stopped at `name` would answer the activity feed with a bare id instead --
+ * both surfaces behaving exactly as each was written.
  *
  * An EMPTY string is skipped rather than returned. `??` only skips `null` and
  * `undefined`, so an untitled draft used to render as no heading at all --

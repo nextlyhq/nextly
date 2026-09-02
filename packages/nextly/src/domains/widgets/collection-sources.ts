@@ -277,6 +277,46 @@ export function resetVerifiedTables(): void {
 }
 
 /**
+ * Collections whose stored metadata is known to be AHEAD of their table.
+ *
+ * 🔴 The one thing table existence cannot tell you, and the reason existence
+ * alone is not enough. A reload writes the new field list to
+ * `dynamic_collections` for EVERY configured collection -- the sync payload is
+ * built from the whole config and knows nothing about what applied -- while
+ * refusing the DDL for a collection whose change it classified unsafe. That
+ * collection then keeps its OLD table, which exists, alongside a NEW field list
+ * that the table never received.
+ *
+ * Verified structurally, such a collection publishes a source naming columns
+ * the database does not have, and a widget query validates against the source
+ * and then fails against the table. Withholding it is the older, duller outcome
+ * and the right one: a card that is missing is better than a card that errors.
+ *
+ * This is the "applied-schema signal" that `migration_status` is trying and
+ * failing to be. It is deliberately NOT read from that column: the label is
+ * also set by writers that never deferred anything, which is what made it
+ * unusable in the first place. The reload knows which collections it refused,
+ * so it says so directly.
+ */
+const globalForDeferred = globalThis as unknown as {
+  __nextly_widgetDeferredCollections?: Set<string>;
+};
+
+function deferredCollections(): ReadonlySet<string> {
+  return globalForDeferred.__nextly_widgetDeferredCollections ?? new Set();
+}
+
+/**
+ * Record which collections a reload declined to apply DDL for.
+ *
+ * Replaces the set rather than adding to it, so a collection whose later reload
+ * succeeds stops being deferred without anyone having to remember to clear it.
+ */
+export function setDeferredCollections(slugs: readonly string[]): void {
+  globalForDeferred.__nextly_widgetDeferredCollections = new Set(slugs);
+}
+
+/**
  * The tables the database actually has, lowercased, or `undefined` when the
  * question could not be asked.
  *
@@ -324,22 +364,38 @@ async function usableCollections<T extends RegisteredCollection>(
   collections: T[]
 ): Promise<T[]> {
   const verified = verifiedTables();
+  const deferred = deferredCollections();
+  // Checked BEFORE anything else, and it overrides both the label and the memo.
+  // A collection can be verified while its label is healthy and then be edited
+  // and refused: the table it was verified against is still there, and is no
+  // longer the shape the stored metadata describes. Consulting the memo first
+  // would publish exactly the source this guard exists to withhold.
+  const isDeferred = (collection: T): boolean =>
+    typeof collection.slug === "string" && deferred.has(collection.slug);
   const settled = (collection: T): boolean =>
-    statusClaimsPresent(collection) ||
-    verified.has((tableNameOf(collection) ?? "").toLowerCase());
+    !isDeferred(collection) &&
+    (statusClaimsPresent(collection) ||
+      verified.has((tableNameOf(collection) ?? "").toLowerCase()));
 
   // A row naming no table cannot be verified by any amount of introspection, so
   // it must not TRIGGER any: without this it is permanently unsettled, and a
   // single malformed row would put a round trip on every request forever while
   // never changing the outcome. It is still filtered by the label below.
-  if (!collections.some(c => !settled(c) && tableNameOf(c) !== undefined)) {
+  // A deferred collection is excluded whatever the database says, so it must not
+  // trigger a lookup either -- it would be a round trip whose answer is ignored,
+  // on every request, for as long as the refusal stands.
+  if (
+    !collections.some(
+      c => !settled(c) && !isDeferred(c) && tableNameOf(c) !== undefined
+    )
+  ) {
     return collections.filter(settled);
   }
 
   const present = await presentTableNames();
   if (present !== undefined) {
     for (const collection of collections) {
-      if (statusClaimsPresent(collection)) continue;
+      if (statusClaimsPresent(collection) || isDeferred(collection)) continue;
       const table = tableNameOf(collection)?.toLowerCase();
       if (table !== undefined && present.has(table)) verified.add(table);
     }

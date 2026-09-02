@@ -14,6 +14,7 @@ import { setNextlyLogger } from "../../../observability/logger";
 import {
   refreshCollectionSources,
   resetVerifiedTables,
+  setDeferredCollections,
 } from "../collection-sources";
 import {
   clearSources,
@@ -80,6 +81,7 @@ beforeEach(() => {
   // The observed-table memo is pinned on `globalThis`, so without this a
   // verification from one test satisfies the next one's assertion.
   resetVerifiedTables();
+  setDeferredCollections([]);
   setNextlyLogger({
     error: () => {},
     warn: () => {},
@@ -520,6 +522,101 @@ describe("a collection whose table is not there yet", () => {
 
     await refreshCollectionSources();
     expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("withholds a DEFERRED collection even though its old table exists", async () => {
+    // 🔴 The case table existence cannot see. A reload writes the new field list
+    // for EVERY configured collection -- the sync payload is the whole config --
+    // while refusing the DDL for one it classified unsafe. That collection keeps
+    // its OLD table, which exists, beside a NEW field list the table never
+    // received. Verified structurally it would publish a source naming columns
+    // the database does not have, and the query fails after validating.
+    setDeferredCollections(["drafts"]);
+    registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_drafts"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("withholds a DEFERRED collection whose label still claims presence", async () => {
+    // The nastier half: the refusal has to override the LABEL too, not only the
+    // observed table. A collection edited after a healthy apply still carries
+    // `applied` from the previous cycle while its new fields sit unapplied, so a
+    // guard that only overrode the structural answer would publish it.
+    setDeferredCollections(["posts"]);
+    registryHoldsWithTables(
+      [
+        {
+          slug: "posts",
+          tableName: "dc_posts",
+          migrationStatus: "applied",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_posts"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")).toBeUndefined();
+  });
+
+  it("publishes a collection again once the reload stops deferring it", async () => {
+    // The control: without it the two refusals above are satisfied by a guard
+    // that withholds permanently. A later successful reload REPLACES the set,
+    // so the refusal lifts with nobody having to clear it.
+    setDeferredCollections(["drafts"]);
+    registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_drafts"]
+    );
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+
+    setDeferredCollections([]);
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeDefined();
+  });
+
+  it("asks the database NOTHING for a deferred collection", async () => {
+    // A deferred collection is excluded whatever the database answers, so a
+    // lookup for it is a round trip whose result is discarded -- on every
+    // request, for as long as the refusal stands.
+    setDeferredCollections(["drafts"]);
+    const { listTables } = registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_drafts"]
+    );
+
+    await refreshCollectionSources();
+    expect(listTables).not.toHaveBeenCalled();
   });
 
   it("asks the database NOTHING when every label already claims presence", async () => {

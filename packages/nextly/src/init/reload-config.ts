@@ -1883,6 +1883,33 @@ async function applyReload(opts?: {
     }
   }
 
+  // 🔴 Published BEFORE either branch below returns, and on every reload, so the
+  // set describes THIS reload rather than whichever one last got far enough to
+  // say something. A reload that refuses a collection's DDL still writes that
+  // collection's new field list to the registry, because the sync payload is
+  // built from the whole config -- so anything deciding what a query may NAME
+  // has to know the difference between metadata that landed and metadata that
+  // merely persisted. Nothing else carries that: `migration_status` is written
+  // by paths that never deferred anything, which is what makes it unable to
+  // answer this.
+  //
+  // Replacing the set rather than adding to it is what makes a later successful
+  // reload clear a refusal, with nobody having to remember to.
+  //
+  // Imported dynamically rather than at the top of the module: this file sits in
+  // `init/` and the widget source refresh reaches the DI container, so a static
+  // edge from here would add to the import cycles the repository already
+  // carries. The call is on an async path that has already awaited several
+  // times, so the cost is a resolved module lookup.
+  const { setDeferredCollections } = await import(
+    "../domains/widgets/collection-sources"
+  );
+  setDeferredCollections(
+    [...deferredEntities]
+      .filter(entity => entity.startsWith("collection:"))
+      .map(entity => entity.slice("collection:".length))
+  );
+
   // No schema (DDL) changes to apply. Registry-only metadata (versions,
   // localized, status, labels, description) can still have changed, and it does
   // not surface as a schema diff — so run the idempotent metadata sync before

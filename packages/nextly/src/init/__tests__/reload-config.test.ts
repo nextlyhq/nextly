@@ -67,6 +67,15 @@ const {
   errorSpy: vi.fn(),
 }));
 
+const setDeferredCollectionsSpy = vi.fn();
+// The reload PUBLISHES which collections it refused, and the widget source
+// refresh is the consumer. Mocked here so this file can assert the call
+// without pulling the DI container in through the widgets domain.
+vi.mock("../../domains/widgets/collection-sources", () => ({
+  setDeferredCollections: (slugs: readonly string[]) =>
+    setDeferredCollectionsSpy(slugs),
+}));
+
 vi.mock("../../cli/utils/config-loader", () => ({
   loadConfig: loadConfigSpy,
   clearConfigCache: clearConfigCacheSpy,
@@ -500,6 +509,74 @@ describe("reloadNextlyConfig", () => {
       "books",
       "applied"
     );
+  });
+
+  it("PUBLISHES the collections it refused, so nothing queries an unapplied shape", async () => {
+    // 🔴 A refused collection still gets its new field list written to the
+    // registry -- the sync payload is the whole config and knows nothing about
+    // what applied -- so its stored metadata describes a shape its table never
+    // received. Anything deciding what a query may NAME has to be told, and
+    // `migration_status` cannot say it: the same value is written by paths that
+    // deferred nothing.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "active", type: "checkbox" }],
+          },
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_books",
+          columns: [
+            ...reservedColumns("dc_books"),
+            { name: "active", type: "text", nullable: true },
+          ],
+        },
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith(["books"]);
+  });
+
+  it("publishes an EMPTY refusal set when everything applied", async () => {
+    // The control: without it the assertion above is satisfied by a call that
+    // always names every collection, which would withhold the whole dashboard.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
   });
 
   it("marks an EDITED code-first collection as 'applied' after a successful apply", async () => {
