@@ -20,20 +20,27 @@
  * @module components/features/widgets/WidgetGrid
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
+import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import {
   useWidgetQueries,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";
+import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
+import { AddWidgetPicker } from "./edit/AddWidgetPicker";
+import { DashboardEditBar } from "./edit/DashboardEditBar";
+import { useLayoutEditor } from "./edit/useLayoutEditor";
+import { WidgetEditControls } from "./edit/WidgetEditControls";
+import { moveAffordance } from "./layout-editor";
 import { coreDraws, resolveWidgetOutcome } from "./outcome";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { widgetSpanClass } from "./sizes";
@@ -141,7 +148,7 @@ export function WidgetGrid() {
   // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
   // and the registry `registerWidget` writes to. Reading only the first made the
   // registry invisible to the renderer built around it.
-  const widgets = useMemo(
+  const declared = useMemo(
     () =>
       resolveDashboardWidgets(
         branding?.plugins,
@@ -150,6 +157,81 @@ export function WidgetGrid() {
       ),
     [branding, hasPermission]
   );
+
+  // The DECLARATIONS, by id. The arrangement says which cards and in what
+  // order; this says what each one actually is. Two questions, two sources:
+  // the server owns the arrangement because only it can filter by permission
+  // authoritatively, and branding owns the declaration because that is what
+  // carries the archetype, the query and the component.
+  const byId = useMemo(
+    () => new Map(declared.map(widget => [widget.id, widget])),
+    [declared]
+  );
+
+  const layout = useDashboardLayout();
+
+  // What an added card inherits. Read from the declaration rather than
+  // defaulted here, so a card the reader adds is the size its author intended.
+  const geometryFor = useCallback(
+    (widgetId: string) => {
+      const declaration = byId.get(widgetId);
+      if (!declaration) return undefined;
+      // `size` on a resolved declaration IS its declared default — the admin's
+      // resolver has already applied it. Reading it here rather than defaulting
+      // means a card the reader adds arrives the size its author intended.
+      return { size: declaration.size };
+    },
+    [byId]
+  );
+
+  const editor = useLayoutEditor(layout, geometryFor);
+
+  // The cards to draw, in the arrangement's order.
+  //
+  // A placement whose declaration this admin cannot resolve is SKIPPED rather
+  // than drawn as an empty cell: the server filtered by permission and by the
+  // registry, but a plugin's client bundle can still be absent, and a titled
+  // card with nothing under it reads as a product bug rather than as a missing
+  // plugin. While editing, hidden cards are drawn too — greyed — because a
+  // reader cannot bring back something they cannot see.
+  // 🔴 Whether an arrangement has been READ, which is not the same as whether
+  // it holds anything. Absent means the request is still in flight or it
+  // failed; empty means this reader has arranged their dashboard down to
+  // nothing. Folding the two together blanks the entire dashboard for the
+  // duration of every page load and for the whole of any outage — the grid
+  // drew from branding alone before this, and a personalization feature must
+  // not be able to take the page down when its own endpoint is unavailable.
+  const hasArrangement = layout.layout !== undefined;
+
+  const visible = useMemo(() => {
+    // No arrangement yet: draw the declarations in their declared order, which
+    // is exactly what this dashboard did before it could be arranged at all.
+    if (!hasArrangement) {
+      return declared.map(widget => ({
+        placementId: widget.id,
+        widget,
+        hidden: false,
+      }));
+    }
+    const rows: Array<{
+      placementId: string;
+      widget: DashboardWidget;
+      hidden: boolean;
+    }> = [];
+    for (const placement of editor.placements) {
+      const widget = byId.get(placement.widgetId);
+      if (!widget) continue;
+      if (placement.hidden && !editor.isEditing) continue;
+      rows.push({
+        placementId: placement.id,
+        widget,
+        hidden: placement.hidden,
+      });
+    }
+    return rows;
+  }, [hasArrangement, declared, editor.placements, editor.isEditing, byId]);
+
+  const widgets = useMemo(() => visible.map(row => row.widget), [visible]);
 
   // Every widget that DECLARED a query, archetype notwithstanding. `custom` is
   // included on purpose: core's widget validator puts it in neither the data
@@ -217,6 +299,33 @@ export function WidgetGrid() {
   const settling = counted.some(outcome => outcome.state === "loading");
 
   const [announcement, setAnnouncement] = useState("");
+
+  // A reorder speaks through the grid's ONE region, not a second one.
+  //
+  // The reason is the reason that region exists: several announcers on one
+  // surface interrupt each other, and a reader cannot tell which announcement
+  // belonged to what they just did. That argument does not weaken because the
+  // second announcer is the grid itself rather than a card.
+  //
+  // Nothing is clobbered by sharing it. The batch effect below fires only when
+  // its OWN sentence changes, and a move does not change it — so a move
+  // message survives until the batch has something new to say, which is
+  // precisely when it should stop being the latest news.
+  const announceMove = useCallback(
+    (title: string, position: number, count: number) => {
+      // The zero-width space alternates the string, because a live region does
+      // not re-announce text that did not change -- and moving a card up twice
+      // produces the same sentence both times. Same device as the builder's
+      // `keyboard-actions`, which is where this grid's convention comes from.
+      setAnnouncement(
+        current =>
+          `${title} moved to position ${position} of ${count}.${
+            current.endsWith("\u200b") ? "" : "\u200b"
+          }`
+      );
+    },
+    []
+  );
   // What was last spoken, so an unchanged outcome does not re-fire. A ref
   // rather than state because it must not itself cause a render.
   const spoken = useRef("");
@@ -243,64 +352,154 @@ export function WidgetGrid() {
   }
 
   return (
-    <section aria-label="Dashboard widgets" className="grid grid-cols-12 gap-6">
-      <span
-        role="status"
-        aria-live="polite"
-        className="sr-only"
-        data-testid="widget-grid-live"
-      >
-        {announcement}
-      </span>
-      {widgets.map(widget => (
+    <div className="space-y-4">
+      {hasArrangement ? (
+        <DashboardEditBar
+          isEditing={editor.isEditing}
+          hasUnsavedChanges={editor.hasUnsavedChanges}
+          isSaving={editor.isSaving}
+          canReset={layout.layout?.source === "own"}
+          onBegin={editor.begin}
+          onSave={editor.save}
+          onCancel={editor.cancel}
+          onReset={editor.reset}
+        />
+      ) : null}
+
+      {editor.isConflict ? (
+        // Both guards refuse the same way and the remedy is the same, so this
+        // is one message rather than two. It does NOT clear the draft: the
+        // reader's work stays on screen while they decide, because discarding
+        // it at the moment they are told to try again is the worst possible
+        // time to throw it away.
         <div
-          key={widget.id}
-          data-testid={`widget-cell-${widget.id}`}
-          // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
-          // widget always renders its card, so this can never hide one; it
-          // reaches only an unframed widget whose component returned null --
-          // which core's conditional sections do, and did before they were
-          // widgets. Without it each becomes a blank cell with a `gap-6` on
-          // either side, which is the empty-slot bug rather than the hiding
-          // those components have always performed.
-          //
-          // CSS rather than asking the component to declare its own emptiness:
-          // a declaration is a second statement of what the render already
-          // decided, and the two drift.
-          className={cn(
-            widgetSpanClass(widget.size),
-            "empty:hidden",
-            // An unframed widget is a SECTION, and sections on this page have
-            // always been 48px apart -- the `space-y-12` the dashboard used
-            // before these became widgets. The grid's own `gap-6` is a card
-            // rhythm and right for cards, so the difference belongs to the
-            // widgets that are not cards: 24px of trailing margin plus the
-            // 24px row gap puts two adjacent sections back at 48px.
-            //
-            // BOTTOM only. A symmetric `my-3` also pushed the FIRST row down,
-            // and the page's outer `space-y-12` already places the grid 48px
-            // below the welcome header -- so every dashboard gained 12px there
-            // while the inter-section gaps looked correct. Measuring the gaps
-            // alone could not see it; only the header-to-first-section distance
-            // could.
-            //
-            // Margins, not padding: a hidden cell contributes neither, but
-            // padding would also inset a body that draws its own background.
-            widget.chrome === "none" && "mb-6"
-          )}
+          role="alert"
+          className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm"
+          data-testid="dashboard-edit-conflict"
         >
-          <WidgetRenderer
-            definition={widget}
-            slot={slots[widget.id]}
-            updatedAt={requested.has(widget.id) ? updatedAt : null}
-            // Only a widget that actually ASKED can be waiting on an answer. A
-            // card drawn entirely by a plugin component took no part in the
-            // batch, and neither did one whose archetype nothing can draw, so a
-            // refetch says nothing about either.
-            isFetching={requested.has(widget.id) ? isFetching : false}
-          />
+          Your dashboard changed somewhere else while you were editing. Reload
+          to pick up the current arrangement — your unsaved changes here will be
+          lost.{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2"
+            onClick={() => void layout.reload()}
+            data-testid="dashboard-edit-reload"
+          >
+            Reload
+          </button>
         </div>
-      ))}
-    </section>
+      ) : null}
+
+      <section
+        aria-label="Dashboard widgets"
+        className="grid grid-cols-12 gap-6"
+      >
+        <span
+          role="status"
+          aria-live="polite"
+          className="sr-only"
+          data-testid="widget-grid-live"
+        >
+          {announcement}
+        </span>
+        {visible.map((row, index) => {
+          const widget = row.widget;
+          const { canMoveUp, canMoveDown } = moveAffordance(
+            index,
+            visible.length
+          );
+          return (
+            <div
+              key={row.placementId}
+              data-testid={`widget-cell-${widget.id}`}
+              // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
+              // widget always renders its card, so this can never hide one; it
+              // reaches only an unframed widget whose component returned null --
+              // which core's conditional sections do, and did before they were
+              // widgets. Without it each becomes a blank cell with a `gap-6` on
+              // either side, which is the empty-slot bug rather than the hiding
+              // those components have always performed.
+              //
+              // CSS rather than asking the component to declare its own emptiness:
+              // a declaration is a second statement of what the render already
+              // decided, and the two drift.
+              className={cn(
+                widgetSpanClass(widget.size),
+                "empty:hidden",
+                // An unframed widget is a SECTION, and sections on this page have
+                // always been 48px apart -- the `space-y-12` the dashboard used
+                // before these became widgets. The grid's own `gap-6` is a card
+                // rhythm and right for cards, so the difference belongs to the
+                // widgets that are not cards: 24px of trailing margin plus the
+                // 24px row gap puts two adjacent sections back at 48px.
+                //
+                // BOTTOM only. A symmetric `my-3` also pushed the FIRST row down,
+                // and the page's outer `space-y-12` already places the grid 48px
+                // below the welcome header -- so every dashboard gained 12px there
+                // while the inter-section gaps looked correct. Measuring the gaps
+                // alone could not see it; only the header-to-first-section distance
+                // could.
+                //
+                // Margins, not padding: a hidden cell contributes neither, but
+                // padding would also inset a body that draws its own background.
+                widget.chrome === "none" && "mb-6",
+                // A hidden card is drawn while editing so it can be brought
+                // back, and dimmed so it is not mistaken for a live one. The
+                // dimming is presentational only: the controls above it stay at
+                // full contrast, because they are what the reader needs to act
+                // on and a faded button is a button people cannot read.
+                row.hidden && "opacity-50"
+              )}
+            >
+              {editor.isEditing ? (
+                <WidgetEditControls
+                  title={widget.title}
+                  position={index + 1}
+                  count={visible.length}
+                  hidden={row.hidden}
+                  canMoveUp={canMoveUp}
+                  canMoveDown={canMoveDown}
+                  onMoveUp={() => {
+                    editor.moveBy(index, -1);
+                    announceMove(widget.title, index + 1 - 1, visible.length);
+                  }}
+                  onMoveDown={() => {
+                    editor.moveBy(index, 1);
+                    announceMove(widget.title, index + 1 + 1, visible.length);
+                  }}
+                  onToggleHidden={() => editor.toggleHidden(row.placementId)}
+                  onRemove={() => editor.remove(row.placementId)}
+                />
+              ) : null}
+              <WidgetRenderer
+                definition={widget}
+                slot={slots[widget.id]}
+                updatedAt={requested.has(widget.id) ? updatedAt : null}
+                // Only a widget that actually ASKED can be waiting on an answer.
+                // A card drawn entirely by a plugin component took no part in
+                // the batch, and neither did one whose archetype nothing can
+                // draw, so a refetch says nothing about either.
+                isFetching={requested.has(widget.id) ? isFetching : false}
+              />
+            </div>
+          );
+        })}
+      </section>
+
+      {editor.isEditing ? (
+        <AddWidgetPicker
+          options={editor.available.map(widgetId => ({
+            widgetId,
+            // The declaration's own title where the admin can resolve it. The
+            // id is a poor label and it is TRUE, which an invented one would
+            // not be — a widget whose client bundle is absent still has to be
+            // addable by name.
+            title: byId.get(widgetId)?.title ?? widgetId,
+          }))}
+          onAdd={editor.add}
+        />
+      ) : null}
+    </div>
   );
 }
