@@ -713,11 +713,20 @@ describe("a token a default depends on must be one the site set defines", () => 
       } as NodeStyles)
     ).not.toEqual([]);
 
-    // And the same leaf with the RIGHT kind is silent, so the control is about
-    // the kind rather than about `border` being unreadable.
+    /*
+     * And the same leaf with a token of the RIGHT kind is silent.
+     *
+     * A TOKEN rather than the literal `"1px"` this first used. A literal never
+     * reaches token lookup or kind validation at all, so it stays silent however
+     * those behave — including if they began rejecting every dimension at this
+     * leaf, which is the failure this control exists to rule out. `space.4` is a
+     * dimension, and a width leaf takes one.
+     */
     expect(
       tokenIssues({
-        base: { base: { border: { width: { blockStart: "1px" } } } },
+        base: {
+          base: { border: { width: { blockStart: { $token: "space.4" } } } },
+        },
       } as NodeStyles)
     ).toEqual([]);
   });
