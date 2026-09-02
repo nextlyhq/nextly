@@ -92,6 +92,7 @@ import {
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { readableEntities } from "./auth/entity-read-access";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { contributedWidgets } from "./domains/widgets/canonical";
@@ -104,7 +105,6 @@ import {
 import type { WidgetDefinition } from "./domains/widgets/definition";
 import { publishableWidgets } from "./domains/widgets/publish";
 import { listWidgets } from "./domains/widgets/registry";
-import { readableCollections } from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -1682,8 +1682,10 @@ async function handleAdminMetaWorkspaceRequest(
   // `callerHoldsPermission` does not -- so an API key those rules reject is
   // refused by the query endpoint and would have been told the collection
   // exists by this payload. One question, one answer.
-  const readableCollectionSlugs = await readableCollections(
-    generatedWidgets().map(generatedCollectionSlug),
+  const readableCollectionSlugs = await readableEntities(
+    generatedWidgets()
+      .map(generatedCollectionSlug)
+      .filter((slug): slug is string => slug !== undefined),
     caller
   );
   const readable = readableGeneratedWidgets(

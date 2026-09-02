@@ -75,6 +75,12 @@ const NEVER_EXPOSED_FIELD_TYPES: ReadonlySet<string> = new Set(["password"]);
  * results asks for an object per row -- which `asText` correctly declines to
  * stringify, so every row draws an em dash and the card says nothing at all.
  *
+ * 🔴 CARDINALITY is checked beside the type, because a scalar type is not a
+ * scalar VALUE. `text` and `select` both accept `hasMany`, and one of those
+ * stores an array — which `asText` declines to print, so the card draws an em
+ * dash on every row while a usable conventional title sits unused beside it.
+ * Type alone was the wrong question.
+ *
  * FAILS CLOSED on a type it does not know, including one a plugin registered.
  * The two outcomes are not symmetric: an unrecognised scalar costs that
  * collection its recent card, which is a missing card; an unrecognised
@@ -155,7 +161,13 @@ function exposedFields(
 /** One collection, in the shape a widget source is built from. */
 export interface WidgetSourceCollection {
   slug: string;
-  fields: Array<{ name: string; type: string; label?: string }>;
+  fields: Array<{
+    name: string;
+    type: string;
+    label?: string;
+    /** Whether the field stores an ARRAY. A scalar type may still be one. */
+    hasMany?: boolean;
+  }>;
   /**
    * What a human calls this collection — the registry's plural label.
    *
@@ -211,7 +223,9 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   // decided from the declaration instead of from a row.
   const printable = new Set(
     collection.fields
-      .filter(field => PRINTABLE_FIELD_TYPES.has(field.type))
+      .filter(
+        field => PRINTABLE_FIELD_TYPES.has(field.type) && field.hasMany !== true
+      )
       .map(field => field.name)
   );
   const titleField = entryTitleField(

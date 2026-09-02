@@ -26,6 +26,7 @@ type Row = {
   status?: boolean;
   labels?: unknown;
   admin?: unknown;
+  migrationStatus?: unknown;
 };
 
 const containerGet = container.get as ReturnType<typeof vi.fn>;
@@ -425,5 +426,76 @@ describe("the display label a source takes from the registry", () => {
 
     await refreshCollectionSources();
     expect(getSource("collection:posts")?.label).toBe("Articles");
+  });
+});
+
+describe("a collection whose table is not there yet", () => {
+  it("gets no source, so nothing offers a card that cannot be queried", async () => {
+    // 🔴 A Schema-Builder collection is recorded `pending` and its migration
+    // does not run outside development. The row exists, permission seeding
+    // makes it visible, and the table arrives at the next deploy -- so a source
+    // for it accepts queries that reach a table that is not there, once per
+    // reader, until then.
+    registryHolds([
+      {
+        slug: "drafts",
+        migrationStatus: "pending",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("DOES give one to a collection whose migration ran", async () => {
+    // The control: without it the refusal above is satisfied by a filter that
+    // drops every collection.
+    registryHolds([
+      {
+        slug: "posts",
+        migrationStatus: "applied",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")).toBeDefined();
+  });
+
+  it("DOES give one to a code-first collection", async () => {
+    // `synced` is what a code-first collection carries: migrations own its
+    // table, so it is present.
+    registryHolds([
+      {
+        slug: "pages",
+        migrationStatus: "synced",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:pages")).toBeDefined();
+  });
+
+  it("DOES give one to a row that predates the status field", async () => {
+    // 🔴 The one place this reads generously rather than closed. The field was
+    // added after rows existed, so a row without it says nothing about its
+    // table -- and those tables do exist. Refusing them would take widgets away
+    // from every collection an older install already had, to guard against a
+    // state they are not in.
+    registryHolds([
+      {
+        slug: "legacy",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:legacy")).toBeDefined();
   });
 });

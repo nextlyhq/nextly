@@ -31,7 +31,10 @@
  * @module api/widget-layout
  */
 
-import type { ReadAccessCaller } from "../auth/entity-read-access";
+import {
+  readableEntities,
+  type ReadAccessCaller,
+} from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
@@ -56,7 +59,6 @@ import {
 import {
   holdsWidgetPermission,
   permissionVerdicts,
-  readableCollections,
 } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -243,8 +245,10 @@ async function visibleWidgets(
   // collection's code-defined rules, and the widget query endpoint asks the
   // second. A key those rules reject had the card offered here and every query
   // for it refused. The same question, asked once per collection.
-  const readable = await readableCollections(
-    all.map(widget => widget.collection),
+  const readable = await readableEntities(
+    all
+      .map(widget => widget.collection)
+      .filter((slug): slug is string => slug !== undefined),
     caller
   );
 

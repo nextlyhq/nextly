@@ -53,6 +53,8 @@ interface RegisteredCollection {
    * is checked at the point of use rather than assumed from the record type.
    */
   admin?: unknown;
+  /** How far this collection's table has got. See {@link tableIsUsable}. */
+  migrationStatus?: unknown;
   /**
    * The singular/plural display names. Read defensively for the same reason as
    * `admin`: the row is stored JSON.
@@ -113,12 +115,22 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
  */
 function readableFields(
   fields: unknown
-): Array<{ name: string; type: string; label?: string }> {
-  const usable: Array<{ name: string; type: string; label?: string }> = [];
+): Array<{ name: string; type: string; label?: string; hasMany?: boolean }> {
+  const usable: Array<{
+    name: string;
+    type: string;
+    label?: string;
+    hasMany?: boolean;
+  }> = [];
   for (const raw of addressableFields(fields, {
     descendInto: storedAtThisLevel,
   })) {
-    const field = raw as { name?: unknown; type?: unknown; label?: unknown };
+    const field = raw as {
+      name?: unknown;
+      type?: unknown;
+      label?: unknown;
+      hasMany?: unknown;
+    };
     if (typeof field.name === "string" && typeof field.type === "string") {
       // The label is carried when the field has a usable one, and omitted
       // otherwise -- a blank or whitespace label is not a heading, and passing
@@ -132,6 +144,11 @@ function readableFields(
       usable.push({
         name: field.name,
         type: field.type,
+        // 🔴 CARDINALITY, carried rather than dropped. A `text` or `select`
+        // field with `hasMany` stores an ARRAY, and a scalar type is not the
+        // same claim as a scalar value -- so a title chosen on type alone can
+        // still resolve to an array, which the row renderer declines to print.
+        ...(field.hasMany === true && { hasMany: true }),
         ...(label && { label }),
       });
     }
@@ -176,6 +193,37 @@ async function readRegisteredCollections(): Promise<
  * listed. Clearing on a transient failure, by contrast, turns one bad database
  * read into a dashboard of broken cards.
  */
+/**
+ * Whether this collection's TABLE exists to be queried.
+ *
+ * 🔴 A collection created in the Schema Builder is recorded `pending` and its
+ * migration does not run outside development — so in production the row exists,
+ * permission seeding makes it visible, and its table does not arrive until the
+ * next deploy. A source for it accepts queries that reach a table that is not
+ * there, once per reader, for as long as the deploy is away.
+ *
+ * An ALLOWLIST of statuses that mean the table is present: `synced` for a
+ * code-first collection whose table migrations own, and `applied` for a Builder
+ * one whose migration ran. `pending`, `generated` and `failed` all mean it is
+ * not there yet, and the last of those will not arrive on its own.
+ *
+ * An ABSENT status is treated as usable, which is the one place this reads
+ * generously rather than closed. The field was added after rows existed, so a
+ * row predating it says nothing about its table — and those tables do exist.
+ * Refusing them would take widgets away from every collection an older install
+ * already had, to protect against a state they are not in.
+ */
+const TABLE_PRESENT_STATUSES: ReadonlySet<string> = new Set([
+  "synced",
+  "applied",
+]);
+
+function tableIsUsable(collection: RegisteredCollection): boolean {
+  const status = (collection as { migrationStatus?: unknown }).migrationStatus;
+  if (status === undefined) return true;
+  return typeof status === "string" && TABLE_PRESENT_STATUSES.has(status);
+}
+
 /**
  * What a human calls this collection, when the stored row carries a usable
  * plural label. PLURAL because a source and its cards name a set of entries.
@@ -229,6 +277,7 @@ export async function refreshCollectionSources(): Promise<void> {
         (collection): collection is RegisteredCollection & { slug: string } =>
           typeof collection.slug === "string" && collection.slug !== ""
       )
+      .filter(tableIsUsable)
       .map(collection => ({
         slug: collection.slug,
         fields: readableFields(collection.fields),

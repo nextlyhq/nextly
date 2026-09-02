@@ -21,7 +21,11 @@ vi.mock("../../di/container", () => ({
   },
 }));
 
-import { canReadEntity, type ReadAccessCaller } from "../entity-read-access";
+import {
+  canReadEntity,
+  readableEntities,
+  type ReadAccessCaller,
+} from "../entity-read-access";
 
 const apiKey = (permissions: string[]): ReadAccessCaller => ({
   userId: "owner-1",
@@ -178,5 +182,50 @@ describe("canReadEntity — degenerate input", () => {
     hasSpy.mockReturnValue(false);
 
     await expect(canReadEntity("posts", session)).resolves.toBe(false);
+  });
+});
+
+describe("readableEntities", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hasSpy.mockReturnValue(true);
+    registeredAccessSpy.mockReturnValue(undefined);
+    checkAccessSpy.mockResolvedValue(true);
+  });
+
+  it("denies only the slug whose check THREW, not the whole set", async () => {
+    // 🔴 A single rejected decision used to reject the whole calculation, so one
+    // unreachable RBAC lookup turned every surface built on this -- the
+    // dashboard's readable resources, the widget layout, the workspace payload
+    // -- into an error rather than a narrower answer. A check that threw has
+    // told us nothing, and "nothing" must not read as "allowed" either.
+    checkAccessSpy.mockImplementation(({ resource }: { resource: string }) =>
+      resource === "broken"
+        ? Promise.reject(new Error("rbac unreachable"))
+        : Promise.resolve(true)
+    );
+
+    const allowed = await readableEntities(
+      ["posts", "broken", "pages"],
+      session
+    );
+
+    expect([...allowed].sort()).toEqual(["pages", "posts"]);
+  });
+
+  it("asks about each slug ONCE however often it is named", async () => {
+    // A permission decision resolves a session caller through a per-user TTL
+    // cache, so a repeat is a second database read for an answer in hand -- and
+    // a dashboard offering two cards per collection names each one twice.
+    await readableEntities(["posts", "posts", "posts"], session);
+
+    expect(checkAccessSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("still returns what the caller may read", async () => {
+    // The control: without it both assertions above are satisfied by a function
+    // that returns the empty set.
+    const allowed = await readableEntities(["posts", "pages"], session);
+    expect([...allowed].sort()).toEqual(["pages", "posts"]);
   });
 });

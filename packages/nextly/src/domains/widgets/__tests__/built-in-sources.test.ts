@@ -327,4 +327,41 @@ describe("what a source calls itself, and which field names its rows", () => {
     ]);
     expect(getSource("collection:readings")?.titleField).toBeUndefined();
   });
+
+  it("REFUSES a nominated field that holds many values", () => {
+    // 🔴 A scalar TYPE is not a scalar VALUE. `text` and `select` both accept
+    // `hasMany`, and one of those stores an array -- which `asText` declines to
+    // print, so the card draws an em dash on every row while a usable
+    // conventional title sits unused beside it. Type alone was the wrong
+    // question.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "tags",
+        fields: [
+          { name: "tags", type: "text", hasMany: true },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("accepts a single-valued field of the same type", () => {
+    // The control: without it the refusal above is satisfied by an allowlist
+    // that rejects `text` outright.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "tags",
+        fields: [
+          { name: "tags", type: "text" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("tags");
+  });
 });
