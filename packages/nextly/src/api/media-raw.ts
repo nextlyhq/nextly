@@ -30,6 +30,7 @@ import {
   matchesWebFontSignature,
   WEB_FONT_MIME_TYPES,
 } from "../services/upload-validation/web-fonts";
+import { DEFAULT_READ_MAX_BYTES } from "../storage/fetch-stored-bytes";
 import { readStoredMediaBytes } from "../storage/read-stored-media";
 import { getMediaStorage } from "../storage/storage";
 
@@ -129,26 +130,29 @@ export async function handleServeMediaBytes(
    * including the local one this route was supposed to work on first.
    */
   /*
-   * The smallest bound that cannot refuse an object this product legitimately
-   * stored, which needs BOTH terms:
+   * A bound that only ever grows, because every input to it is unreliable in a
+   * different direction and none can be trusted alone:
    *
-   * - The row's own recorded size, because the policy describes what may be
-   *   written NEXT and not what was accepted historically. Lowering
-   *   `security.limits.fileSize` would otherwise strand every larger font
-   *   already in the store, permanently, on a route with no way to say so.
-   * - The current cap, because a row written before the size was taken from
-   *   the validated bytes can understate its object, and a bound that trusts
-   *   an understated number refuses the very file it was widened to serve.
+   * - `DEFAULT_READ_MAX_BYTES` is the floor: the bound this route has applied
+   *   for its whole existence. Keeping it means no configuration change can
+   *   make an object that was servable yesterday unservable today, which no
+   *   number derived from present state can promise.
+   * - The row's recorded size covers an object larger than that floor. It is
+   *   the only input describing THIS object, but a row written before the size
+   *   was taken from the validated bytes can understate what it points at, so
+   *   it cannot be the bound on its own.
+   * - The configured cap covers an install that raised it: a font accepted
+   *   moments earlier under a 20mb policy is larger than the floor and larger
+   *   than nothing else here would allow.
    *
-   * A constant was neither, and refused a font accepted moments earlier under
-   * a configured cap larger than it. Both numbers are written by this product
-   * rather than supplied by a caller: the media services record the length of
-   * the bytes they actually stored.
+   * Taking the largest is what makes the three failure modes disjoint. Lower
+   * any one of them and some legitimately stored font stops being served —
+   * measured, one per case, in this route's tests.
    */
   const bytes = await readStoredMediaBytes(
     getMediaStorage().getAdapterForCollection(MEDIA_COLLECTION),
     media.filename,
-    Math.max(media.size, resolveUploadPolicy().maxSize)
+    Math.max(DEFAULT_READ_MAX_BYTES, media.size, resolveUploadPolicy().maxSize)
   );
   // The row outlived its object. Same answer as a row that never existed,
   // because from outside they are the same thing: there is no font here.
