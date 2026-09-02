@@ -60,7 +60,29 @@ const BLOCKS = coreBlocks as AnyBlockDefinition[];
  */
 const MARKER = "nx-every-block-marker";
 
-const NODE: BlockNode = { id: "n1", type: "core/text", version: 1, props: {} };
+/**
+ * The node a block is rendered as, built from THAT block's own declarations.
+ *
+ * One shared node would disagree with the props beside it: a renderer reading
+ * `node.type`, `node.version` or `node.props` would be handed `core/text` v1 and
+ * an empty props object while `args.props` carried something else entirely. A
+ * renderer that only works for `core/text` would pass this gate, and one that
+ * correctly checks its own identity would fail it.
+ *
+ * Production hands a renderer the node it was selected for, and the same props
+ * object, so this does too.
+ */
+function nodeFor(
+  block: AnyBlockDefinition,
+  props: Record<string, unknown>
+): BlockNode {
+  return {
+    id: `n-${block.name.replace("/", "-")}`,
+    type: block.name,
+    version: block.version,
+    props,
+  };
+}
 
 function context(): PageContext {
   return {
@@ -74,10 +96,15 @@ function context(): PageContext {
   };
 }
 
-function args(props: Record<string, unknown>): BlockRenderArgs<never> {
+function args(
+  block: AnyBlockDefinition,
+  props: Record<string, unknown>
+): BlockRenderArgs<never> {
   return {
     props,
-    node: NODE,
+    // The SAME object the renderer receives as `props`, so a renderer reading
+    // one cannot disagree with a renderer reading the other.
+    node: nodeFor(block, props),
     className: MARKER,
     partClass: () => "",
     ctx: context(),
@@ -89,8 +116,9 @@ function args(props: Record<string, unknown>): BlockRenderArgs<never> {
 
 /** What one block renders from its own advertised props. */
 async function renderOf(block: AnyBlockDefinition): Promise<string> {
+  const props = { ...(block.example?.props ?? {}) };
   const element = (await block.render(
-    args({ ...(block.example?.props ?? {}) }) as never
+    args(block, props) as never
   )) as ReactElement | null;
   return element === null ? "" : renderToStaticMarkup(element);
 }

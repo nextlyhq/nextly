@@ -249,6 +249,55 @@ describe("the kitchen-sink document", () => {
     }
   );
 
+  it("repeats the loop's template ONCE PER ENTRY, not once", async () => {
+    /*
+     * The per-node case above renders every block against a reader that answers
+     * with nothing, so `core/collection-loop` proves only that its empty outer
+     * container exists. Breaking per-item iteration leaves it green while the
+     * page shows no repeated content at all — which is the state this page was
+     * in before the route was given a provider.
+     *
+     * So this one answers with entries and looks for repetition. The child is a
+     * marker rather than the fixture's own text: counting a string the document
+     * also contains elsewhere would be satisfied by the page rather than by the
+     * loop.
+     */
+    const loop = NODES.find(node => node.type === "core/collection-loop");
+    expect(
+      loop,
+      "the fixture no longer contains a loop to exercise"
+    ).toBeDefined();
+
+    const definition = BY_NAME.get("core/collection-loop");
+    const entries = [{ id: "1" }, { id: "2" }, { id: "3" }];
+    const ITEM = "nx-loop-item-marker";
+
+    const element = await (definition as Definition).render({
+      props: (loop as BlockNode).props,
+      node: loop,
+      className: MARKER,
+      partClass: () => "",
+      ctx: {
+        entry: null,
+        data: { find: () => Promise.resolve({ items: entries, total: 3 }) },
+        resolveMedia: () => Promise.resolve(null),
+        resolveEntryPath: () => Promise.resolve(null),
+      },
+      renderSlot: () => ITEM,
+    } as unknown as BlockRenderArgs<never>);
+
+    const markup =
+      element === null || element === undefined
+        ? ""
+        : renderToStaticMarkup(element as never);
+
+    expect(
+      markup.split(ITEM).length - 1,
+      `the loop drew its template ${String(markup.split(ITEM).length - 1)} times ` +
+        `for ${String(entries.length)} entries`
+    ).toBe(entries.length);
+  });
+
   it("stores no slot name its block does not declare", () => {
     /*
      * A slot key nothing declares is invisible to every other check here.

@@ -8,7 +8,15 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createSiteDataProvider } from "../../src/lib/site-content";
+
+/** The route whose dynamic blocks depend on a provider being wired in. */
+const BLOCKS_ROUTE = fileURLToPath(
+  new URL("../../src/app/blocks/[[...slug]]/page.tsx", import.meta.url)
+);
 
 /** A reader that records what it was asked and answers with one row. */
 function stubReader() {
@@ -26,6 +34,33 @@ function stubReader() {
     } as never,
   };
 }
+
+describe("the blocks route", () => {
+  it("hands its dynamic blocks a provider", () => {
+    /*
+     * Everything else in this file tests the provider in isolation, so all of it
+     * stays green when the route stops passing one — and a route with no `data`
+     * gets `emptyDataProvider`, which answers every `core/collection-loop` with
+     * nothing. The page then renders a section that lists posts and shows an
+     * empty box.
+     *
+     * Read from the route's SOURCE, which is the honest limit of a unit test
+     * here: a Next page module exports what the framework expects and nothing
+     * this file could import to inspect. The repository already checks a
+     * configuration file this way, in `ci-steps-report-independently.test.mjs`.
+     */
+    const source = readFileSync(BLOCKS_ROUTE, "utf-8");
+
+    // Must-be-found: the file was read and is the route, so an absent `data`
+    // below means it is missing rather than that the path is wrong.
+    expect(source).toContain("createBlocksPage(");
+    expect(
+      source,
+      "the blocks route passes no `data` provider, so every core/collection-loop " +
+        "on a stored page renders an empty container"
+    ).toMatch(/\bdata:\s*siteDataProvider\b/);
+  });
+});
 
 describe("the site's data provider", () => {
   it("passes the collection through and reshapes the result", () => {
@@ -53,10 +88,6 @@ describe("the site's data provider", () => {
      * route answers anyone with a URL. `Nextly.find` defaults to a TRUSTED read
      * that evaluates no access rule and applies no lifecycle filter, so the
      * bare call hands a public page rows nobody was allowed to see.
-     *
-     * Measured against the seeded playground data before this was fixed: the
-     * bare call returned 5 posts including 2 drafts, where the enforced and
-     * published-only reads each returned 3.
      *
      * Both flags, because they answer different questions — access decides who
      * may see a row, the lifecycle decides whether it is public yet — so a test
