@@ -42,6 +42,11 @@ export const NEXTLY_ERROR_STATUS = {
   // is sending, this one refuses to buffer an object already stored. Kept
   // apart so a caller discriminating on the code cannot match both.
   STORAGE_READ_TOO_LARGE: 413,
+  // A stored object did not answer within the deadline the read was given. 504
+  // rather than 500 because the failure is the BACKEND not answering, and a
+  // caller can act on that difference: a gateway timeout is worth retrying, an
+  // internal error is not.
+  STORAGE_READ_TIMEOUT: 504,
   MAGIC_BYTE_MISMATCH: 400,
   SVG_SANITIZATION_FAILED: 400,
   UNSUPPORTED_FOR_BACKEND: 415,

@@ -10,17 +10,18 @@
  *
  * @module storage/fetch-stored-bytes.test
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../errors/nextly-error";
 import {
+  deadlineSignal,
   fetchStoredBytes,
   resolveReadBounds,
   DEFAULT_READ_MAX_BYTES,
   DEFAULT_READ_TIMEOUT_MS,
 } from "./fetch-stored-bytes";
 import { safeFetch, SafeFetchError } from "../utils/validate-external-url";
-import { isStorageReadTooLarge } from "./read-errors";
+import { isStorageReadTimeout, isStorageReadTooLarge } from "./read-errors";
 
 vi.mock("../utils/validate-external-url", async importOriginal => {
   /*
@@ -255,5 +256,48 @@ describe("the bounds a read runs under", () => {
     // is tuned, so these are the fetch layer's own constants re-exported.
     expect(DEFAULT_READ_MAX_BYTES).toBe(10 * 1024 * 1024);
     expect(DEFAULT_READ_TIMEOUT_MS).toBe(30_000);
+  });
+});
+
+describe("the deadline a read runs under", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts with this package's own error, not the platform's", async () => {
+    /*
+     * `AbortSignal.timeout` rejects with a `DOMException` named `TimeoutError`,
+     * which a caller reaching for `NextlyError.is` cannot classify. Asserted on
+     * the REASON rather than on `aborted`, because a signal that aborts with
+     * the wrong value satisfies `aborted` perfectly.
+     */
+    const deadline = deadlineSignal(50, "media/f.woff2");
+    vi.advanceTimersByTime(51);
+
+    expect(deadline.signal.aborted).toBe(true);
+    expect(isStorageReadTimeout(deadline.signal.reason)).toBe(true);
+    // Not the over-cap refusal: that one read the object, this one never did.
+    expect(isStorageReadTooLarge(deadline.signal.reason)).toBe(false);
+  });
+
+  it("stops the timer once the read has settled", async () => {
+    /*
+     * `unref` keeps a pending deadline from holding the process open and does
+     * nothing else: the timer stays on the heap holding the controller and the
+     * path, so a server doing a thousand reads a second carries thirty seconds
+     * of them and then runs a thousand aborts nobody is waiting for.
+     *
+     * Its control is the case above, which fails if the deadline stops firing
+     * at all — this one fails only when a cancelled deadline still fires.
+     */
+    const deadline = deadlineSignal(50, "media/f.woff2");
+    deadline.cancel();
+    vi.advanceTimersByTime(5_000);
+
+    expect(deadline.signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

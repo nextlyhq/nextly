@@ -127,7 +127,12 @@ export type {
 // ============================================================
 
 export { fetchStoredBytes } from "./fetch-stored-bytes";
-export { StorageReadTooLargeError, isStorageReadTooLarge } from "./read-errors";
+export {
+  StorageReadTooLargeError,
+  isStorageReadTooLarge,
+  StorageReadTimeoutError,
+  isStorageReadTimeout,
+} from "./read-errors";
 export type { StorageReadOptions } from "./types";
 export { isTransientError, withRetry, createRetryable } from "./retry";
 
