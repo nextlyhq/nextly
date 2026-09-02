@@ -411,3 +411,67 @@ describe("an unknown size survives, including the inherited names", () => {
     expect(widgetSpanClass("sm")).toBe(WIDGET_SPAN_CLASSES.sm);
   });
 });
+
+describe("two contributions sharing one widget id", () => {
+  /** One plugin's contribution, as `/api/admin-meta` serializes it. */
+  function contributing(widget: Record<string, unknown>) {
+    return { name: "@acme/p", widgets: [widget] } as never;
+  }
+
+  it("does not let a later UNGATED declaration render where a gated one was withheld", () => {
+    // 🔴 Widget ids are plugin-local, so two enabled plugins can ship the same
+    // one. The resolver used to pass the id on when a declaration was declined,
+    // so a second plugin contributing that id with no `requiredPermission`
+    // rendered exactly where the first plugin's gated widget had been withheld.
+    // Nothing enforced agreement between the two declarations.
+    const widgets = resolveDashboardWidgets(
+      [
+        contributing({
+          id: "dup/one",
+          title: "Gated",
+          archetype: "custom",
+          component: "p#A",
+          requiredPermission: "read-secrets",
+        }),
+        contributing({
+          id: "dup/one",
+          title: "Ungated",
+          archetype: "custom",
+          component: "p#B",
+        }),
+      ],
+      [],
+      () => false
+    );
+
+    expect(widgets).toEqual([]);
+  });
+
+  it("resolves the id to the FIRST declaration, matching the server", () => {
+    // The control, and the agreement that matters. `canonicalWidgets` resolves
+    // a collision by declaration order alone -- it must, because default
+    // positions come from the whole-registry materialization and a caller-
+    // dependent identity would move every reader's cards. A grid that chose
+    // differently would draw one declaration where the server placed another.
+    const widgets = resolveDashboardWidgets(
+      [
+        contributing({
+          id: "dup/one",
+          title: "First",
+          archetype: "custom",
+          component: "p#A",
+        }),
+        contributing({
+          id: "dup/one",
+          title: "Second",
+          archetype: "custom",
+          component: "p#B",
+        }),
+      ],
+      [],
+      () => true
+    );
+
+    expect(widgets.map(w => w.title)).toEqual(["First"]);
+  });
+});

@@ -14,6 +14,7 @@
 import type {
   WidgetAction,
   WidgetArchetype,
+  WidgetHeight,
   WidgetQuery,
   WidgetSize,
   WidgetChrome,
@@ -85,6 +86,7 @@ export interface ReadableWidgetDeclaration {
   category?: string;
   archetype?: WidgetArchetype;
   defaultSize?: WidgetSize;
+  defaultHeight?: WidgetHeight;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
   query?: WidgetQuery;
@@ -211,6 +213,7 @@ function resolveOne(
     // enum wins where both are declared, because a plugin that adopted the new
     // field meant it.
     size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
+    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
@@ -254,6 +257,7 @@ function resolveRegistered(
     icon: meta.icon,
     archetype: meta.archetype,
     size: meta.defaultSize,
+    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
     component: meta.component,
     actions: readableActions(meta.actions, hasPermission),
@@ -300,6 +304,11 @@ function mergeCollision(
     icon: registration.icon ?? contribution.icon,
     archetype: registration.archetype,
     defaultSize: registration.defaultSize,
+    // The registry wins where it states one, exactly as `defaultOrder` and
+    // `chrome` do below. Named in this list rather than left out because the
+    // list IS the contract: a field missing from it is dropped silently, and a
+    // merged widget would lose the height its contribution declared.
+    defaultHeight: registration.defaultHeight ?? contribution.defaultHeight,
     minSize: registration.minSize,
     maxSize: registration.maxSize,
     // The contributed size is the FALLBACK, read only when the registration
@@ -380,16 +389,29 @@ export function resolveDashboardWidgets(
     resolve: () => DashboardWidget | undefined
   ): DashboardWidget[] => {
     if (seen.has(id)) return [];
-    const widget = resolve();
-    // NOT marked seen when the resolver declines, so a later declaration of the
-    // same id still gets its turn. Whether that is right depends on the two
-    // declarations agreeing about the permission, which nothing here enforces:
-    // a contributed widget carrying no permission still renders behind a
-    // registration that was withheld only if the two are not merged, which is
-    // why the merge above is what closes it rather than this line.
-    if (!widget) return [];
+    // 🔴 The id is CLAIMED before the resolver runs, so a declaration that is
+    // declined still consumes it and no later declaration takes its place.
+    //
+    // The previous rule let a decline pass the id on, and that is a permission
+    // SHADOWING hole: widget ids are plugin-local, so a second plugin
+    // contributing the same id with no `requiredPermission` rendered exactly
+    // where the first plugin's gated widget had been withheld. Nothing else
+    // enforced agreement between the two declarations -- the registration merge
+    // closes that case and two contributions have no merge to close it.
+    //
+    // It is also what makes this agree with the server. `canonicalWidgets`
+    // resolves a collision by declaration order alone, and it MUST: positions
+    // in the default arrangement come from a placement's index in the
+    // whole-registry materialization, so a canonical set that varied per caller
+    // would move every reader's cards relative to each other. Deciding identity
+    // here by anything the caller affects would put the two back out of step,
+    // with the server placing one declaration and the grid drawing another.
+    //
+    // So: one id names one declaration, chosen without reference to who is
+    // asking or to whether the declaration turned out to be renderable.
     seen.add(id);
-    return [widget];
+    const widget = resolve();
+    return widget ? [widget] : [];
   };
 
   const contributed = declaredWidgets(plugins).flatMap(meta => {

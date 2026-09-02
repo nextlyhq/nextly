@@ -30,9 +30,23 @@ export interface AddWidgetOption {
 export interface AddWidgetPickerProps {
   options: AddWidgetOption[];
   onAdd: (widgetId: string) => void;
+  /**
+   * Whether the arrangement already holds as many cards as one write may carry.
+   *
+   * The picker still LISTS the surplus — those widgets exist and the reader
+   * should be able to see that they do — but every button is disabled and the
+   * reason is stated. Hiding them instead would make a widget disappear from
+   * the one place it is discoverable, which is the defect this picker exists to
+   * prevent.
+   */
+  atCapacity?: boolean;
 }
 
-export function AddWidgetPicker({ options, onAdd }: AddWidgetPickerProps) {
+export function AddWidgetPicker({
+  options,
+  onAdd,
+  atCapacity = false,
+}: AddWidgetPickerProps) {
   if (options.length === 0) {
     // Said rather than rendered blank. An empty picker and a picker that failed
     // to load look identical, and "everything is already on your dashboard" is
@@ -52,6 +66,17 @@ export function AddWidgetPicker({ options, onAdd }: AddWidgetPickerProps) {
       <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
         Add a widget
       </h3>
+      {atCapacity ? (
+        // Named BEFORE the buttons, so a reader meets the reason rather than a
+        // row of controls that do nothing. It says the remedy too: the limit is
+        // on the arrangement, not on the widget they were reaching for.
+        <p
+          className="mb-2 text-sm text-muted-foreground"
+          data-testid="add-widget-at-capacity"
+        >
+          Your dashboard is full. Remove a card to make room for another.
+        </p>
+      ) : null}
       <ul className="flex flex-wrap gap-2">
         {options.map(option => (
           <li key={option.widgetId}>
@@ -60,6 +85,7 @@ export function AddWidgetPicker({ options, onAdd }: AddWidgetPickerProps) {
               variant="outline"
               size="sm"
               onClick={() => onAdd(option.widgetId)}
+              disabled={atCapacity}
               // The category rides in the accessible name rather than being
               // rendered as a separate grouping. With a handful of widgets a
               // grouped list is more chrome than help, and a reader who needs
