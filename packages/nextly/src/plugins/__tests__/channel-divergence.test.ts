@@ -409,6 +409,26 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
       actions: 42,
     },
   },
+  {
+    case: "a null action item on an archetype this core does not know",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "timeline",
+      defaultSize: "sm",
+      actions: [null],
+    },
+  },
+  {
+    case: "a primitive action item on an archetype this core does not know",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "timeline",
+      defaultSize: "sm",
+      actions: [42],
+    },
+  },
 ];
 
 describe("the registry and contributions channels agree except where declared", () => {

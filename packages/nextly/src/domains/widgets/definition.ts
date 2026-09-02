@@ -261,9 +261,22 @@ function archetypeRelatedProblem(
     return "archetype, when given, must be a string";
   }
 
-  // Shape first, and for every standing including a newer core's.
-  if (widget.actions !== undefined && !Array.isArray(widget.actions)) {
-    return "actions, when given, must be an array";
+  // Shape first, and for every standing including a newer core's -- one level
+  // in, not just the container. `readableActions` runs for every archetype and
+  // reads `action.requiredPermission` off each item, so a `null` or `undefined`
+  // entry throws exactly as a non-array `actions` does. A newer core may add
+  // FIELDS to an action; it cannot make an action stop being an object, so this
+  // is version-independent while "must have a label and href" is not.
+  if (widget.actions !== undefined) {
+    if (!Array.isArray(widget.actions)) {
+      return "actions, when given, must be an array";
+    }
+    const badIndex = widget.actions.findIndex(
+      action => typeof action !== "object" || action === null
+    );
+    if (badIndex !== -1) {
+      return `actions[${badIndex}] must be an object`;
+    }
   }
 
   // Placement is a vocabulary judgement, so a newer core's archetype is exempt.
