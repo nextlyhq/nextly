@@ -46,3 +46,19 @@ repeated the name while saying nothing about which weights the family covers.
 `@nextlyhq/plugin-sdk/admin`. It is the one route a plugin has to put bytes on
 the site, which anything referencing a file — a `@font-face` above all — needs
 before it can point at one.
+
+The panel's controls are not a form of their own. They are rendered inside the
+entry editor's, and a nested form's submit reaches the editor's handler — so
+pressing Enter in one of these fields started the upload AND saved the page
+entry, committing the document as it stood before the builder opened. Enter now
+adds the font and nothing else.
+
+An add is refused when the stored style holds a font row this version cannot
+read, naming the row. The section is saved by replacement, so appending to what
+was read would have saved a list that row is missing from — and the save would
+have succeeded, because the list sent is exactly the one the checker approves.
+
+Web font formats carry the `format()` keyword their `src` entries take, so the
+panel, the upload gate and the public byte route read one table instead of
+three; a descending weight range such as `900 100` is refused, since a browser
+drops the whole descriptor and matches the face at a weight nobody chose.

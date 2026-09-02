@@ -86,6 +86,19 @@ export interface FontsPanelProps {
    * editor already answers with.
    */
   onAddFace?: (request: FontFaceUpload) => Promise<string | undefined>;
+  /**
+   * What the file picker offers, as an `accept` attribute.
+   *
+   * The host's to state, not this panel's. Which formats can be uploaded,
+   * stored and then served to an anonymous reader is one decision, and the
+   * host is where it is already made — a list restated here would drift from
+   * it, and the drift is invisible: a format this panel omits is one nobody
+   * can add, and one it admits alone is a refusal arriving after the upload.
+   *
+   * Absent means the picker names no preference, which is the honest default
+   * for a host that has not said. The host still decides on the way in.
+   */
+  acceptFiles?: string;
 }
 
 /**
@@ -358,15 +371,38 @@ function specimenWeight(weight: string | undefined): string | undefined {
  *
  * Both forms the descriptor allows: one absolute weight, or two making a
  * variable range.
+ *
+ * A range is ORDERED, which per-part checking cannot see. `900 100` is two
+ * individually valid weights and not a range: the descriptor requires the
+ * lower endpoint first, so a browser drops the whole thing and matches the
+ * face at a weight nobody chose — the same silent outcome as `70O`, reached
+ * from the other direction.
  */
 function isUsableWeight(weight: string): boolean {
   const parts = weight.trim().split(/\s+/);
   if (parts.length === 0 || parts.length > 2) return false;
-  return parts.every(part => {
-    if (part === "normal" || part === "bold") return true;
-    const value = Number(part);
-    return Number.isFinite(value) && value >= 1 && value <= 1000;
-  });
+  const low = weightValue(parts[0] ?? "");
+  if (low === undefined) return false;
+  if (parts.length === 1) return true;
+  const high = weightValue(parts[1] ?? "");
+  return high !== undefined && low <= high;
+}
+
+/**
+ * One endpoint as the number it compares as, or nothing when it is not one.
+ *
+ * The two keywords are part of the grammar — `font-weight: bold 900` is a
+ * legal descriptor — and they have fixed numeric meanings, so ordering can be
+ * judged across a mixed pair rather than only across two numerals.
+ */
+function weightValue(part: string): number | undefined {
+  if (part === "normal") return 400;
+  if (part === "bold") return 700;
+  const value = Number(part);
+  // `Number("")` is 0 and `Number(" ")` is 0, both outside the range below.
+  return Number.isFinite(value) && value >= 1 && value <= 1000
+    ? value
+    : undefined;
 }
 
 /**
@@ -595,18 +631,33 @@ function familyFromFilename(name: string): string {
 }
 
 /**
- * The form that adds a face.
+ * The controls that add a face.
  *
- * `.woff2` and `.woff` only, and stated exactly rather than as `font/*`: those
- * two are what the byte route serves to an anonymous reader, so offering a
- * picker that admits a TTF would let an author choose a file this site accepts
- * into storage and then never serves — a refusal arriving one screen later,
- * about a file they cannot see the problem with.
+ * NOT a `<form>`, and that is the whole design. This panel is rendered inside
+ * the entry editor, whose fields already sit in one — `EntryFormProvider`
+ * writes it — and HTML forbids a form inside a form. React builds the element
+ * anyway, and the result is worse than invalid markup: a submit raised in here
+ * BUBBLES, and React delivers it to the entry form's own handler, so pressing
+ * Enter in the family field saved the page entry. `preventDefault` does not
+ * help, because the default action is not the problem; the propagation is.
+ *
+ * Saving the entry from here is not merely surprising. The builder is a
+ * takeover surface that holds its work privately and writes it back on the way
+ * out, so a save started while it is open commits the document as it was
+ * BEFORE the session — the same trap `blockImplicitSubmit` was written for on
+ * the admin's side of the boundary.
+ *
+ * Enter still adds the font. Refusing the keystroke outright would protect the
+ * entry and take away the affordance every other text field in the product
+ * has; intercepting it does both jobs, since a keystroke handled here never
+ * reaches the form outside.
  */
 function AddFaceForm({
   onAddFace,
+  acceptFiles,
 }: {
   onAddFace: (request: FontFaceUpload) => Promise<string | undefined>;
+  acceptFiles?: string;
 }): React.JSX.Element {
   const [file, setFile] = useState<File | null>(null);
   const [family, setFamily] = useState("");
@@ -633,12 +684,11 @@ function AddFaceForm({
     }
   };
 
-  const submit = async (event: React.FormEvent): Promise<void> => {
-    event.preventDefault();
+  const submit = async (): Promise<void> => {
     if (file === null || family.trim() === "" || busy) return;
     if (!isUsableWeight(weight)) {
       setError(
-        "A weight is one number from 1 to 1000, or two making a variable range — 400, or 100 900."
+        "A weight is one number from 1 to 1000, or two making a variable range with the lighter one first — 400, or 100 900."
       );
       return;
     }
@@ -674,13 +724,44 @@ function AddFaceForm({
     }
   };
 
+  /*
+   * Enter adds the font, and stops there.
+   *
+   * `preventDefault` for the entry form's implicit submission — a single-line
+   * input inside a form submits it on Enter, and this panel's fields are
+   * inside one. `stopPropagation` is not needed and not used: nothing above
+   * listens for a keystroke, and the default action is the whole mechanism.
+   *
+   * A COMPOSING keystroke is exempt. An author using an IME presses Enter to
+   * accept the candidate they are part-way through typing; the browser does
+   * not submit on it, so taking it would make these fields unusable in
+   * Japanese, Chinese and Korean to prevent nothing. Read from the native
+   * event, which is where `isComposing` lives — and `keyCode === 229` is how
+   * the same state reaches engines that report the composition instead.
+   */
+  const addOnEnter = (event: React.KeyboardEvent): void => {
+    if (event.key !== "Enter") return;
+    const native = event.nativeEvent;
+    if (native.isComposing || native.keyCode === 229) return;
+    event.preventDefault();
+    void submit();
+  };
+
   return (
-    <form className="nx-fonts__add" onSubmit={void_(submit)}>
+    <div
+      aria-labelledby="nx-fonts-add-heading"
+      className="nx-fonts__add"
+      role="group"
+    >
+      <h4 className="nx-fonts__add-heading" id="nx-fonts-add-heading">
+        Add a font file
+      </h4>
+
       <label className="nx-fonts__add-label" htmlFor="nx-fonts-file">
         Font file
       </label>
       <input
-        accept=".woff2,.woff,font/woff2,font/woff"
+        accept={acceptFiles}
         className="nx-fonts__add-file"
         id="nx-fonts-file"
         onChange={event => chooseFile(event.target.files?.[0] ?? null)}
@@ -697,6 +778,7 @@ function AddFaceForm({
           setFamily(event.target.value);
           setFamilyAuthored(true);
         }}
+        onKeyDown={addOnEnter}
         placeholder="Inter"
         type="text"
         value={family}
@@ -716,6 +798,7 @@ function AddFaceForm({
         id="nx-fonts-weight"
         list="nx-fonts-weights"
         onChange={event => setWeight(event.target.value)}
+        onKeyDown={addOnEnter}
         type="text"
         value={weight}
       />
@@ -740,10 +823,15 @@ function AddFaceForm({
         <option value="italic">Italic</option>
       </select>
 
+      {/*
+        `type="button"` stated rather than left to default. A button inside a
+        form defaults to `submit`, and this one is inside the entry's.
+      */}
       <button
         className="nx-fonts__add-submit"
         disabled={busy || file === null || family.trim() === ""}
-        type="submit"
+        onClick={() => void submit()}
+        type="button"
       >
         {busy ? "Adding…" : "Add font file"}
       </button>
@@ -753,17 +841,8 @@ function AddFaceForm({
           {error}
         </p>
       )}
-    </form>
+    </div>
   );
-}
-
-/** A promise-returning submit handler, in the shape a form event wants. */
-function void_(
-  handler: (event: React.FormEvent) => Promise<void>
-): (event: React.FormEvent) => void {
-  return event => {
-    void handler(event);
-  };
 }
 
 /** Faces absent: a read in flight and a read that failed need different words. */
@@ -796,6 +875,7 @@ export function FontsPanel({
   absence,
   onOpenTokens,
   onAddFace,
+  acceptFiles,
 }: FontsPanelProps): React.JSX.Element {
   if (faces === undefined) return <FacesAbsent absence={absence} />;
 
@@ -808,7 +888,9 @@ export function FontsPanel({
           Font files this site loads
         </h3>
         <FaceList faces={faces} />
-        {onAddFace !== undefined && <AddFaceForm onAddFace={onAddFace} />}
+        {onAddFace !== undefined && (
+          <AddFaceForm acceptFiles={acceptFiles} onAddFace={onAddFace} />
+        )}
       </section>
 
       <section aria-labelledby="nx-fonts-tokens">

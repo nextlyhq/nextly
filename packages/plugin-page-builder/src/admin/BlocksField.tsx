@@ -119,6 +119,7 @@ import {
   parseKeys,
   toast,
 } from "@nextlyhq/ui";
+import { WEB_FONT_FORMATS } from "nextly/config";
 import {
   useCallback,
   useEffect,
@@ -1030,10 +1031,27 @@ type UploadedMedia = Awaited<
  */
 function useFontFaceWriter(
   stored: readonly FontFaceDef[] | undefined,
-  storedPending: boolean
+  storedPending: boolean,
+  unreadableFonts: readonly string[]
 ): (request: FontFaceUpload) => Promise<string | undefined> {
   const { save: saveSiteStyle } = useSaveSiteStyle();
   const { mutateAsync: uploadMedia } = useUploadMedia();
+  /*
+   * Every face this writer has saved, kept until the read reports it back.
+   *
+   * `useUpdateSingleDocument` starts its invalidation with `void`, so the save
+   * resolves BEFORE the refetch that carries the new face into `stored`. An
+   * author adding a family's regular and its bold in quick succession reaches
+   * the second add while `stored` still describes the document as it was, and
+   * a base taken from it saves the second face over the first.
+   *
+   * Held rather than reset on arrival, and UNIONED with `stored` below: once
+   * the read catches up the two agree and the union is `stored` exactly, so
+   * there is no moment when this has to be judged stale. The union is also
+   * what keeps a face added from another surface in the meantime — a reset
+   * base would drop it.
+   */
+  const written = useRef<readonly FontFaceDef[]>([]);
   /*
    * The last file that reached storage, and what it became.
    *
@@ -1064,6 +1082,23 @@ function useFontFaceWriter(
        */
       if (storedPending) {
         return "This site's fonts are still loading. Try again in a moment.";
+      }
+
+      /*
+       * Refused BEFORE the upload, because the alternative is deletion.
+       *
+       * `stored` is the read's value, which drops any row it cannot type, and
+       * `save` replaces the section outright — so appending to it saves a list
+       * those rows are missing from, and the write succeeds, because what it
+       * sends is exactly what the checker approves.
+       *
+       * Not a capability withdrawn: `refusing` in the storage module rejects a
+       * write over any issue at all, so such a row already blocks every save of
+       * this section. Refusing here names it, and does so before an upload
+       * whose bytes nothing would reference.
+       */
+      if (unreadableFonts.length > 0) {
+        return `This site stores a font this version cannot read (${unreadableFonts.join(", ")}), and adding one would replace it. Repair or remove that entry first.`;
       }
 
       const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
@@ -1099,11 +1134,13 @@ function useFontFaceWriter(
         style: request.style,
       };
 
-      const result = await saveSiteStyle("fonts", [...(stored ?? []), face]);
+      const next = [...appendBase(stored, written.current), face];
+      const result = await saveSiteStyle("fonts", next);
       if (result.saved) {
         // Stored and referenced, so the next add starts clean rather than
         // pointing a second face at the first face's bytes.
         uploaded.current = null;
+        written.current = next;
         return undefined;
       }
       /*
@@ -1116,8 +1153,49 @@ function useFontFaceWriter(
         ? reasons.join(" ")
         : "That font could not be saved.";
     },
-    [saveSiteStyle, stored, storedPending, uploadMedia]
+    [saveSiteStyle, stored, storedPending, unreadableFonts, uploadMedia]
   );
+}
+
+/**
+ * Everything a new face must be saved alongside: what was read, plus what this
+ * writer saved that the read has not reported back yet.
+ *
+ * A union rather than a choice between the two. Picking `written` while it
+ * looks ahead would drop a face added from another surface since; picking
+ * `stored` drops the one just saved. Order follows `stored`, so a face keeps
+ * the position the document gives it and an unreported one lands after —
+ * where it will be once the read catches up.
+ *
+ * @param stored - The read's faces, or `undefined` before it arrives
+ * @param written - Faces this writer has saved, oldest first
+ * @returns The faces to append to
+ */
+function appendBase(
+  stored: readonly FontFaceDef[] | undefined,
+  written: readonly FontFaceDef[]
+): readonly FontFaceDef[] {
+  const base = stored ?? [];
+  const present = new Set(base.map(faceIdentity));
+  return [...base, ...written.filter(face => !present.has(faceIdentity(face)))];
+}
+
+/**
+ * What makes two face records the same stored row.
+ *
+ * The sources carry it: a face added here points at one media object, whose id
+ * is minted by the upload, so two adds never collide and a re-read of the same
+ * row always matches. Family, weight and style join it because a document may
+ * legitimately point two faces at one file — a variable font serving both an
+ * upright and a synthesised oblique is the ordinary case.
+ */
+function faceIdentity(face: FontFaceDef): string {
+  return [
+    face.family,
+    face.weight ?? "",
+    face.style ?? "",
+    face.src.map(source => source.url).join("|"),
+  ].join("::");
 }
 
 /**
@@ -1135,14 +1213,21 @@ function FontsPanelWithUpload({
   onOpenTokens,
   storedFaces,
   storedPending,
+  unreadableFonts,
 }: FontsPanelProps & {
   storedFaces: readonly FontFaceDef[] | undefined;
   storedPending: boolean;
+  unreadableFonts: readonly string[];
 }): React.JSX.Element {
-  const addFontFace = useFontFaceWriter(storedFaces, storedPending);
+  const addFontFace = useFontFaceWriter(
+    storedFaces,
+    storedPending,
+    unreadableFonts
+  );
   return (
     <FontsPanel
       absence={absence}
+      acceptFiles={FONT_FILE_ACCEPT}
       faces={faces}
       onAddFace={addFontFace}
       onOpenTokens={onOpenTokens}
@@ -1192,17 +1277,36 @@ async function storeOnce(
 /**
  * The `format()` hint for a validated media type.
  *
- * Derived from the type upload validation settled on, so it names the file
- * that will actually be served. An unrecognised type contributes no hint at
- * all rather than a guessed one: `format()` is advisory, and a browser told
- * the wrong format skips the source entirely.
+ * Read from the same table the upload gate, the public byte route and the
+ * admin dropzone read, so this panel cannot come to disagree with any of them
+ * about what a web font is. A restated map is the shape that drifts: a format
+ * core adds would be stored and served while this panel refused the type it
+ * had just accepted, and the author would see a font the site handles
+ * everywhere except the one screen offering to add it.
+ *
+ * An unrecognised type contributes no hint at all rather than a guessed one:
+ * `format()` is advisory, and a browser told the wrong format skips the source
+ * entirely.
  */
 function fontFormatFor(mimeType: string): string | undefined {
   const settled = mimeType.toLowerCase().trim();
-  if (settled === "font/woff2") return "woff2";
-  if (settled === "font/woff") return "woff";
-  return undefined;
+  return WEB_FONT_FORMATS.find(format => format.mimeType === settled)
+    ?.formatKeyword;
 }
+
+/**
+ * What the file picker offers, in the two vocabularies a picker accepts.
+ *
+ * Both, because neither alone is enough. A `.woff2` chosen from disk is
+ * reported with no type at all on the platforms that do not carry fonts in
+ * their registry, so a types-only `accept` hides the file the author came to
+ * add; an extensions-only one hides a font handed over by a tool that names it
+ * correctly and spells it differently.
+ */
+const FONT_FILE_ACCEPT: string = WEB_FONT_FORMATS.flatMap(format => [
+  format.extension,
+  format.mimeType,
+]).join(",");
 
 function useBreakpointWriter(
   configSiteStyle: SiteStyleData | undefined
@@ -1660,6 +1764,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   const {
     siteStyle: canvasSiteStyle,
     stored: storedSiteStyle,
+    unreadableFonts: unreadableStoredFonts,
     pending: siteStylePending,
     error: siteStyleError,
   } = useSiteStyle(configSiteStyle);
@@ -2455,6 +2560,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 onOpenTokens={() => requestPanel("tokens")}
                 storedFaces={storedSiteStyle?.fonts}
                 storedPending={siteStylePending}
+                unreadableFonts={unreadableStoredFonts}
               />
             ),
             /*

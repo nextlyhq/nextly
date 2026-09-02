@@ -2834,6 +2834,16 @@
   border-top: 1px solid var(--nx-border);
 }
 
+/* The group's own name. A `role="group"` needs one to be announced as a group
+   at all, and the visible heading and the accessible name are then the same
+   string rather than a caption and a hidden label that can disagree. */
+.nx-fonts__add-heading {
+  margin: 0 0 0.125rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
 .nx-fonts__add-label {
   font-size: var(--text-xs);
   font-weight: 500;

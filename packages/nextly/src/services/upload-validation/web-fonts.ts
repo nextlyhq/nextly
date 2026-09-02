@@ -24,6 +24,17 @@ export interface WebFontFormat {
   /** The suffix a person sees on their own file, dot included. */
   readonly extension: string;
   /**
+   * The keyword a `src` entry's `format()` takes for this type.
+   *
+   * Stated rather than derived from the extension, which it happens to equal
+   * for both formats here and does not equal in general — the same table in a
+   * product that carried TrueType would pair `.ttf` with `truetype`. A face
+   * whose `format()` disagrees with its bytes is worse than one carrying no
+   * hint at all, because a browser told the wrong format skips the source
+   * without trying it.
+   */
+  readonly formatKeyword: string;
+  /**
    * The four bytes the format begins with, as ASCII.
    *
    * Both formats carry a fixed signature the W3C specifies, which is what makes
@@ -48,12 +59,14 @@ export const WEB_FONT_FORMATS: readonly WebFontFormat[] = [
   {
     mimeType: "font/woff2",
     extension: ".woff2",
+    formatKeyword: "woff2",
     signature: "wOF2",
     aliases: ["application/font-woff2", "application/x-font-woff2"],
   },
   {
     mimeType: "font/woff",
     extension: ".woff",
+    formatKeyword: "woff",
     signature: "wOFF",
     aliases: ["application/font-woff", "application/x-font-woff"],
   },

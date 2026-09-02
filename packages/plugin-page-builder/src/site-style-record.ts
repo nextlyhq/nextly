@@ -351,6 +351,40 @@ export function checkStoredFonts(
   return { value: faces, issues };
 }
 
+/**
+ * The stored font rows this reader cannot type, named by their position.
+ *
+ * The reading posture drops what it cannot type, which is right for a RENDER —
+ * one legacy row must not take the editor down. It is wrong for a WRITE. A
+ * section is saved by replacement, so a writer that appends to the read value
+ * sends a list with the dropped rows missing, and they are gone: the write
+ * succeeds, because what it sends is exactly what the checker approves.
+ *
+ * Answered here, from `readFontFace` — the same predicate the reader drops on,
+ * so the two cannot come to disagree about which rows survive.
+ *
+ * A writer that has these must refuse rather than proceed. It is not a
+ * regression to refuse: `refusing` in {@link site-style-storage} rejects a
+ * write over ANY issue, so the row already blocks every save of this section;
+ * refusing early names the row before an upload it cannot use.
+ *
+ * The same question exists for classes and breakpoints and is not asked here,
+ * because their writers hand over a whole set the author edited rather than
+ * appending to what was read — a different shape, whose answer belongs with
+ * whichever writer first needs it.
+ *
+ * @param doc - The stored Site Style document, as read
+ * @returns One `fonts[i]` label per unreadable row, empty when all were typed
+ */
+export function unreadableStoredFonts(doc: unknown): readonly string[] {
+  if (!isPlainRecord(doc) || !Array.isArray(doc.fonts)) return [];
+  const unreadable: string[] = [];
+  doc.fonts.forEach((entry: unknown, index) => {
+    if (readFontFace(entry) === undefined) unreadable.push(`fonts[${index}]`);
+  });
+  return unreadable;
+}
+
 /** One face's shape, or nothing. Value rules stay `validateFontFace`'s. */
 function readFontFace(entry: unknown): FontFaceDef | undefined {
   if (!isPlainRecord(entry)) return undefined;

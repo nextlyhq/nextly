@@ -27,6 +27,15 @@ describe("the canonical web font table", () => {
     for (const format of WEB_FONT_FORMATS) {
       expect(format.mimeType).toMatch(/^font\//);
       expect(format.extension.startsWith(".")).toBe(true);
+      /*
+       * The `format()` keyword, which a `src` entry carries and which is a
+       * third vocabulary rather than the extension without its dot: a table
+       * carrying TrueType would pair `.ttf` with `truetype`. Asserted as its
+       * own field so a consumer deriving the hint from `extension` is a
+       * consumer reading the wrong column.
+       */
+      expect(format.formatKeyword).not.toBe("");
+      expect(format.formatKeyword.startsWith(".")).toBe(false);
     }
   });
 

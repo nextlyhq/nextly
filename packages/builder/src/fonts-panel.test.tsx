@@ -347,7 +347,7 @@ describe("adding a font file", () => {
       target: { value: "italic" },
     });
     await act(async () => {
-      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
     });
 
     expect(onAddFace).toHaveBeenCalledTimes(1);
@@ -390,7 +390,7 @@ describe("adding a font file", () => {
 
     await chooseFile(woff2("Inter-Regular.woff2"));
     await act(async () => {
-      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
     });
 
     expect(screen.getByRole("alert").textContent).toBe(
@@ -440,7 +440,7 @@ describe("adding a font file", () => {
       target: { value: "italic" },
     });
     await act(async () => {
-      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
     });
 
     expect((screen.getByLabelText("Weight") as HTMLInputElement).value).toBe(
@@ -467,7 +467,7 @@ describe("adding a font file", () => {
       target: { value: "70O" },
     });
     await act(async () => {
-      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
     });
 
     expect(onAddFace).not.toHaveBeenCalled();
@@ -488,6 +488,67 @@ describe("adding a font file", () => {
     );
   });
 
+  it("REFUSES a descending range, which is two valid weights and no range", async () => {
+    /*
+     * Every endpoint here passes a per-part check, which is why this is not
+     * covered by the case above: the defect is the ORDER. A `font-weight`
+     * descriptor requires the lighter endpoint first, so a browser drops the
+     * whole declaration and matches the face at a weight nobody chose — the
+     * same silent outcome as `70O`, reached from the other direction.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Variable.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "900 100" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).not.toHaveBeenCalled();
+  });
+
+  it("STORES the same pair the right way round", async () => {
+    // The control for the case above: without it, "refuses 900 100" is also
+    // satisfied by a check that refuses every range, which is the one form the
+    // free-text field exists for.
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Variable.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "100 900" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).toHaveBeenCalledTimes(1);
+    expect(onAddFace.mock.calls[0]?.[0].weight).toBe("100 900");
+  });
+
+  it("offers the file types the HOST accepts, not a list of its own", () => {
+    /*
+     * The panel cannot know which formats this site stores and serves, and a
+     * list restated here drifts from the host's silently — a format the host
+     * adds becomes one nobody can choose.
+     */
+    render(
+      <FontsPanel
+        acceptFiles=".woff2,font/woff2"
+        faces={[]}
+        onAddFace={async () => undefined}
+        tokens={tokens}
+      />
+    );
+
+    expect(screen.getByLabelText("Font file").getAttribute("accept")).toBe(
+      ".woff2,font/woff2"
+    );
+  });
+
   it("clears the file and family once the host stored one", async () => {
     // The control for the case above: without it, "keeps the fields" is also
     // satisfied by a form that never clears them.
@@ -496,13 +557,137 @@ describe("adding a font file", () => {
 
     await chooseFile(woff2("Inter-Regular.woff2"));
     await act(async () => {
-      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
     });
 
     expect((screen.getByLabelText("Family") as HTMLInputElement).value).toBe(
       ""
     );
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("the add controls inside the entry editor's own form", () => {
+  const woff2 = (name: string): File =>
+    new File([new Uint8Array([0x77, 0x4f, 0x46, 0x32])], name, {
+      type: "font/woff2",
+    });
+
+  /**
+   * The panel where the product puts it: inside a `<form>`.
+   *
+   * The wrapper is the mechanism under test, not scaffolding. `EntryFormProvider`
+   * renders one around every field, so a panel rendered bare is a composition
+   * the product never builds — and the defect these cases exist for is
+   * invisible in it.
+   */
+  function renderInEntryForm(
+    onAddFace: (r: FontFaceUpload) => Promise<string | undefined>
+  ): {
+    entrySubmitted: ReturnType<typeof vi.fn>;
+  } {
+    const entrySubmitted = vi.fn();
+    render(
+      <form
+        onSubmit={event => {
+          event.preventDefault();
+          entrySubmitted();
+        }}
+      >
+        <FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />
+      </form>
+    );
+    return { entrySubmitted };
+  }
+
+  async function chooseFile(file: File): Promise<void> {
+    const input = screen.getByLabelText("Font file") as HTMLInputElement;
+    Object.defineProperty(input, "files", {
+      value: [file],
+      configurable: true,
+    });
+    await act(async () => {
+      fireEvent.change(input);
+    });
+  }
+
+  it("builds NO form of its own, which HTML forbids here anyway", () => {
+    /*
+     * Asserted on the structure rather than on a behaviour, because the two
+     * failures a nested form causes are reached by different routes — an
+     * implicit submit from a keystroke, and a bubbling submit event — and both
+     * come from the element existing.
+     *
+     * This case carries the keystroke route ON ITS OWN. jsdom does not
+     * implement implicit form submission, so Enter in a text field raises no
+     * submit event here however the markup is nested — measured: restoring the
+     * nested form leaves the Enter case below GREEN, and only this assertion
+     * and the click case move. A browser is where that route is observable,
+     * which is what the `site-style` e2e covers; in this file the element's
+     * absence is the evidence.
+     */
+    const { container } = render(
+      <form>
+        <FontsPanel
+          faces={[]}
+          onAddFace={async () => undefined}
+          tokens={tokens}
+        />
+      </form>
+    );
+
+    expect(container.querySelectorAll("form")).toHaveLength(1);
+  });
+
+  it("adds the font when Enter is pressed, without saving the entry", async () => {
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    const { entrySubmitted } = renderInEntryForm(onAddFace);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText("Family"), {
+        key: "Enter",
+      });
+    });
+
+    // Both halves matter. Adding without the second assertion is satisfied by
+    // a panel that adds the font AND saves the document underneath it.
+    expect(onAddFace).toHaveBeenCalledTimes(1);
+    expect(entrySubmitted).not.toHaveBeenCalled();
+  });
+
+  it("does not save the entry when the Add button is pressed", async () => {
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    const { entrySubmitted } = renderInEntryForm(onAddFace);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).toHaveBeenCalledTimes(1);
+    expect(entrySubmitted).not.toHaveBeenCalled();
+  });
+
+  it("lets an IME keystroke through rather than taking Enter from it", async () => {
+    /*
+     * An author using an IME presses Enter to accept the candidate they are
+     * part-way through typing. The browser does not submit on that keystroke,
+     * so acting on it would add a font mid-word and make the field unusable in
+     * Japanese, Chinese and Korean to prevent nothing.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    renderInEntryForm(onAddFace);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    await act(async () => {
+      fireEvent.keyDown(screen.getByLabelText("Family"), {
+        key: "Enter",
+        isComposing: true,
+      });
+    });
+
+    expect(onAddFace).not.toHaveBeenCalled();
   });
 });
 

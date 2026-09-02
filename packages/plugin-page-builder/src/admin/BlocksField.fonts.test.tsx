@@ -262,7 +262,7 @@ describe("adding a font file through the panel", () => {
    *  hand over a different `File`, which is a different case entirely. */
   async function submitAdd(): Promise<void> {
     await act(async () => {
-      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
     });
   }
 
@@ -298,6 +298,95 @@ describe("adding a font file through the panel", () => {
       "AlreadyStored",
       "Inter",
     ]);
+  });
+
+  it("REFUSES when the document holds a font row this version cannot read", async () => {
+    /*
+     * The read drops a row it cannot type, which is right for a render and
+     * wrong as a base for a write: `save` replaces the section, so appending
+     * to the read value saves a list the dropped row is missing from — and the
+     * save SUCCEEDS, because what it sends is exactly what the checker
+     * approves. The row is deleted and the author is told it worked.
+     */
+    storedRead = {
+      data: {
+        fonts: [
+          { family: "Readable", src: [{ url: "/s.woff2" }] },
+          // No `src` array, so the reader cannot type it and drops it.
+          { family: "FromAnOlderShape", source: "/legacy.woff" },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    await addFace();
+
+    expect(saved).toHaveLength(0);
+    // Before the upload, so no bytes are stored that nothing will reference.
+    expect(uploads).toHaveLength(0);
+    expect(screen.getByRole("alert").textContent).toContain("fonts[1]");
+  });
+
+  it("adds normally when every stored row IS readable", async () => {
+    /*
+     * The control for the case above: a refusal keyed on something other than
+     * the drop — the row count, a non-empty section — would also refuse here,
+     * and the panel would be unable to add a font to any site that has one.
+     */
+    storedRead = {
+      data: {
+        fonts: [{ family: "Readable", src: [{ url: "/s.woff2" }] }],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    await addFace();
+
+    expect(saved).toHaveLength(1);
+    expect(uploads).toHaveLength(1);
+  });
+
+  it("keeps the first face when a second add arrives before the read catches up", async () => {
+    /*
+     * The invalidation after a save is started with `void`, so the mutation
+     * resolves before the refetch that carries the new face into the read. An
+     * author adding a family's regular and then its bold reaches the second
+     * add while the read still describes the document as it was — and a base
+     * taken from it saves the second face OVER the first.
+     *
+     * The read is deliberately left unchanged between the two adds, which is
+     * exactly the window: what the writer saved must survive in the list it
+     * builds next, without the read having reported it.
+     */
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+
+    await addFace("Inter-Regular.woff2");
+    uploadResult = { id: "m-2", mimeType: "font/woff2" };
+    await addFace("Inter-Bold.woff2");
+
+    const written = saved.at(-1) as { fonts: Array<{ family: string }> };
+    expect(written.fonts).toHaveLength(2);
+    expect(written.fonts.map(f => f.family)).toEqual(["Inter", "Inter"]);
+  });
+
+  it("takes the format hint from the type validation settled on", async () => {
+    /*
+     * WOFF rather than WOFF2, because the two are separate rows in the shared
+     * table and a hint restated in this module would have to carry both. A
+     * browser told the wrong format skips the source without trying it.
+     */
+    uploadResult = { id: "m-woff", mimeType: "font/woff" };
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+    await addFace("Inter-Regular.woff");
+
+    const written = saved.at(-1) as {
+      fonts: Array<{ src: Array<{ format?: string }> }>;
+    };
+    expect(written.fonts[0]?.src[0]?.format).toBe("woff");
   });
 
   it("REFUSES while the stored faces are still loading", async () => {

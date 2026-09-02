@@ -8,6 +8,7 @@ import {
   checkStoredFonts,
   checkStoredTokens,
   readSiteStyleRecord,
+  unreadableStoredFonts,
 } from "./site-style-record";
 
 /** One shape-valid stored token. */
@@ -240,6 +241,48 @@ describe("checkStoredFonts", () => {
     const result = checkStoredFonts([{ family: "NoSrc" }]);
     expect(result.issues).toHaveLength(1);
     expect(result.value).toEqual([]);
+  });
+});
+
+describe("unreadableStoredFonts", () => {
+  it("names the row the reader drops, which the read value cannot report", () => {
+    /*
+     * A narrowed list and a complete one are the same shape, so a writer
+     * appending to `readSiteStyleRecord`'s value has no way to see that a row
+     * is missing from the list it is about to save back over.
+     */
+    const doc = {
+      fonts: [
+        { family: "Geist", src: [{ url: "/fonts/geist.woff2" }] },
+        { family: "Legacy", source: "/fonts/legacy.woff" },
+      ],
+    };
+
+    expect(unreadableStoredFonts(doc)).toEqual(["fonts[1]"]);
+    // The reader's own value, for the contrast this exists to supply.
+    expect(readSiteStyleRecord(doc).fonts).toHaveLength(1);
+  });
+
+  it("says nothing about a row the reader KEEPS but the engine refuses", () => {
+    /*
+     * The discriminating case. A remote `src` is a value-level refusal: the row
+     * is typed, kept, and reported by the checker — so it blocks a save without
+     * ever being dropped, and a writer that treated every issue as a reason to
+     * refuse would stop an author fixing exactly this.
+     */
+    const doc = {
+      fonts: [
+        { family: "Sneaky", src: [{ url: "https://cdn.example/f.woff2" }] },
+      ],
+    };
+
+    expect(unreadableStoredFonts(doc)).toEqual([]);
+    expect(checkStoredFonts(doc.fonts).issues.length).toBeGreaterThan(0);
+  });
+
+  it("reports nothing for a document with no fonts section at all", () => {
+    expect(unreadableStoredFonts({})).toEqual([]);
+    expect(unreadableStoredFonts(undefined)).toEqual([]);
   });
 });
 

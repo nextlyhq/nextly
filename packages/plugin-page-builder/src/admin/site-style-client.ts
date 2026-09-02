@@ -38,7 +38,10 @@ import {
 import { useCallback, useMemo } from "react";
 
 import { resolveSiteStyle, type SiteStyleData } from "../site-style";
-import { readSiteStyleRecord } from "../site-style-record";
+import {
+  readSiteStyleRecord,
+  unreadableStoredFonts,
+} from "../site-style-record";
 import { SITE_STYLE_SLUG } from "../site-style-storage";
 
 /** The four sections of the document, each one studio's to own. */
@@ -71,6 +74,15 @@ export interface SiteStyleRead {
    * silently discards the rest.
    */
   readonly stored: SiteStyleData | undefined;
+  /**
+   * The stored font rows the read had to drop, named by position.
+   *
+   * Beside `stored` because it is the part of the answer `stored` cannot
+   * carry: a narrowed list and a complete one are the same shape, so a writer
+   * appending to it has no way to see that rows are missing from the value it
+   * is about to save back over them.
+   */
+  readonly unreadableFonts: readonly string[];
   /** Whether the stored tier has arrived yet. */
   readonly pending: boolean;
   /** Why the read failed, when it did. */
@@ -100,10 +112,14 @@ export function useSiteStyle(defaults?: SiteStyleData): SiteStyleRead {
     () => resolveSiteStyle(defaults, stored),
     [defaults, stored]
   );
+  // From the document rather than from `stored`, which is the value AFTER the
+  // drop and therefore cannot report one.
+  const unreadableFonts = useMemo(() => unreadableStoredFonts(data), [data]);
 
   return {
     siteStyle,
     stored,
+    unreadableFonts,
     pending: isPending,
     error: error ?? null,
   };
