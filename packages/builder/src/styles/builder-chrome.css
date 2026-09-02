@@ -683,6 +683,36 @@
   .nx-inspector__field > label {
     grid-column: 1;
   }
+
+  /*
+   * The box gives up and becomes rows, at the same width and for the same
+   * reason: three columns of a control that has already lost its label column
+   * leaves each side about a third of a rail that was too narrow for two.
+   *
+   * The labels come BACK when it does. Their words are hidden only because
+   * position is saying which edge each field is, and once the fields are
+   * stacked nothing is saying it — four unlabelled inputs would be worse than
+   * either layout. This is the one place the clip is undone, which is why it
+   * lives beside the rule that stacks them rather than in the box's own block.
+   */
+  .nx-style-inspector__property[data-sides="logical"] {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .nx-style-inspector__property[data-sides="logical"]::before {
+    display: none;
+  }
+
+  .nx-style-inspector__property[data-sides="logical"]
+    .nx-style-inspector__field-label-text {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+    white-space: normal;
+  }
 }
 
 /*
@@ -2839,14 +2869,23 @@
 }
 
 /*
- * Everything that is NOT a side spans the whole box.
+ * Everything that is NOT a side spans the whole box, and the sides start on
+ * ROW TWO so that spanning lands in the right place.
  *
  * The property's heading, a form selector and the notice for a withdrawn
- * property are all siblings of the four sides. Without a placement they are
- * auto-placed into whichever cell is still free — the heading into the box's
- * top-left corner and the notice beside it — where a sentence gets a third of
- * the panel and the first row grows into a tall wrapped sliver. Addressed as
- * "not a side" so a sibling added later is spanned rather than scattered.
+ * property are all siblings of the four sides. Given no placement at all they
+ * are auto-placed into whichever single cell is free — the heading into the
+ * box's top-left corner — where a sentence gets a third of the panel and the
+ * row grows into a tall wrapped sliver. Given a column span and no row, they
+ * are placed after every explicitly-placed item instead, which puts the
+ * property's own heading UNDERNEATH its box.
+ *
+ * Leaving row one empty is what resolves both: a full-width item cannot fit in
+ * the partially-filled rows the sides occupy, so the heading takes row one and
+ * anything after it lands below the box, each spanning the full width. The
+ * sides say which row they are in rather than relying on that, because their
+ * arrangement is the picture and it must not depend on how many siblings
+ * happen to precede them.
  */
 .nx-style-inspector__property[data-sides="logical"] > *:not([data-side]) {
   grid-column: 1 / -1;
@@ -2861,20 +2900,20 @@
  * this reads it, which is also why these selectors stay shallow.
  */
 .nx-style-inspector__property[data-sides="logical"] > [data-side="blockStart"] {
-  grid-area: 1 / 2;
+  grid-area: 2 / 2;
 }
 
 .nx-style-inspector__property[data-sides="logical"]
   > [data-side="inlineStart"] {
-  grid-area: 2 / 1;
+  grid-area: 3 / 1;
 }
 
 .nx-style-inspector__property[data-sides="logical"] > [data-side="inlineEnd"] {
-  grid-area: 2 / 3;
+  grid-area: 3 / 3;
 }
 
 .nx-style-inspector__property[data-sides="logical"] > [data-side="blockEnd"] {
-  grid-area: 3 / 2;
+  grid-area: 4 / 2;
 }
 
 /*
@@ -2932,9 +2971,35 @@
  */
 .nx-style-inspector__property[data-sides="logical"]::before {
   content: "";
-  grid-area: 2 / 2;
+  grid-area: 3 / 2;
   align-self: stretch;
   min-height: 1.25rem;
   border: 1px dashed var(--nx-border);
   border-radius: 0.25rem;
+}
+
+/*
+ * A measurement STACKS inside a box: the quantity above, the unit under it.
+ *
+ * Beside each other they do not fit. A side is a third of a rail rather than a
+ * whole one, and the unit menu is about 66px of intrinsic width — a trigger
+ * showing two or three characters plus its chevron and padding — which leaves
+ * the quantity around 26px, or two characters, in the very field an author
+ * types into. Lowering the menu's `min-width` cannot recover that, because the
+ * width is its CONTENT rather than its minimum.
+ *
+ * So the two halves take turns on the width instead of splitting it, which
+ * costs a row of height in a control that is three rows tall already and gives
+ * the quantity the whole 96px. Only inside a box: a full-width row has room for
+ * both and reads better with them on one line.
+ */
+.nx-style-inspector__property[data-sides="logical"]
+  .nx-style-inspector__numeric {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.125rem;
+}
+
+.nx-style-inspector__property[data-sides="logical"] .nx-style-inspector__unit {
+  width: 100%;
 }
