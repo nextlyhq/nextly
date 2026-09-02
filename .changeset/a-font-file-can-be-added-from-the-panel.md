@@ -60,5 +60,6 @@ have succeeded, because the list sent is exactly the one the checker approves.
 
 Web font formats carry the `format()` keyword their `src` entries take, so the
 panel, the upload gate and the public byte route read one table instead of
-three; a descending weight range such as `900 100` is refused, since a browser
-drops the whole descriptor and matches the face at a weight nobody chose.
+three; a descending weight range such as `900 100` is refused, because it is a
+range no specification gives a meaning to — a browser parses and keeps it, so
+what the face then matches is left to the engine.
