@@ -2094,10 +2094,13 @@
    * stylesheet on its own.
    */
   --nx-swatch: transparent;
-  flex: 0 0 auto;
-  width: 1.25rem;
-  height: 1.25rem;
-  border: 1px solid var(--nx-border);
+  /*
+   * FILLS the shared slot rather than being a box of its own. Each row owns an
+   * independent `auto` grid column, so a colour slot of a different width put
+   * its fields at a different indent from every other row's.
+   */
+  position: absolute;
+  inset: 0;
   border-radius: var(--radius-sm);
   background-image:
     linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
@@ -3138,4 +3141,143 @@
   border-top: 1px dashed var(--nx-builder-border);
   margin-top: 0.5rem;
   padding-top: 0.5rem;
+}
+
+/*
+ * The preview slot for kinds that are not a colour.
+ *
+ * Same box as the swatch so the previews form a column rather than a ragged
+ * edge, and wider than tall because the two kinds that need room — a length
+ * and a duration — both need it along one axis.
+ */
+.nx-tokens__preview {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 2.5rem;
+  height: 1.25rem;
+  overflow: hidden;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-builder-surface);
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--nx-builder-text);
+}
+
+/*
+ * The shadow's own box, inset so the shadow it casts has somewhere to land.
+ * A shadow drawn on an element flush with its container is clipped to nothing,
+ * which would report every shadow as identical.
+ */
+.nx-tokens__shadow {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  background: var(--nx-builder-surface-raised);
+}
+
+/* A length, measured against the slot and stopping at it. */
+.nx-tokens__bar {
+  position: absolute;
+  inset-inline-start: 0;
+  height: 0.375rem;
+  min-width: 1px;
+  /* The cap. A token has no maximum to scale against, so a longer value runs
+     to the end of the slot and says only "at least this". */
+  max-width: 100%;
+  border-radius: 1px;
+  background: var(--nx-builder-text);
+}
+
+/*
+ * A negative length, drawn on the other side of a centre line.
+ *
+ * The line is what makes the direction readable: without it a bar growing
+ * leftwards from the right edge looks like a shorter bar, and the sign — which
+ * is the whole reason a margin token is negative — disappears.
+ */
+.nx-tokens__preview[data-sign="negative"] {
+  border-inline-start-color: transparent;
+}
+
+.nx-tokens__preview[data-sign="negative"] .nx-tokens__bar {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  opacity: 0.55;
+}
+
+/*
+ * A duration, shown by taking that long to cross the slot. `alternate` so the
+ * dot returns rather than jumping back, which reads as a second, shorter run.
+ */
+.nx-tokens__tick {
+  position: absolute;
+  inset-inline-start: 0;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: var(--nx-builder-text);
+  animation-name: nx-token-tick;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+  animation-timing-function: linear;
+}
+
+@keyframes nx-token-tick {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(2rem);
+  }
+}
+
+/*
+ * At rest when motion is not wanted. The dot still says WHICH row holds a
+ * duration; it stops claiming how long by moving.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .nx-tokens__tick {
+    animation: none;
+  }
+}
+
+/*
+ * What a class writes, under its name.
+ *
+ * Two parts on one line: the properties the base state sets, and how much is
+ * set somewhere this row is not showing. The second is dimmed because it is a
+ * caveat on the first rather than more of it.
+ */
+.nx-classman__declares {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--nx-builder-text-muted);
+}
+
+/*
+ * Truncated rather than wrapped to any length. A class may write a dozen
+ * properties and the rail is narrow; the row's job is to say what KIND of
+ * thing this class does, and the panel below it can say the rest.
+ */
+.nx-classman__properties {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--nx-font-mono, ui-monospace, monospace);
+}
+
+.nx-classman__elsewhere {
+  flex: 0 0 auto;
+  opacity: 0.75;
+  font-style: italic;
 }

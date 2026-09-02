@@ -134,13 +134,21 @@ describe("what the studio draws", () => {
     const { container } = render(
       <Panel tokens={unresolvable} onChange={vi.fn()} />
     );
+    /*
+     * Both rows own the same slot; only one of them has a swatch inside it.
+     * Asserting on the SLOT count as well as the swatch count is what keeps
+     * this about painting rather than about the column silently losing a cell.
+     */
+    const slots = Array.from(container.querySelectorAll(".nx-tokens__preview"));
+    expect(slots.length).toBe(2);
     const swatches = Array.from(
       container.querySelectorAll(".nx-tokens__swatch")
     );
+    expect(swatches.length).toBe(1);
     expect(swatches[0]?.getAttribute("style")).toContain("#112233");
     // A `var()` resolves against the PANEL rather than the canvas, so painting
-    // it would show a colour the page does not have.
-    expect(swatches[1]?.getAttribute("data-empty")).toBe("");
+    // it would show a colour the page does not have — the slot stays, empty.
+    expect(slots[1]?.querySelector(".nx-tokens__swatch")).toBeNull();
   });
 });
 
@@ -1217,6 +1225,131 @@ describe("the panel explains itself and shows the whole set", () => {
 
     // The new token must arrive UNARMED.
     expect(screen.queryByText(/loses that style/i)).toBeNull();
+  });
+
+  it("draws a preview for every kind that HAS a visual form", () => {
+    /*
+     * Only colour was previewed, so a shadow was an opaque CSS string and a
+     * size was a number with nothing to compare it to. Each kind is now shown
+     * as the thing it is, in the same slot so the column stays a column.
+     */
+    mount({
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#112233" } },
+        { name: "size.gap", kind: "dimension", values: { light: "8px" } },
+        {
+          name: "shadow.card",
+          kind: "shadow",
+          values: { light: "0 1px 2px #000" },
+        },
+        { name: "weight.bold", kind: "fontWeight", values: { light: "700" } },
+        { name: "font.body", kind: "fontFamily", values: { light: "serif" } },
+        { name: "speed.fast", kind: "duration", values: { light: "150ms" } },
+      ],
+    });
+    // Each preview drawn AS the value: the style attribute is what makes it a
+    // preview rather than a label, so that is what is asserted.
+    const shadow = document.querySelector<HTMLElement>(".nx-tokens__shadow");
+    expect(shadow?.style.boxShadow).toBe("0 1px 2px #000");
+    const bar = document.querySelector<HTMLElement>(".nx-tokens__bar");
+    expect(bar?.style.width).toContain("8px");
+    const tick = document.querySelector<HTMLElement>(".nx-tokens__tick");
+    expect(tick?.style.animationDuration).toBe("150ms");
+    const previews = Array.from(
+      document.querySelectorAll<HTMLElement>(".nx-tokens__preview")
+    );
+    expect(previews.some(node => node.style.fontWeight === "700")).toBe(true);
+    expect(previews.some(node => node.style.fontFamily === "serif")).toBe(true);
+    // Colour keeps its own swatch, under the rule it already had.
+    expect(document.querySelector(".nx-tokens__swatch")).not.toBeNull();
+  });
+
+  it("draws NOTHING for a value it cannot resolve on its own", () => {
+    /*
+     * The guard rail colour already had, applied to every kind: a `var()`
+     * resolves against the PANEL's custom properties rather than the canvas's,
+     * so drawing it would show something the page does not have. And `number`
+     * and `custom` have no visual form to draw at all.
+     */
+    mount({
+      tokens: [
+        {
+          name: "size.ref",
+          kind: "dimension",
+          values: { light: "var(--site-size-gap)" },
+        },
+        { name: "count.cols", kind: "number", values: { light: "3" } },
+        { name: "custom.thing", kind: "custom", values: { light: "whatever" } },
+      ],
+    });
+    expect(document.querySelector(".nx-tokens__bar")).toBeNull();
+    expect(document.querySelector(".nx-tokens__shadow")).toBeNull();
+    // Every row still carries its slot, EMPTY, so the column does not go ragged
+    // — which is the failure that made colour share this element in the first
+    // place.
+    const slots = Array.from(document.querySelectorAll(".nx-tokens__preview"));
+    expect(slots.length).toBe(3);
+    expect(slots.every(slot => slot.childElementCount === 0)).toBe(true);
+  });
+
+  it("draws no preview for a token the ENGINE refuses to write", () => {
+    /*
+     * Preview eligibility is the engine's verdict, not a second rule here. A
+     * value `checkCssValue` rejects is absent from the page stylesheet, and the
+     * browser may still accept it on an inline `width` — so a panel judging for
+     * itself would draw a preview of a token the page does not carry.
+     */
+    mount({
+      tokens: [
+        { name: "size.ok", kind: "dimension", values: { light: "8px" } },
+        {
+          name: "size.bad",
+          kind: "dimension",
+          values: { light: "8px; color: red" },
+        },
+      ],
+    });
+    // The control: the good one IS drawn, so this is about the refusal rather
+    // than about previews being off altogether.
+    const bars = document.querySelectorAll(".nx-tokens__bar");
+    expect(bars.length).toBe(1);
+    expect((bars[0] as HTMLElement).style.width).toContain("8px");
+  });
+
+  it("keeps a negative length's SIZE and its direction", () => {
+    /*
+     * A dimension token may validly be negative — a margin pulling something
+     * back. CSS refuses a negative `width`, so the declaration was discarded
+     * and `min-width` left the same sliver a zero shows: a working token drawn
+     * as though it had neither size nor direction.
+     */
+    mount({
+      tokens: [
+        { name: "pull.back", kind: "dimension", values: { light: "-8px" } },
+      ],
+    });
+    const bar = document.querySelector<HTMLElement>(".nx-tokens__bar");
+    expect(bar?.style.width).toContain("8px");
+    expect(
+      document.querySelector(".nx-tokens__preview")?.getAttribute("data-sign")
+    ).toBe("negative");
+  });
+
+  it("refuses a length whose SIGN it cannot read", () => {
+    // A bar drawn on the wrong side of the line is worse than none, and a
+    // `calc()` hides its sign behind arithmetic this panel does not do.
+    mount({
+      tokens: [
+        {
+          name: "odd.one",
+          kind: "dimension",
+          values: { light: "calc(4px - 8px)" },
+        },
+      ],
+    });
+    expect(document.querySelector(".nx-tokens__bar")).toBeNull();
+    // The slot stays, so the column does not go ragged.
+    expect(document.querySelector(".nx-tokens__preview")).not.toBeNull();
   });
 
   it("groups every kind that HAS tokens into one list", () => {

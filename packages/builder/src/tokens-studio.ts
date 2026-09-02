@@ -105,6 +105,17 @@ export interface TokenRow {
    * second row would resolve to the first — so the one state the studio exists
    * to help an author repair would be the one state it cannot address.
    */
+  /**
+   * Whether the ENGINE emitted this token, as `emitTokenBlocks` reports it.
+   *
+   * Carried rather than re-derived because the engine refuses on five separate
+   * conditions — a name that is not a token name, no light value, a value the
+   * guard rejects, a value that would fetch, and a collision on one custom
+   * property — and a surface restating any of them agrees today and describes
+   * a different stylesheet afterwards. A preview drawn for a token the page
+   * does not carry is exactly that disagreement made visible.
+   */
+  readonly written: boolean;
   readonly at: number;
   /**
    * A React key that survives a removal elsewhere in the list.
@@ -175,7 +186,15 @@ export function tokenRows(
    * answer; its own docblock says a caller re-deriving it "would have to
    * restate all five" refusals and would drift the first time one changed.
    */
-  const claimed = firstByProperty(emitTokenBlocks(set, ":root").emitted);
+  const made = emitTokenBlocks(set, ":root");
+  const claimed = firstByProperty(made.emitted);
+  /*
+   * Which tokens the engine actually WROTE, for anything downstream that must
+   * not describe a token the page does not carry. Same list, same call: asking
+   * "is this written" a second way is how the panel and the stylesheet come to
+   * disagree.
+   */
+  const written = new Set(made.emitted);
   // Indexed against the WHOLE list, so `at` addresses the stored position
   // rather than a position within any later grouping or filter.
   const seen = new Map<string, number>();
@@ -188,6 +207,7 @@ export function tokenRows(
       at,
       nth === 0 ? identity : `${identity}#${nth}`,
       claimed,
+      written,
       mode
     );
   });
@@ -213,6 +233,7 @@ function rowOf(
   at: number,
   key: string,
   claimed: ReadonlyMap<string, SiteToken>,
+  written: ReadonlySet<SiteToken>,
   mode: TokenMode
 ): TokenRow {
   const own = token.values[mode];
@@ -220,6 +241,7 @@ function rowOf(
   return {
     at,
     key,
+    written: written.has(token),
     stored: own,
     identity: tokenIdentity(token),
     name: token.name,
