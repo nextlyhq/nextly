@@ -103,6 +103,7 @@ import {
 } from "./domains/widgets/collection-widgets";
 import type { WidgetDefinition } from "./domains/widgets/definition";
 import { publishableWidgets } from "./domains/widgets/publish";
+import { listWidgets } from "./domains/widgets/registry";
 import { readableCollections } from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
 import {
@@ -1692,9 +1693,17 @@ async function handleAdminMetaWorkspaceRequest(
     // this payload -- once as itself and once as core's derived guess -- and the
     // canonical set resolves that collision in the registration's favour, so the
     // two halves of the response disagreed about which declaration the card is.
+    //
+    // 🔴 From `listWidgets()`, the registry ITSELF, not from the publishable
+    // projection of it. `publishableWidgets` drops a definition that cannot
+    // survive `JSON.stringify` -- a `BigInt` in `query.where`, say -- and that
+    // definition is still in the registry, so `canonicalWidgets` still resolves
+    // its id to the registration. Detecting collisions against the narrower set
+    // would publish core's generated card under an id the server had already
+    // given to somebody else, which is the same disagreement one level down.
     new Set([
       ...contributedWidgets().map(widget => widget.id),
-      ...publishableWidgets().map(widget => widget.id),
+      ...listWidgets().map(widget => widget.id),
     ])
   );
 

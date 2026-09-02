@@ -12,20 +12,20 @@ import {
   useSchemaUpdateInvalidation,
 } from "../useSchemaUpdateInvalidation";
 
-function mounted() {
+function mounted(key: readonly unknown[] = ["admin-meta"]) {
   const client = new QueryClient();
   const spy = vi.spyOn(client, "invalidateQueries").mockResolvedValue();
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const view = renderHook(() => useSchemaUpdateInvalidation(), { wrapper });
+  const view = renderHook(() => useSchemaUpdateInvalidation(key), { wrapper });
   const keys = () =>
     spy.mock.calls.map(call => (call[0] as { queryKey: unknown[] }).queryKey);
   return { view, keys };
 }
 
 describe("useSchemaUpdateInvalidation", () => {
-  it("re-reads admin-meta, which carries the widget declarations", () => {
+  it("re-reads the key it was given", () => {
     // 🔴 The workspace payload is cached for five minutes while the layout
     // endpoint answers fresh, so a collection created a moment ago is offered
     // in the picker under its raw id — and adding it saves a placement the grid
@@ -53,5 +53,17 @@ describe("useSchemaUpdateInvalidation", () => {
     window.dispatchEvent(new Event(SCHEMA_UPDATED_EVENT));
 
     expect(keys()).toEqual([]);
+  });
+
+  it("re-reads whichever key its OWNER passes", () => {
+    // 🔴 The key is a parameter because TWO queries go stale on a schema change
+    // and they belong to different modules — the declarations and the dashboard
+    // layout, which answers which cards are placed and which are offered. A hook
+    // naming both would make one module responsible for the other's freshness.
+    const { keys } = mounted(["dashboard", "layout"]);
+
+    window.dispatchEvent(new Event(SCHEMA_UPDATED_EVENT));
+
+    expect(keys()).toEqual([["dashboard", "layout"]]);
   });
 });

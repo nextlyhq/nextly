@@ -4,7 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import type React from "react";
 import { createContext, useContext, useEffect, useMemo } from "react";
 
-import { useSchemaUpdateInvalidation } from "@admin/hooks/useSchemaUpdateInvalidation";
+import {
+  ADMIN_META_KEY,
+  useSchemaUpdateInvalidation,
+} from "@admin/hooks/useSchemaUpdateInvalidation";
 
 import { useAuthSession } from "../../hooks/queries/useAuthSession";
 import { protectedApi } from "../../lib/api/protectedApi";
@@ -228,7 +231,7 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   // them stale — the workspace half carries the widget declarations, including
   // the cards core derives per collection. This provider owns them, so it is
   // the one that re-reads them.
-  useSchemaUpdateInvalidation();
+  useSchemaUpdateInvalidation(ADMIN_META_KEY);
 
   const {
     data: brandingData,

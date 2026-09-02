@@ -36,6 +36,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 
+import { useSchemaUpdateInvalidation } from "@admin/hooks/useSchemaUpdateInvalidation";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
   DashboardLayoutResponse,
@@ -104,6 +105,13 @@ function nonConflictError(...errors: Array<Error | null>): Error | null {
 
 export function useDashboardLayout(): UseDashboardLayoutResult {
   const queryClient = useQueryClient();
+
+  // A schema change moves what this endpoint answers: a collection created a
+  // moment ago has cards to OFFER, and one just deleted no longer does. Nothing
+  // else invalidates this key — `refetchOnWindowFocus` is the only other route,
+  // so a dashboard left open would keep a picker that cannot add the new card
+  // and still offers the removed one, whose save is then refused.
+  useSchemaUpdateInvalidation(DASHBOARD_LAYOUT_KEY);
 
   const query = useQuery({
     queryKey: DASHBOARD_LAYOUT_KEY,

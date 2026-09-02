@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { ADMIN_META_KEY } from "@admin/hooks/useSchemaUpdateInvalidation";
 
 import { fieldGroupKeys } from "../hooks/queries";
@@ -101,6 +102,10 @@ export function RestartProvider({ children }: { children: ReactNode }) {
         // cards core derives per collection. Without it the picker offers a new
         // collection's card under its raw id and the grid cannot draw it.
         void queryClient.invalidateQueries({ queryKey: ADMIN_META_KEY });
+        // And the dashboard layout, which answers which cards are placed and
+        // which are offered. Both go stale for the same reason and neither is
+        // reachable from the other's key.
+        void queryClient.invalidateQueries({ queryKey: DASHBOARD_LAYOUT_KEY });
       } else {
         toast.error(message ?? "Failed to apply schema changes");
       }
