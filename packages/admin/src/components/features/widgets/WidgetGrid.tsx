@@ -22,7 +22,7 @@
 
 import { DndContext, closestCenter } from "@dnd-kit/core";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import {
   useBranding,
@@ -37,41 +37,13 @@ import { ArrangedCell } from "./edit/ArrangedCell";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { useDashboardArrangement } from "./edit/useDashboardArrangement";
 import { resolveDashboardWidgets } from "./resolve-widgets";
+import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
 
 // At module scope, before any render. `PluginSlot` resolves a path DURING
 // render, so registering from an effect would land after the first paint and
 // every core card would show its unresolved fallback once on the way in.
 registerCoreWidgetComponents();
-
-/**
- * What the grid says once a batch settles, or `null` for a state not worth
- * interrupting a reader for.
- *
- * Mid-flight says nothing, for the same reason `DocumentStatusLive` stays quiet
- * during a save: this grid refetches on every window focus, and announcing the
- * start of each refresh would speak over the reader every time they came back
- * to the tab. What matters is where it came to rest.
- *
- * `failed` counts CARDS THAT SHOW AN ERROR, not slots the server marked bad,
- * and the two are different numbers. There is no separate "the whole request
- * failed" sentence either: a rejected request gives every widget in it a failed
- * slot, so the counts already say so -- and with the requests partitioned, one
- * batch failing does not mean the dashboard did.
- */
-function settledAnnouncement(
-  isLoading: boolean,
-  total: number,
-  failed: number
-): string | null {
-  if (total === 0) return null;
-  if (isLoading) return null;
-  const loaded = total - failed;
-  const noun = total === 1 ? "widget" : "widgets";
-  return failed > 0
-    ? `${loaded} of ${total} ${noun} updated, ${failed} failed.`
-    : `${loaded} of ${total} ${noun} updated.`;
-}
 
 /**
  * What the grid shows when it holds no widget, which is three different facts.
@@ -151,19 +123,17 @@ export function WidgetGrid() {
     [branding, hasPermission]
   );
 
+  // 🔴 A stable indirection, because these three hooks form a cycle: the
+  // announcer needs the batch's outcome, the batch needs the widgets the
+  // arrangement resolved, and the arrangement needs somewhere to announce a
+  // move. The ref is the one link that can be filled in after the fact — the
+  // wrapper's identity never changes, so nothing downstream re-renders on it,
+  // and by the time a reader can move a card the announcer is long since
+  // assigned.
+  const announcer = useRef<(t: string, p: number, c: number) => void>(() => {});
   const announceMove = useCallback(
-    (title: string, position: number, count: number) => {
-      // The zero-width space alternates the string, because a live region does
-      // not re-announce text that did not change -- and moving a card up twice
-      // produces the same sentence both times. Same device as the builder's
-      // `keyboard-actions`, which is where this grid's convention comes from.
-      setAnnouncement(
-        current =>
-          `${title} moved to position ${position} of ${count}.${
-            current.endsWith("\u200b") ? "" : "\u200b"
-          }`
-      );
-    },
+    (title: string, position: number, count: number) =>
+      announcer.current(title, position, count),
     []
   );
 
@@ -171,6 +141,7 @@ export function WidgetGrid() {
   const {
     visible,
     editor,
+    moveBy,
     hasArrangement,
     sortableItems,
     sensors,
@@ -187,35 +158,12 @@ export function WidgetGrid() {
   const { slots, isFetching, updatedAt, requested, counted, failed, settling } =
     useWidgetBatch(widgets);
 
-  const [announcement, setAnnouncement] = useState("");
-
-  // A reorder speaks through the grid's ONE region, not a second one.
-  //
-  // The reason is the reason that region exists: several announcers on one
-  // surface interrupt each other, and a reader cannot tell which announcement
-  // belonged to what they just did. That argument does not weaken because the
-  // second announcer is the grid itself rather than a card.
-  //
-  // Nothing is clobbered by sharing it. The batch effect below fires only when
-  // its OWN sentence changes, and a move does not change it — so a move
-  // message survives until the batch has something new to say, which is
-  // precisely when it should stop being the latest news.
-
-  // The drag path and the button path move a card through the SAME function.
-  // Two implementations of "where does this land" agree until one of them is
-  // edited, and a grid whose drag and whose buttons disagreed would be
-  // impossible to reason about from either.
-
-  // What was last spoken, so an unchanged outcome does not re-fire. A ref
-  // rather than state because it must not itself cause a render.
-  const spoken = useRef("");
-  const next = settledAnnouncement(settling, counted, failed);
-
-  useEffect(() => {
-    if (!next || next === spoken.current) return;
-    spoken.current = next;
-    setAnnouncement(next);
-  }, [next]);
+  const { announcement, announceMove: announceSettledMove } = useGridAnnouncer(
+    settling,
+    counted,
+    failed
+  );
+  announcer.current = announceSettledMove;
 
   // Nothing to draw. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
@@ -235,8 +183,17 @@ export function WidgetGrid() {
     <div className="space-y-4">
       <DashboardEditChrome
         editor={editor}
+        writeError={layout.writeError}
         hasArrangement={hasArrangement}
-        canReset={layout.layout?.source === "own"}
+        // 🔴 A stored row exists whenever the VERSION is non-zero, which is not
+        // the same as `source === "own"`. A row the service could not decode is
+        // reported as `source: "default"` — the dashboard falls back to the
+        // registry's order — while keeping its real, non-zero version. Gating
+        // Reset on the source therefore hid the one control that could clear
+        // the bad row, and with an untouched draft Save is disabled too, so the
+        // reader had no way out and every read went on logging the same decode
+        // failure. The version is what says a row is there.
+        canReset={(layout.layout?.version ?? 0) > 0}
         onReload={() => void layout.reload()}
       />
 
@@ -280,14 +237,10 @@ export function WidgetGrid() {
                 // refetch says nothing about either.
                 updatedAt={requested.has(row.widget.id) ? updatedAt : null}
                 isFetching={requested.has(row.widget.id) ? isFetching : false}
-                onMove={(from, delta) => {
-                  editor.moveBy(from, delta);
-                  announceMove(
-                    row.widget.title,
-                    from + 1 + delta,
-                    visible.length
-                  );
-                }}
+                // The arrangement hook announces, because it is the one that
+                // resolves the destination -- announcing here would name a
+                // position computed a second time, and the two would drift.
+                onMove={moveBy}
                 onToggleHidden={editor.toggleHidden}
                 onRemove={editor.remove}
               />

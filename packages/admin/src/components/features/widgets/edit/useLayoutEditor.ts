@@ -28,7 +28,7 @@ import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 import {
   addPlacement,
   hasChanges,
-  movePlacement,
+  movePlacementTo,
   removePlacement,
   renumber,
   togglePlacementHidden,
@@ -59,43 +59,75 @@ export interface LayoutEditor {
   cancel: () => void;
   save: () => void;
   reset: () => void;
-  move: (from: number, to: number) => void;
-  moveBy: (index: number, delta: number) => void;
+  /** Move by IDENTITY: the placement `fromId` takes the position of `toId`. */
+  move: (fromId: string, toId: string) => void;
   toggleHidden: (placementId: string) => void;
   remove: (placementId: string) => void;
   add: (widgetId: string) => void;
+}
+
+/**
+ * An arrangement being edited, and the guards it is a modification of.
+ *
+ * One object, so a placement list can never be sent against a version and a
+ * scope it was not derived from.
+ */
+interface LayoutDraft {
+  placements: WidgetPlacement[];
+  version: number;
+  scope: string;
 }
 
 export function useLayoutEditor(
   layout: UseDashboardLayoutResult,
   geometryFor: WidgetGeometrySource
 ): LayoutEditor {
-  // `null` means "not editing" and an array means "editing", so the two facts
-  // cannot disagree the way a separate boolean and a draft array would — there
-  // is no state in which the reader is editing and there is nothing to edit.
-  const [draft, setDraft] = useState<WidgetPlacement[] | null>(null);
+  // `null` means "not editing" and a draft means "editing", so the two facts
+  // cannot disagree the way a separate boolean and an array would — there is no
+  // state in which the reader is editing and there is nothing to edit.
+  //
+  // 🔴 The GUARDS are captured with the placements, not read at save time. They
+  // are what the reader's arrangement is a modification OF, so they belong to
+  // the snapshot the way the placements do. Read fresh at save, the query's own
+  // `refetchOnWindowFocus` defeated them: another tab saves, this tab regains
+  // focus and refetches, `version` advances underneath an untouched draft, and
+  // the save then succeeds against the NEW version — silently overwriting the
+  // other tab with an arrangement built from a version that no longer exists.
+  // The guard was configured out of existence by the refresh policy beside it.
+  const [draft, setDraft] = useState<LayoutDraft | null>(null);
 
   const server = useMemo(
     () => layout.layout?.placements ?? [],
     [layout.layout]
   );
 
-  const begin = useCallback(() => setDraft([...server]), [server]);
+  const begin = useCallback(() => {
+    const current = layout.layout;
+    // Nothing to edit against. Editing is offered only once a read has landed,
+    // so this is a guard rather than a state the UI can reach.
+    if (!current) return;
+    setDraft({
+      placements: [...current.placements],
+      version: current.version,
+      scope: current.scope,
+    });
+  }, [layout.layout]);
   const cancel = useCallback(() => setDraft(null), []);
 
   const save = useCallback(() => {
-    const current = draft;
-    const version = layout.layout?.version;
-    const scope = layout.layout?.scope;
-    // Nothing to send, or nothing to send it against. A missing guard is a read
-    // that never landed, and inventing one would be inventing the very
-    // assertion the server checks.
-    if (!current || version === undefined || scope === undefined) return;
+    if (!draft) return;
     layout.save.mutate(
       // Renumbered on the way out: the editor reorders an ARRAY, so a moved
       // card still carries the `order` it had before. Sent as-is, the server
       // sorts by a number that no longer matches what the reader sees.
-      { placements: renumber(current), version, scope },
+      //
+      // The guards come from the DRAFT, so they are the ones this arrangement
+      // was derived from rather than whatever the last refetch produced.
+      {
+        placements: renumber(draft.placements),
+        version: draft.version,
+        scope: draft.scope,
+      },
       // Only on success. A conflict must LEAVE the draft in place, because
       // dropping it here would discard the reader's work at the exact moment
       // they are being told to try again.
@@ -107,21 +139,21 @@ export function useLayoutEditor(
     layout.reset.mutate(undefined, { onSuccess: () => setDraft(null) });
   }, [layout]);
 
+  // BOTH paths move by identity, through one function. The drag handler gets
+  // ids from dnd-kit and the buttons read them off the row they render for, so
+  // neither has to translate a position in the FILTERED view into a position in
+  // the stored array — which is exactly the translation that was wrong: with an
+  // unresolvable placement between two visible ones, a view index moved the
+  // wrong card and persisted it.
   const move = useCallback(
-    (from: number, to: number) =>
+    (fromId: string, toId: string) =>
       setDraft(current =>
-        current ? movePlacement(current, from, to) : current
-      ),
-    []
-  );
-
-  // The keyboard and button path. Expressed as a DELTA rather than as a target
-  // index so a caller cannot compute the destination differently from the way
-  // the drag path computes it.
-  const moveBy = useCallback(
-    (index: number, delta: number) =>
-      setDraft(current =>
-        current ? movePlacement(current, index, index + delta) : current
+        current
+          ? {
+              ...current,
+              placements: movePlacementTo(current.placements, fromId, toId),
+            }
+          : current
       ),
     []
   );
@@ -129,7 +161,15 @@ export function useLayoutEditor(
   const toggleHidden = useCallback(
     (placementId: string) =>
       setDraft(current =>
-        current ? togglePlacementHidden(current, placementId) : current
+        current
+          ? {
+              ...current,
+              placements: togglePlacementHidden(
+                current.placements,
+                placementId
+              ),
+            }
+          : current
       ),
     []
   );
@@ -137,7 +177,12 @@ export function useLayoutEditor(
   const remove = useCallback(
     (placementId: string) =>
       setDraft(current =>
-        current ? removePlacement(current, placementId) : current
+        current
+          ? {
+              ...current,
+              placements: removePlacement(current.placements, placementId),
+            }
+          : current
       ),
     []
   );
@@ -146,13 +191,20 @@ export function useLayoutEditor(
     (widgetId: string) =>
       setDraft(current =>
         current
-          ? addPlacement(current, widgetId, geometryFor(widgetId))
+          ? {
+              ...current,
+              placements: addPlacement(
+                current.placements,
+                widgetId,
+                geometryFor(widgetId)
+              ),
+            }
           : current
       ),
     [geometryFor]
   );
 
-  const placements = draft ?? server;
+  const placements = draft?.placements ?? server;
 
   // What the picker offers, recomputed against the DRAFT rather than taken from
   // the server's answer. `available` was true when the read landed; a card the
@@ -174,7 +226,7 @@ export function useLayoutEditor(
     isEditing: draft !== null,
     placements,
     available,
-    hasUnsavedChanges: draft !== null && hasChanges(server, draft),
+    hasUnsavedChanges: draft !== null && hasChanges(server, draft.placements),
     isSaving: layout.save.isPending || layout.reset.isPending,
     isConflict: layout.isConflict,
     begin,
@@ -182,7 +234,6 @@ export function useLayoutEditor(
     save,
     reset,
     move,
-    moveBy,
     toggleHidden,
     remove,
     add,

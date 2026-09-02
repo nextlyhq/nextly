@@ -29,6 +29,34 @@ export interface MoveAffordance {
 }
 
 /**
+ * Moves the placement identified by `fromId` to the position currently held by
+ * `toId`, and returns a NEW array.
+ *
+ * 🔴 By IDENTITY, not by index, and the difference is a real defect rather than
+ * a preference. The grid draws a FILTERED view — a placement whose declaration
+ * this admin cannot resolve is skipped — so a position in what the reader sees
+ * is not a position in what is stored. With `[A, unresolvable, B]` the reader
+ * sees `[A, B]`, and moving `B` up by view-index 1 moved the UNRESOLVABLE
+ * placement while `B` stayed put, then persisted that order.
+ *
+ * Ids survive filtering; indices do not. Both callers already hold ids — the
+ * drag handler gets them from dnd-kit, and the buttons read them off the row
+ * they are rendered for — so nothing has to translate.
+ */
+export function movePlacementTo(
+  placements: readonly WidgetPlacement[],
+  fromId: string,
+  toId: string
+): WidgetPlacement[] {
+  const from = placements.findIndex(placement => placement.id === fromId);
+  const to = placements.findIndex(placement => placement.id === toId);
+  // An id neither list knows is an ordinary outcome — a drag released over
+  // nothing, a stale row — rather than an error worth throwing over.
+  if (from === -1 || to === -1) return [...placements];
+  return movePlacement(placements, from, to);
+}
+
+/**
  * Moves the placement at `from` to `to`, and returns a NEW array.
  *
  * Out-of-range indices return the input unchanged rather than throwing. A drag

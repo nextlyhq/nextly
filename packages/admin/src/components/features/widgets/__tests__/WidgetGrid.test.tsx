@@ -123,6 +123,33 @@ afterEach(() => {
  * its own and dnd-kit's disappeared, which is the pair of mistakes this
  * invariant exists to catch.
  */
+/**
+ * A `POST /dashboard/query` mock that answers the query it was ASKED.
+ *
+ * Positional fixtures — an array of results lined up with the widgets as
+ * declared — encode the batch's ORDER into every test that uses one. The batch
+ * is built in a stable identity order rather than in display order, so that
+ * moving a card cannot change the query key and re-issue every request; the
+ * order is therefore an implementation detail, and a fixture that depends on it
+ * fails for a reason that has nothing to do with what it is testing.
+ *
+ * Keyed by source, so each widget gets its own number however the batch is
+ * arranged. A source the caller did not name comes back as a failed slot rather
+ * than as a silent zero, so a test that mis-names one is told.
+ */
+function mockCountsBySource(counts: Record<string, number>): void {
+  vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => {
+    const queries = (body as { queries: Array<{ source: string }> }).queries;
+    return {
+      results: queries.map(query =>
+        query.source in counts
+          ? { ok: true, result: { op: "count", total: counts[query.source] } }
+          : { ok: false, error: `no fixture for ${query.source}` }
+      ),
+    };
+  });
+}
+
 function gridLiveRegions(container: HTMLElement): Element[] {
   return [
     ...container.querySelectorAll(
@@ -632,21 +659,30 @@ describe("WidgetGrid — collection and gating", () => {
         },
       ],
     } as unknown as AdminBranding;
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 1 } },
-        { ok: true, result: { op: "count", total: 2 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 1,
+      "collection:pages": 2,
     });
 
     renderGrid();
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
-      queries: [
+    // The SET, not the sequence. The batch is built in a stable identity order
+    // rather than in display order, so that moving a card cannot change the
+    // query key and re-issue every request -- which makes the sequence an
+    // implementation detail. What this test is about is that both channels land
+    // in ONE request, and that survives whatever order they are sent in.
+    const sent = (
+      vi.mocked(protectedApi.post).mock.calls[0][1] as {
+        queries: Array<{ source: string; op: string }>;
+      }
+    ).queries;
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(
+      expect.arrayContaining([
         { source: "collection:posts", op: "count" },
         { source: "collection:orders", op: "count" },
-      ],
-    });
+      ])
+    );
   });
 
   it("gates a registered widget on its permission like any other", () => {
@@ -821,11 +857,9 @@ describe("WidgetGrid — batching", () => {
         query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 12 } },
-        { ok: true, result: { op: "count", total: 34 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 12,
+      "collection:pages": 34,
     });
 
     renderGrid();
@@ -1121,14 +1155,23 @@ describe("WidgetGrid — accessibility", () => {
         /1 of 3 widgets updated, 2 failed/i
       )
     );
-    // Two queries for three widgets, and the positional keying still lands each
-    // result on the widget that asked for it.
-    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
-      queries: [
+    // Two queries for three widgets -- the undrawable one is never asked -- and
+    // the keying still lands each result on the widget that asked for it. The
+    // SET rather than the sequence: the batch is built in a stable identity
+    // order rather than in display order, so which of the two goes first is an
+    // implementation detail and not what this test is about.
+    const sent = (
+      vi.mocked(protectedApi.post).mock.calls[0][1] as {
+        queries: Array<{ source: string; op: string }>;
+      }
+    ).queries;
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(
+      expect.arrayContaining([
         { source: "collection:posts", op: "count" },
         { source: "collection:pages", op: "count" },
-      ],
-    });
+      ])
+    );
   });
 
   it("has exactly ONE live region for the whole grid", async () => {
@@ -1146,11 +1189,9 @@ describe("WidgetGrid — accessibility", () => {
         query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 1 } },
-        { ok: true, result: { op: "count", total: 2 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 1,
+      "collection:pages": 2,
     });
 
     const { container } = renderGrid();
@@ -1175,11 +1216,9 @@ describe("WidgetGrid — accessibility", () => {
         query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 1 } },
-        { ok: true, result: { op: "count", total: 2 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 1,
+      "collection:pages": 2,
     });
 
     renderGrid();

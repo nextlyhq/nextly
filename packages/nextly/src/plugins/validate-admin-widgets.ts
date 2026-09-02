@@ -487,8 +487,23 @@ export function contributedWidgetSummaries(
   plugins: readonly PluginDefinition[]
 ): CanonicalWidget[] {
   return plugins.flatMap(plugin =>
-    (validatedAdminWidgets(plugin) ?? [])
-      .map(toSummary)
-      .filter((summary): summary is CanonicalWidget => summary !== undefined)
+    // 🔴 Disabled plugins contribute NOTHING, matching `buildPluginAdminMeta`,
+    // which withholds every behavioural admin surface — menu, pages, settings,
+    // widgets — from a plugin the config has switched off. Without this the two
+    // answers drifted: the layout endpoint put a disabled plugin's widget ids
+    // into default placements, into `available` and into the scope token, while
+    // the admin had no declaration to draw any of them with. Ghost cards the
+    // reader could arrange and never see.
+    //
+    // `enabled !== false` rather than `enabled === true`, because the field is
+    // optional and its absence means enabled — the same reading admin-meta,
+    // `reload-config` and the field-type registry each apply.
+    plugin.enabled === false
+      ? []
+      : (validatedAdminWidgets(plugin) ?? [])
+          .map(toSummary)
+          .filter(
+            (summary): summary is CanonicalWidget => summary !== undefined
+          )
   );
 }

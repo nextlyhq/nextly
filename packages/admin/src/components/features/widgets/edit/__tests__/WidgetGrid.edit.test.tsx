@@ -3,7 +3,7 @@
  * and what happens when the arrangement is not there.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +59,7 @@ function layout(
     widgetId: string;
     order: number;
     hidden?: boolean;
+    size?: string;
   }>,
   patch: Partial<DashboardLayoutResponse> = {}
 ): DashboardLayoutResponse {
@@ -74,12 +75,21 @@ function layout(
 
 function renderGrid() {
   const client = new QueryClient({
-    defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } },
+    defaultOptions: {
+      queries: { retry: false, retryDelay: 0, gcTime: 0 },
+      // 🔴 Mirrors the app's own `QueryProvider`, which sets
+      // `mutations.retry: MUTATION_RETRY_COUNT`. TanStack does not retry
+      // mutations by default, so a test client that stayed silent here could
+      // never observe an unwanted retry — the guard against one would read as
+      // covered while nothing exercised it. `retryDelay: 0` so the attempts
+      // happen in milliseconds rather than in backoff seconds.
+      mutations: { retry: 2, retryDelay: 0 },
+    },
   });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  return render(<WidgetGrid />, { wrapper: Wrapper });
+  return { client, ...render(<WidgetGrid />, { wrapper: Wrapper }) };
 }
 
 beforeEach(() => {
@@ -347,6 +357,102 @@ describe("saving", () => {
   });
 });
 
+describe("the guards a save is sent against", () => {
+  it("uses the version the DRAFT was taken from, not the newest one", async () => {
+    // 🔴 The silent-overwrite bug. The query refetches on window focus, so
+    // another tab can save while this one is editing: the version advances
+    // underneath an untouched draft, and a save that reads it fresh then
+    // SUCCEEDS against a version its arrangement was never derived from —
+    // overwriting the other tab with no conflict reported. The guard was
+    // configured out of existence by the refresh policy beside it.
+    const { client } = renderGrid();
+    const user = await beginEditing();
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+
+    // Another tab saves, and this tab's layout refreshes underneath the draft.
+    // Driven through the client rather than a focus event, because what matters
+    // is that a refetch LANDED while editing -- `refetchOnWindowFocus` is one
+    // way to reach that state and not the property under test.
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a", order: 0 }], {
+      version: 99,
+      scope: "moved-on",
+    });
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["dashboard", "layout"] });
+    });
+    expect(api.get).toHaveBeenCalledTimes(2);
+
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
+    const body = api.put.mock.calls[0][1] as { version: number; scope: string };
+    expect(body.version).toBe(3);
+    expect(body.scope).toBe("tok");
+  });
+
+  it("does not retry a failed save", async () => {
+    // A version-guarded write is not idempotent under an AMBIGUOUS failure: if
+    // the server commits and the response is lost, a retry sends the same
+    // now-stale version, is refused, and tells the reader another editor
+    // changed their dashboard — when their own save had already succeeded. The
+    // retry manufactures the very conflict the guard exists to report honestly.
+    api.put.mockRejectedValue(new Error("network"));
+    renderGrid();
+    const user = await beginEditing();
+
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await screen.findByTestId("dashboard-edit-error");
+    expect(api.put).toHaveBeenCalledTimes(1);
+  });
+
+  it("says so when a save fails for a reason that is not a conflict", async () => {
+    // Previously only conflicts rendered, so a network error or a 500 left the
+    // reader in edit mode with the spinner stopped and nothing said, believing
+    // their arrangement had been stored.
+    api.put.mockRejectedValue(new Error("boom"));
+    renderGrid();
+    const user = await beginEditing();
+
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+
+    await screen.findByTestId("dashboard-edit-error");
+    expect(screen.queryByTestId("dashboard-edit-conflict")).toBeNull();
+    // And the work is still there.
+    expect(
+      screen.getAllByTestId("widget-edit-controls").length
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("a card the reader resized", () => {
+  it("renders at its STORED size, not the declaration's", async () => {
+    // The stored size IS the arrangement — the layout API preserves it so a
+    // card the reader resized stays resized. Reading the declaration instead
+    // silently re-sized their dashboard whenever a plugin changed its default.
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, size: "sm" },
+    ]);
+    renderGrid();
+    await screen.findByTestId("dashboard-edit-begin");
+
+    // `core/a` declares `full`; the placement says `sm`.
+    expect(screen.getByTestId("widget-cell-core/a").className).toContain(
+      "lg:col-span-3"
+    );
+  });
+
+  it("falls back to the declaration when the placement stored none", async () => {
+    renderGrid();
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByTestId("widget-cell-core/a").className).toContain(
+      "col-span-12"
+    );
+  });
+});
+
 describe("cancelling", () => {
   it("puts the arrangement back", async () => {
     renderGrid();
@@ -392,13 +498,32 @@ describe("a conflict", () => {
 });
 
 describe("reset", () => {
-  it("is offered only to a reader who has an arrangement of their own", async () => {
+  it("is not offered when there is no stored row at all", async () => {
+    // Version 0 is what "no row" means on the wire; `source: "default"` alone
+    // does not, which is the next case.
     layoutResponse = layout([{ id: "p1", widgetId: "core/a", order: 0 }], {
       source: "default",
+      version: 0,
     });
     renderGrid();
     await beginEditing();
     expect(screen.queryByTestId("dashboard-edit-reset")).toBeNull();
+  });
+
+  it("IS offered when a stored row exists but could not be decoded", async () => {
+    // 🔴 The state that had no way out. A row the service cannot decode is
+    // reported as `source: "default"` — the dashboard falls back to the
+    // registry's order — while keeping its real, non-zero version. Gating Reset
+    // on the source hid the one control that could clear it, and with an
+    // untouched draft Save is disabled too, so every read went on logging the
+    // same decode failure with the reader unable to do anything about it.
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a", order: 0 }], {
+      source: "default",
+      version: 7,
+    });
+    renderGrid();
+    await beginEditing();
+    expect(screen.getByTestId("dashboard-edit-reset")).toBeInTheDocument();
   });
 
   it("deletes the row rather than writing the current defaults", async () => {

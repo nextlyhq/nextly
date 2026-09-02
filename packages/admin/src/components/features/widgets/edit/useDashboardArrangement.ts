@@ -26,12 +26,22 @@ export interface ArrangedWidget {
   placementId: string;
   widget: DashboardWidget;
   hidden: boolean;
+  /**
+   * The size the reader's arrangement stored, when it stored one.
+   *
+   * A `string` rather than the size enum, for the reason every layout type is:
+   * it may have been written by a plugin built against a newer core, and the
+   * span helper already falls back on a value it does not recognise.
+   */
+  size?: string;
 }
 
 export interface DashboardArrangement {
   /** The cards to draw, in the arrangement's order. */
   visible: ArrangedWidget[];
   editor: LayoutEditor;
+  /** Move the card at a VIEW index one step, resolving ids for the editor. */
+  moveBy: (index: number, delta: number) => void;
   /**
    * Whether an arrangement has been READ — not whether it holds anything.
    *
@@ -100,6 +110,7 @@ export function useDashboardArrangement(
         placementId: placement.id,
         widget,
         hidden: placement.hidden,
+        ...(placement.size === undefined ? {} : { size: placement.size }),
       });
     }
     return rows;
@@ -114,18 +125,42 @@ export function useDashboardArrangement(
   // Two implementations of "where does this land" agree until one is edited,
   // and a grid whose drag and whose buttons disagreed would be impossible to
   // reason about from either.
+  // `useSortableFieldArray` hands back INDICES into the list it was given, and
+  // that list is the filtered view. They are turned into placement ids here,
+  // once, so the editor never sees a position that means something different to
+  // it than it did to the grid.
   const { sensors, handleDragEnd } = useSortableFieldArray(
     sortableItems,
     (from, to) => {
-      editor.move(from, to);
       const moved = visible[from];
-      if (moved) announceMove(moved.widget.title, to + 1, visible.length);
+      const target = visible[to];
+      if (!moved || !target) return;
+      editor.move(moved.placementId, target.placementId);
+      announceMove(moved.widget.title, to + 1, visible.length);
     }
+  );
+
+  /**
+   * The button path: move the card at `index` one step in the VIEW.
+   *
+   * Resolved to the neighbour's id here rather than to `index + delta`, because
+   * the neighbour in the view may not be the neighbour in the stored array.
+   */
+  const moveBy = useCallback(
+    (index: number, delta: number) => {
+      const moved = visible[index];
+      const target = visible[index + delta];
+      if (!moved || !target) return;
+      editor.move(moved.placementId, target.placementId);
+      announceMove(moved.widget.title, index + delta + 1, visible.length);
+    },
+    [visible, editor, announceMove]
   );
 
   return {
     visible,
     editor,
+    moveBy,
     hasArrangement,
     sortableItems,
     sensors,

@@ -17,6 +17,8 @@ import type { LayoutEditor } from "./useLayoutEditor";
 
 export interface DashboardEditChromeProps {
   editor: LayoutEditor;
+  /** A write that failed for a reason other than losing a race. */
+  writeError: Error | null;
   /**
    * Whether an arrangement has been read. Editing is offered only then: a write
    * echoes a version and a scope token, and neither exists until a read lands.
@@ -29,6 +31,7 @@ export interface DashboardEditChromeProps {
 
 export function DashboardEditChrome({
   editor,
+  writeError,
   hasArrangement,
   canReset,
   onReload,
@@ -70,6 +73,23 @@ export function DashboardEditChrome({
           >
             Reload
           </button>
+        </div>
+      ) : null}
+
+      {writeError && !editor.isConflict ? (
+        // Reported because it previously was not. Only conflicts were rendered,
+        // so a save that failed on a network error, a 500 or an authorization
+        // change left the reader in edit mode with the spinner stopped and
+        // nothing said — believing their arrangement had been stored. The
+        // remedy differs from a conflict's too: this one is retried, not
+        // reloaded, so the arrangement stays exactly where it is.
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
+          data-testid="dashboard-edit-error"
+        >
+          Your dashboard could not be saved. Your changes are still here — try
+          again in a moment.
         </div>
       ) : null}
     </>

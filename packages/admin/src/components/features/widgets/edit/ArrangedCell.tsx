@@ -62,7 +62,14 @@ export function ArrangedCell({
         // `relative` so the drag handle, which is absolutely positioned, lands
         // on this cell rather than on the grid.
         "relative",
-        widgetSpanClass(widget.size),
+        // 🔴 The PLACEMENT's size wins over the declaration's. The stored size
+        // IS the reader's arrangement — the layout API preserves it precisely
+        // so a card they resized stays resized — and reading the declaration
+        // instead silently re-sized their dashboard whenever a plugin changed
+        // its `defaultSize`. `widgetSpanClass` already survives a value this
+        // admin does not recognise, which is what makes it safe to hand it one
+        // that came from storage rather than from this release's enum.
+        widgetSpanClass(row.size ?? widget.size),
         // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
         // widget always renders its card, so this can never hide one; it
         // reaches only an unframed widget whose component returned null --
@@ -86,12 +93,7 @@ export function ArrangedCell({
         //
         // Margins, not padding: a hidden cell contributes neither, but padding
         // would also inset a body that draws its own background.
-        widget.chrome === "none" && "mb-6",
-        // A hidden card is drawn while editing so it can be brought back, and
-        // dimmed so it is not mistaken for a live one. Presentational only: the
-        // controls above it stay at full contrast, because they are what the
-        // reader acts on and a faded button is a button people cannot read.
-        row.hidden && "opacity-50"
+        widget.chrome === "none" && "mb-6"
       )}
     >
       {isEditing ? (
@@ -108,12 +110,20 @@ export function ArrangedCell({
           onRemove={() => onRemove(row.placementId)}
         />
       ) : null}
-      <WidgetRenderer
-        definition={widget}
-        slot={slot}
-        updatedAt={updatedAt}
-        isFetching={isFetching}
-      />
+      {/* The dimming wraps the BODY only. Applied to the cell it composited
+          every descendant — the controls, the drag handle, their labels and
+          their focus rings — so the buttons needed to bring a hidden card back
+          were themselves faded, which is the opposite of what the comment
+          beside it promised. A hidden card is dimmed so it is not mistaken for
+          a live one; the controls that act on it stay legible. */}
+      <div className={cn(row.hidden && "opacity-50")}>
+        <WidgetRenderer
+          definition={widget}
+          slot={slot}
+          updatedAt={updatedAt}
+          isFetching={isFetching}
+        />
+      </div>
     </SortableWidgetCell>
   );
 }

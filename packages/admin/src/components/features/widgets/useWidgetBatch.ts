@@ -57,11 +57,20 @@ function worthAsking(widget: DashboardWidget): boolean {
 }
 
 export function useWidgetBatch(widgets: DashboardWidget[]): WidgetBatch {
+  // 🔴 Sorted by ID, not left in display order. `useWidgetQueries` puts the
+  // request partitions into its TanStack query keys, so a key built from the
+  // visual arrangement CHANGES every time a card moves — and every drag or
+  // button press re-issued the whole batch, spending access-checked database
+  // reads and blanking cards mid-edit, though not one data question had
+  // changed. A stable identity order makes the key describe what is being
+  // asked rather than where it happens to sit; results are keyed back by widget
+  // id, which never depended on order.
   const requests = useMemo<WidgetQueryRequest[]>(
     () =>
       widgets
         .filter(worthAsking)
-        .map(widget => ({ widgetId: widget.id, query: widget.query! })),
+        .map(widget => ({ widgetId: widget.id, query: widget.query! }))
+        .sort((a, b) => a.widgetId.localeCompare(b.widgetId)),
     [widgets]
   );
 

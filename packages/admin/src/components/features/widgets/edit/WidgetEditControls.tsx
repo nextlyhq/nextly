@@ -61,7 +61,10 @@ export function WidgetEditControls({
 }: WidgetEditControlsProps) {
   return (
     <div
-      className="flex items-center gap-1 border-b border-border bg-muted/40 px-2 py-1"
+      // `pl-9` reserves the drag handle's column. The handle is absolutely
+      // positioned over this toolbar, so without reserved space it sits ON the
+      // first thing here rather than beside it.
+      className="flex items-center gap-1 border-b border-border bg-muted/40 py-1 pl-9 pr-2"
       data-testid="widget-edit-controls"
     >
       {/* The name first, so a reader tabbing through a dozen identical control

@@ -79,7 +79,13 @@ export function SortableWidgetCell({
           {...listeners}
           // `cursor-grab`, not `cursor-move`: this reorders within a list, it
           // does not move the card to an arbitrary point.
-          className="absolute right-1 top-1 z-10 cursor-grab rounded p-1 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
+          // 🔴 LEFT, not right. On the right it overlapped `WidgetEditControls`'
+          // Remove button — same corner, higher `z-index` — so the handle
+          // swallowed pointer input across most of a control the feature
+          // promises is ordinarily clickable. The toolbar's own content starts
+          // with a title that has room to spare, so the handle sits before it
+          // and the buttons keep the right edge to themselves.
+          className="absolute left-1 top-1 z-10 cursor-grab rounded p-1 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
           // Names the card, because a grid of identical handles is unusable
           // otherwise. dnd-kit supplies its own keyboard instructions through
           // `attributes`; this is the label they attach to.

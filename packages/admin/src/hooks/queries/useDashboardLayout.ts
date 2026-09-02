@@ -73,6 +73,16 @@ export interface UseDashboardLayoutResult {
    * authors both messages and both end "Reload and try again."
    */
   isConflict: boolean;
+  /**
+   * A write that failed for any OTHER reason, as something to show the reader.
+   *
+   * Separate from `isConflict` because the remedies differ: a conflict is
+   * recovered by reloading, a network error or a 500 by trying again. Reported
+   * at all because it previously was not — only conflicts were rendered, so a
+   * failed save left the reader in edit mode with the spinner stopped and
+   * nothing said, believing their arrangement had been stored.
+   */
+  writeError: Error | null;
   reload: () => Promise<unknown>;
 }
 
@@ -85,6 +95,11 @@ function isConflictError(error: Error | null): boolean {
   const status = (error as { status?: number }).status;
   const code = (error as { code?: string }).code;
   return status === 409 || code === "CONFLICT";
+}
+
+/** The first failure that is NOT a lost race, or `null`. */
+function nonConflictError(...errors: Array<Error | null>): Error | null {
+  return errors.find(error => error && !isConflictError(error)) ?? null;
 }
 
 export function useDashboardLayout(): UseDashboardLayoutResult {
@@ -108,11 +123,22 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
   const save = useMutation({
     mutationFn: (input: SaveLayoutInput) =>
       protectedApi.put<unknown>(LAYOUT_PATH, input),
+    // 🔴 No retries, against the provider's default of two. A version-guarded
+    // write is not idempotent under an AMBIGUOUS failure: if the server commits
+    // and the response is lost, the retry sends the same now-stale version, the
+    // server refuses it, and the reader is told another editor changed their
+    // dashboard — when in fact their own save had already succeeded. The retry
+    // manufactures the exact conflict the guard exists to report truthfully.
+    retry: false,
     onSuccess: invalidate,
   });
 
   const reset = useMutation({
     mutationFn: () => protectedApi.delete<unknown>(LAYOUT_PATH),
+    // Idempotent by design — deleting a row that is already gone is the same
+    // answer — but retried silently it would still hide a server that is
+    // failing, and the reader would watch a spinner rather than a message.
+    retry: false,
     onSuccess: invalidate,
   });
 
@@ -127,6 +153,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     isConflict:
       isConflictError(save.error ?? null) ||
       isConflictError(reset.error ?? null),
+    writeError: nonConflictError(save.error ?? null, reset.error ?? null),
     reload: invalidate,
   };
 }
