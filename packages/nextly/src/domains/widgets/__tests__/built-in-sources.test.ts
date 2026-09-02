@@ -246,3 +246,179 @@ describe("built-in sources", () => {
     expect(listSources()).toHaveLength(1);
   });
 });
+
+describe("what a source calls itself, and which field names its rows", () => {
+  it("labels itself the way a HUMAN names the collection", () => {
+    // 🔴 `label` means "what a human calls this". The slug is a storage
+    // identifier, so a collection whose plural label is "Articles" was
+    // published to the picker -- and to every generated card's title -- as
+    // `blog-posts`, disagreeing with the name used everywhere else in the admin.
+    registerBuiltInSources([
+      {
+        slug: "blog-posts",
+        label: "Articles",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:blog-posts")?.label).toBe("Articles");
+  });
+
+  it("falls back to the slug when the collection named itself nothing", () => {
+    // The control: without it the assertion above is satisfied by a source that
+    // labels itself from any string it happens to hold.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.label).toBe("posts");
+  });
+
+  it("resolves the title field from the author's nomination", () => {
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "headline",
+        fields: [
+          { name: "headline", type: "text" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("headline");
+  });
+
+  it("REFUSES a nominated field a card could not print", () => {
+    // 🔴 `toSourceType` maps every type it does not recognise to "string", so a
+    // `json` field is indistinguishable from a text field by the time a source
+    // is built -- and schema validation permits one as `useAsTitle`. The card
+    // would then ask for an object per row, which `asText` declines to
+    // stringify, drawing an em dash on every line. It falls back to a field the
+    // card CAN print, which is what the entry list does when it reads a value
+    // it cannot render.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "payload",
+        fields: [
+          { name: "payload", type: "json" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("names no title field at all when nothing printable could be one", () => {
+    registerBuiltInSources([
+      {
+        slug: "readings",
+        fields: [
+          { name: "payload", type: "json" },
+          { name: "parts", type: "repeater" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:readings")?.titleField).toBeUndefined();
+  });
+
+  it("REFUSES a nominated field that holds many values", () => {
+    // 🔴 A scalar TYPE is not a scalar VALUE. `text` and `select` both accept
+    // `hasMany`, and one of those stores an array -- which `asText` declines to
+    // print, so the card draws an em dash on every row while a usable
+    // conventional title sits unused beside it. Type alone was the wrong
+    // question.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "tags",
+        fields: [
+          { name: "tags", type: "text", hasMany: true },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("REFUSES a boolean field as the title, nominated or conventional", () => {
+    // 🔴 One question, two answers is the defect. The shared naming rule accepts
+    // a non-empty string or a finite number and refuses a boolean -- in both
+    // implementations, `readableText` for the entry surfaces and the candidate
+    // walk for the activity feed. A field-level allowlist that admitted
+    // `checkbox` therefore nominated a column every value-level rule then
+    // declines: the card names nothing while the same entry is named by a
+    // conventional fallback everywhere else.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "active",
+        fields: [
+          { name: "active", type: "checkbox" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("REFUSES a conventional field that is itself a checkbox", () => {
+    // The half a nomination-only guard misses: `title` is a conventional name,
+    // so it is reached by the fallback walk without anyone nominating it.
+    registerBuiltInSources([
+      {
+        slug: "flags",
+        fields: [{ name: "title", type: "checkbox" }],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:flags")?.titleField).toBeUndefined();
+  });
+
+  it("judges a DUPLICATE name by the declaration the source carries", () => {
+    // 🔴 Two questions about one name have to be asked of ONE declaration. A
+    // collection may declare `tags` twice and the two need not agree; the
+    // source keeps the FIRST, which here stores an array. Asking the printable
+    // filter of the raw list let the second, scalar declaration vote, so `tags`
+    // qualified as a title while the field the source actually carries is the
+    // `hasMany` one -- and the card prints an array where a name belongs.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "tags",
+        fields: [
+          { name: "tags", type: "text", hasMany: true },
+          { name: "tags", type: "text" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("accepts a single-valued field of the same type", () => {
+    // The control: without it the refusal above is satisfied by an allowlist
+    // that rejects `text` outright.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "tags",
+        fields: [
+          { name: "tags", type: "text" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("tags");
+  });
+});

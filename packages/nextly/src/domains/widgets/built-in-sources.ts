@@ -8,6 +8,8 @@
  * @module domains/widgets/built-in-sources
  */
 
+import { entryTitleField } from "../collections/entry-title";
+
 import {
   replaceSourcesOfKind,
   sourceKindFromId,
@@ -62,6 +64,56 @@ const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
  */
 const NEVER_EXPOSED_FIELD_TYPES: ReadonlySet<string> = new Set(["password"]);
 
+/**
+ * Field types whose stored value a row-drawing card can PRINT.
+ *
+ * 🔴 An allowlist, and read against the field's ORIGINAL type rather than the
+ * coarse one below: `toSourceType` maps everything it does not recognise to
+ * `"string"`, so a `json`, `group`, `repeater`, `component` or `chips` field is
+ * indistinguishable from a text field by the time a source is built. Schema
+ * validation permits any of those as `admin.useAsTitle`, and the card that
+ * results asks for an object per row -- which `asText` correctly declines to
+ * stringify, so every row draws an em dash and the card says nothing at all.
+ *
+ * 🔴 CARDINALITY is checked beside the type, because a scalar type is not a
+ * scalar VALUE. `text` and `select` both accept `hasMany`, and one of those
+ * stores an array — which `asText` declines to print, so the card draws an em
+ * dash on every row while a usable conventional title sits unused beside it.
+ * Type alone was the wrong question.
+ *
+ * FAILS CLOSED on a type it does not know, including one a plugin registered.
+ * The two outcomes are not symmetric: an unrecognised scalar costs that
+ * collection its recent card, which is a missing card; an unrecognised
+ * structured type costs the reader a card of em dashes, which looks like the
+ * product is broken. `relationship` and `upload` are excluded for a third
+ * reason -- their value may well be a printable id, and an id is not a name.
+ */
+/**
+ * 🔴 The INVARIANT this list has to hold: every type in it must produce a value
+ * the shared naming rule will actually print. That rule accepts a non-empty
+ * string or a finite number and refuses everything else, in both places it is
+ * implemented -- `readableText` for the entry surfaces and the candidate walk in
+ * `entryHeading` for the activity feed.
+ *
+ * `checkbox` is absent for that reason, and its absence is the point rather than
+ * an oversight: a boolean is a legal `useAsTitle` nomination and a conventional
+ * field can itself be a checkbox, so nominating one here made the field-level
+ * answer disagree with every value-level answer -- the generated card selecting
+ * a column whose value each of those rules then declines, while the same entry
+ * is named by a conventional fallback everywhere else. A type this list admits
+ * but the value rule refuses is a card that names nothing.
+ */
+const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "number",
+  "date",
+  "select",
+  "email",
+  "code",
+  "radio",
+]);
+
 /** Map a Nextly field type onto the coarse type a query validator needs. */
 function toSourceType(fieldType: string): WidgetSourceField["type"] {
   switch (fieldType) {
@@ -97,33 +149,75 @@ function toSourceType(fieldType: string): WidgetSourceField["type"] {
  * config from the top means: a layout group appended below cannot displace the
  * field it shadows.
  */
-function exposedFields(
-  fields: Array<{ name: string; type: string; label?: string }>
-): WidgetSourceField[] {
+/**
+ * The declarations a source actually CARRIES, one per name.
+ *
+ * 🔴 Split out so every question about a field is asked of the SAME
+ * declaration. A collection may declare one name twice, and the two need not
+ * agree: `tags` as `hasMany` and then `tags` as a scalar is a legal config. The
+ * exposed field list kept the first of those while the printable-title filter
+ * was asked of the RAW list, where the second one also gets a vote -- so a name
+ * whose retained declaration stores an array could be nominated as the title,
+ * and the list card printed an array where a name belongs.
+ *
+ * Hidden types are dropped BEFORE a name is claimed, which is deliberate and is
+ * why "first" here means first EXPOSED: a name first declared as a
+ * never-exposed type and later as text is carried by the later declaration,
+ * because the earlier one was never a candidate to begin with.
+ */
+function retainedDeclarations<T extends { name: string; type: string }>(
+  fields: readonly T[]
+): T[] {
   const taken = new Set<string>();
-  const exposed: WidgetSourceField[] = [];
+  const kept: T[] = [];
   for (const field of fields) {
     if (NEVER_EXPOSED_FIELD_TYPES.has(field.type)) continue;
     if (taken.has(field.name)) continue;
     taken.add(field.name);
-    // The label travels with the field. This function REBUILDS each entry
-    // rather than passing it through -- `type` is mapped into the source
-    // vocabulary here -- so anything not named is dropped, which is how the
-    // label went missing between the collection registry and the source in the
-    // first place.
-    exposed.push({
-      name: field.name,
-      type: toSourceType(field.type),
-      ...(field.label !== undefined && { label: field.label }),
-    });
+    kept.push(field);
   }
-  return exposed;
+  return kept;
+}
+
+function exposedFields(
+  fields: Array<{ name: string; type: string; label?: string }>
+): WidgetSourceField[] {
+  // The label travels with the field. This function REBUILDS each entry rather
+  // than passing it through -- `type` is mapped into the source vocabulary
+  // here -- so anything not named is dropped, which is how the label went
+  // missing between the collection registry and the source in the first place.
+  return retainedDeclarations(fields).map(field => ({
+    name: field.name,
+    type: toSourceType(field.type),
+    ...(field.label !== undefined && { label: field.label }),
+  }));
 }
 
 /** One collection, in the shape a widget source is built from. */
 export interface WidgetSourceCollection {
   slug: string;
-  fields: Array<{ name: string; type: string; label?: string }>;
+  fields: Array<{
+    name: string;
+    type: string;
+    label?: string;
+    /** Whether the field stores an ARRAY. A scalar type may still be one. */
+    hasMany?: boolean;
+  }>;
+  /**
+   * What a human calls this collection — the registry's plural label.
+   *
+   * Absent falls back to the slug, which is what every source published before
+   * this was carrying. A collection that never set one has no better answer.
+   */
+  label?: string;
+  /**
+   * The field the collection's author nominated to name its entries
+   * (`admin.useAsTitle`), when they nominated one.
+   *
+   * Carried rather than resolved by the caller, because resolving it needs the
+   * full field list — system columns included — which only the source knows.
+   */
+  useAsTitle?: string;
   /**
    * Whether the collection has `createdAt`/`updatedAt` columns. Absent means
    * ON, which is how `defineCollection` normalizes it and how the registry
@@ -150,10 +244,43 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   if (collection.status === true) systemFields.push(STATUS_FIELD);
 
   const id = `collection:${collection.slug}`;
+  const fields = [
+    ...declared,
+    ...systemFields.filter(field => !seen.has(field.name)),
+  ];
+  // Through the shared rule, with BOTH halves: the author's nomination and the
+  // names it must exist in. Resolved once here so no consumer has to ask again
+  // with only one of them.
+  // Only the fields a card could actually print are candidates. Passing every
+  // name would let the shared rule nominate a structured field, and the entry
+  // list does not behave that way either: it reads the VALUE and falls back
+  // when the nominated one is not readable text. This is that same behaviour,
+  // decided from the declaration instead of from a row.
+  //
+  // Asked of the RETAINED declarations, not of `collection.fields`. A duplicate
+  // name's later declaration is not the one this source carries, so letting it
+  // answer here would qualify a name whose actual declaration stores an array.
+  const printable = new Set(
+    retainedDeclarations(collection.fields)
+      .filter(
+        field => PRINTABLE_FIELD_TYPES.has(field.type) && field.hasMany !== true
+      )
+      .map(field => field.name)
+  );
+  const titleField = entryTitleField(
+    collection.useAsTitle,
+    fields.filter(field => printable.has(field.name)).map(field => field.name)
+  );
 
   return {
     id,
-    label: collection.slug,
+    ...(titleField === undefined ? {} : { titleField }),
+    // What a HUMAN calls this collection, which is what `label` means. The slug
+    // is a storage identifier: a collection whose plural label is "Articles"
+    // was published to the source picker, and to every generated card's title,
+    // as `blog-posts` -- disagreeing with the name used everywhere else in the
+    // admin. The slug remains the identity, in `id`.
+    label: collection.label ?? collection.slug,
     // DERIVED from the id rather than restated beside it. The id's namespace is
     // the canonical identity -- `registerSource` refuses a source whose two
     // disagree -- so writing `"collection"` here as well would be the same fact
@@ -165,10 +292,7 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // for why nothing enforces it.
     requiredPermission: `read-${collection.slug}`,
     supports: ["count", "list"],
-    fields: [
-      ...declared,
-      ...systemFields.filter(field => !seen.has(field.name)),
-    ],
+    fields,
   };
 }
 

@@ -22,6 +22,24 @@ describe("entryHeading", () => {
     expect(entryHeading({ title: "T", name: "N" }, null, "id-1")).toBe("T");
   });
 
+  it("walks the SAME conventional names the field-level rule accepts", () => {
+    // 🔴 One question, one answer. The rule that decides which column a list or
+    // a generated card SELECTS accepts `label`, `subject` and `heading` beside
+    // `title` and `name`, and this walk has to accept the same set: a
+    // collection naming its entries with `subject` takes that field as its
+    // title on the dashboard, and a shorter walk answers the activity feed with
+    // a bare id for the same entry.
+    expect(entryHeading({ subject: "Re: hello" }, null, "id-1")).toBe(
+      "Re: hello"
+    );
+    expect(entryHeading({ heading: "Chapter 1" }, null, "id-1")).toBe(
+      "Chapter 1"
+    );
+    expect(entryHeading({ label: "Draft" }, null, "id-1")).toBe("Draft");
+    // Preference order is preserved: `title` still outranks the newcomers.
+    expect(entryHeading({ subject: "S", title: "T" }, null, "id-1")).toBe("T");
+  });
+
   it("returns `undefined` rather than a placeholder when nothing is usable", () => {
     // The activity feed's case. A heading it invents is worse than none: the
     // row would claim a name the entry never had.

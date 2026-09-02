@@ -176,8 +176,21 @@ function fail(message: string): never {
 }
 
 /** Confirms `id` is present and shaped as `namespace/name`. */
+/**
+ * Whether `id` is a widget id this registry would accept.
+ *
+ * Exported so a caller that DERIVES an id can ask before minting one, rather
+ * than restating the pattern. The dashboard generates a card per collection, and
+ * a slug that cannot produce a valid id has to be skipped — a second copy of
+ * this rule there would accept ids the registry refuses, or refuse ids it
+ * accepts, and either way the two would drift apart silently.
+ */
+export function isValidWidgetId(id: unknown): id is string {
+  return typeof id === "string" && ID_PATTERN.test(id);
+}
+
 function validateId(d: Partial<WidgetDefinition>): void {
-  if (typeof d.id !== "string" || !ID_PATTERN.test(d.id)) {
+  if (!isValidWidgetId(d.id)) {
     fail(
       `id must be namespace/name in lowercase slug form, got ${String(d.id)}`
     );

@@ -11,7 +11,10 @@ vi.mock("../../../di/container", () => ({ container: { get: vi.fn() } }));
 
 import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
-import { refreshCollectionSources } from "../collection-sources";
+import {
+  refreshCollectionSources,
+  setDeferredCollections,
+} from "../collection-sources";
 import {
   clearSources,
   getSource,
@@ -24,6 +27,10 @@ type Row = {
   fields: Array<{ name: string; type: string; label?: string }>;
   timestamps?: boolean;
   status?: boolean;
+  labels?: unknown;
+  admin?: unknown;
+  migrationStatus?: unknown;
+  tableName?: string;
 };
 
 const containerGet = container.get as ReturnType<typeof vi.fn>;
@@ -38,6 +45,28 @@ function registryHolds(rows: Row[]): void {
   });
 }
 
+/**
+ * Makes the registry answer with `rows` AND the database report `tables`.
+ *
+ * The plain `registryHolds` throws on `container.get("adapter")`, which is the
+ * unanswerable-introspection path -- so a test that wants the STRUCTURAL
+ * question asked has to supply a database that can answer it.
+ */
+function registryHoldsWithTables(
+  rows: Row[],
+  tables: string[]
+): { listTables: ReturnType<typeof vi.fn> } {
+  const listTables = vi.fn(async () => tables);
+  containerGet.mockImplementation((name: string) => {
+    if (name === "collectionRegistryService") {
+      return { getAllCollections: async () => rows };
+    }
+    if (name === "adapter") return { listTables };
+    throw new Error(`unexpected container.get("${name}") in this test`);
+  });
+  return { listTables };
+}
+
 /** Makes the registry unreachable, the way a failed read or a cold container is. */
 function registryUnreachable(): void {
   containerGet.mockImplementation(() => {
@@ -48,6 +77,9 @@ function registryUnreachable(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   clearSources();
+  // The refusal set is pinned on `globalThis`, so without this one test's
+  // deferral outlives it and satisfies the next test's assertion.
+  setDeferredCollections([]);
   setNextlyLogger({
     error: () => {},
     warn: () => {},
@@ -372,5 +404,225 @@ describe("fields inside a presentational group are addressable", () => {
     expect(
       getSource("collection:users")?.fields.map(f => f.name)
     ).not.toContain("secret");
+  });
+});
+
+describe("the display label a source takes from the registry", () => {
+  it("uses the collection's plural label", () => {
+    registryHolds([
+      {
+        slug: "blog-posts",
+        labels: { singular: "Article", plural: "Articles" },
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+    return refreshCollectionSources().then(() => {
+      expect(getSource("collection:blog-posts")?.label).toBe("Articles");
+    });
+  });
+
+  it("does not let a WHITESPACE label take the whole install down", async () => {
+    // 🔴 `validateSource` refuses a label that is empty after trimming, and
+    // `defineCollection` preserves `labels.plural: "   "` as written. A check
+    // for `!== ""` therefore accepted it, `registerSource` threw, and this
+    // refresh runs on every workspace, layout and widget-query request -- so one
+    // whitespace label failed all three for everybody.
+    registryHolds([
+      {
+        slug: "posts",
+        labels: { plural: "   " },
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await expect(refreshCollectionSources()).resolves.toBeUndefined();
+    expect(getSource("collection:posts")?.label).toBe("posts");
+  });
+
+  it("trims a label that is merely padded", async () => {
+    // The control: without it the assertion above is satisfied by a reader that
+    // ignores `labels` entirely and always answers with the slug.
+    registryHolds([
+      {
+        slug: "posts",
+        labels: { plural: "  Articles  " },
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")?.label).toBe("Articles");
+  });
+});
+
+describe("a collection whose table is not there yet", () => {
+  it("gets no source, so nothing offers a card that cannot be queried", async () => {
+    // 🔴 A Schema-Builder collection is recorded `pending` and its migration
+    // does not run outside development. The row exists, permission seeding
+    // makes it visible, and the table arrives at the next deploy -- so a source
+    // for it accepts queries that reach a table that is not there, once per
+    // reader, until then.
+    registryHolds([
+      {
+        slug: "drafts",
+        migrationStatus: "pending",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("refuses a PENDING collection even when its table is present", async () => {
+    // 🔴 The refusal is deliberate and is the conservative half of a known
+    // trade. `pending` is also what a Builder collection carries after its
+    // migration HAS run, because nothing marks the row -- so this hides cards
+    // that would work. It hides them rather than publishing a source whose
+    // columns may not exist, which is the failure that cannot be undone by
+    // looking again.
+    registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_something_else"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("withholds a DEFERRED collection even though its old table exists", async () => {
+    // 🔴 The case table existence cannot see. A reload writes the new field list
+    // for EVERY configured collection -- the sync payload is the whole config --
+    // while refusing the DDL for one it classified unsafe. That collection keeps
+    // its OLD table, which exists, beside a NEW field list the table never
+    // received. Verified structurally it would publish a source naming columns
+    // the database does not have, and the query fails after validating.
+    setDeferredCollections(["drafts"]);
+    registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_drafts"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("withholds a DEFERRED collection whose label still claims presence", async () => {
+    // The nastier half: the refusal has to override the LABEL too, not only the
+    // observed table. A collection edited after a healthy apply still carries
+    // `applied` from the previous cycle while its new fields sit unapplied, so a
+    // guard that only overrode the structural answer would publish it.
+    setDeferredCollections(["posts"]);
+    registryHoldsWithTables(
+      [
+        {
+          slug: "posts",
+          tableName: "dc_posts",
+          migrationStatus: "applied",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_posts"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")).toBeUndefined();
+  });
+
+  it("publishes a collection again once the reload stops deferring it", () => {
+    // The control the two refusals need: without it they are satisfied by a
+    // guard that withholds permanently. The label CLAIMS presence throughout,
+    // so the refusal is the only thing withholding this collection, and a later
+    // reload replaces the published set rather than adding to it -- which is
+    // what lifts a refusal with nobody having to clear it.
+    const row = {
+      slug: "posts",
+      tableName: "dc_posts",
+      migrationStatus: "applied",
+      fields: [{ name: "title", type: "text" }],
+      timestamps: true,
+    };
+
+    return (async () => {
+      setDeferredCollections(["posts"]);
+      registryHolds([row]);
+      await refreshCollectionSources();
+      expect(getSource("collection:posts")).toBeUndefined();
+
+      setDeferredCollections([]);
+      await refreshCollectionSources();
+      expect(getSource("collection:posts")).toBeDefined();
+    })();
+  });
+
+  it("DOES give one to a collection whose migration ran", async () => {
+    // The control: without it the refusal above is satisfied by a filter that
+    // drops every collection.
+    registryHolds([
+      {
+        slug: "posts",
+        migrationStatus: "applied",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")).toBeDefined();
+  });
+
+  it("DOES give one to a code-first collection", async () => {
+    // `synced` is what a code-first collection carries: migrations own its
+    // table, so it is present.
+    registryHolds([
+      {
+        slug: "pages",
+        migrationStatus: "synced",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:pages")).toBeDefined();
+  });
+
+  it("DOES give one to a row that predates the status field", async () => {
+    // 🔴 The one place this reads generously rather than closed. The field was
+    // added after rows existed, so a row without it says nothing about its
+    // table -- and those tables do exist. Refusing them would take widgets away
+    // from every collection an older install already had, to guard against a
+    // state they are not in.
+    registryHolds([
+      {
+        slug: "legacy",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:legacy")).toBeDefined();
   });
 });

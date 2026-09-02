@@ -226,6 +226,13 @@ export type { WidgetQuery } from "./domains/widgets/query";
 // copies of that mapping is two answers to one question, and the copies had
 // already drifted -- only one of them existed.
 export { legacySizeToWidgetSize } from "./domains/widgets/definition";
+// Which field NAMES an entry. The admin draws a column with it, the activity
+// feed labels a row with it, and the dashboard's generated list widgets pick a
+// row label with it -- so it is one answer here rather than one per consumer.
+export {
+  COMMON_TITLE_FIELDS,
+  entryTitleField,
+} from "./domains/collections/entry-title";
 // A VALUE, and the only one in this block. The admin batches a dashboard's
 // widgets into requests `POST /api/dashboard/query` will accept, so it needs the
 // number that endpoint refuses above -- and a second copy of it on the client
