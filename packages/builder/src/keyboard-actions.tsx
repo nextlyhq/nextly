@@ -429,16 +429,14 @@ export function useBlockKeyboardActions({
       if (move === null) return;
 
       /*
-       * ASKED BEFORE THE MOVE, which is the whole of this fix.
+       * Asked BEFORE the move, because the op store does not consult the
+       * nesting rule — `ops.ts` holds no reference to it — so a placement the
+       * rule forbids is applied rather than refused.
        *
-       * The op store does not consult the nesting rule — measured, zero
-       * references in `ops.ts` — so a placement the rule forbids is applied
-       * rather than refused. The POINTER route is stopped because
-       * `drop-targets` asks `blockAllowedAt` before a drop resolves; asking
-       * here is the keyboard route's half of that same decision, of that same
-       * function, so the two surfaces cannot disagree about where a block may
-       * go. Without it a keyboard author builds documents a pointer author
-       * cannot, and nothing says so.
+       * This is the keyboard route's half of the decision `drop-targets` makes
+       * for the pointer, of the same function, so the two surfaces cannot
+       * disagree about where a block may go. A keyboard author who could not
+       * be refused here would build documents a pointer author cannot.
        */
       const refusal = nestingRefusalForMove(
         editorNow.document,

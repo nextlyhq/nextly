@@ -380,11 +380,11 @@ describe("useBlockKeyboardActions", () => {
 
   it("REFUSES a move the nesting rule forbids, and says why", () => {
     /*
-     * The gap this closes. A pointer author who drags a block somewhere it
-     * cannot go is shown the reason and the remedy; before this, a keyboard
-     * author pressing the same move got silence — the rule reached one of them
-     * and not the other, which is the failure WCAG 4.1.3 describes and the one
-     * that costs exactly the people the keyboard route exists for.
+     * A pointer author who drags a block somewhere it cannot go is shown the
+     * reason and the remedy. The same move by keyboard must be refused and
+     * explained too: a rule that reaches one route and not the other costs
+     * exactly the people the keyboard route exists for, and a status that
+     * never arrives is the failure WCAG 4.1.3 describes.
      *
      * The nesting source is supplied rather than registered so the refusal is a
      * property of THIS test rather than of whatever the registry happens to
@@ -405,9 +405,9 @@ describe("useBlockKeyboardActions", () => {
 
     /*
      * REFUSED, not merely explained. The store never asks the nesting rule, so
-     * before this the move was applied and the document ended up holding a
-     * placement a drag would have refused. `apply` not being reached is the
-     * assertion that separates stopping it from narrating it.
+     * a move that reaches `apply` is applied — and the document would then hold
+     * a placement a drag refuses. `apply` not being reached is the assertion
+     * that separates stopping the move from narrating it.
      */
     expect(editor.apply).not.toHaveBeenCalled();
     const said = screen.getByRole("status").textContent ?? "";

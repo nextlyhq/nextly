@@ -7,9 +7,9 @@
  * in `ops.ts`, with a control showing the symbol resolves elsewhere in the
  * package. So a placement the rule forbids is not refused at apply time; it is
  * applied. The POINTER route is stopped because `drop-targets` asks
- * `blockAllowedAt` before a drop resolves, and until this module was called
- * before the move rather than after it, the keyboard route asked nobody. A
- * keyboard author could therefore build a document a pointer author cannot.
+ * `blockAllowedAt` before a drop resolves; the keyboard route asks this, before
+ * the move, for the same reason. Without it a keyboard author builds documents
+ * a pointer author cannot.
  *
  * So this is the keyboard route's half of a decision the pointer route already
  * makes, asked of the same function, rather than a second implementation of it:
