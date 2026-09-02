@@ -81,6 +81,7 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
 import { relationKey } from "../../collections/services/collection-relationship-service";
+import { workflowForCollection } from "../../collections/services/collection-workflows";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -1722,6 +1723,10 @@ export class SingleQueryService extends BaseService {
           (singleMeta as { status?: boolean }).status === true,
         overrideAccess: options.overrideAccess === true,
         explicit: options.status,
+        // Singles carry a lifecycle like collections do, and the registry is
+        // keyed by slug for both — so a Single naming a workflow is answered by
+        // its own states rather than by the default pair.
+        workflow: workflowForCollection(slug),
       });
 
       // 1.55. Load the row once for whichever deferred rule needs it, and screen

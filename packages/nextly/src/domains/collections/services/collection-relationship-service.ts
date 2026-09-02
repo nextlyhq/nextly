@@ -81,6 +81,7 @@ import {
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
 import { decodeJsonFieldValues } from "./collection-utils";
+import { workflowForCollection } from "./collection-workflows";
 
 /**
  * System-entity columns that hold secrets and must never ride along a
@@ -1442,6 +1443,10 @@ export class CollectionRelationshipService extends BaseService {
       // The LIFECYCLE question, not the trust question — see widensLifecycle.
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
+      // The TARGET collection's workflow, not the one being read from: an
+      // expansion is a read of the target, and answering it with the source's
+      // vocabulary would admit or hide the wrong rows.
+      workflow: workflowForCollection(targetCollection),
     });
     return statusFilter;
   }

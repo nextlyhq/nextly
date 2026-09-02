@@ -37,6 +37,7 @@ import type { CollectionAccessControl } from "../../domains/auth/services/access
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
+import type { ContentWorkflow } from "../../lib/content-states";
 import type { RevalidateConfig } from "../../revalidation/types";
 import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
@@ -740,6 +741,18 @@ export interface SearchConfig {
  * };
  * ```
  */
+/**
+ * A collection's lifecycle, when it is more than on-or-off.
+ *
+ * Its own type rather than an inline object so a config can name it, and so the
+ * shape has somewhere to grow when workflows authored in the admin arrive by
+ * name alongside the value form.
+ */
+export interface CollectionStatusConfig {
+  /** The states these documents move through. Build it with `defineWorkflow`. */
+  workflow: ContentWorkflow;
+}
+
 export interface CollectionConfig {
   /**
    * Unique identifier for the collection.
@@ -802,7 +815,23 @@ export interface CollectionConfig {
    *
    * @default false
    */
-  status?: boolean;
+  /**
+   * The lifecycle a collection's documents move through, when the two-state
+   * default is not enough.
+   *
+   * `status: true` keeps the pair every collection has always had — a draft
+   * nobody outside may see and a published document anybody may. Naming a
+   * workflow instead declares the states this collection's documents move
+   * through, and the read path asks that workflow which of them are public
+   * rather than comparing against a word.
+   *
+   * The workflow is passed as a VALUE rather than by name. A config shares one
+   * by importing the const, which is type-checked, jump-to-definition and
+   * impossible to misspell — where a string would be resolved at boot and fail
+   * with a name nobody can find. Workflows authored in the admin arrive by name
+   * later, and this option widens to accept both.
+   */
+  status?: boolean | CollectionStatusConfig;
 
   /**
    * Enable content versioning (revision history) for this collection.
@@ -1237,3 +1266,32 @@ export function defineCollection(
 export type { FieldConfig };
 export type { BeforeOperationHandler, HookHandler };
 export type { CollectionAccessControl };
+
+/**
+ * Whether this collection carries a lifecycle at all.
+ *
+ * The question the SCHEMA asks — it decides whether the table gets a `status`
+ * column — and it is true for both forms of the option. Answered here rather
+ * than by each caller testing `=== true`, which is what stopped being correct
+ * the moment the option could also be an object.
+ */
+export function collectionHasLifecycle(
+  status: boolean | CollectionStatusConfig | undefined
+): boolean {
+  return status === true || (typeof status === "object" && status !== null);
+}
+
+/**
+ * The workflow this collection declared, or `undefined` for the default pair.
+ *
+ * The question the READ PATH asks. Separate from the one above because they
+ * have different answers for `status: true`: that collection has a lifecycle
+ * and has named no workflow.
+ */
+export function collectionWorkflow(
+  status: boolean | CollectionStatusConfig | undefined
+): ContentWorkflow | undefined {
+  return typeof status === "object" && status !== null
+    ? status.workflow
+    : undefined;
+}
