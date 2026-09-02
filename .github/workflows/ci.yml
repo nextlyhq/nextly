@@ -507,11 +507,15 @@ jobs:
       #
       # ui / storage-s3 / storage-uploadthing have no test files yet; listed so
       # they gate automatically the moment they gain one.
+      # admin-css is listed because its suite compiles a fixture stylesheet, and
+      # what that compile emits depends on the repository around it rather than
+      # on this package alone - so it is a suite an unrelated change can turn
+      # red, which is exactly the kind nothing should have to remember to run.
       # NOT gated on Build, unlike the four steps around it: turbo.jsonc gives
       # `test` `dependsOn: ["^build"]`, so `turbo test` rebuilds the dependency
       # subgraph of whatever it is filtered to. A Build failure in a package
-      # none of these seventeen depends on - an app, which is a leaf - would
-      # otherwise silence all seventeen suites for no reason, and a failure in
+      # none of these depends on - an app, which is a leaf - would otherwise
+      # silence every suite listed here for no reason, and a failure in
       # one they DO depend on is reported as an attributed `#build` failure
       # here rather than as the type-aware noise the others would produce.
       - name: Test
@@ -526,6 +530,7 @@ jobs:
           --filter=@nextlyhq/plugin-seo
           --filter=@nextlyhq/plugin-sdk
           --filter=@nextlyhq/ui
+          --filter=@nextlyhq/admin-css
           --filter=@nextlyhq/adapter-drizzle
           --filter=@nextlyhq/adapter-postgres
           --filter=@nextlyhq/adapter-mysql
@@ -539,7 +544,7 @@ jobs:
           TURBO_CACHE_DIR: .turbo
 
       # The playground is an APP, so `turbo test`'s filter list above — which
-      # names the seventeen publishable packages — never reaches it, and its
+      # names publishable packages only — never reaches it, and its
       # suites ran nowhere. That was already true of its dev-tooling tests
       # (doctor, reset, the style-fixture manifest); it now also covers the
       # seeded block-page fixture, whose whole job is to fail when a block is
