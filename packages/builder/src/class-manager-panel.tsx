@@ -251,6 +251,24 @@ export function ClassManagerPanel({
 }: ClassManagerPanelProps): React.ReactElement {
   const [filter, setFilter] = React.useState<ClassFilter>("all");
   /*
+   * The supplied ids as a set, built once and handed to the rows.
+   *
+   * Two consumers ask "is this class supplied": each row, to decide whether it
+   * draws a delete control, and the lede, to decide whether it may offer
+   * deletion at all. One set, so the sentence and the controls cannot disagree.
+   */
+  const supplied = React.useMemo(
+    () => new Set(suppliedClassIds ?? []),
+    [suppliedClassIds]
+  );
+  /*
+   * Whether deletion is reachable ANYWHERE, which the callback alone does not
+   * answer: a row draws its delete control only when it is not supplied.
+   */
+  const anyDeletable =
+    onDelete !== undefined &&
+    (library ?? []).some(entry => !supplied.has(entry.id));
+  /*
    * The name search, which is what makes every class REACHABLE.
    *
    * The list is capped so a library near its ceiling does not mount two
@@ -329,11 +347,7 @@ export function ClassManagerPanel({
        * saying so the absent button reads as a missing feature rather than as a
        * split someone chose.
        */}
-      <p className="nx-classman__lede">
-        <b>A class is a saved set of styles you can reuse.</b>{" "}
-        {onDelete === undefined ? "Rename them" : "Rename and clear them out"}{" "}
-        here; you apply one beside the style controls.
-      </p>
+      <ClassesLede anyDeletable={anyDeletable} />
       <FilterChips active={active} filters={offerable} onChange={setFilter} />
       <ClassSearch query={query} onChange={setQuery} />
       <ClassList
@@ -343,8 +357,9 @@ export function ClassManagerPanel({
         pendingSlugs={pendingSlugs}
         pageSize={pageSize}
         library={library}
-        supplied={new Set(suppliedClassIds ?? [])}
+        supplied={supplied}
         usageKnown={usageKnown}
+        anyDeletable={anyDeletable}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -493,6 +508,38 @@ function EmptyClasses({
 }
 
 /**
+ * What a class is, and what this panel can do with one.
+ *
+ * Its own component so `ClassManagerPanel` stays under the cognitive gate, and
+ * because the sentence is conditional on something the panel derives: the copy
+ * and the row controls have to agree, so the condition travels with the words.
+ */
+function ClassesLede({
+  anyDeletable,
+}: {
+  /*
+   * Whether ANY row can actually be deleted, which is not the same question
+   * as whether the host passed `onDelete`.
+   *
+   * A row renders its delete control only when it is not supplied — a
+   * supplied class is labelled "Default" and `isSupplied` takes precedence
+   * over the callback — so a library made entirely of supplied classes
+   * offers deletion nowhere even with the callback wired. Deriving the
+   * sentence from the callback alone promised the action for that host
+   * shape. This asks the predicate the rows themselves ask.
+   */
+  anyDeletable: boolean;
+}): React.JSX.Element {
+  return (
+    <p className="nx-classman__lede">
+      <b>A class is a saved set of styles you can reuse.</b>{" "}
+      {anyDeletable ? "Rename and clear them out" : "Rename them"} here; you
+      apply one beside the style controls.
+    </p>
+  );
+}
+
+/**
  * How many rows the manager mounts at once.
  *
  * A library may hold `MAX_NAMED_CLASSES`, and the `All` filter matches every
@@ -531,6 +578,7 @@ function ClassList({
   library,
   supplied,
   usageKnown,
+  anyDeletable,
   onRename,
   onDelete,
 }: {
@@ -549,6 +597,14 @@ function ClassList({
   library: readonly NamedClass[];
   supplied: ReadonlySet<string>;
   usageKnown: boolean;
+  /**
+   * Whether deletion is reachable on ANY row, derived once by the panel.
+   *
+   * Passed rather than recomputed from `onDelete` and `supplied` here: the
+   * lede and this list must give one answer, and two derivations of "can
+   * anything be deleted" would drift the moment either changed.
+   */
+  anyDeletable: boolean;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
@@ -575,7 +631,7 @@ function ClassList({
       <EmptyClasses
         searching={searching}
         filter={filter}
-        canDelete={onDelete !== undefined}
+        canDelete={anyDeletable}
       />
     );
   }

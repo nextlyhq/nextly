@@ -152,35 +152,57 @@ export interface TokenRow {
 }
 
 /** The tokens of one kind, in stored order, as rows. */
+export function tokenRows(
+  tokens: SiteTokenSet | undefined,
+  mode: TokenMode = "light"
+): readonly TokenRow[] {
+  const all = tokens?.tokens ?? [];
+  // Built ONCE for the whole set rather than rediscovered per row. Asking
+  // "who else compiles to my custom property" with a linear scan inside a
+  // per-row call makes the projection quadratic, and a DTCG import is not
+  // bounded to a size where that stays invisible.
+  const claimed = firstByProperty(all);
+  // Indexed against the WHOLE list, so `at` addresses the stored position
+  // rather than a position within any later grouping or filter.
+  const seen = new Map<string, number>();
+  return all.map((token, at) => {
+    const identity = tokenIdentity(token);
+    const nth = seen.get(identity) ?? 0;
+    seen.set(identity, nth + 1);
+    return rowOf(
+      token,
+      at,
+      nth === 0 ? identity : `${identity}#${nth}`,
+      claimed,
+      mode
+    );
+  });
+}
+
+/**
+ * The rows of ONE kind.
+ *
+ * Derived from {@link tokenRows} rather than projecting again, so a caller
+ * asking for every kind pays for one pass over the set instead of one per
+ * kind, and the two can never disagree about a row's key or its issues.
+ */
 export function tokenRowsFor(
   tokens: SiteTokenSet | undefined,
   kind: TokenKind,
   mode: TokenMode = "light"
 ): readonly TokenRow[] {
-  const all = tokens?.tokens ?? [];
-  // Indexed against the WHOLE list before filtering, so `at` addresses the
-  // stored position rather than a position within this tab.
-  const seen = new Map<string, number>();
-  return all
-    .map((token, at) => {
-      const identity = tokenIdentity(token);
-      const nth = seen.get(identity) ?? 0;
-      seen.set(identity, nth + 1);
-      return { token, at, key: nth === 0 ? identity : `${identity}#${nth}` };
-    })
-    .filter(entry => entry.token.kind === kind)
-    .map(entry => rowOf(entry.token, entry.at, entry.key, all, mode));
+  return tokenRows(tokens, mode).filter(row => row.kind === kind);
 }
 
 function rowOf(
   token: SiteToken,
   at: number,
   key: string,
-  among: readonly SiteToken[],
+  claimed: ReadonlyMap<string, SiteToken>,
   mode: TokenMode
 ): TokenRow {
   const own = token.values[mode];
-  const collision = collisionFor(token, among);
+  const collision = collisionFor(token, claimed);
   return {
     at,
     key,
@@ -224,14 +246,30 @@ function issuesOf(token: SiteToken): readonly string[] {
  * `tokenCustomProperty` composes the key, so the normalisation stays the
  * engine's; only the pairwise comparison is done here.
  */
+/**
+ * Which token each custom property belongs to, by first claim.
+ *
+ * The compiler writes the FIRST token to claim a property and drops the rest,
+ * so "who owns this name" is one question about the whole set. Answering it
+ * once here is what keeps the projection linear.
+ */
+function firstByProperty(
+  among: readonly SiteToken[]
+): ReadonlyMap<string, SiteToken> {
+  const claimed = new Map<string, SiteToken>();
+  for (const token of among) {
+    const property = tokenCustomProperty(tokenIdentity(token), "");
+    if (!claimed.has(property)) claimed.set(property, token);
+  }
+  return claimed;
+}
+
 function collisionFor(
   token: SiteToken,
-  among: readonly SiteToken[]
+  claimed: ReadonlyMap<string, SiteToken>
 ): string | undefined {
   const property = tokenCustomProperty(tokenIdentity(token), "");
-  const first = among.find(
-    other => tokenCustomProperty(tokenIdentity(other), "") === property
-  );
+  const first = claimed.get(property);
   if (first === undefined || first === token) return undefined;
   return `"${token.name}" and "${first.name}" both become "${property}", so only "${first.name}" is written.`;
 }

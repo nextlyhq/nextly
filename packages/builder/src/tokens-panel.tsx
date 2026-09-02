@@ -53,7 +53,7 @@ import {
   renameToken,
   setTokenValue,
   tokenNameIssue,
-  tokenRowsFor,
+  tokenRows,
   type TokenRow,
 } from "./tokens-studio";
 import {
@@ -158,12 +158,33 @@ export function TokensPanel({
    * place at all.
    */
   const needle = query.trim().toLowerCase();
-  const groups = TOKEN_KINDS.map(kind => ({
-    kind,
-    rows: tokenRowsFor(tokens, kind, mode).filter(
-      row => needle === "" || row.name.toLowerCase().includes(needle)
-    ),
-  })).filter(group => group.rows.length > 0);
+  /*
+   * ONE projection of the set, held across keystrokes.
+   *
+   * The grouped shape reads every kind at once where the tabs read only the
+   * open one, so projecting per kind meant a pass over the whole set eight
+   * times, on every render — and a search re-ran all of it per character. A
+   * DTCG import is not bounded to a size where that stays invisible.
+   */
+  const rows = React.useMemo(() => tokenRows(tokens, mode), [tokens, mode]);
+  /*
+   * Grouped in one pass over that projection, in `TOKEN_KINDS` order so the
+   * sections keep the order the vocabulary declares rather than the order the
+   * site happens to store its tokens in.
+   */
+  const groups = React.useMemo(() => {
+    const byKind = new Map<TokenKind, TokenRow[]>();
+    for (const row of rows) {
+      if (needle !== "" && !row.name.toLowerCase().includes(needle)) continue;
+      const held = byKind.get(row.kind);
+      if (held === undefined) byKind.set(row.kind, [row]);
+      else held.push(row);
+    }
+    return TOKEN_KINDS.map(kind => ({
+      kind,
+      rows: byKind.get(kind) ?? [],
+    })).filter(group => group.rows.length > 0);
+  }, [rows, needle]);
 
   if (tokens === undefined) {
     return (
@@ -196,10 +217,17 @@ export function TokensPanel({
        * of vocabulary, and never said what any of it does to the site. An
        * author who does not already know the word has nothing to go on, and
        * this is the surface where they would have learned it.
+       *
+       * It names the ACTIVE MODE rather than promising the whole site changes.
+       * A token with distinct light and dark values is edited one mode at a
+       * time, so "every block changes" would describe renderings this edit
+       * deliberately leaves alone — and naming the mode is also the only thing
+       * on screen that explains what the switch above is for.
        */}
       <p className="nx-tokens__lede">
-        <b>Tokens are your site&rsquo;s named values.</b> Change one here and
-        every block using it changes with it, on every page.
+        <b>Tokens are your site&rsquo;s named values.</b> Every block using one
+        follows it, on every page. You are editing the{" "}
+        {mode === "dark" ? "dark" : "light"} values; switch above for the other.
       </p>
       {issue === undefined ? null : (
         /*
@@ -309,8 +337,8 @@ function EmptyTokens({ searching }: { searching: boolean }): React.JSX.Element {
       <p className="nx-tokens__empty-head">No tokens yet.</p>
       <p className="nx-inspector__note">
         A token names one value — a colour, a size, a shadow — so every block
-        can point at it instead of repeating it. Change it once and the whole
-        site follows.
+        can point at it instead of repeating it, and you change them all from
+        one place.
       </p>
     </div>
   );
@@ -721,6 +749,15 @@ function ModeSwitch({
 }
 
 /** Every token of one kind, with the way to add another. */
+/**
+ * How many rows of one kind mount before the author asks for more.
+ *
+ * Matches `class-manager-panel`'s default. Large enough that an ordinary site
+ * never sees the control, small enough that a thousand-token import draws a
+ * panel rather than blocking the editor.
+ */
+const TOKEN_PAGE_SIZE = 50;
+
 function TokenList({
   rows,
   tokens,
@@ -742,11 +779,23 @@ function TokenList({
   mode: TokenMode;
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
+  /*
+   * How many PAGES are open, not how many rows — the same shape
+   * `class-manager-panel` uses, and for the same reason: a token table has no
+   * upper bound an author controls, a DTCG file can carry thousands, and every
+   * row here mounts two inputs plus a preview. Rendering all of them is what
+   * makes a large import freeze the editor, and a search cannot be relied on
+   * to reach the tail because a query matching most names narrows nothing.
+   */
+  const [pagesOpen, setPagesOpen] = React.useState(1);
+  const limit = pagesOpen * TOKEN_PAGE_SIZE;
+  const shown = rows.slice(0, limit);
+  const hidden = rows.length - shown.length;
   return (
     <div className="nx-tokens__list">
       {rows.length === 0 ? null : (
         <ul>
-          {rows.map(row => (
+          {shown.map(row => (
             <li key={row.key}>
               <TokenEntry
                 row={row}
@@ -758,6 +807,17 @@ function TokenList({
             </li>
           ))}
         </ul>
+      )}
+      {hidden === 0 ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="nx-tokens__more"
+          onClick={() => setPagesOpen(current => current + 1)}
+        >
+          {`Show ${Math.min(hidden, TOKEN_PAGE_SIZE)} more`}
+        </Button>
       )}
     </div>
   );

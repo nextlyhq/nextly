@@ -1080,16 +1080,35 @@ describe("the panel explains itself", () => {
     expect(screen.queryByText(/or clear out/i)).toBeNull();
     expect(screen.getByText(/Rename them\s+here/i)).toBeTruthy();
 
+    // Must-differ: a callback AND a row that can actually take it.
     view.rerender(
       <ClassManagerPanel
-        library={[]}
+        library={[cls("id-own", "own-class", 1)]}
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
         onDelete={vi.fn()}
       />
     );
-    expect(screen.getByText(/clear them out\s+here/i)).toBeTruthy();
+    expect(screen.getByText(/clear them out/i)).toBeTruthy();
+
+    /*
+     * And the shape the callback alone could not see: every class SUPPLIED, so
+     * each row is labelled "Default" and draws no delete control even though
+     * the host wired one. Reading `onDelete` alone promised deletion here.
+     */
+    view.rerender(
+      <ClassManagerPanel
+        library={[cls("id-own", "own-class", 1)]}
+        usage={undefined}
+        documentClassIds={[]}
+        suppliedClassIds={["id-own"]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/clear them out/i)).toBeNull();
+    expect(screen.getByText(/Rename them/i)).toBeTruthy();
   });
 
   it("keeps the filters, because they answer questions that OVERLAP", () => {

@@ -1071,8 +1071,46 @@ describe("the panel explains itself and shows the whole set", () => {
     // The panel opened with a mode switch, a transfer control and eight tabs of
     // vocabulary, and never a sentence about what any of it does to the site.
     mount(MIXED);
-    expect(screen.getByText(/named values/i)).toBeTruthy();
-    expect(screen.getByText(/every block using it/i)).toBeTruthy();
+    /*
+     * Read off the LEDE itself rather than the document. "Light" is also the
+     * mode switch's own button, so a document-wide match for it passes on a
+     * panel whose lede says nothing about the mode at all.
+     */
+    const lede = document.querySelector(".nx-tokens__lede");
+    expect(lede?.textContent).toMatch(/named values/i);
+    expect(lede?.textContent).toMatch(/every block using one/i);
+    /*
+     * And it NAMES the mode, because an edit reaches only the values of the
+     * mode on screen. "every block changes" described renderings a light edit
+     * deliberately leaves alone.
+     */
+    expect(lede?.textContent).toMatch(/editing the light values/i);
+    expect(lede?.textContent).not.toMatch(/changes with it, on every page/i);
+  });
+
+  it("BOUNDS how many rows of one kind it mounts", () => {
+    /*
+     * The grouped shape reads every kind at once where the tabs read only the
+     * open one, and a DTCG import is not bounded to a size where mounting them
+     * all stays invisible — each row carries two inputs and a preview. Same
+     * cap and same control as `class-manager-panel`, for the same reason.
+     */
+    const many: SiteTokenSet = {
+      tokens: Array.from({ length: 130 }, (_, at) => ({
+        name: `color.c${at}`,
+        kind: "color" as const,
+        values: { light: "#111111" },
+      })),
+    };
+    mount(many);
+    // The heading still reports the WHOLE group, not the mounted slice —
+    // otherwise the count would tell an author 50 tokens exist.
+    expect(screen.getByText("130")).toBeTruthy();
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
+
+    const more = screen.getByRole("button", { name: /Show 50 more/i });
+    fireEvent.click(more);
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(100);
   });
 
   it("groups every kind that HAS tokens into one list", () => {
@@ -1124,7 +1162,10 @@ describe("the panel explains itself and shows the whole set", () => {
     mount({ tokens: [] });
     expect(screen.getByText(/no tokens yet/i)).toBeTruthy();
     expect(
-      screen.getByText(/change it once and the whole site follows/i)
+      screen.getByText(/point at it instead of repeating it/i)
     ).toBeTruthy();
+    // Not the absolute claim: an edit reaches one mode, so "the whole site
+    // follows" promised more than a single edit does.
+    expect(screen.queryByText(/the whole site follows/i)).toBeNull();
   });
 });
