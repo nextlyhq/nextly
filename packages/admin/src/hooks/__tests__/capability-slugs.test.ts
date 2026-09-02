@@ -41,16 +41,34 @@ describe("an UMBRELLA grant reveals what it covers", () => {
     expect(from("manage-media").canViewMedia).toBe(true);
   });
 
-  it("any api-key or email grant reveals settings", () => {
+  it("an api-key or email grant that opens a screen reveals settings", () => {
     for (const slug of [
       "read-api-keys",
-      "create-api-keys",
       "update-api-keys",
-      "delete-api-keys",
       "manage-email-providers",
       "manage-email-templates",
     ]) {
       expect(from(slug).canViewSettings, slug).toBe(true);
+    }
+  });
+
+  /**
+   * The other half, and the reason this list is not simply every slug naming
+   * the resource. `canViewSettings` shows the rail entry AND opens
+   * `/admin/settings`, whose page is General Settings — which answers to
+   * `manage-settings` and returns 403 without it. So a grant belongs here only
+   * if it opens a destination IN the panel.
+   *
+   * `create-` and `delete-api-keys` do not: the panel's only api-key entry is
+   * the list, and listing answers to read-or-update. Including them showed a
+   * rail entry whose every destination turned the reader away — they landed on
+   * General Settings and got a 403, which is not access they lose here, it is
+   * a dead end they no longer see. The create form remains reachable by URL,
+   * and its route still admits them.
+   */
+  it("an api-key grant that opens nothing in the panel does not", () => {
+    for (const slug of ["create-api-keys", "delete-api-keys"]) {
+      expect(from(slug).canViewSettings, slug).toBe(false);
     }
   });
 

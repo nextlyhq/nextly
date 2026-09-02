@@ -849,11 +849,7 @@ function ClassRowView({
           pendingSlug={pendingSlug}
           row={row}
         />
-        <DeclarationSummary
-          styles={styles}
-          slug={row.slug}
-          styleContext={styleContext}
-        />
+        <DeclarationSummary styles={styles} styleContext={styleContext} />
         <UsageNote row={row} usageKnown={usageKnown} />
         {isSupplied ? (
           // Named rather than shown disabled. A greyed button invites an
@@ -1176,19 +1172,17 @@ function DeleteConfirm({
  */
 function DeclarationSummary({
   styles,
-  slug,
   styleContext,
 }: {
   styles: NodeStyles | undefined;
-  slug: string;
   styleContext: StyleCompileContext | undefined;
 }): React.ReactElement | null {
   const summary = React.useMemo(
     () =>
       styles === undefined
         ? undefined
-        : classDeclarations(styles, slug, styleContext),
-    [styles, slug, styleContext]
+        : classDeclarations(styles, styleContext),
+    [styles, styleContext]
   );
   if (summary === undefined) return null;
   if (summary.shown.length === 0 && summary.elsewhere === 0) return null;
