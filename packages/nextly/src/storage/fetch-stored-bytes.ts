@@ -166,7 +166,7 @@ export async function fetchStoredBytes(
  *   that means the failure arrived before any status did, which says nothing
  *   about whether the object was oversized.
  */
-function classifyFetchFailure(
+export function classifyFetchFailure(
   error: unknown
 ): "absent" | "oversized" | "unknown" {
   if (!(error instanceof SafeFetchError)) return "unknown";

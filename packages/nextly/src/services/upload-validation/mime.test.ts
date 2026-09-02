@@ -22,6 +22,22 @@ describe("DEFAULT_ALLOWED_MIME_TYPES", () => {
   it("contains image/svg+xml (allowed; sanitized downstream)", () => {
     expect(DEFAULT_ALLOWED_MIME_TYPES).toContain("image/svg+xml");
   });
+
+  it("allows the two web font formats, and no other font format", () => {
+    /*
+     * A precondition rather than a nicety: a `@font-face` may not name another
+     * host, so a font has to be uploaded before it can be used at all, and an
+     * allowlist without these refuses the upload that makes one usable.
+     *
+     * The negative half is the part worth keeping. TTF and OTF have no
+     * conversion step here, so allowing them would store and serve several
+     * times the bytes of the same face as WOFF2 with nothing reporting it.
+     */
+    expect(DEFAULT_ALLOWED_MIME_TYPES).toContain("font/woff2");
+    expect(DEFAULT_ALLOWED_MIME_TYPES).toContain("font/woff");
+    expect(DEFAULT_ALLOWED_MIME_TYPES).not.toContain("font/ttf");
+    expect(DEFAULT_ALLOWED_MIME_TYPES).not.toContain("font/otf");
+  });
 });
 
 describe("resolveAllowlist", () => {

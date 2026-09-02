@@ -35,6 +35,21 @@ export const DEFAULT_ALLOWED_MIME_TYPES: readonly string[] = [
   "audio/mpeg",
   "audio/wav",
   "audio/ogg",
+  /*
+   * Web font formats only, and deliberately just these two.
+   *
+   * A `@font-face` may not name another host — a rule the styling engine
+   * enforces rather than suggests — so a site's own fonts have to be uploaded
+   * before they can be used at all, and an allowlist without them refuses the
+   * upload that makes a font usable.
+   *
+   * TTF and OTF are left out because nothing here converts them: they would be
+   * accepted, stored and served at several times the size of the same face as
+   * WOFF2, to every visitor, with no signal that anything was wrong. A refusal
+   * a designer can act on is better than a silent cost they cannot see.
+   */
+  "font/woff2",
+  "font/woff",
 ];
 
 export type MimeValidationResult =
