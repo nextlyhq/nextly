@@ -1,16 +1,17 @@
+import type { PluginMetadata } from "@admin/types/branding";
 import type { StandalonePluginSummary } from "@admin/types/route-section";
 
 /**
  * A standalone plugin plus the display label its panel may carry.
  *
- * Intersected with the shared summary rather than restated, because the route
- * registry names that type too and a second declaration of the same shape is
- * what lets the two drift. Only `appearance` is added: it is the one fact this
- * heading needs that the section resolver does not.
+ * Both halves are derived rather than restated. `StandalonePluginSummary` is
+ * deliberately narrow — its own docblock says so, to let callers pass a
+ * literal — so it is intersected rather than widened, and `appearance` is
+ * picked off `PluginMetadata` rather than re-spelled, so it tracks that type if
+ * it gains a field.
  */
-export type LabelledStandalonePlugin = StandalonePluginSummary & {
-  appearance?: { label?: string };
-};
+export type LabelledStandalonePlugin = StandalonePluginSummary &
+  Pick<PluginMetadata, "appearance">;
 
 /**
  * The heading a standalone plugin's panel carries.
@@ -19,6 +20,14 @@ export type LabelledStandalonePlugin = StandalonePluginSummary & {
  * slug is the last resort so a panel is never headed by nothing. Returns the
  * empty string when the selected rail item is not a standalone plugin at all,
  * which is what the caller renders as "no heading".
+ *
+ * `||` rather than `??`, deliberately, and this is the rule's disagreement with
+ * itself rather than a copied habit: `label` is free-form plugin config, so a
+ * plugin can ship `label: ""`, and under `??` that empty string is a value and
+ * heads the panel with nothing. Six other sites spell this rule and four of
+ * them use `??`, so a reader finding them should not assume this one is the
+ * stale copy. Converging all seven is filed separately; it spans the plugins
+ * pages, not just the sidebar.
  *
  * @module components/layout/sidebar/lib/resolve-standalone-label
  */

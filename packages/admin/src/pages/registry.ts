@@ -396,8 +396,16 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Settings routes
   // Any grant that reaches SOMETHING in the panel may open the panel's own URL.
   // Narrowing it to `manage-settings` turned the rail entry into a door that
-  // closed in the face of anyone whose only destination was further in; the
-  // page itself sends them on to the first one they can reach.
+  // closed in the face of anyone whose only destination was further in.
+  //
+  // This guard admits them; it does not place them. The page behind it is
+  // General Settings, whose own query answers to `manage-settings`, so a reader
+  // admitted here without that grant sees a 403 rather than a redirect. Nothing
+  // sends them on — an earlier version of this comment said the page did, and
+  // it never has. The rail is what keeps them off this URL: `resolveSettingsLanding`
+  // picks the first destination in the panel they can actually open, so the
+  // fallthrough to `/admin/settings` is reached only by a reader who has no
+  // reachable destination at all.
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
