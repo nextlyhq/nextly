@@ -302,10 +302,18 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       columns={columns}
       rows={paginatedData}
       loading={isLoading}
-      onRowClick={key => {
-        // Only active keys are editable; revoked keys are read-only.
-        if (key.isActive) onEdit(key);
-      }}
+      onRowClick={
+        // The row is a second door to the same edit route, so it answers to
+        // the same grant as the Edit item. Without this a read-only viewer
+        // opens the editor by clicking the row — or by activating it from the
+        // keyboard — and is refused there. Revoked keys are read-only for
+        // everyone.
+        canEdit
+          ? key => {
+              if (key.isActive) onEdit(key);
+            }
+          : undefined
+      }
       primaryColumn="name"
       rowActions={rowActions}
       registryKey="api-keys"

@@ -14,7 +14,7 @@
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { render, screen, waitFor } from "@admin/__tests__/utils";
+import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 import type { ApiKeyMeta } from "@admin/services/apiKeyApi";
 
 import { ApiKeyTable } from "../ApiKeyTable";
@@ -34,11 +34,14 @@ const KEY: ApiKeyMeta = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
+const onEditSpy = vi.fn();
+
 function renderTable(gates: { canEdit: boolean; canRevoke: boolean }) {
+  onEditSpy.mockClear();
   render(
     <ApiKeyTable
       data={[KEY]}
-      onEdit={vi.fn()}
+      onEdit={onEditSpy}
       onRevoke={vi.fn()}
       canEdit={gates.canEdit}
       canRevoke={gates.canRevoke}
@@ -76,6 +79,31 @@ describe("ApiKeyTable row actions", () => {
     await openRowMenu();
     expect(screen.queryByText("Edit")).toBeNull();
     expect(screen.queryByText("Revoke")).toBeNull();
+  });
+
+  /**
+   * The row itself is a second door to the edit route. Gating only the menu
+   * item leaves a read-only viewer able to open the editor by clicking the
+   * row, or by activating it from the keyboard, and be refused there.
+   */
+  it("does not make rows activate the editor for a read-only viewer", async () => {
+    renderTable({ canEdit: false, canRevoke: false });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    // Scoped to the table: this list also renders a card view, so an unscoped
+    // query matches the same key twice.
+    const table = screen.getByRole("table");
+    await user.click(within(table).getByText("CI Deploy"));
+    // The positive control below proves this query DOES reach a clickable row
+    // when permitted, so a silent no-op here is the gate rather than a miss.
+    expect(onEditSpy).not.toHaveBeenCalled();
+  });
+
+  it("activates the editor from the row when permitted", async () => {
+    renderTable({ canEdit: true, canRevoke: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    const table = screen.getByRole("table");
+    await user.click(within(table).getByText("CI Deploy"));
+    expect(onEditSpy).toHaveBeenCalled();
   });
 
   /**
