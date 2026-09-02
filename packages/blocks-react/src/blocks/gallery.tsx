@@ -40,22 +40,19 @@
  * `minmax(180px, 1fr)` makes a single track wider than its parent and the
  * pictures overflow. `min(180px, 100%)` lets the last one fit.
  *
- * **The gap is `space.4` again, and still no aspect ratio.** This block shipped
- * with `{ $token: "space.4" }` and its tiles rendered touching: `compileSiteSheet`
- * — the only thing that turns a token set into CSS — had no consumers, so the
- * reference compiled to a `var()` with nothing behind it, the declaration was
- * invalid at computed-value time, and `gap` fell back to `normal`, which is zero
- * for a grid. It was changed to the literal `1rem` "until the site stylesheet is
- * wired into the render path". It now is — `PageRenderer` compiles one by
- * default — so the reference resolves and the literal has been retired. The
- * rendered value is unchanged, because `1rem` is what `space.4` declares; what
- * changes is that a site retuning its spacing scale now reaches these tiles.
- *
- * A default `aspect-ratio` was considered and refused: it would crop every
- * picture in the library to one shape, and the crop is invisible in the editor's
- * own preview because the same rule applies there. Uniform tiles are a real
- * want, so `aspectRatio` stays available on the image through its own supports
- * rather than being imposed by the group.
+ * **The gap is a plain length, and no aspect ratio.** `defaultSiteTokens()`
+ * NAMES `space.4` but guarantees nothing: `compileSiteSheet` — the only thing
+ * that turns a token set into CSS — has zero consumers outside `blocks-engine`,
+ * and `--site-` appears in no source file outside the engine (positive control:
+ * `--nx-` appears in 103). This block shipped with `{ $token: "space.4" }` and
+ * its tiles rendered touching, because an unresolved `var()` makes the
+ * declaration invalid at computed-value time and `gap` falls back to `normal`,
+ * which is zero for a grid. `1rem` is what `space.4` itself declares, so the
+ * value survives the change back once tokens are emitted. A default `aspect-ratio` was considered and refused: it
+ * would crop every picture in the library to one shape, and the crop is
+ * invisible in the editor's own preview because the same rule applies there.
+ * Uniform tiles are a real want, so `aspectRatio` stays available on the image
+ * through its own supports rather than being imposed by the group.
  *
  * @module blocks/library/gallery
  */
@@ -88,13 +85,11 @@ export const GALLERY_BASE_STYLES = {
     base: {
       display: "grid",
       gridTemplateColumns: "repeat(auto-fit, minmax(min(180px, 100%), 1fr))",
-      // A TOKEN, which this could not be until the site sheet reached the
-      // render path: before that a `{ $token }` compiled to a `var()` with
-      // nothing behind it and the gap fell back to `normal` — zero for a grid,
-      // which is how this block shipped with its tiles touching. `space.4` is
-      // in the guaranteed default set and resolves to the `1rem` this line
-      // previously hardcoded, so the rendered gap is unchanged.
-      gap: { $token: "space.4" },
+      // A LENGTH, not a token: nothing emits token CSS yet, so a `{ $token }`
+      // reference compiles to a `var()` with nothing behind it and the gap
+      // silently falls back to `normal`, which for a grid is zero. `1rem` is
+      // what `space.4` itself declares, so the value survives the change back.
+      gap: "1rem",
     },
   },
 } as const;

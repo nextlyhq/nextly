@@ -79,27 +79,24 @@ describe("core/gallery", () => {
   });
 
   it("spaces its tiles with a value that actually resolves", () => {
-    // This test required `space.4`, then required its ABSENCE, and now requires
-    // it again — so the reason is worth stating rather than the value.
+    // This test used to require `space.4` and was named "uses only guaranteed
+    // tokens, so it resolves under every theme". The `--nx-` half was right and
+    // is kept; the token half asserted a premise that does not hold.
     //
-    // The token half was never wrong in principle; it asserted a premise that
-    // did not hold. `compileSiteSheet` — the only thing that turns a token set
-    // into CSS — had no consumers, so `{ $token: "space.4" }` compiled to
-    // `var(--site-space-4)`, nothing defined it, the declaration was invalid at
-    // computed-value time, and `gap` fell back to `normal`: zero for a grid. The
-    // tiles touched. The literal `1rem` was the correct answer to that.
+    // `defaultSiteTokens()` guarantees NOTHING today: `compileSiteSheet` — the
+    // only thing that turns a token set into CSS — has zero consumers outside
+    // `blocks-engine`, and `--site-` appears in no source file outside the
+    // engine (positive control: `--nx-` appears in four). So a `{ $token }`
+    // compiled to `var(--site-space-4)`, nothing defined it, the declaration
+    // was invalid at computed-value time, and `gap` fell back to `normal` —
+    // zero for a grid. The tiles touched.
     //
-    // `PageRenderer` now compiles a site sheet by default, so the premise holds
-    // and the token is correct again. What this asserts is therefore the
-    // REFERENCE; that the reference resolves is asserted where it can actually
-    // be seen — against a rendered page in `columns.test.tsx`, and for every
-    // declaring block by the guaranteed-token suite in `base-styles.test.tsx`.
+    // The ratchet that catches this class for every block lives in
+    // `base-styles.test.tsx`; this asserts the value this block settled on.
     const declared = JSON.stringify(GALLERY_BASE_STYLES);
 
-    expect(declared).toContain('"$token":"space.4"');
-    // Must-differ: the literal it replaced is gone, so this cannot pass on a
-    // declaration carrying both.
-    expect(declared).not.toContain("1rem");
+    expect(declared).toContain("1rem");
+    expect(declared).not.toContain("$token");
     // The ADMIN namespace, which this renderer never emits — so a rule using it
     // resolves to nothing on a published page while looking right in an admin
     // preview. Three separate blocks reached for it independently.

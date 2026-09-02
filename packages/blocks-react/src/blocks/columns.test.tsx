@@ -144,51 +144,54 @@ describe("the columns pair", () => {
        */
       const css = compiledCss();
 
-      expect(css).toContain("gap: var(--site-space-4)");
+      expect(css).toContain("gap: 1rem");
       // Must-differ: the row is still a grid, so this is about the gutter and
       // not about the layout having been replaced by something simpler.
       expect(css).toContain("display: grid");
     });
 
-    it("names a token the RENDERED page actually defines", () => {
+    it("keeps the gutter on a STORED stylesheet handed back with no context", () => {
       /*
-       * The half the assertion above cannot make, and the half that matters.
+       * The path a token reference does not survive, and the reason this gutter
+       * is a length.
        *
-       * `resolvePageStyles` compiles the page tier alone, so it emits the
-       * `var()` whether or not anything defines it — which is exactly the state
-       * `core/gallery` and `core/accordion` shipped in. Both declared
-       * `{ $token: "space.4" }`, both compiled to `var(--site-space-4)`, and
-       * both rendered their children touching, because an unresolved custom
-       * property makes the declaration invalid at computed-value time and `gap`
-       * falls back to `normal` — zero for a grid.
+       * A consumer with no write path compiles once and stores the artifact,
+       * then hands it back as `styles`. `PageRenderer` withholds the site sheet
+       * when no breakpoints are stated, so nothing defines `--site-*` — while
+       * the stored page CSS still carries whatever it referenced. A `{ $token }`
+       * gutter therefore arrives as a `var()` with nothing behind it, which is
+       * invalid at computed-value time, and `gap` falls back to `normal`: zero
+       * for a grid, which is the exact defect this block was fixed for.
        *
-       * The custom-property name is READ OUT of the gutter rather than written
-       * here. A literal `--site-space-4:` would be satisfied by the site sheet
-       * emitting the default set, which it does whatever this block references
-       * — so the assertion would hold while the gutter pointed at a token
-       * nothing defines. Verified: naming `space.nonesuch` passes the literal
-       * form of this test and fails the form below.
+       * Measured, not assumed: `core/card` is live in that state today, its
+       * `background-color: var(--site-color-surface)` reaching this path with
+       * the property undefined.
+       *
+       * So this asserts the gutter as a VALUE on the rendered page. It fails the
+       * moment the gutter becomes a token again, which is the point — the
+       * migration is waiting on the definition reaching every path a reference
+       * does, and this is what says so.
        */
+      const resolver = createBlockResolver([...coreBlocks]);
+      const stored = resolvePageStyles(
+        DOC,
+        undefined,
+        {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        resolver
+      );
       const markup = renderToStaticMarkup(
-        <PageRenderer
-          document={DOC}
-          blocks={createBlockResolver([...coreBlocks])}
-          styleContext={{
-            breakpoints: {
-              viewport: [{ id: "base", label: "Desktop" }],
-              container: [],
-            },
-          }}
-        />
+        <PageRenderer document={DOC} blocks={resolver} styles={stored} />
       );
 
-      const reference = markup.match(/gap:\s*var\((--site-[a-z0-9-]+)\)/);
-
-      // Must-be-found: the gutter reached the page AS a token reference. Without
-      // this the derivation below would have nothing to check and pass vacuously.
-      expect(reference).not.toBeNull();
-      // The definition, named by the reference itself.
-      expect(markup).toContain(`${reference?.[1]}:`);
+      expect(markup).toContain("gap: 1rem");
+      // Must-differ: no unresolved custom property is carrying the gutter, which
+      // is the failure this case exists to refuse rather than merely to describe.
+      expect(markup).not.toMatch(/gap:\s*var\(/);
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {

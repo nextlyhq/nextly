@@ -115,24 +115,19 @@ describe("the accordion pair", () => {
   });
 
   it("separates sections with spacing, never a hardcoded divider colour", () => {
-    // The divider reasoning below is unchanged and was right. The SPACING has
-    // now moved twice: it required `space.4`, then required a literal, and
-    // requires the token again.
+    // The divider reasoning below is unchanged and was right. What changed is
+    // the SPACING: this required `space.4`, and a token resolves to nothing.
     //
-    // `compileSiteSheet` — the only thing that turns a token set into CSS — had
-    // no consumers, so `gap: { $token: "space.4" }` compiled to
+    // `defaultSiteTokens()` guarantees nothing today — `compileSiteSheet` has
+    // zero consumers outside `blocks-engine` and `--site-` appears in no source
+    // file outside it, so `gap: { $token: "space.4" }` compiled to
     // `var(--site-space-4)`, nothing defined it, and the gap fell back to
     // `normal`: zero for a grid. The sections touched, which is precisely the
-    // separation this test exists to guarantee. `PageRenderer` now compiles a
-    // site sheet by default, so the reference resolves and the literal is
-    // retired. That it resolves is asserted against a RENDERED page in
-    // `columns.test.tsx`; a declaration cannot show it.
+    // separation this test exists to guarantee.
     const declared = JSON.stringify(ACCORDION_BASE_STYLES);
 
-    expect(declared).toContain('"$token":"space.4"');
-    // Must-differ: the literal it replaced is gone, so this cannot pass on a
-    // declaration carrying both.
-    expect(declared).not.toContain("1rem");
+    expect(declared).toContain("1rem");
+    expect(declared).not.toContain("$token");
     // The older block drew its dividers with `var(--nx-color-border)` — the
     // ADMIN namespace, which this renderer never emits, so that rule resolves
     // to nothing on a published page while looking right in an admin preview.
