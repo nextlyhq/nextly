@@ -126,6 +126,40 @@ export interface JobRow {
   updatedAt: Date;
 }
 
+/**
+ * The columns {@link JobsRepository.listRecent} actually selects.
+ *
+ * The single source for both the query's projection and the type it returns.
+ * They were two lists before — `Omit<JobRow, "input">` beside a projection that
+ * also left out `runAsUserId`, `dedupeKey` and `lockedBy` — so the type promised
+ * three non-optional fields the query never returns, and a caller reading one
+ * got `undefined` from a property the compiler said was a `string`. Adding a
+ * column here now widens both at once; there is no second list to forget.
+ */
+const SUMMARY_COLUMNS = [
+  "id",
+  "slug",
+  "state",
+  "attemptCount",
+  "runAt",
+  "nextAttemptAt",
+  "lockedUntil",
+  "lastError",
+  "createdAt",
+  "updatedAt",
+] as const satisfies readonly (keyof JobRow)[];
+
+/**
+ * A job as a monitor needs it: exactly the columns the summary query selects.
+ *
+ * Projected from {@link JobRow} through {@link SUMMARY_COLUMNS}, so a column
+ * renamed or removed there is a compile error rather than a field that quietly
+ * arrives undefined. `input` is excluded because it is arbitrary caller data of
+ * unbounded size that no list consumer reads; the other absentees are identity
+ * and lease-holder columns a monitor has no use for.
+ */
+export type JobSummaryRow = Pick<JobRow, (typeof SUMMARY_COLUMNS)[number]>;
+
 export interface NewJob {
   slug: string;
   input: unknown;
@@ -278,6 +312,48 @@ export class JobsRepository {
    * `nextly_webhook_deliveries` selects its due rows the same way, for the same
    * reason.
    */
+  /**
+   * The most recently touched jobs, for somebody watching the queue.
+   *
+   * Ordered by `updatedAt` rather than `createdAt`: what an operator wants to
+   * see first is what most recently HAPPENED, and a job enqueued days ago that
+   * failed a minute ago is the row that matters. Creation order would bury it
+   * under newer work that has not run.
+   *
+   * Bounded by `limit` with no total alongside it, deliberately. The seam this
+   * repository is written against offers no count, and a second query to
+   * produce one would be a page-count that can disagree with the page it
+   * labels. A caller that needs "the last N" is served; a caller that needs
+   * true pagination should say so and get an offset-based method with a count
+   * the same query produced.
+   *
+   * Terminal rows are pruned on a retention window — seven days by default —
+   * so this is a recent-history view by construction rather than an archive.
+   * A caller must not read an absent job as one that never ran.
+   */
+  async listRecent(input: {
+    limit: number;
+    /** Restrict to these states. Omitted means every state. */
+    states?: readonly JobState[];
+  }): Promise<JobSummaryRow[]> {
+    // PROJECTED, deliberately. `input` is arbitrary caller data of unbounded
+    // size and no consumer of this method reads it, so selecting it would let
+    // anyone opening a monitor pull up to `limit` complete payloads out of the
+    // database and into memory for nothing.
+    return this.db.select<JobSummaryRow>(JOBS, {
+      columns: [...SUMMARY_COLUMNS],
+      ...(input.states === undefined || input.states.length === 0
+        ? {}
+        : {
+            where: {
+              and: [{ column: "state", op: "IN", value: [...input.states] }],
+            },
+          }),
+      orderBy: [{ column: "updatedAt", direction: "desc" }],
+      limit: input.limit,
+    });
+  }
+
   async findDue(input: { now: Date; limit: number }): Promise<JobRow[]> {
     return this.db.select<JobRow>(JOBS, {
       where: {
