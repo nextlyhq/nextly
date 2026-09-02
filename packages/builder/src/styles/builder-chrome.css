@@ -3158,10 +3158,10 @@
   overflow: hidden;
   border: 1px solid var(--nx-border);
   border-radius: var(--radius-sm);
-  background: var(--nx-surface);
+  background: var(--nx-builder-surface);
   font-size: 0.6875rem;
   line-height: 1;
-  color: var(--nx-fg);
+  color: var(--nx-builder-text);
 }
 
 /*
@@ -3173,7 +3173,7 @@
   width: 0.75rem;
   height: 0.75rem;
   border-radius: 2px;
-  background: var(--nx-bg);
+  background: var(--nx-builder-surface-raised);
 }
 
 /* A length, measured against the slot and stopping at it. */
@@ -3186,7 +3186,7 @@
      to the end of the slot and says only "at least this". */
   max-width: 100%;
   border-radius: 1px;
-  background: var(--nx-fg);
+  background: var(--nx-builder-text);
 }
 
 /*
@@ -3199,7 +3199,7 @@
   width: 0.375rem;
   height: 0.375rem;
   border-radius: 50%;
-  background: var(--nx-fg);
+  background: var(--nx-builder-text);
   animation-name: nx-token-tick;
   animation-iteration-count: infinite;
   animation-direction: alternate;
@@ -3240,7 +3240,7 @@
   margin: 0;
   font-size: 0.6875rem;
   line-height: 1.4;
-  color: var(--nx-muted-fg);
+  color: var(--nx-builder-text-muted);
 }
 
 /*
