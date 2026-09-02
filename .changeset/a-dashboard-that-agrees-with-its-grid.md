@@ -48,3 +48,21 @@ And a default arrangement is now bounded by the same limit a save is: an install
 declaring more widgets than a single write may carry was answered with a default
 layout the server would refuse, so the reader's first gesture failed and the
 dashboard could not be arranged at all.
+
+A widget id names one declaration, chosen the same way on both sides. Two
+plugins contributing the same id resolve to the first declared, and a
+declaration the reader may not see no longer passes its id to the next one --
+which had let a second plugin's ungated card render exactly where the first
+plugin's gated one was withheld.
+
+A declared size or height must be a non-empty string. An empty one was read as
+"unstated" by the server and as "stated" by the grid, so a card was stored at one
+width and drawn at another; a non-string height reached a placement the next
+save would refuse. Both are refused at boot now, where the author can still see
+the mistake, and an unfamiliar value like a newer core's size still passes.
+
+The default arrangement is bounded by what one save may carry, and the bound is
+applied to what the reader can actually see -- widgets they have no access to no
+longer consume it. Past that limit the picker still lists what is left, says the
+dashboard is full, and refuses the add rather than building an arrangement that
+could never be saved.

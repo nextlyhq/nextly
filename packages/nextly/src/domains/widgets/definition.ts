@@ -233,6 +233,44 @@ function archetypeStanding(value: unknown): ArchetypeStanding {
     : { kind: "newer" };
 }
 
+/**
+ * Why a widget's declared geometry is the wrong SHAPE, or `undefined`.
+ *
+ * `defaultSize` and `defaultHeight` are strings in every version, and a blank
+ * one names nothing in any of them -- so this is a shape rule rather than a
+ * vocabulary rule, shared by both declaration channels, and an unknown value
+ * like `"xxl"` still passes. That is the distinction that lets it live outside
+ * the registry: a contribution may come from a plugin built against a newer
+ * core, and refusing an unfamiliar size would drop a card over a value the
+ * admin already survives.
+ *
+ * Blank is REFUSED rather than read as absent, because the two channels
+ * disagreed about which it was. The server's summary reader treats `""` as
+ * unstated and falls back to the deprecated `size` alias; the admin's resolver
+ * uses `??`, for which `""` is present, and keeps it -- so a declaration
+ * carrying `defaultSize: ""` beside `size: "half"` was stored as `lg` and drawn
+ * full width, and the card changed width when the arrangement arrived and
+ * changed back when it was re-added. Refusing the declaration is the only place
+ * that mistake is still visible to the author who made it.
+ *
+ * A non-string height is the same hole one field over: it reached the resolved
+ * widget, and re-adding that card copied it into a placement the next write
+ * refuses -- an ordinary edit turned into a draft that could never be saved.
+ */
+function geometryShapeProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  for (const field of ["defaultSize", "defaultHeight"] as const) {
+    const value = widget[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string") {
+      return `${field}, when given, must be a string`;
+    }
+    if (value === "") return `${field}, when given, must not be empty`;
+  }
+  return undefined;
+}
+
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
@@ -254,6 +292,9 @@ export function widgetValueProblem(
   if (widget.chrome !== undefined && typeof widget.chrome !== "string") {
     return "chrome, when given, must be a string";
   }
+
+  const geometry = geometryShapeProblem(widget);
+  if (geometry !== undefined) return geometry;
 
   // A permission slug is a STRING in every version -- a newer core may mint new
   // slugs, but it cannot make a slug stop being a string -- so this is shape

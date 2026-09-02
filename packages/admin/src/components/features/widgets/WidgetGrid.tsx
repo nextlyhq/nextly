@@ -303,6 +303,7 @@ export function WidgetGrid() {
             title: byId.get(widgetId)?.title ?? widgetId,
           }))}
           onAdd={editor.add}
+          atCapacity={editor.atCapacity}
         />
       ) : null}
     </div>

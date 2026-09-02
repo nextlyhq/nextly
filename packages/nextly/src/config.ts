@@ -232,6 +232,11 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
 // would send a batch the server rejects the day the two diverged. Its module has
 // no imports, so taking it here costs a `nextly.config.ts` nothing.
 export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
+// Also a VALUE, and for the same reason. The layout endpoint refuses a
+// submission carrying more placements than this, so the editor has to know the
+// number to stop a reader building an arrangement that can never be saved --
+// and a second copy of it on the client is a second answer that drifts.
+export { MAX_PLACEMENTS } from "./domains/widgets/layout";
 export type {
   WidgetOp,
   WidgetSourceField,

@@ -12,6 +12,7 @@ import { protectedApi } from "@admin/lib/api/protectedApi";
 import { registerCoreComponent } from "@admin/lib/plugins/component-registry-internal";
 import type { AdminBranding } from "@admin/types/branding";
 import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
+import { MAX_PLACEMENTS } from "nextly/config";
 
 import { WidgetGrid } from "../../WidgetGrid";
 
@@ -647,6 +648,42 @@ describe("cancelling after a write failed", () => {
       expect(screen.queryByTestId("dashboard-edit-error")).toBeNull()
     );
   });
+});
+
+describe("an arrangement that already holds as many cards as a write may carry", () => {
+  /** `MAX_PLACEMENTS` placed cards, with one more offered by the picker. */
+  function atCapacity() {
+    const ids = Array.from({ length: MAX_PLACEMENTS }, (_, i) => `core/w${i}`);
+    mockBranding = branding([...ids, "core/surplus"]);
+    layoutResponse = layout(
+      ids.map((id, i) => ({ id: `p${i}`, widgetId: id, order: i * 10 })),
+      { available: ["core/surplus"] }
+    );
+  }
+
+  it("refuses the add rather than building a draft that cannot be saved", async () => {
+    // 🔴 An install declaring more widgets than one submission may hold offers
+    // the surplus through `available`, so every picker button built a
+    // 201-placement draft the server was always going to refuse -- and the
+    // reader met a generic "could not be saved" naming no limit they knew about.
+    atCapacity();
+    renderGrid();
+    const user = await beginEditing();
+
+    const add = await screen.findByTestId("add-widget-core/surplus");
+    expect(add).toBeDisabled();
+    expect(screen.getByTestId("add-widget-at-capacity")).toBeInTheDocument();
+
+    // The surplus is still LISTED. Hiding it would remove the widget from the
+    // one place it is discoverable, which is what the picker exists to prevent.
+    expect(add).toBeInTheDocument();
+  });
+
+  // The REFUSAL itself is asserted against `addPlacement` in
+  // `layout-editor.test.ts`, not here. A test driving the disabled button
+  // cannot reach the guard -- the click never fires -- so it passed with the
+  // guard deleted, which is no coverage at all. The control that can fail is
+  // the one on the pure function.
 });
 
 describe("an arrangement with nothing left on it", () => {
