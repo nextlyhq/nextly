@@ -14,6 +14,77 @@ import { cn } from "@admin/lib/utils";
 import type { PaginationProps } from "./types";
 
 /**
+ * What the control says about the rows, which is the part a reader takes at
+ * face value.
+ *
+ * Its own component because the question it answers has three outcomes and the
+ * control around it has none: an unknown total, an empty list, and a range.
+ * Inline, that is three nested conditionals inside a body that is already long.
+ *
+ * ADDRESSABLE, via `data-slot`. The landmark also contains the page-size
+ * selector, whose label carries the word "page", so a query made against the
+ * landmark as a whole cannot tell this line's text from the selector's — it
+ * has to be reachable on its own.
+ */
+function PaginationSummary({
+  currentPage,
+  itemLabel,
+  pageSize,
+  totalItems,
+  totalPages,
+}: {
+  currentPage: number;
+  itemLabel: string;
+  pageSize: number;
+  totalItems: number | undefined;
+  totalPages: number;
+}): React.JSX.Element {
+  /*
+   * An absent total is not an empty one: a caller that cannot count says
+   * nothing about how many rows exist, and gets the page-of-pages form.
+   */
+  if (totalItems === undefined) {
+    return (
+      <div
+        className="whitespace-nowrap order-2 @2xl/content:order-1"
+        data-slot="pagination-summary"
+      >
+        Page <span className="font-semibold">{currentPage + 1}</span> of{" "}
+        <span className="font-semibold">{totalPages}</span>
+      </div>
+    );
+  }
+
+  /*
+   * A RANGE only exists when there are rows to bound. Its start is
+   * `currentPage * pageSize + 1`, which is 1 on the first page whatever the
+   * total, while its end is clamped to the total — so an empty list read
+   * "Showing 1-0 of 0", a range whose start is past its end, describing a
+   * first row that is not there.
+   *
+   * Said as a count rather than a range, because that is what an empty list
+   * has. "Showing 0-0" would be arithmetically tidy and still answer a
+   * question nobody asked.
+   */
+  return (
+    <div
+      className="whitespace-nowrap order-2 @2xl/content:order-1"
+      data-slot="pagination-summary"
+    >
+      {totalItems === 0 ? (
+        <>No {itemLabel}</>
+      ) : (
+        <>
+          Showing {currentPage * pageSize + 1}-
+          {Math.min((currentPage + 1) * pageSize, totalItems)} of {totalItems}{" "}
+          {itemLabel}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * Pagination Component
  *
  * A reusable pagination component with page controls, page size selector, and smart page numbering.
@@ -125,78 +196,6 @@ import type { PaginationProps } from "./types";
  * />
  * ```
  */
-/**
- * What the control says about the rows, which is the part a reader takes at
- * face value.
- *
- * Its own component because the question it answers has three outcomes and the
- * control around it has none: an unknown total, an empty list, and a range.
- * Inline, that is three nested conditionals inside a body that is already long.
- *
- * ADDRESSABLE, via `data-slot`. The landmark also contains the page-size
- * selector, whose label carries the word "page" — so an assertion made against
- * the whole landmark matches that text and passes whatever this line says,
- * which is how a test written for this line came to pass on a render that had
- * lost it entirely.
- */
-function PaginationSummary({
-  currentPage,
-  itemLabel,
-  pageSize,
-  totalItems,
-  totalPages,
-}: {
-  currentPage: number;
-  itemLabel: string;
-  pageSize: number;
-  totalItems: number | undefined;
-  totalPages: number;
-}): React.JSX.Element {
-  /*
-   * An absent total is not an empty one: a caller that cannot count says
-   * nothing about how many rows exist, and gets the page-of-pages form.
-   */
-  if (totalItems === undefined) {
-    return (
-      <div
-        className="whitespace-nowrap order-2 @2xl/content:order-1"
-        data-slot="pagination-summary"
-      >
-        Page <span className="font-semibold">{currentPage + 1}</span> of{" "}
-        <span className="font-semibold">{totalPages}</span>
-      </div>
-    );
-  }
-
-  /*
-   * A RANGE only exists when there are rows to bound. Its start is
-   * `currentPage * pageSize + 1`, which is 1 on the first page whatever the
-   * total, while its end is clamped to the total — so an empty list read
-   * "Showing 1-0 of 0", a range whose start is past its end, describing a
-   * first row that is not there.
-   *
-   * Said as a count rather than a range, because that is what an empty list
-   * has. "Showing 0-0" would be arithmetically tidy and still answer a
-   * question nobody asked.
-   */
-  return (
-    <div
-      className="whitespace-nowrap order-2 @2xl/content:order-1"
-      data-slot="pagination-summary"
-    >
-      {totalItems === 0 ? (
-        <>No {itemLabel}</>
-      ) : (
-        <>
-          Showing {currentPage * pageSize + 1}-
-          {Math.min((currentPage + 1) * pageSize, totalItems)} of {totalItems}{" "}
-          {itemLabel}
-        </>
-      )}
-    </div>
-  );
-}
-
 export const Pagination = React.forwardRef<HTMLElement, PaginationProps>(
   (
     {

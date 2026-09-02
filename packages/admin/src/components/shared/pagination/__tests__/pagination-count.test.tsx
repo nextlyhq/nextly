@@ -78,10 +78,10 @@ describe("the count line", () => {
 
     /*
      * On the summary ELEMENT, not on the landmark. The landmark also contains
-     * the page-size selector, whose label reads "Rows per page" — measured,
-     * an assertion for "Page" against the landmark passes even when this line
-     * has been replaced by a broken count, which is what the first version of
-     * this test did.
+     * the page-size selector, whose label reads "Rows per page", so an
+     * assertion for "Page" made against the landmark is satisfied by the
+     * selector alone — it holds even with this line replaced by a broken
+     * count, or removed. The exact text of the element is what separates them.
      */
     const summary = container.querySelector('[data-slot="pagination-summary"]');
     expect(summary?.textContent).toBe("Page 2 of 7");
