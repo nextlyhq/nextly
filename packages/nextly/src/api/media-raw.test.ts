@@ -12,7 +12,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { container } from "../di/container";
 import { NextlyError } from "../errors/nextly-error";
+import { DEFAULT_READ_MAX_BYTES } from "../storage/fetch-stored-bytes";
 
 import { WEB_FONT_MIME_TYPES } from "../services/upload-validation/web-fonts";
 
@@ -75,11 +77,12 @@ async function getRaw(
   );
 }
 
-function storedAs(mimeType: string): void {
+function storedAs(mimeType: string, size = WOFF2_BYTES.length): void {
   mocks.mediaService.findById.mockResolvedValue({
     id: "m1",
     filename: "2026/04/face.woff2",
     mimeType,
+    size,
   });
 }
 
@@ -91,6 +94,7 @@ const WOFF2_BYTES = Buffer.concat([
 
 beforeEach(() => {
   vi.clearAllMocks();
+  container.clear();
   mocks.manager.getAdapterForCollection.mockReturnValue(mocks.adapter);
   mocks.adapter.read.mockResolvedValue(WOFF2_BYTES);
 });
@@ -105,6 +109,111 @@ describe("the public byte route", () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(
       new Uint8Array(WOFF2_BYTES)
     );
+  });
+
+  it("answers a blank 404 for a missing row raised by ANOTHER bundled copy", async () => {
+    /*
+     * A route handler and the shared media service can come from different
+     * server bundles, and two copies of this package define two distinct
+     * classes — so `instanceof` fails for an error this package raised. The
+     * absence then escaped to the generic handler, which answers with a
+     * structured problem document, while a present-but-non-public row answers
+     * with a blank 404. Being able to tell those apart is the one thing this
+     * route promises an anonymous caller it will not allow.
+     *
+     * The double carries the cross-realm brand — the same registered symbol a
+     * second copy would set — and is deliberately NOT an instance of the class
+     * this module imported, which is the whole point.
+     */
+    const fromAnotherBundle = Object.assign(new Error("no such row"), {
+      [Symbol.for("nextly/NextlyError")]: true,
+      code: "NOT_FOUND",
+    });
+    expect(fromAnotherBundle instanceof NextlyError).toBe(false);
+    mocks.mediaService.findById.mockRejectedValue(fromAnotherBundle);
+
+    const response = await getRaw("m1");
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("");
+  });
+
+  it("reads up to the size the installation agreed to STORE", async () => {
+    /*
+     * The serving bound was a constant while the upload cap is configurable,
+     * so a font accepted at 12MB under a 20mb policy was refused by this route
+     * on every request — permanently, with a 413 the author cannot act on.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "20mb" } },
+    }));
+    storedAs("font/woff2");
+
+    expect((await getRaw("m1")).status).toBe(200);
+    expect(mocks.adapter.read).toHaveBeenCalledWith(
+      "2026/04/face.woff2",
+      expect.objectContaining({ maxBytes: 20 * 1024 * 1024 })
+    );
+  });
+
+  it("still serves a font STORED under a cap the install has since lowered", async () => {
+    /*
+     * The policy governs what may be written next; it does not describe what
+     * was accepted historically. An install that lowers `fileSize` would
+     * otherwise strand every larger font already in the store — permanently,
+     * on a route that cannot explain itself — so the row's own size is part
+     * of the bound.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "1mb" } },
+    }));
+    storedAs("font/woff2", 2 * 1024 * 1024);
+
+    expect((await getRaw("m1")).status).toBe(200);
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(2 * 1024 * 1024);
+    // Not the lowered policy, which would have refused the stored object.
+    expect(options.maxBytes).not.toBe(1024 * 1024);
+  });
+
+  it("keeps the configured cap when the row understates its object", async () => {
+    /*
+     * The other term, and the reason the bound is not the row's size alone: a
+     * row written before the size was taken from the validated bytes can
+     * record less than the object holds, and trusting it would refuse the file
+     * the wider cap exists to serve.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "20mb" } },
+    }));
+    storedAs("font/woff2", 1);
+
+    expect((await getRaw("m1")).status).toBe(200);
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(20 * 1024 * 1024);
+  });
+
+  it("falls back to the default bound when no cap is configured", async () => {
+    /*
+     * The control: an assertion on the configured number alone is satisfied by
+     * a route that passes whatever it is handed, so the unconfigured case has
+     * to answer differently.
+     */
+    storedAs("font/woff2");
+
+    expect((await getRaw("m1")).status).toBe(200);
+    const [, options] = mocks.adapter.read.mock.calls[0] as [
+      string,
+      { maxBytes: number },
+    ];
+    expect(options.maxBytes).toBe(DEFAULT_READ_MAX_BYTES);
+    expect(options.maxBytes).not.toBe(20 * 1024 * 1024);
   });
 
   it("REFUSES a type outside the servable set, and says nothing about it", async () => {

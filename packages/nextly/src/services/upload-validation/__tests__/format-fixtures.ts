@@ -78,6 +78,20 @@ export const OGG_VORBIS: Buffer = oggPage(
 );
 
 /**
+ * A PDF, complete enough to be recognised as one: the header carries the
+ * signature, and a trailing comment makes each copy distinguishable without
+ * making it a different format.
+ *
+ * `%` opens a comment in PDF syntax, so `marker` can be anything a caller
+ * needs to tell two uploads apart.
+ *
+ * @param marker - Text distinguishing this copy from another
+ */
+export function pdfDocument(marker = ""): Buffer {
+  return Buffer.from(`%PDF-1.4\n%${marker}\n%%EOF\n`, "ascii");
+}
+
+/**
  * HTML, which carries no signature at all — so a sniffer cannot identify it
  * under any claim, and it is the shape that reaches storage when silence from
  * the sniffer is read as agreement.

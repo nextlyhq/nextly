@@ -25,11 +25,11 @@ import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { RequestContext } from "../services/shared";
 import { canonicalMimeType } from "../services/upload-validation/mime";
+import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
 import {
   matchesWebFontSignature,
   WEB_FONT_MIME_TYPES,
 } from "../services/upload-validation/web-fonts";
-import { DEFAULT_READ_MAX_BYTES } from "../storage/fetch-stored-bytes";
 import { readStoredMediaBytes } from "../storage/read-stored-media";
 import { getMediaStorage } from "../storage/storage";
 
@@ -92,7 +92,16 @@ export async function handleServeMediaBytes(
      * the second into the first would answer a visitor "no such font" during an
      * outage — a cache could then hold that answer long after the outage ended.
      */
-    if (error instanceof NextlyError && error.code === "NOT_FOUND") {
+    /*
+     * Branded, not `instanceof`. A route handler and the shared media service
+     * can be instantiated from different server bundles, and two copies of this
+     * package produce two distinct classes — so the check fails for an error
+     * this package raised, the absence escapes to the generic handler, and it
+     * answers with a structured problem document where a present-but-private
+     * row answers with a blank 404. Those two being distinguishable is the one
+     * thing this route promises not to do.
+     */
+    if (NextlyError.isNotFound(error)) {
       return notFound();
     }
     throw error;
@@ -119,10 +128,27 @@ export async function handleServeMediaBytes(
    * produces a relative path that `safeFetch` refuses. Every backend fails,
    * including the local one this route was supposed to work on first.
    */
+  /*
+   * The smallest bound that cannot refuse an object this product legitimately
+   * stored, which needs BOTH terms:
+   *
+   * - The row's own recorded size, because the policy describes what may be
+   *   written NEXT and not what was accepted historically. Lowering
+   *   `security.limits.fileSize` would otherwise strand every larger font
+   *   already in the store, permanently, on a route with no way to say so.
+   * - The current cap, because a row written before the size was taken from
+   *   the validated bytes can understate its object, and a bound that trusts
+   *   an understated number refuses the very file it was widened to serve.
+   *
+   * A constant was neither, and refused a font accepted moments earlier under
+   * a configured cap larger than it. Both numbers are written by this product
+   * rather than supplied by a caller: the media services record the length of
+   * the bytes they actually stored.
+   */
   const bytes = await readStoredMediaBytes(
     getMediaStorage().getAdapterForCollection(MEDIA_COLLECTION),
     media.filename,
-    DEFAULT_READ_MAX_BYTES
+    Math.max(media.size, resolveUploadPolicy().maxSize)
   );
   // The row outlived its object. Same answer as a row that never existed,
   // because from outside they are the same thing: there is no font here.
