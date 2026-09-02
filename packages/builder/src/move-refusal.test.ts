@@ -69,6 +69,37 @@ describe("explaining a refused move", () => {
   });
 });
 
+it("refuses on the SLOT's allow-list, and names what the slot takes", () => {
+  /*
+   * The other half of the rule, and the half whose wording differs.
+   *
+   * `blockAllowedAt` asks two questions — the child saying where it makes
+   * sense (`parentsOf`) and the container saying what it holds
+   * (`slotAllowOf`) — and `drag-refusal` keeps their answers apart because
+   * `permitted` is two different facts under one field name. A slot refusal
+   * names what the SLOT admits; a parent refusal names the containers the
+   * MOVING BLOCK may sit inside. Announcing one as the other tells an author
+   * something about the region that was never measured.
+   *
+   * Without this the slot path is reachable in production and exercised by
+   * nothing: every other case here goes through `parentsOf`.
+   */
+  const wording = nestingRefusalForMove(
+    documentOf(),
+    "text",
+    { parentId: "box", slot: "header", index: 0 },
+    {
+      parentsOf: () => undefined,
+      slotAllowOf: () => ["acme/heading"],
+    }
+  );
+
+  expect(wording?.headline).toMatch(/this slot does not take/i);
+  // "Takes" — a statement about the SLOT, which is true only for this reason.
+  expect(wording?.remedy).toMatch(/^Takes /);
+  expect(wording?.remedy).toContain("Heading");
+});
+
 describe("permitting, rather than inventing a refusal", () => {
   it("PERMITS a placement the rule allows, rather than refusing it", () => {
     /*
