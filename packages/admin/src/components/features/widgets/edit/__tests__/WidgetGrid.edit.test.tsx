@@ -495,6 +495,89 @@ describe("a conflict", () => {
       "widget-cell-core/a",
     ]);
   });
+
+  it("Reload takes the server's arrangement and dismisses itself", async () => {
+    // 🔴 Reload only invalidated the query. The editor still preferred its
+    // local draft, so the refetched arrangement was never drawn, and the failed
+    // mutation kept the alert up -- the reader pressed the one control offered,
+    // lost nothing, gained nothing, and was told again to reload.
+    const conflict = Object.assign(new Error("changed"), { status: 409 });
+    api.put.mockRejectedValue(conflict);
+    renderGrid();
+    const user = await beginEditing();
+
+    await user.click(screen.getAllByTestId("widget-move-down")[0]);
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+    await screen.findByTestId("dashboard-edit-conflict");
+
+    // What the other tab stored while this one was editing.
+    layoutResponse = layout([
+      { id: "p3", widgetId: "core/c", order: 0 },
+      { id: "p1", widgetId: "core/a", order: 10 },
+      { id: "p2", widgetId: "core/b", order: 20 },
+    ]);
+    await user.click(screen.getByTestId("dashboard-edit-reload"));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getAllByTestId(/^widget-cell-/)
+          .map(node => node.getAttribute("data-testid"))
+      ).toEqual([
+        "widget-cell-core/c",
+        "widget-cell-core/a",
+        "widget-cell-core/b",
+      ])
+    );
+    expect(screen.queryByTestId("dashboard-edit-conflict")).toBeNull();
+    // The draft is gone, so the reader is out of edit mode rather than looking
+    // at server rows they believe are still theirs to save.
+    expect(screen.getByTestId("dashboard-edit-begin")).toBeInTheDocument();
+  });
+});
+
+describe("an arrangement with nothing left on it", () => {
+  it("KEEPS the way back when every card is put away", async () => {
+    // 🔴 The dead end. Deriving the grid's rows from the arrangement meant an
+    // all-hidden layout produced no rows, and the early return that draws the
+    // three no-widgets states unmounted the edit bar, Reset and the picker
+    // along with them -- a blank dashboard with no control left that could undo
+    // it. An arrangement must never reach a state it cannot leave.
+    layoutResponse = layout([
+      { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+      { id: "p2", widgetId: "core/b", order: 10, hidden: true },
+      { id: "p3", widgetId: "core/c", order: 20, hidden: true },
+    ]);
+    renderGrid();
+
+    expect(
+      await screen.findByTestId("dashboard-edit-begin")
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("widget-grid-empty")).toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^widget-cell-/)).toHaveLength(0);
+
+    // And the way back WORKS, rather than merely being on screen: editing
+    // reveals the put-away cards, which is the only route to bringing one back.
+    await beginEditing();
+    expect(screen.getAllByTestId(/^widget-cell-/)).toHaveLength(3);
+  });
+
+  it("offers Reset and the picker when the arrangement holds no placements", async () => {
+    // The other way to reach nothing: every card removed and saved. `available`
+    // then lists all three, so the picker is a real way back and not only a
+    // control that happens to be mounted.
+    layoutResponse = layout([], {
+      version: 4,
+      available: ["core/a", "core/b", "core/c"],
+    });
+    const user = userEvent.setup();
+    renderGrid();
+
+    await user.click(await screen.findByTestId("dashboard-edit-begin"));
+
+    expect(screen.getByTestId("dashboard-edit-reset")).toBeInTheDocument();
+    expect(await screen.findByTestId("add-widget-picker")).toBeInTheDocument();
+  });
 });
 
 describe("reset", () => {

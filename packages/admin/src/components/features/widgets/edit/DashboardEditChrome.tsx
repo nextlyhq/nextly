@@ -26,7 +26,6 @@ export interface DashboardEditChromeProps {
   hasArrangement: boolean;
   /** Whether this reader has an arrangement of their own to reset. */
   canReset: boolean;
-  onReload: () => void;
 }
 
 export function DashboardEditChrome({
@@ -34,7 +33,6 @@ export function DashboardEditChrome({
   writeError,
   hasArrangement,
   canReset,
-  onReload,
 }: DashboardEditChromeProps) {
   return (
     <>
@@ -57,6 +55,12 @@ export function DashboardEditChrome({
         // reader's work stays on screen while they decide, because discarding
         // it at the moment they are told to try again is the worst possible
         // time to throw it away.
+        //
+        // Reload is the editor's OWN recovery rather than a callback passed
+        // from the grid. The draft, the failed mutation and the query are three
+        // pieces of one state, and only the editor holds all three -- a caller
+        // that could reach the query alone refetched an arrangement this
+        // component then declined to draw, under an alert that never went away.
         <div
           role="alert"
           className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm"
@@ -68,7 +72,7 @@ export function DashboardEditChrome({
           <button
             type="button"
             className="underline underline-offset-2"
-            onClick={onReload}
+            onClick={editor.reload}
             data-testid="dashboard-edit-reload"
           >
             Reload

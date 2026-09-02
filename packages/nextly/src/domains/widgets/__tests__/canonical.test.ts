@@ -53,6 +53,40 @@ describe("the canonical widget set", () => {
     expect(merged[0].defaultOrder).toBe(5);
   });
 
+  it("keeps a CONTRIBUTED order the registration did not state", () => {
+    // 🔴 A collision was resolved by wholesale replacement, which the admin
+    // does not do: `resolve-widgets.ts` reads
+    // `registration.defaultOrder ?? contribution.defaultOrder`. So a
+    // registration that stated no order dropped the contributed one here and
+    // kept it there -- the server building the default arrangement from one
+    // declaration while the grid drew it from another, with a card sorted into
+    // a position the reader never sees.
+    registerWidget(registered({ id: "dup/one" }));
+    const merged = canonicalWidgets([{ id: "dup/one", defaultOrder: 99 }]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].defaultOrder).toBe(99);
+  });
+
+  it("keeps a CONTRIBUTED height the registration did not state", () => {
+    registerWidget(registered({ id: "dup/one" }));
+    expect(
+      canonicalWidgets([{ id: "dup/one", defaultHeight: "tall" }])[0]
+    ).toHaveProperty("defaultHeight", "tall");
+  });
+
+  it("does NOT inherit a contributed permission, matching the admin", () => {
+    // The asymmetry is deliberate. The registry is the override channel, so a
+    // registration that states no permission has stated that, and
+    // `mergeCollision` reads it exactly that way. Falling back here would gate
+    // a card the admin renders ungated -- the reader sees it and every write
+    // naming it is refused, which is the same disagreement inverted.
+    registerWidget(registered({ id: "dup/one" }));
+    const merged = canonicalWidgets([
+      { id: "dup/one", requiredPermission: "read-forms" },
+    ]);
+    expect(merged[0]).not.toHaveProperty("requiredPermission");
+  });
+
   it("carries the fields placement reads, from a registration", () => {
     registerWidget(
       registered({

@@ -59,6 +59,18 @@ export interface LayoutEditor {
   cancel: () => void;
   save: () => void;
   reset: () => void;
+  /**
+   * The remedy a conflict offers: take the server's arrangement, discard this
+   * one.
+   *
+   * 🔴 THREE pieces of state, because a conflict is three and clearing one
+   * leaves the other two contradicting the reader. Re-reading alone refetched
+   * an arrangement the editor then declined to show — `placements` prefers the
+   * draft — while the failed mutation kept `isConflict` true, so the alert
+   * stayed up saying to reload beneath a button that had just been pressed. The
+   * action has to do everything its own copy promises.
+   */
+  reload: () => void;
   /** Move by IDENTITY: the placement `fromId` takes the position of `toId`. */
   move: (fromId: string, toId: string) => void;
   toggleHidden: (placementId: string) => void;
@@ -137,6 +149,19 @@ export function useLayoutEditor(
 
   const reset = useCallback(() => {
     layout.reset.mutate(undefined, { onSuccess: () => setDraft(null) });
+  }, [layout]);
+
+  const reload = useCallback(() => {
+    // The draft goes first: it is the thing the reader was warned they would
+    // lose, and it is what stands between the refetched arrangement and being
+    // drawn.
+    setDraft(null);
+    // BOTH mutations, because `isConflict` reads both errors — a reset can lose
+    // the same race a save can, and clearing only the save left a conflict
+    // raised by the other one permanently on screen.
+    layout.save.reset();
+    layout.reset.reset();
+    void layout.reload();
   }, [layout]);
 
   // BOTH paths move by identity, through one function. The drag handler gets
@@ -233,6 +258,7 @@ export function useLayoutEditor(
     cancel,
     save,
     reset,
+    reload,
     move,
     toggleHidden,
     remove,

@@ -71,14 +71,56 @@ function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
 }
 
 /**
+ * One id declared through BOTH channels, as the single summary it describes.
+ *
+ * 🔴 MERGED FIELD BY FIELD, not substituted, because that is what the admin
+ * does and the two must agree. `resolve-widgets.ts` reads
+ * `registration.defaultOrder ?? contribution.defaultOrder`; a wholesale replace
+ * here dropped a contributed order that the admin kept, so the server built the
+ * default arrangement from one declaration while the grid drew it from another
+ * — a card sorted into a position the reader never sees, with nothing visibly
+ * wrong to say so.
+ *
+ * `requiredPermission` deliberately does NOT fall back, and the asymmetry is
+ * the point rather than an omission. The registry is the override channel —
+ * `overrideWidget` and `extendWidget` exist so a later plugin can correct an
+ * earlier widget — so a registration that states no permission has STATED that,
+ * and the admin reads it exactly that way. A `??` here would gate a card the
+ * admin renders ungated: the reader would see it and the server would refuse
+ * every write naming it, which is the same disagreement in the other direction.
+ *
+ * `defaultSize` needs no fallback either, for a duller reason: `WidgetDefinition`
+ * requires it and `validateWidgetDefinition` enforces it, so a registration
+ * always states one.
+ *
+ * What is left is the two fields a registration may legally omit and a
+ * contribution may legally state, and for those the contribution is read.
+ */
+function mergeCanonical(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): CanonicalWidget {
+  const defaultOrder = registration.defaultOrder ?? contribution.defaultOrder;
+  const defaultHeight =
+    registration.defaultHeight ?? contribution.defaultHeight;
+  return {
+    // The registration wholesale first: id, `requiredPermission` and
+    // `defaultSize` are its to state, including by stating nothing.
+    ...registration,
+    ...(defaultOrder === undefined ? {} : { defaultOrder }),
+    ...(defaultHeight === undefined ? {} : { defaultHeight }),
+  };
+}
+
+/**
  * Every widget this install has, from both channels, deduplicated by id.
  *
  * 🔴 A REGISTRATION WINS a collision, which is the same precedence the admin's
- * own resolver applies (`resolve-widgets.ts` reads
- * `registration.defaultOrder ?? contribution.defaultOrder`). The two must agree:
- * if the server resolved a colliding id to the contribution while the admin
- * rendered the registration, the arrangement would order a card by one
- * declaration and draw it from another, and nothing would look wrong.
+ * own resolver applies — field by field, through {@link mergeCanonical}, rather
+ * than by replacing the contribution outright. The two must agree: if the
+ * server resolved a colliding id differently from the admin, the arrangement
+ * would order a card by one declaration and draw it from another, and nothing
+ * would look wrong.
  *
  * Contributions are taken as already-validated summaries rather than raw
  * declarations, so this module never has to know how a plugin is shaped — and
@@ -88,13 +130,18 @@ export function canonicalWidgets(
   contributed: readonly CanonicalWidget[]
 ): CanonicalWidget[] {
   const byId = new Map<string, CanonicalWidget>();
-  // Contributions first, so a registration with the same id overwrites one
+  // Contributions first, so a registration with the same id merges over one
   // rather than being dropped by it.
   for (const widget of contributed) {
     if (widget.id) byId.set(widget.id, widget);
   }
   for (const definition of listWidgets()) {
-    byId.set(definition.id, fromRegistration(definition));
+    const registration = fromRegistration(definition);
+    const contribution = byId.get(definition.id);
+    byId.set(
+      definition.id,
+      contribution ? mergeCanonical(contribution, registration) : registration
+    );
   }
   return [...byId.values()];
 }

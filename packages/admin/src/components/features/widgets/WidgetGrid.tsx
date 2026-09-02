@@ -105,6 +105,38 @@ function NothingToDraw({
   return null;
 }
 
+/**
+ * What the grid shows when the arrangement has emptied it out.
+ *
+ * A different question from {@link NothingToDraw}, which is about a dashboard
+ * that has no widgets to offer at all. This one is about a reader who HAS
+ * widgets and has put every one of them away -- so it says which way is back
+ * rather than what went wrong.
+ *
+ * Its own component, and it decides for itself whether to draw, so the grid
+ * body carries neither branch. Rendered inside the widgets section, so the
+ * landmark and the live region stay where a reader left them.
+ */
+function EmptyArrangement({
+  count,
+  isEditing,
+}: {
+  count: number;
+  isEditing: boolean;
+}) {
+  if (count > 0) return null;
+  return (
+    <p
+      data-testid="widget-grid-empty"
+      className="col-span-12 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
+    >
+      {isEditing
+        ? "Every card is put away. Add one back below, or reset to the default arrangement."
+        : "Your dashboard has no cards on it. Edit it to bring one back, or reset to the default arrangement."}
+    </p>
+  );
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -165,7 +197,7 @@ export function WidgetGrid() {
   );
   announcer.current = announceSettledMove;
 
-  // Nothing to draw. Returned after the hooks above so the hook order is the
+  // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
   // THREE outcomes, not two. Every card on the dashboard now arrives through
   // the workspace query, so an empty list is no longer proof that there is
@@ -173,7 +205,15 @@ export function WidgetGrid() {
   // of one that never answered. Collapsing all three into `return null` blanked
   // the entire page on first paint and on any transient failure, where the
   // sections used to mount immediately and draw their own states.
-  if (widgets.length === 0) {
+  //
+  // 🔴 Asked of the DECLARATIONS, not of the arranged rows. `visible` is empty
+  // in a fourth case that is none of these three: a reader who has put every
+  // card away, or removed every card and saved. Returning here for that unmounted
+  // the edit bar, the Reset control and the add picker along with the grid --
+  // the whole page blank, with no way back to the one control that could undo
+  // it. An arrangement must never be able to reach a state it cannot leave, so
+  // the recovery chrome outlives the rows and the empty grid says so in place.
+  if (declared.length === 0) {
     return (
       <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
     );
@@ -194,7 +234,6 @@ export function WidgetGrid() {
         // reader had no way out and every read went on logging the same decode
         // failure. The version is what says a row is there.
         canReset={(layout.layout?.version ?? 0) > 0}
-        onReload={() => void layout.reload()}
       />
 
       <DndContext
@@ -223,6 +262,10 @@ export function WidgetGrid() {
             >
               {announcement}
             </span>
+            <EmptyArrangement
+              count={visible.length}
+              isEditing={editor.isEditing}
+            />
             {visible.map((row, index) => (
               <ArrangedCell
                 key={row.placementId}
