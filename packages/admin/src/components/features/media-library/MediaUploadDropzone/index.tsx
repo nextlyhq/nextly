@@ -42,6 +42,7 @@
 
 import { Progress, Button } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
+import { WEB_FONT_FORMATS } from "nextly/config";
 import * as React from "react";
 import {
   useDropzone,
@@ -137,16 +138,19 @@ export const DEFAULT_ACCEPTED_FILE_TYPES: Accept = {
   "video/*": [".mp4", ".mov", ".avi"],
   "application/pdf": [".pdf"],
   /*
-   * Web fonts, matching the server's own allowlist. React Dropzone rejects a
-   * file whose type is absent here as `file-invalid-type` before any request
-   * is made, so a server that accepts a font is not enough on its own: the
-   * upload the author actually performs never leaves the browser.
+   * Web fonts, DERIVED from the server's own table rather than restated here.
+   * React Dropzone refuses a file whose type is absent from this map as
+   * `file-invalid-type` in the browser, before any request exists — so this map
+   * and the server allowlist have to agree, and two hand-kept lists agree only
+   * until one of them is edited.
    *
-   * Both halves are needed. Some browsers report no type at all for a `.woff2`
-   * chosen from disk, and Dropzone then falls back to matching the extension.
+   * Both halves of each entry are needed. Some browsers report no type at all
+   * for a `.woff2` chosen from disk, and Dropzone then matches the extension;
+   * the server fills the type back in from the same table.
    */
-  "font/woff2": [".woff2"],
-  "font/woff": [".woff"],
+  ...Object.fromEntries(
+    WEB_FONT_FORMATS.map(format => [format.mimeType, [format.extension]])
+  ),
 };
 
 /**

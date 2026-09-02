@@ -70,6 +70,7 @@ import type {
   ListMediaOptions,
 } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
+import { resolveClaimedMimeType } from "../services/upload-validation/web-fonts";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
 import { executeBulkDelete } from "./media-bulk";
@@ -427,7 +428,7 @@ async function handleUploadMedia(
   const input = {
     file: buffer,
     filename: file.name,
-    mimeType: file.type,
+    mimeType: resolveClaimedMimeType(file.name, file.type),
     size: file.size,
     uploadedBy: uploadedByEnsured,
   };
@@ -445,7 +446,9 @@ async function handleUploadMedia(
     {
       buffer,
       filename: file.name,
-      mimeType: file.type,
+      // The same resolution the schema was given above. Validating one value
+      // and storing another means the record can carry a type nothing checked.
+      mimeType: resolveClaimedMimeType(file.name, file.type),
       size: file.size,
       folderId: folderId || undefined,
     },

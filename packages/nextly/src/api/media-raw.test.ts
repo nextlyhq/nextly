@@ -14,7 +14,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../errors/nextly-error";
 
+import { WEB_FONT_MIME_TYPES } from "../services/upload-validation/web-fonts";
+
 import { createMediaHandlers } from "./media-handlers";
+import { PUBLIC_SERVE_MIME_TYPES } from "./media-raw";
 
 const mocks = vi.hoisted(() => ({
   mediaService: { findById: vi.fn() },
@@ -178,5 +181,20 @@ describe("the public byte route", () => {
     );
     const status = outcome instanceof Response ? outcome.status : 500;
     expect(status).not.toBe(404);
+  });
+});
+
+describe("the serving boundary", () => {
+  it("serves exactly what the canonical table declares", () => {
+    /*
+     * Both directions, because they fail differently. A format in the table but
+     * not here is one an author can upload and never serve; one here but not in
+     * the table makes every stored object of that type world readable by id,
+     * which is the direction nobody notices.
+     */
+    expect([...PUBLIC_SERVE_MIME_TYPES].sort()).toEqual(
+      [...WEB_FONT_MIME_TYPES].sort()
+    );
+    expect(PUBLIC_SERVE_MIME_TYPES.size).toBeGreaterThan(0);
   });
 });

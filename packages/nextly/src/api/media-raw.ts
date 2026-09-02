@@ -24,6 +24,7 @@
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { RequestContext } from "../services/shared";
+import { WEB_FONT_MIME_TYPES } from "../services/upload-validation/web-fonts";
 import { DEFAULT_READ_MAX_BYTES } from "../storage/fetch-stored-bytes";
 import { readStoredMediaBytes } from "../storage/read-stored-media";
 import { getMediaStorage } from "../storage/storage";
@@ -37,10 +38,9 @@ import { getMediaStorage } from "../storage/storage";
  * answer to. Adding an entry here makes every stored object of that type world
  * readable by id.
  */
-export const PUBLIC_SERVE_MIME_TYPES: ReadonlySet<string> = new Set([
-  "font/woff2",
-  "font/woff",
-]);
+export const PUBLIC_SERVE_MIME_TYPES: ReadonlySet<string> = new Set(
+  WEB_FONT_MIME_TYPES
+);
 
 /**
  * A year, and `immutable` alongside it.

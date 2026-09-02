@@ -24,6 +24,7 @@ import type {
   ListMediaOptions,
 } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
+import { resolveClaimedMimeType } from "../services/upload-validation/web-fonts";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
 import { readJsonBody } from "./read-json-body";
@@ -161,7 +162,7 @@ export const POST = withErrorHandler(
     const input = {
       file: buffer,
       filename: fileEnsured.name,
-      mimeType: fileEnsured.type,
+      mimeType: resolveClaimedMimeType(fileEnsured.name, fileEnsured.type),
       size: fileEnsured.size,
       uploadedBy: uploadedByEnsured,
     };
@@ -179,7 +180,7 @@ export const POST = withErrorHandler(
       {
         buffer,
         filename: fileEnsured.name,
-        mimeType: fileEnsured.type,
+        mimeType: resolveClaimedMimeType(fileEnsured.name, fileEnsured.type),
         size: fileEnsured.size,
         folderId: folderId || undefined,
       },

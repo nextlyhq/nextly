@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 
+import { WEB_FONT_FORMATS } from "nextly/config";
+
 import {
   describeFileError,
   buildQueueFromDrop,
@@ -262,5 +264,24 @@ describe("the default accept map", () => {
     const description = getAcceptDescription(undefined, 10 * MB).toLowerCase();
     expect(description).not.toContain("ttf");
     expect(description).not.toContain("otf");
+  });
+});
+
+describe("the browser boundary", () => {
+  it("lets a person drag every format the server accepts", () => {
+    /*
+     * The map decides in the BROWSER, before any request exists, so a format
+     * the server accepts and this map omits is one nobody can upload — and no
+     * server-side test can see it. Enumerated from the shared table rather than
+     * from a list written here, which is what makes it fail when the table
+     * gains a format and this map is forgotten.
+     */
+    expect(WEB_FONT_FORMATS.length).toBeGreaterThan(0);
+    for (const format of WEB_FONT_FORMATS) {
+      expect(DEFAULT_ACCEPTED_FILE_TYPES).toHaveProperty(format.mimeType);
+      expect(DEFAULT_ACCEPTED_FILE_TYPES[format.mimeType]).toContain(
+        format.extension
+      );
+    }
   });
 });

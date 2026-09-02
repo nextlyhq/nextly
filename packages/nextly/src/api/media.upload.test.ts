@@ -131,6 +131,55 @@ describe("POST /api/media — unified validation pipeline", () => {
     expect(code).toBe("VALIDATION_ERROR");
   });
 
+  it("accepts a font the browser could not name, as its canonical type", async () => {
+    /*
+     * The case the extension entry in the admin dropzone exists for. A browser
+     * reports an empty `type` for a `.woff2` chosen from disk — fonts are not
+     * in every platform's registry — and the upload was then refused for
+     * claiming no type at all, whatever the allowlist said. Dropzone let the
+     * file through and the server turned it away.
+     *
+     * Asserted on what reaches STORAGE rather than on a 201, because the
+     * response is the same either way once the upload succeeds; what the record
+     * carries is the thing that was wrong.
+     */
+    const bundle = buildStubBundle();
+    container.registerSingleton("mediaService", () => bundle.service);
+    const { POST } = await import("./media");
+
+    // Bytes `file-type` does not recognise, so the magic-byte check trusts the
+    // claim — the point here is the claim's RESOLUTION, not the sniffer.
+    const bytes = Buffer.from("not-really-a-font", "utf8");
+    const res = await POST(makeRequest(bytes, "Inter.woff2", ""));
+
+    expect(res.status).toBe(201);
+    // The stored claim, read off the call rather than matched against a whole
+    // argument list — the shape around it is not what this case is about.
+    const stored = bundle.legacyUploadMedia.mock.calls[0]?.[0] as {
+      mimeType?: string;
+    };
+    expect(stored.mimeType).toBe("font/woff2");
+  });
+
+  it("does NOT invent a type for a name it does not know", async () => {
+    /*
+     * The control, and the half that matters for safety: this fills in a claim
+     * the caller never made, so it must resolve for font names only. A `.bin`
+     * with no type stays unnamed and is refused exactly as before — otherwise
+     * the inference would be a way to launder anything past the allowlist.
+     */
+    container.registerSingleton(
+      "mediaService",
+      () => buildStubBundle().service
+    );
+    const { POST } = await import("./media");
+
+    const res = await POST(
+      makeRequest(Buffer.from("x", "utf8"), "payload.bin", "")
+    );
+    expect(res.status).not.toBe(201);
+  });
+
   it("rejects .exe regardless of MIME claim", async () => {
     container.registerSingleton(
       "mediaService",
