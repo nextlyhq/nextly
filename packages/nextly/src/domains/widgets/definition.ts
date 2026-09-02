@@ -185,6 +185,34 @@ function validateId(d: Partial<WidgetDefinition>): void {
  * Takes a loose record rather than a `Partial<WidgetDefinition>`, so a decoded
  * JSON object can ask it without either side casting to the other's shape.
  */
+/**
+ * How this core should treat a declaration's `archetype`.
+ *
+ * FOUR states, not two. Gating rules on "is it a string this core knows" folded
+ * the other three together and each one leaked a defect: an ABSENT archetype
+ * became `custom` during resolution but skipped every rule that names one; a
+ * NON-STRING skipped them too and reached the admin, which interpolates it into
+ * a diagnostic; and an UNKNOWN string was exempted from shape rules when the
+ * exemption it earns is only from vocabulary ones.
+ */
+type ArchetypeStanding =
+  /** Not supplied. Resolution deterministically fills in `custom`. */
+  | { kind: "resolved-custom" }
+  /** A name this core knows, so every rule about it applies. */
+  | { kind: "known"; name: WidgetArchetype }
+  /** A name from a newer core. Exempt from VOCABULARY rules, not from shape. */
+  | { kind: "newer" }
+  /** Not a string at all, which no version of this contract permits. */
+  | { kind: "invalid" };
+
+function archetypeStanding(value: unknown): ArchetypeStanding {
+  if (value === undefined) return { kind: "resolved-custom" };
+  if (typeof value !== "string") return { kind: "invalid" };
+  return WIDGET_ARCHETYPES.includes(value as WidgetArchetype)
+    ? { kind: "known", name: value as WidgetArchetype }
+    : { kind: "newer" };
+}
+
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
@@ -211,18 +239,41 @@ export function widgetValueProblem(
   const rangeProblem = sizeRangeProblem(widget);
   if (rangeProblem !== undefined) return rangeProblem;
 
-  // `actions` belongs to the archetype named for it. Elsewhere the admin never
-  // reads the array, so declaring one is a shortcut list the author believes
-  // they published and nobody can reach.
-  //
-  // Only when this core RECOGNISES the archetype, for the version reason this
-  // function's own note gives.
-  if (
-    widget.actions !== undefined &&
-    typeof widget.archetype === "string" &&
-    WIDGET_ARCHETYPES.includes(widget.archetype as WidgetArchetype) &&
-    widget.archetype !== "actions"
-  ) {
+  return archetypeRelatedProblem(widget);
+}
+
+/**
+ * The rules that depend on what the archetype is, per its standing.
+ *
+ * The split that matters: a newer core's archetype is exempt from VOCABULARY
+ * rules -- this core cannot judge where its payload belongs -- but not from
+ * SHAPE. `resolveOne` calls `readableActions` for every archetype whatever its
+ * name, and that immediately calls `.filter`, so a non-array `actions` throws
+ * during resolution and takes the whole grid down before the unknown-card
+ * fallback can draw. Container shape is version-independent; placement is not.
+ */
+function archetypeRelatedProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  const standing = archetypeStanding(widget.archetype);
+
+  if (standing.kind === "invalid") {
+    return "archetype, when given, must be a string";
+  }
+
+  // Shape first, and for every standing including a newer core's.
+  if (widget.actions !== undefined && !Array.isArray(widget.actions)) {
+    return "actions, when given, must be an array";
+  }
+
+  // Placement is a vocabulary judgement, so a newer core's archetype is exempt.
+  // An ABSENT one is not: resolution supplies `custom`, which is a name this
+  // core knows perfectly well, so the rule applies as it would to any other.
+  if (standing.kind === "newer") return undefined;
+  const effective =
+    standing.kind === "resolved-custom" ? "custom" : standing.name;
+
+  if (widget.actions !== undefined && effective !== "actions") {
     return 'actions are only valid for archetype "actions"';
   }
 
@@ -593,12 +644,20 @@ export function chromeProblem(
   //
   // The archetype rule likewise only where this core KNOWS the archetype --
   // otherwise it judges a newer core's shape and refuses the whole install.
-  if (
-    chrome === "none" &&
-    typeof archetype === "string" &&
-    WIDGET_ARCHETYPES.includes(archetype as WidgetArchetype) &&
-    archetype !== "custom"
-  ) {
+  // Through the same four-state reading as the placement rule, so the two
+  // cannot drift into disagreeing about what an absent or newer archetype
+  // means. An ABSENT one resolves to `custom`, which is exactly where `"none"`
+  // is legal; a NEWER one is exempt, since this core cannot say whether its
+  // body is composed into a card.
+  const standing = archetypeStanding(archetype);
+  const effective =
+    standing.kind === "resolved-custom"
+      ? "custom"
+      : standing.kind === "known"
+        ? standing.name
+        : undefined;
+
+  if (chrome === "none" && effective !== undefined && effective !== "custom") {
     return `chrome "none" is only valid for archetype "custom", not "${String(archetype)}" -- core draws that body into the card itself`;
   }
 

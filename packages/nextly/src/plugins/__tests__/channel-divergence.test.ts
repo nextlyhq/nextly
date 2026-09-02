@@ -202,6 +202,17 @@ const DECLARED_DIFFERENCES: Array<{
       chrome: "borderless",
     },
   },
+  {
+    case: "chrome none on an archetype this core does not know",
+    why: "its own placement BRANCH: this core cannot say whether a newer archetype's body is composed into a card, so removing the guard would break the boundary without failing the unknown-archetype or unknown-chrome rows",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "timeline",
+      defaultSize: "sm",
+      chrome: "none",
+    },
+  },
 ];
 
 /** Rules that must hold identically on both sides. */
@@ -319,6 +330,83 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
       minSize: "xl",
       maxSize: "enormous",
       component: "p#X",
+    },
+  },
+  {
+    case: "minSize above maxSize",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      minSize: "xl",
+      maxSize: "sm",
+      component: "p#X",
+    },
+  },
+  {
+    case: "minSize above maxSize when defaultSize is from a newer core",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "enormous",
+      minSize: "xl",
+      maxSize: "sm",
+      component: "p#X",
+    },
+  },
+  {
+    case: "defaultSize above maxSize",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "xl",
+      maxSize: "sm",
+      component: "p#X",
+    },
+  },
+  {
+    case: "defaultSize above maxSize when minSize is from a newer core",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "xl",
+      maxSize: "sm",
+      minSize: "enormous",
+      component: "p#X",
+    },
+  },
+  {
+    case: "an archetype that is not a string",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: 42,
+      defaultSize: "sm",
+      component: "p#X",
+    },
+  },
+  {
+    case: "actions beside a component with no archetype at all",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      defaultSize: "sm",
+      component: "p#X",
+      actions: [{ label: "L", href: "/admin/users/create" }],
+    },
+  },
+  {
+    case: "a non-array actions on an archetype this core does not know",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "timeline",
+      defaultSize: "sm",
+      actions: 42,
     },
   },
 ];
