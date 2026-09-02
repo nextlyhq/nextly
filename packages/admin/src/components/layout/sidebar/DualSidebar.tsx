@@ -189,6 +189,9 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     ),
   });
 
+  // Shown while the grants are still resolving, like the rest of the rail. The
+  // alternative flashes: an entry appearing a moment after the page settles
+  // reads as the UI changing its mind, and the media route refuses on its own.
   const hasMediaSection = hasPermissionDataPending
     ? true
     : capabilities.canViewMedia;
