@@ -10,6 +10,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
 import {
@@ -19,21 +20,13 @@ import {
   type WidgetPlacement,
 } from "../../domains/widgets/layout";
 import { NextlyError } from "../../errors/nextly-error";
+import { layoutRowId, type LayoutScopeKind } from "../../schemas/widget-layout";
 import { nextlyWidgetLayout as layoutMysql } from "../../schemas/widget-layout/mysql";
 import { nextlyWidgetLayout as layoutPg } from "../../schemas/widget-layout/postgres";
 import { nextlyWidgetLayout as layoutSqlite } from "../../schemas/widget-layout/sqlite";
 import { affectedRowCount } from "../../shared/lib/affected-row-count";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
-
-/**
- * Which kind of owner a layout row belongs to.
- *
- * Only `user` is written today. `role` is spelled here rather than added later
- * because it is half of the primary key, and a key that learns a second value
- * after rows exist is a migration.
- */
-export type LayoutScopeKind = "user";
 
 /** The version a caller holds when they have never read a stored row. */
 export const NO_STORED_LAYOUT_VERSION = 0;
@@ -52,35 +45,51 @@ export interface StoredLayoutRow {
   unreadable: boolean;
 }
 
-function rowId(kind: LayoutScopeKind, scopeId: string): string {
-  return `${kind}:${scopeId}`;
+/**
+ * The layout table for whichever dialect is running.
+ *
+ * A union of the three real table objects rather than `any`. The three declare
+ * the same column names, so every property this service reaches for resolves on
+ * all three arms; what the union buys is that a column this service invents, or
+ * one renamed in a schema and not here, stops compiling instead of failing at
+ * runtime on somebody's install.
+ */
+type LayoutTable = typeof layoutPg | typeof layoutMysql | typeof layoutSqlite;
+
+/**
+ * The ONE place a dialect is turned into a layout table.
+ *
+ * A `switch` with a `never` default rather than a lookup, so adding a dialect
+ * to `SupportedDialect` fails to compile here instead of resolving to whichever
+ * arm happened to come last.
+ */
+function layoutTableFor(dialect: SupportedDialect): LayoutTable {
+  switch (dialect) {
+    case "postgresql":
+      return layoutPg;
+    case "mysql":
+      return layoutMysql;
+    case "sqlite":
+      return layoutSqlite;
+    default: {
+      const exhaustive: never = dialect;
+      throw NextlyError.internal({
+        logContext: {
+          reason: "no widget layout table for this dialect",
+          dialect: String(exhaustive),
+        },
+      });
+    }
+  }
 }
 
 export class WidgetLayoutService extends BaseService {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private table: any;
+  private readonly table: LayoutTable;
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
 
-    switch (this.dialect) {
-      case "postgresql":
-        this.table = layoutPg;
-        break;
-      case "mysql":
-        this.table = layoutMysql;
-        break;
-      case "sqlite":
-        this.table = layoutSqlite;
-        break;
-      default:
-        throw NextlyError.internal({
-          logContext: {
-            reason: "no widget layout table for this dialect",
-            dialect: String(this.dialect),
-          },
-        });
-    }
+    this.table = layoutTableFor(this.dialect);
   }
 
   /**
@@ -101,7 +110,7 @@ export class WidgetLayoutService extends BaseService {
     const rows = await this.db
       .select()
       .from(this.table)
-      .where(eq(this.table.id, rowId(kind, scopeId)))
+      .where(eq(this.table.id, layoutRowId(kind, scopeId)))
       .limit(1);
 
     const row = rows?.[0] as
@@ -168,7 +177,7 @@ export class WidgetLayoutService extends BaseService {
     placements: readonly WidgetPlacement[],
     expectedVersion: number
   ): Promise<number> {
-    const id = rowId(kind, scopeId);
+    const id = layoutRowId(kind, scopeId);
     const layout = serializeLayout(placements);
     const now = new Date();
 

@@ -44,6 +44,7 @@ import {
   defaultPlacements,
   layoutSizeProblem,
   mergePreservingHidden,
+  mergedLayoutExceedsColumn,
   partitionPlacements,
   readPlacements,
   visibilityToken,
@@ -63,19 +64,76 @@ import {
   readCaller,
 } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
-import { respondData } from "./response-shapes";
+import {
+  respondData,
+  respondMutation,
+  SKIP_DATE_FORMATTING_HEADER,
+} from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
+
+/**
+ * Headers every layout response carries.
+ *
+ * 🔴 The date-formatting opt-out is load-bearing, not tidiness. The route
+ * handler rewrites date-looking strings in every JSON payload by VALUE, not
+ * merely by key name, to present stored timestamps in the installation's
+ * timezone — so a plugin's opaque `placement.config` of
+ * `{ cutoff: "2026-09-02T04:00:00.000Z" }` comes back as
+ * `"2026-09-02T00:00:00.000-04:00"`. The client then submits that transformed
+ * value in its next whole-snapshot PUT and it is persisted, so a configuration
+ * this endpoint promises to treat as opaque does not survive a round trip, and
+ * drifts one timezone offset further on every save.
+ *
+ * `config` is configuration rather than records, which is precisely the case
+ * {@link SKIP_DATE_FORMATTING_HEADER} exists for. The header is internal and is
+ * stripped before the response reaches a client.
+ */
+const OPAQUE_CONFIG_HEADERS = {
+  ...PRIVATE_NO_STORE_HEADERS,
+  [SKIP_DATE_FORMATTING_HEADER]: "1",
+} as const;
 
 /** Which layer the returned arrangement came from. */
 type LayoutSource = "own" | "default";
 
 /**
+ * The placements a write must carry through untouched.
+ *
+ * Two cases, and the second is the one that is easy to miss. With a stored row,
+ * it is the placements this caller could not see. With NO stored row, the
+ * caller was still shown a FILTERED default set — so a first save would freeze
+ * a snapshot that never contained the gated defaults, and a permission granted
+ * afterwards could never reveal them: `defaultPlacements` runs only while the
+ * row is absent, and after that first write it never runs again. The visibility
+ * token catches a grant that lands BETWEEN the read and the write; it cannot
+ * catch one that lands after a successful save. So the invisible half of the
+ * default set is carried into the first row exactly as a stored row's invisible
+ * half is carried into every later one.
+ *
+ * Derived from `defaultPlacements` over the WHOLE registry rather than
+ * generated separately, so a carried default keeps the position it would have
+ * had — and so there is one implementation of "where does an unplaced widget
+ * go" rather than two that agree today.
+ */
+function carriedPlacements(
+  storedPlacements: readonly WidgetPlacement[] | undefined,
+  visibleIds: ReadonlySet<string>
+): WidgetPlacement[] {
+  if (storedPlacements) {
+    return partitionPlacements(storedPlacements, visibleIds).invisible;
+  }
+  return defaultPlacements(listWidgets()).filter(
+    placement => !visibleIds.has(placement.widgetId)
+  );
+}
+
+/**
  * The scope a layout belongs to today.
  *
- * Every row this endpoint writes is the caller's own. The role layer is
- * designed into the table's key and deliberately not built (founder,
- * 2026-09-01), so there is exactly one scope kind to resolve and no resolution
- * ORDER to get wrong yet.
+ * Every row this endpoint writes is the caller's own, so there is exactly one
+ * scope kind to resolve and no resolution ORDER to get wrong yet. The key
+ * reserves the dimension anyway: a second kind of owner added after rows exist
+ * is a migration, and reserving one column now costs nothing.
  */
 const SCOPE_KIND = "user" as const;
 
@@ -127,11 +185,31 @@ async function visibleWidgets(
     });
   }
 
-  return all.filter(widget => {
-    const slug = widget.requiredPermission;
-    if (typeof slug !== "string" || slug === "") return true;
-    return verdicts.get(slug) === true;
-  });
+  return all.filter(widget => isVisibleTo(widget, verdicts));
+}
+
+/**
+ * Whether one widget may be mentioned to this caller.
+ *
+ * 🔴 Only `undefined` means ungated. Every other non-string is DENIED, which is
+ * the opposite of what "not a string, so no permission was declared" gives
+ * you: `requiredPermission: 42` or `{ read: true }` would then be treated as an
+ * open widget and returned to every authenticated caller — a declaration whose
+ * author plainly meant to restrict it, failing open because it was malformed.
+ *
+ * `widgetValueProblem` now refuses such a declaration, so this is the second of
+ * two locks rather than the only one. It stays because the registry is also
+ * writable from code that never passes through that validator, and because a
+ * `typeof` on a value already in hand costs nothing.
+ */
+function isVisibleTo(
+  widget: WidgetDefinition,
+  verdicts: ReadonlyMap<string, boolean>
+): boolean {
+  const slug: unknown = widget.requiredPermission;
+  if (slug === undefined) return true;
+  if (typeof slug !== "string" || slug === "") return false;
+  return verdicts.get(slug) === true;
 }
 
 /**
@@ -171,7 +249,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       source,
       scope: visibilityToken(widgets.map(w => w.id)),
     },
-    { headers: PRIVATE_NO_STORE_HEADERS }
+    { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
 
@@ -227,6 +305,28 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
+  // 🔴 BEFORE the body is read, and before anything is parsed, resolved or
+  // constructed. This is a precondition, not a defensive check: a caller that
+  // can never perform this operation must be refused on that ground, and
+  // refused first. Placed after the body it answered a malformed payload with a
+  // validation error — telling a caller which FIELD it got wrong on a request
+  // it was never allowed to make, and paying for the parse to say so.
+  //
+  // A dashboard arrangement is one person's personalization of their own admin
+  // screen, and an API key has no screen. Refused rather than gated behind a
+  // permission slug, because no grant would make it meaningful: the key would
+  // be rewriting the layout of whoever minted it. Reading stays open — it tells
+  // a key nothing it could not already ask the registry.
+  //
+  // Read off the auth context rather than the resolved caller, because that is
+  // available here and the resolved caller is not: resolving it is a database
+  // read, which is work this refusal exists to avoid doing.
+  if (auth.authMethod === "api-key") {
+    throw NextlyError.forbidden({
+      logContext: { reason: "an api key may not write a dashboard layout" },
+    });
+  }
+
   const body = await readJsonBody(req);
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw NextlyError.validation({
@@ -246,22 +346,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const submittedScope = readScope(body as Record<string, unknown>);
 
   const service = await getLayoutService();
-  const resolved = await readCaller(auth);
-  const caller = readAccessCaller(resolved);
-
-  // A dashboard arrangement is one person's personalization of their own admin
-  // screen, and an API key has no screen. Refused rather than gated behind a
-  // permission slug, because there is no grant that would make it meaningful:
-  // the key would be rewriting the layout of whoever minted it. Reading stays
-  // open -- a read tells a key nothing it could not already ask the registry.
-  if (caller.authMethod === "api-key") {
-    // `forbidden` carries a fixed public message by design, so the reason
-    // travels in the log rather than to the caller.
-    throw NextlyError.forbidden({
-      logContext: { reason: "an api key may not write a dashboard layout" },
-    });
-  }
-
+  const caller = readAccessCaller(await readCaller(auth));
   const widgets = await visibleWidgets(caller);
   const visibleIds = new Set(widgets.map(widget => widget.id));
 
@@ -320,18 +405,36 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   }
 
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
-  // An unreadable row contributes nothing to carry through: its contents could
-  // not be decoded, so there is no invisible placement to preserve. The write
-  // replaces it wholesale, which is the repair.
-  const carried = stored.layout
-    ? partitionPlacements(stored.layout.placements, visibleIds).invisible
-    : [];
+  const carried = carriedPlacements(stored.layout?.placements, visibleIds);
 
-  const toStore = mergePreservingHidden(submitted, carried);
-  const tooLarge = layoutSizeProblem(toStore);
+  // The caller's OWN submission, measured and reported with its real size --
+  // every number in this refusal describes data they sent.
+  const tooLarge = layoutSizeProblem(submitted);
   if (tooLarge !== undefined) {
     throw NextlyError.validation({
       errors: [{ path: "placements", code: "TOO_LARGE", message: tooLarge }],
+    });
+  }
+
+  const toStore = mergePreservingHidden(submitted, carried);
+  // And the payload actually written, measured WITHOUT reporting a quantity.
+  // The number here is partly made of placements this caller may not know
+  // exist, so a caller could otherwise grow one visible placement until the
+  // refusal appeared and read the difference as the size of configuration they
+  // are not allowed to see.
+  if (mergedLayoutExceedsColumn(toStore)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "placements",
+          code: "TOO_LARGE",
+          message: "This dashboard layout is too large to store.",
+        },
+      ],
+      logContext: {
+        submitted: submitted.length,
+        carried: carried.length,
+      },
     });
   }
 
@@ -342,7 +445,11 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     expectedVersion
   );
 
-  return respondData(
+  // `respondMutation`, not `respondData`: this is a write, and every write in
+  // this package answers `{ message, item }`. A bespoke top-level shape would
+  // be one the shared client parser cannot read at all.
+  return respondMutation(
+    "Dashboard layout saved.",
     {
       placements: submitted,
       version,
@@ -353,7 +460,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       // the next PUT will catch that on its own terms.
       scope,
     },
-    { headers: PRIVATE_NO_STORE_HEADERS }
+    { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
 

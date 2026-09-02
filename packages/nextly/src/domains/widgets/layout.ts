@@ -397,12 +397,27 @@ export const MAX_PLACEMENTS = 200;
 export const MAX_LAYOUT_BYTES = 32 * 1024;
 
 /**
- * Why this layout cannot be stored, or `undefined`.
+ * The ceiling on the payload actually written, carried placements included.
  *
- * Asked of the payload that will actually be written — including the
- * placements merged back in on the caller's behalf, which the caller never
- * submitted and cannot be blamed for. A refusal is still the right answer: a
- * layout that cannot be re-read is worse than one that will not save.
+ * Higher than one caller's budget because a write legitimately stores more than
+ * the caller sent, and lower than MySQL's 65535 so a multi-byte payload cannot
+ * reach the dialect's own edge and truncate.
+ */
+export const MAX_STORED_BYTES = 56 * 1024;
+
+/**
+ * Why the caller's OWN submission cannot be stored, or `undefined`.
+ *
+ * 🔴 Measures only what the caller sent, and that scope is the point rather
+ * than an omission. Measuring the merged payload — the submission plus the
+ * placements carried back on the caller's behalf — and reporting its byte count
+ * hands back a number that VARIES WITH HIDDEN DATA. A caller who has lost
+ * access to a widget could then grow one visible placement until the refusal
+ * appears and read the difference as the size of configuration they are not
+ * allowed to see, which is exactly the observability this endpoint spends the
+ * rest of its effort denying. Whether the merged total still fits the column is
+ * a separate question, asked by {@link mergedLayoutExceedsColumn}, which
+ * answers yes or no and never a quantity.
  */
 export function layoutSizeProblem(
   placements: readonly WidgetPlacement[]
@@ -417,6 +432,28 @@ export function layoutSizeProblem(
     return `a layout may be at most ${MAX_LAYOUT_BYTES} bytes; this one is ${bytes}`;
   }
   return undefined;
+}
+
+/**
+ * Whether the payload that will actually be WRITTEN overruns the narrowest
+ * dialect's column.
+ *
+ * A boolean, deliberately. Every caller-visible refusal above reports a
+ * quantity; this one cannot, because the quantity it would report is partly
+ * made of placements the caller may not know exist.
+ *
+ * Reachable only when carried-through placements push a submission that was
+ * itself within budget past the ceiling — so the caller has done nothing wrong
+ * and there is nothing for them to fix. Refusing is still right: a row that
+ * cannot be re-read loses the whole dashboard, which is strictly worse than a
+ * save that did not happen.
+ */
+export function mergedLayoutExceedsColumn(
+  placements: readonly WidgetPlacement[]
+): boolean {
+  return (
+    Buffer.byteLength(serializeLayout(placements), "utf8") > MAX_STORED_BYTES
+  );
 }
 
 /**

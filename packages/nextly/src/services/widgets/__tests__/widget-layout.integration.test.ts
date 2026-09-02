@@ -27,6 +27,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { WidgetPlacement } from "../../../domains/widgets/layout";
 import { NextlyError } from "../../../errors/nextly-error";
+import { layoutRowId } from "../../../schemas/widget-layout";
 import { WidgetLayoutService } from "../widget-layout-service";
 
 const silentLogger = {
@@ -139,11 +140,24 @@ function layoutSuite(
       expect(read.layout?.placements[0].id).toBe("first");
     });
 
-    it("keeps two scopes apart at the id column's full width", async () => {
-      // `id` is `${kind}:${scopeId}` in a varchar(191). Two ids that differ
-      // only past a truncation point must stay two rows -- on MySQL, which is
-      // the only dialect that enforces the width, a truncating column would
-      // merge them and hand one reader the other's dashboard.
+    it("stores a scope id far longer than the key column", async () => {
+      // A user id is `varchar(191)` on MySQL and unbounded `text` on
+      // PostgreSQL. Spelled into the key as `user:${scopeId}` it overruns the
+      // 191-character primary key past 186 characters, so those accounts read
+      // fine -- an absent row is a legal answer -- and fail on every save with
+      // a database length error. The key is a digest instead, so the scope's
+      // own length cannot reach the column at all.
+      const long = "u".repeat(400);
+      await service.saveLayout("user", long, [placement({ id: "long" })], 0);
+      expect(
+        (await service.getLayout("user", long)).layout?.placements[0].id
+      ).toBe("long");
+    });
+
+    it("keeps two scopes apart past any truncation point", async () => {
+      // Two ids that differ only past a truncation point must stay two rows: a
+      // key that truncated would merge them and hand one reader the other's
+      // dashboard.
       const stem = "u".repeat(180);
       const a = `${stem}-aaa`;
       const b = `${stem}-bbb`;
@@ -164,7 +178,12 @@ function layoutSuite(
       await service.saveLayout("user", scope, [placement()], 0);
       // Corrupt the stored payload the way a downgrade or a bad hand-edit
       // would, without going through the service that would refuse it.
-      await corruptLayout(service, `user:${scope}`);
+      // Addressed through the SAME derivation the service writes with. Spelled
+      // out as `user:${scope}` it targeted a row that does not exist, the
+      // corruption landed nowhere, and the assertion below failed -- which is
+      // the good direction, but only because the test asserts the corrupt
+      // OUTCOME rather than the write having happened.
+      await corruptLayout(service, layoutRowId("user", scope));
 
       const read = await service.getLayout("user", scope);
       expect(read.unreadable).toBe(true);

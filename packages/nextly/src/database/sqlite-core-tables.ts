@@ -316,6 +316,19 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_document_lock" ("expires_at")`,
     `CREATE INDEX IF NOT EXISTS "ndl_scope_idx"
       ON "nextly_document_lock" ("scope_kind", "slug")`,
+    // One reader's dashboard arrangement. Declared here and not only in the
+    // Drizzle bundle, because this fallback is what builds the database when
+    // `freshPushSchema` cannot run -- the non-TTY path -- and a table missing
+    // from it is a table every read and write fails against, on exactly the
+    // installs where nobody is watching the boot.
+    `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_id" TEXT NOT NULL,
+      "layout" TEXT NOT NULL,
+      "version" INTEGER NOT NULL DEFAULT 1,
+      "updated_at" INTEGER NOT NULL
+    )`,
     // No REFERENCES to "email_providers": that table is not bootstrapped here,
     // and SQLite resolves a foreign key at insert time rather than at CREATE,
     // so declaring one would turn every recorded delivery into a failure on a

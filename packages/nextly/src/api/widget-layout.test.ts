@@ -45,6 +45,7 @@ import {
   visibilityToken,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
+import { SKIP_DATE_FORMATTING_HEADER } from "./response-shapes";
 import {
   clearWidgets,
   listWidgets,
@@ -124,13 +125,32 @@ function putReq(body: unknown): Request {
   });
 }
 
-async function bodyOf(res: Response) {
-  return (await res.json()) as {
-    placements?: WidgetPlacement[];
-    version?: number;
-    source?: string;
-    error?: { message?: string };
+interface LayoutPayload {
+  placements?: WidgetPlacement[];
+  version?: number;
+  source?: string;
+  scope?: string;
+}
+
+/** A GET answers with the object itself. */
+async function bodyOf(res: Response): Promise<LayoutPayload> {
+  return (await res.json()) as LayoutPayload;
+}
+
+/**
+ * A PUT answers with the canonical mutation envelope, so the payload is under
+ * `item`. Read through its own helper rather than by reaching into `bodyOf`'s
+ * result, so a test asserting on the payload cannot silently pass against a
+ * body that never had one.
+ */
+async function itemOf(res: Response): Promise<LayoutPayload> {
+  const body = (await res.json()) as {
+    message?: string;
+    item?: LayoutPayload;
   };
+  expect(body.message).toEqual(expect.any(String));
+  expect(body.item).toBeDefined();
+  return body.item as LayoutPayload;
 }
 
 beforeEach(() => {
@@ -251,6 +271,37 @@ describe("GET /api/dashboard/layout", () => {
   });
 });
 
+describe("opaque config survives the response pipeline", () => {
+  it.each([
+    ["GET", async () => getWidgetLayout(getReq())],
+    [
+      "PUT",
+      async () =>
+        putWidgetLayout(
+          putReq({
+            placements: [
+              { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+            ],
+            version: 0,
+            scope: visibilityToken(["core/a"]),
+          })
+        ),
+    ],
+  ])("%s opts out of date formatting", async (_verb, call) => {
+    // The route handler rewrites date-looking strings in every JSON payload by
+    // VALUE, not merely by key name -- so a plugin's opaque
+    // `config: { cutoff: "2026-09-02T04:00:00.000Z" }` comes back timezone
+    // shifted, the client submits the shifted value in its next whole-snapshot
+    // PUT, and it is persisted. The configuration this endpoint calls opaque
+    // then drifts one offset further on every save.
+    registerWidget(widget({ id: "core/a" }));
+
+    const res = await call();
+
+    expect(res.headers.get(SKIP_DATE_FORMATTING_HEADER)).toBe("1");
+  });
+});
+
 describe("PUT /api/dashboard/layout", () => {
   const onePlacement: WidgetPlacement[] = [
     { id: "p1", widgetId: "core/a", order: 0, hidden: false },
@@ -313,19 +364,21 @@ describe("PUT /api/dashboard/layout", () => {
       ]),
     };
 
-    const body = await bodyOf(
-      await putWidgetLayout(
-        putReq({
-          placements: onePlacement,
-          version: 2,
-          scope: scopeFor(["core/a"]),
-        })
-      )
+    const res = await putWidgetLayout(
+      putReq({
+        placements: onePlacement,
+        version: 2,
+        scope: scopeFor(["core/a"]),
+      })
     );
+    const raw = res.clone();
+    const item = await itemOf(res);
 
-    // Preserving it must not become a way to learn it is there.
-    expect(JSON.stringify(body)).not.toContain("gated");
-    expect(body.placements?.map(p => p.id)).toEqual(["p1"]);
+    // Preserving it must not become a way to learn it is there -- asserted over
+    // the WHOLE response body, not just the payload, so a leak in the envelope
+    // or a warning line would fail too.
+    expect(await raw.text()).not.toContain("gated");
+    expect(item.placements?.map(p => p.id)).toEqual(["p1"]);
   });
 
   it("refuses a placement naming a widget the caller cannot see", async () => {
@@ -462,9 +515,11 @@ describe("PUT /api/dashboard/layout", () => {
 
   it("refuses an API key, which has no dashboard to arrange", async () => {
     registerWidget(widget({ id: "core/a" }));
-    readCaller.mockResolvedValue({
-      user: { id: "user-1", roles: [] },
-      authenticatedScope: { actorType: "apiKey", permissions: ["read-posts"] },
+    reqAuth.mockResolvedValue({
+      userId: "user-1",
+      permissions: ["read-posts"],
+      roles: [],
+      authMethod: "api-key",
     });
 
     const res = await putWidgetLayout(
@@ -500,6 +555,115 @@ describe("PUT /api/dashboard/layout", () => {
 
     expect(res.status).toBe(400);
     expect(saved).toBeUndefined();
+  });
+
+  it("refuses an API key BEFORE it reads the body", async () => {
+    // The refusal is a precondition, so it must not depend on the body being
+    // well formed. With the check placed after the parse, this unparseable body
+    // came back as a validation error -- telling a caller which field it got
+    // wrong on a request it was never allowed to make, and paying for the parse
+    // in order to say so.
+    registerWidget(widget({ id: "core/a" }));
+    reqAuth.mockResolvedValue({
+      userId: "user-1",
+      permissions: [],
+      roles: [],
+      authMethod: "api-key",
+    });
+
+    const res = await putWidgetLayout(
+      new Request("http://localhost/api/dashboard/layout", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: "{ this is not json",
+      })
+    );
+
+    expect(res.status).toBe(403);
+  });
+
+  it("carries invisible defaults into the FIRST save", async () => {
+    // With no stored row the caller was still shown a FILTERED default set, so
+    // writing back only what they saw freezes a snapshot that never contained
+    // the gated defaults -- and `defaultPlacements` runs only while the row is
+    // absent, so a permission granted afterwards could never reveal them. The
+    // visibility token catches a grant between the read and the write; nothing
+    // catches one that lands after a successful save except this.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(
+      widget({ id: "core/gated", requiredPermission: "read-secrets" })
+    );
+    callerHoldsPermission.mockResolvedValue(false);
+
+    await putWidgetLayout(
+      putReq({
+        placements: onePlacement,
+        version: 0,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "core/gated",
+    ]);
+  });
+
+  /*
+   * There is deliberately no test here for a widget whose `requiredPermission`
+   * is a truthy non-string.
+   *
+   * Two locks stand between that value and this endpoint, and BOTH are outside
+   * it: `widgetValueProblem` refuses the declaration (covered in
+   * `domains/widgets/__tests__/definition.test.ts`), and `registerWidget`
+   * stores a FROZEN snapshot, so the entry cannot be mutated into that state
+   * afterwards either -- measured, not assumed: assigning to what `listWidgets`
+   * returns throws `object is not extensible`.
+   *
+   * So `isVisibleTo`'s non-string branch is unreachable from any caller outside
+   * the widgets domain, and a test claiming to exercise it would be producing
+   * the state by some route the product does not have. The branch stays,
+   * because unreachability is a property of the current call graph rather than
+   * of the code, and a `typeof` on a value already in hand costs nothing when
+   * its rejection never runs.
+   */
+
+  it("does not report a size that depends on hidden placements", async () => {
+    // A refusal whose number varies with carried data lets a caller grow one
+    // visible placement until it appears and read the difference as the size of
+    // configuration they are not allowed to see.
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(
+      widget({ id: "core/gated", requiredPermission: "read-secrets" })
+    );
+    callerHoldsPermission.mockResolvedValue(false);
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        {
+          id: "p9",
+          widgetId: "core/gated",
+          order: 0,
+          hidden: false,
+          config: { blob: "y".repeat(60_000) },
+        },
+      ]),
+    };
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: onePlacement,
+        version: 1,
+        scope: scopeFor(["core/a"]),
+      })
+    );
+    const text = await res.text();
+
+    expect(res.status).toBe(400);
+    // No quantity at all, so nothing in the message moves with the hidden
+    // placement's size.
+    expect(text).not.toMatch(/\d{3,}/);
+    expect(text).not.toContain("gated");
   });
 
   it("reports a version conflict as a conflict", async () => {

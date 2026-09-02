@@ -235,6 +235,21 @@ export function widgetValueProblem(
     return "chrome, when given, must be a string";
   }
 
+  // A permission slug is a STRING in every version -- a newer core may mint new
+  // slugs, but it cannot make a slug stop being a string -- so this is shape
+  // rather than vocabulary, and it is shared by both channels. The field was
+  // declared and never checked, and the gap failed OPEN: the dashboard's server
+  // filter reads "not a string" as "no permission declared", so a widget whose
+  // author wrote `requiredPermission: { read: true }` was gated for nobody and
+  // returned to every authenticated caller. Refusing the declaration is the
+  // only place the mistake is still visible to the person who made it.
+  if (
+    widget.requiredPermission !== undefined &&
+    typeof widget.requiredPermission !== "string"
+  ) {
+    return "requiredPermission, when given, must be a string";
+  }
+
   // A query is an OBJECT in every version, so it belongs here rather than
   // beside the body checks. There it was reachable only when the query had to
   // establish a body, so a widget shipping a component skipped it -- and the
