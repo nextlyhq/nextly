@@ -189,6 +189,23 @@ type ComponentDef = {
   admin?: unknown;
 };
 
+/**
+ * The slugs a metadata sync rewrote, read defensively from an untyped result.
+ *
+ * `SyncResult.updated` names the rows that went through `updateCollection`,
+ * which is the one path that resets `migration_status` on a collection that
+ * already existed. Read through a guard rather than a cast because the surface
+ * this module holds is duck-typed: a partial resolver fake may resolve anything
+ * at all, and a sync that reports nothing must leave the marking alone rather
+ * than throw inside the metadata step.
+ */
+function rewrittenSlugs(result: unknown): string[] {
+  if (typeof result !== "object" || result === null) return [];
+  const updated = (result as { updated?: unknown }).updated;
+  if (!Array.isArray(updated)) return [];
+  return updated.filter((slug): slug is string => typeof slug === "string");
+}
+
 // Minimal duck-typed surfaces of registry services used here.
 interface CollectionRegistrySurface {
   syncCodeFirstCollections(configs: unknown[]): Promise<unknown>;
@@ -2230,20 +2247,43 @@ async function applyReload(opts?: {
       const codeFirstConfigs = buildCollectionSyncPayload(
         newConfig.collections ?? []
       );
-      await registry.syncCodeFirstCollections(codeFirstConfigs);
+      const collectionSync =
+        await registry.syncCodeFirstCollections(codeFirstConfigs);
 
       // registerCollection defaults migration_status to 'pending'; the pipeline
       // just created any missing tables, so mark them 'applied' (mirrors the
       // singles branch / di/register.ts). Without this a code collection added
       // after initial setup shows "pending" forever. Absent in the pre-pipeline
       // liveByTable snapshot ⇒ just created.
+      //
+      // 🔴 A successful apply leaves a row saying `pending` in TWO ways, and the
+      // pre-apply snapshot only sees one of them. `registerCollection` defaults a
+      // NEW row to `pending`, which the absent-table check below catches. But
+      // `updateCollection` ALSO RESETS an EXISTING row to `pending` whenever the
+      // fields, status or localized flag change -- and the DDL for that change is
+      // precisely what the apply above just performed. Such a collection's table
+      // was present before the apply, so `!liveByTable.has` skips it, and the row
+      // goes on reporting an outstanding migration for a table already at the new
+      // shape until a restart re-marks it.
+      //
+      // That row is not merely cosmetic. Anything deciding whether a collection's
+      // table can be queried reads it -- the widget source refresh does -- so a
+      // field edit under `next dev` silently withdrew that collection's generated
+      // cards from the dashboard for the rest of the session.
+      //
+      // The edited set is taken from the SYNC'S OWN REPORT rather than from the
+      // snapshot, because the snapshot answers "did this table exist before the
+      // apply": the right question for a table the pipeline CREATED and the wrong
+      // one for a table it ALTERED.
+      const migrated = new Set<string>(rewrittenSlugs(collectionSync));
       for (const target of targets) {
-        if (!liveByTable.has(target.tableName)) {
-          try {
-            await registry.updateMigrationStatus(target.slug, "applied");
-          } catch {
-            // Non-fatal: migration status is metadata only.
-          }
+        if (!liveByTable.has(target.tableName)) migrated.add(target.slug);
+      }
+      for (const slug of migrated) {
+        try {
+          await registry.updateMigrationStatus(slug, "applied");
+        } catch {
+          // Non-fatal: migration status is metadata only.
         }
       }
     } catch {

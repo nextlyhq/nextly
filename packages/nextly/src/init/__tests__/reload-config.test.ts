@@ -152,6 +152,15 @@ describe("reloadNextlyConfig", () => {
     failComponentSync?: boolean;
     /** Seed a `nextly_meta` migration marker the storage guard will read. */
     migrationMarker?: unknown;
+    /**
+     * What the collection metadata sync REPORTS it rewrote.
+     *
+     * The real `syncCodeFirstCollections` answers a `SyncResult`, and the
+     * reload reads its `updated` list to learn which existing rows it just
+     * reset to `pending`. A fake resolving `{}` says "nothing was rewritten",
+     * so a test about an EDITED collection has to state the report.
+     */
+    collectionSyncResult?: unknown;
   }) {
     const withAdapter = opts?.withAdapter ?? true;
     const lockDouble = createLockingAdapter({
@@ -195,7 +204,7 @@ describe("reloadNextlyConfig", () => {
       collectionRegistryService: {
         syncCodeFirstCollections: opts?.failCollectionMetaSync
           ? vi.fn().mockRejectedValue(new Error("meta sync failed"))
-          : vi.fn().mockResolvedValue({}),
+          : vi.fn().mockResolvedValue(opts?.collectionSyncResult ?? {}),
         // Mirrors CollectionRegistryService.getAllCollections — the DB-backed
         // list of every registered collection (code + UI). Defaults to empty.
         getAllCollections: vi
@@ -491,6 +500,96 @@ describe("reloadNextlyConfig", () => {
       "books",
       "applied"
     );
+  });
+
+  it("marks an EDITED code-first collection as 'applied' after a successful apply", async () => {
+    // The other half of the same bug. `updateCollection` resets an existing
+    // row's migration_status to 'pending' whenever the fields change, and the
+    // DDL for that change is what the apply just performed -- but the table was
+    // present before the apply, so the pre-pipeline `liveByTable` snapshot
+    // cannot tell that its migration is done. The row then reports an
+    // outstanding migration for a table already at the new shape, and the
+    // widget source refresh (which reads migration_status to decide whether a
+    // collection can be queried) withdraws that collection's generated cards
+    // for the rest of the dev session.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+        ],
+      },
+    });
+    // dc_books ALREADY EXISTS and is missing the new column -- an ALTER of a
+    // live table, which is the case the snapshot branch cannot see.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_books", columns: reservedColumns("dc_books") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: { created: [], updated: ["books"], unchanged: [] },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "books",
+      "applied"
+    );
+  });
+
+  it("leaves an UNCHANGED collection's migration status alone", async () => {
+    // The control the assertion above needs: marking every target 'applied'
+    // would pass that test too, and would overwrite a status that legitimately
+    // says a migration is outstanding. Only the rows the sync REPORTS it
+    // rewrote are re-marked.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "books",
+            tableName: "dc_books",
+            fields: [{ name: "title", type: "text" }],
+          },
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    // BOTH tables already exist, so neither is caught by the snapshot branch.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        { name: "dc_books", columns: reservedColumns("dc_books") },
+        { name: "dc_authors", columns: reservedColumns("dc_authors") },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: ["books"],
+        unchanged: ["authors"],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(resolver.updateCollectionMigrationStatusSpy).toHaveBeenCalledWith(
+      "books",
+      "applied"
+    );
+    expect(
+      resolver.updateCollectionMigrationStatusSpy
+    ).not.toHaveBeenCalledWith("authors", "applied");
   });
 
   it("preserves UI-created singles (registry-only) in the desired schema", async () => {
