@@ -39,6 +39,32 @@ beforeEach(() => {
 });
 
 describe("reading a stored object", () => {
+  it("calls the adapter's read AS A METHOD, keeping its receiver", async () => {
+    /*
+     * A real adapter is a class instance whose `read` reaches for `this` — the
+     * local one resolves the path through a private method, the cloud ones
+     * reach their client and config. Handed over detached the call throws
+     * inside the adapter, which catches it and reports every existing object as
+     * missing.
+     *
+     * A `vi.fn()` CANNOT show this: it has no receiver to lose, so every case
+     * below passes against a reader that strips it. The double here reads its
+     * answer off `this`, which is the only shape that fails when the receiver
+     * goes.
+     */
+    const storage = {
+      bytes: "from-the-instance",
+      read(this: { bytes: string }): Promise<Buffer | null> {
+        return Promise.resolve(Buffer.from(this.bytes, "utf8"));
+      },
+      getPublicUrl: vi.fn(),
+    };
+
+    const bytes = await readStoredMediaBytes(storage, "f.woff2", 1000);
+    expect(bytes?.toString("utf8")).toBe("from-the-instance");
+    expect(safeFetch).not.toHaveBeenCalled();
+  });
+
   it("asks an adapter that CAN read, and does not fetch", async () => {
     const storage = {
       read: vi.fn().mockResolvedValue(Buffer.from("native")),

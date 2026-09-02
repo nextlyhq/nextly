@@ -134,7 +134,18 @@ export async function readStoredMediaBytes(
    * The URL route is for adapters that cannot read at all.
    */
   if (typeof storage.read === "function") {
-    return await readThroughAdapter(storage.read, storagePath, maxBytes);
+    /*
+     * BOUND, because an adapter is a class instance and its `read` reaches for
+     * `this` — the local one resolves the path through a private method, the
+     * cloud ones reach their client and config. Handed over detached, the call
+     * throws inside the adapter, which catches it and reports every existing
+     * object as missing.
+     */
+    return await readThroughAdapter(
+      storage.read.bind(storage),
+      storagePath,
+      maxBytes
+    );
   }
   return await readThroughPublicUrl(storage, storagePath, maxBytes);
 }
@@ -270,5 +281,13 @@ function translateFetchFailure(
     // as a fault tells a caller to retry what will never return.
     return null;
   }
-  return error instanceof Error ? error : new Error(String(error));
+  /*
+   * A rejection that is not an `Error` at all — a string, an object — still has
+   * to reach the caller as this package's own failure, with a code and a status
+   * rather than a bare shape nothing can classify.
+   */
+  if (error instanceof Error) return error;
+  return NextlyError.internal({
+    logContext: { storagePath, reason: String(error) },
+  });
 }

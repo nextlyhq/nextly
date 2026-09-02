@@ -126,6 +126,52 @@ export interface MediaUploadDropzoneProps {
 }
 
 /**
+ * The extensions a family filter stands for, DERIVED from what the server
+ * actually accepts.
+ *
+ * React Dropzone matches a file by type OR by suffix, and a browser reporting
+ * no type — which it does for any format its platform does not register — has
+ * only the suffix left. So this list decides what can be dragged at all.
+ *
+ * Written by hand it disagreed with the server in both directions: it offered
+ * AVI and MOV, which the allowlist refuses, and withheld AVIF, SVG, WebM and
+ * every audio format, which the allowlist accepts. Reading the same list the
+ * server validates against is what stops the two drifting again.
+ *
+ * The wildcard itself stays permissive on purpose: an install that widens
+ * `additionalMimeTypes` accepts types this build cannot know, and matching the
+ * family lets those through to the server that configured them.
+ */
+const FAMILY_PREFIXES = ["image/", "video/", "audio/"] as const;
+
+const EXTENSIONS_BY_FAMILY: Record<string, readonly string[]> =
+  Object.fromEntries(
+    [...FAMILY_PREFIXES, "font/"].map(family => [
+      `${family}*`,
+      DEFAULT_ACCEPTED_FORMATS.filter(format =>
+        format.mimeType.startsWith(family)
+      ).flatMap(format => format.extensions),
+    ])
+  );
+
+/**
+ * The family wildcards the DEFAULT map offers, with the suffixes the server
+ * accepts under each.
+ *
+ * The wildcard is what keeps a configured install working: an install that adds
+ * `image/heic` through `additionalMimeTypes` is accepted by the server, and an
+ * exact-type map built from this build's defaults would refuse it in the
+ * browser before a request existed. The family lets it through to the
+ * authoritative validator; the extensions stay truthful for the default config.
+ */
+const EXTENSIONS_BY_FAMILY_ACCEPT: Accept = Object.fromEntries(
+  FAMILY_PREFIXES.map(family => [
+    `${family}*`,
+    [...(EXTENSIONS_BY_FAMILY[`${family}*`] ?? [])],
+  ])
+);
+
+/**
  * Default accepted file types for dropzone
  *
  * - Images: PNG, JPG, JPEG, GIF, WebP
@@ -133,12 +179,23 @@ export interface MediaUploadDropzoneProps {
  * - Documents: PDF
  * - Fonts: WOFF2, WOFF
  */
-export const DEFAULT_ACCEPTED_FILE_TYPES: Accept = Object.fromEntries(
-  DEFAULT_ACCEPTED_FORMATS.map(format => [
-    format.mimeType,
-    [...format.extensions],
-  ])
-);
+export const DEFAULT_ACCEPTED_FILE_TYPES: Accept = {
+  ...EXTENSIONS_BY_FAMILY_ACCEPT,
+  /*
+   * Exact types for what belongs to no family wildcard, and for fonts
+   * deliberately: `font/*` would admit TTF and OTF, which the server refuses
+   * because nothing converts them — a file accepted here and rejected there is
+   * a rejection an author only meets after the upload.
+   */
+  ...Object.fromEntries(
+    DEFAULT_ACCEPTED_FORMATS.filter(
+      format => !FAMILY_PREFIXES.some(f => format.mimeType.startsWith(f))
+    ).map(format => [format.mimeType, [...format.extensions]])
+  ),
+  ...Object.fromEntries(
+    WEB_FONT_FORMATS.map(format => [format.mimeType, [format.extension]])
+  ),
+};
 
 /**
  * Default maximum file size. Matches the server's default `limits.fileSize`
@@ -170,33 +227,6 @@ const UPLOAD_SUCCESS_DISPLAY_DURATION_MS = 4000;
 const WEB_FONT_MIME_BY_TYPE = new Map(
   WEB_FONT_FORMATS.map(format => [format.mimeType, format.extension])
 );
-
-/**
- * The extensions a family filter stands for, DERIVED from what the server
- * actually accepts.
- *
- * React Dropzone matches a file by type OR by suffix, and a browser reporting
- * no type — which it does for any format its platform does not register — has
- * only the suffix left. So this list decides what can be dragged at all.
- *
- * Written by hand it disagreed with the server in both directions: it offered
- * AVI and MOV, which the allowlist refuses, and withheld AVIF, SVG, WebM and
- * every audio format, which the allowlist accepts. Reading the same list the
- * server validates against is what stops the two drifting again.
- *
- * The wildcard itself stays permissive on purpose: an install that widens
- * `additionalMimeTypes` accepts types this build cannot know, and matching the
- * family lets those through to the server that configured them.
- */
-const EXTENSIONS_BY_FAMILY: Record<string, readonly string[]> =
-  Object.fromEntries(
-    ["image/", "video/", "audio/", "font/"].map(family => [
-      `${family}*`,
-      DEFAULT_ACCEPTED_FORMATS.filter(format =>
-        format.mimeType.startsWith(family)
-      ).flatMap(format => format.extensions),
-    ])
-  );
 
 /**
  * The extensions one accepted type admits, or none for a type nothing here

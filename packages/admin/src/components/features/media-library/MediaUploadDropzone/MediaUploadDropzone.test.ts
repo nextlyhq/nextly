@@ -269,7 +269,7 @@ describe("the default accept map", () => {
 });
 
 describe("the browser boundary", () => {
-  it("offers exactly the formats the server accepts, in BOTH directions", () => {
+  it("offers every format the server accepts, and none it refuses", () => {
     /*
      * The two lists disagreed each way and neither side could see it. The map
      * offered AVI and MOV, which the allowlist refuses — so an author read that
@@ -277,23 +277,51 @@ describe("the browser boundary", () => {
      * AVIF, SVG, WebM and every audio format, which the allowlist accepts — so
      * files the server wanted could not be dragged at all.
      *
-     * Enumerated both ways because each direction fails differently and a test
-     * of one is satisfied by the other going wrong.
+     * A format counts as offered by its exact type OR by its family wildcard,
+     * because the wildcard is deliberate: an install adding `image/heic`
+     * through `additionalMimeTypes` is accepted by the server, and an
+     * exact-only map built from this build's defaults would refuse it in the
+     * browser before a request existed. What the wildcard must still carry is
+     * the SUFFIX, since a browser reporting no type has nothing else to match.
      */
     expect(DEFAULT_ACCEPTED_FORMATS.length).toBeGreaterThan(0);
 
     for (const format of DEFAULT_ACCEPTED_FORMATS) {
-      expect(DEFAULT_ACCEPTED_FILE_TYPES).toHaveProperty(format.mimeType);
+      const family = `${format.mimeType.split("/")[0] ?? ""}/*`;
+      const offered =
+        DEFAULT_ACCEPTED_FILE_TYPES[format.mimeType] ??
+        DEFAULT_ACCEPTED_FILE_TYPES[family];
+
+      expect(offered).toBeDefined();
       for (const extension of format.extensions) {
-        expect(DEFAULT_ACCEPTED_FILE_TYPES[format.mimeType]).toContain(
-          extension
-        );
+        expect(offered).toContain(extension);
       }
     }
 
-    const served = new Set(DEFAULT_ACCEPTED_FORMATS.map(f => f.mimeType));
-    for (const offered of Object.keys(DEFAULT_ACCEPTED_FILE_TYPES)) {
-      expect(served.has(offered)).toBe(true);
+    /*
+     * And nothing offered that the server refuses. A family wildcard passes
+     * because the server is the authority on what that family contains; an
+     * EXACT type must be one the allowlist names, which is what caught AVI.
+     */
+    for (const [offered, extensions] of Object.entries(
+      DEFAULT_ACCEPTED_FILE_TYPES
+    )) {
+      if (offered.endsWith("/*")) {
+        const family = offered.slice(0, -1);
+        for (const extension of extensions) {
+          expect(
+            DEFAULT_ACCEPTED_FORMATS.some(
+              format =>
+                format.mimeType.startsWith(family) &&
+                format.extensions.includes(extension)
+            )
+          ).toBe(true);
+        }
+        continue;
+      }
+      expect(
+        DEFAULT_ACCEPTED_FORMATS.some(format => format.mimeType === offered)
+      ).toBe(true);
     }
   });
 
