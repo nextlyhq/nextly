@@ -24,8 +24,10 @@
  *    cannot see.
  */
 import {
+  blockPartClassName,
   blockTypeClassName,
   defaultSiteTokens,
+  tokenKindsForProperty,
   getStyleProperty,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -44,6 +46,32 @@ import { coreBlocks } from "./index";
 /** The blocks that declare defaults at all. */
 const DECLARING = (coreBlocks as AnyBlockDefinition[]).filter(
   block => block.baseStyles !== undefined
+);
+
+/**
+ * The PART defaults, which this file did not inspect at all until now.
+ *
+ * `DECLARING` filters on `block.baseStyles`, and every case below walks that
+ * one field — so a property declared on a part has never been checked against
+ * the catalog or against the compiled sheet. That is not a hypothetical gap:
+ * `core/form`'s submit was written with `justify-self`, which the catalog does
+ * not carry, and the whole suite stayed green while the declaration was
+ * dropped and the button ran the full width of its column.
+ *
+ * Parts are where a block styles something it renders INSIDE its root, which
+ * is exactly where an author cannot reach with a style control — so a default
+ * dropped here is one nobody can put back.
+ */
+const DECLARING_PARTS: (readonly [string, string, NodeStyles])[] = (
+  coreBlocks as AnyBlockDefinition[]
+).flatMap(block =>
+  Object.entries(
+    (block.parts ?? {}) as Record<string, { baseStyles?: NodeStyles }>
+  ).flatMap(([partName, part]) =>
+    part.baseStyles === undefined
+      ? []
+      : [[block.name, partName, part.baseStyles] as const]
+  )
 );
 
 /**
@@ -72,7 +100,8 @@ function declaredProperties(styles: NodeStyles): string[] {
  * lives at a different depth for each shape it can take — a scalar declares one,
  * an object shape declares one per field — so reading it would need a walker
  * per shape. Every scalar entry in the catalog is the plain kebab-case of its
- * property name, which is what {@link isScalarDeclaration} confines this to.
+ * property name, and an object-shaped one is counted rather than named, which is
+ * what {@link declarationsFor} does with the prefix this returns.
  */
 /**
  * How many scalar leaves one declared property carries, across every state and
@@ -142,33 +171,6 @@ function declarationsFor(
 
 function cssNameOf(property: string): string {
   return property.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
-}
-
-/**
- * Whether every declaration of a property is a single value rather than a
- * per-side or per-corner object.
- *
- * An object-shaped declaration compiles to SEVERAL css properties with names of
- * their own — `borderRadius` given corners emits `border-start-start-radius`
- * and its three siblings, none of which is the kebab-case of `borderRadius`. So
- * those are excluded from the name check rather than checked wrongly; the
- * membership assertion still covers them, and a token reference stays IN,
- * because it compiles to one `var()` under the property's own name.
- */
-function isScalarDeclaration(styles: NodeStyles, property: string): boolean {
-  for (const byBreakpoint of Object.values(styles)) {
-    if (byBreakpoint === undefined) continue;
-    for (const values of Object.values(byBreakpoint)) {
-      if (values === undefined) continue;
-      if (!(property in values)) continue;
-      const value: unknown = (values as Record<string, unknown>)[property];
-      const isObject = typeof value === "object" && value !== null;
-      const isToken =
-        isObject && typeof (value as { $token?: unknown }).$token === "string";
-      if (isObject && !isToken) return false;
-    }
-  }
-  return true;
 }
 
 /**
@@ -282,6 +284,91 @@ describe("every default the core library declares", () => {
     }
   );
 
+  it("inspects every part that declares defaults", () => {
+    /*
+     * The population control for the case below. Without it, a walk that
+     * returned nothing — a renamed `parts` field, a changed shape — would leave
+     * the next assertion green while checking no part at all.
+     */
+    expect(
+      DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
+    ).toEqual([
+      "core/form#control",
+      "core/form#submit",
+      "core/image#caption",
+      "core/quote#attribution",
+      "core/quote#quotation",
+    ]);
+  });
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s declares only properties STYLE_CATALOG knows",
+    (name, part, styles) => {
+      const declared = declaredProperties(styles);
+      expect(
+        declared.length,
+        `${name} part ${part} declared no properties`
+      ).toBeGreaterThan(0);
+      expect(
+        declared.filter(property => getStyleProperty(property) === undefined),
+        `${name} part ${part} declares a property the compiler does not know. ` +
+          `It will be DROPPED silently rather than passed through, so the ` +
+          `default has no effect — and a part is markup an author cannot ` +
+          `reach with a style control, so nobody can put it back. Note the ` +
+          `catalog has flex and grid CONTAINER properties and no ITEM ` +
+          `properties at all.`
+      ).toEqual([]);
+    }
+  );
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s reaches the compiled stylesheet, property by property",
+    (name, part, styles) => {
+      /*
+       * The second failure mode, which the membership case above cannot see: a
+       * catalog property is STILL dropped when its value does not match the
+       * grammar the catalog declares for it. The root styles have had this
+       * check since they had the first one; parts had neither.
+       */
+      const block = (coreBlocks as AnyBlockDefinition[]).find(
+        candidate => candidate.name === name
+      ) as AnyBlockDefinition;
+      const css = compiledCss(block);
+      const selector = blockPartClassName(name, part);
+      expect(css, `nothing was emitted for ${name} part ${part}`).toContain(
+        selector
+      );
+      const declared = declaredProperties(styles);
+      const expected = declared.map(property => ({
+        property,
+        leaves: leafCount(styles, property),
+        emitted: declarationsFor(
+          css,
+          selector,
+          cssNameOf(property),
+          declared.map(cssNameOf)
+        ),
+      }));
+      expect(
+        expected.length,
+        `${name} part ${part} declared no property to check`
+      ).toBeGreaterThan(0);
+      const missing = expected
+        .filter(({ leaves, emitted }) => emitted < leaves)
+        .map(
+          ({ property, leaves, emitted }) =>
+            `${property} (${emitted} of ${leaves} emitted)`
+        );
+      expect(
+        missing,
+        `${name} part ${part} declares ${missing.join(", ")} but the compiled ` +
+          `stylesheet does not carry every leaf. A part is markup an author ` +
+          `cannot reach with a style control, so a default dropped here is ` +
+          `one nobody can put back.`
+      ).toEqual([]);
+    }
+  );
+
   it.each(DECLARING.map(block => [block.name, block] as const))(
     "%s reaches the compiled stylesheet, property by property",
     (name, block) => {
@@ -299,13 +386,21 @@ describe("every default the core library declares", () => {
       // declared property is looked for by its own CSS name.
       const declared = declaredProperties(block.baseStyles as NodeStyles);
 
-      // A scalar compiles to its own name and is looked for exactly. An
-      // object-shaped one compiles to SEVERAL declarations whose names extend
-      // it, and it is checked by COUNT rather than by a shared prefix: one
-      // needle of `padding-` is satisfied by any surviving side, so a
+      // Checked by COUNT rather than by presence, for both shapes. One needle
+      // of `padding-` is satisfied by any surviving side, so a
       // `padding.inlineStart` the compiler refused would hide behind the
       // `padding.blockEnd` beside it and the case would stay green while a
       // default it names is silently absent.
+      //
+      // A SCALAR is counted the same way, and used to be pinned at 1 on the
+      // reasoning that one value compiles to one declaration. That holds per
+      // state, not per property: `backgroundColor` in `base` and again in
+      // `hover` is two declarations, both inside a rule carrying this block's
+      // selector, so an expectation of 1 is satisfied by the base declaration
+      // alone and a refused hover value is invisible. No default declares a
+      // second state today, which is exactly why the shortcut looked sound —
+      // it would have failed open on the first one that did. `leafCount`
+      // already sums across every state and breakpoint, so it is simply asked.
       //
       // Counting sidesteps having to predict the expanded NAMES, which are not
       // a join of the path — `border.width.blockStart` compiles to
@@ -313,16 +408,9 @@ describe("every default the core library declares", () => {
       // leaves went in is knowable without knowing what each one is called.
       const expected = declared.map(property => {
         const cssName = cssNameOf(property);
-        const scalar = isScalarDeclaration(
-          block.baseStyles as NodeStyles,
-          property
-        );
         return {
           property,
-          scalar,
-          leaves: scalar
-            ? 1
-            : leafCount(block.baseStyles as NodeStyles, property),
+          leaves: leafCount(block.baseStyles as NodeStyles, property),
           emitted: declarationsFor(
             css,
             selector,
@@ -371,6 +459,37 @@ function tokenNamesIn(value: unknown): string[] {
   return Object.values(record).flatMap(tokenNamesIn);
 }
 
+/**
+ * Every token reference a `NodeStyles` makes, WITH the property it is made for.
+ *
+ * The property is what {@link tokenNamesIn} throws away, and it is the half that
+ * decides whether a reference is usable: a name can exist in the guaranteed set
+ * and still be the wrong KIND for where it is written.
+ *
+ * The property is the key at the state/breakpoint level — the third level down —
+ * so the walk carries it once it is past `styles[state][breakpoint]` and then
+ * descends without changing it. A token inside an object-shaped declaration
+ * belongs to the property that declaration names.
+ */
+function tokenReferencesIn(
+  styles: NodeStyles
+): { property: string; token: string }[] {
+  const found: { property: string; token: string }[] = [];
+  for (const byBreakpoint of Object.values(styles)) {
+    if (byBreakpoint === undefined) continue;
+    for (const values of Object.values(byBreakpoint)) {
+      if (values === undefined) continue;
+      for (const [property, value] of Object.entries(
+        values as Record<string, unknown>
+      )) {
+        for (const token of tokenNamesIn(value))
+          found.push({ property, token });
+      }
+    }
+  }
+  return found;
+}
+
 describe("a token a default depends on must be one the site set defines", () => {
   /**
    * **This REPLACES a ratchet that forbade tokens outright**, and the swap is the
@@ -411,6 +530,129 @@ describe("a token a default depends on must be one the site set defines", () => 
       ).toEqual([]);
     }
   );
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s names only tokens the guaranteed set defines",
+    (name, part, styles) => {
+      /*
+       * The same question as the case above, asked of parts — which the case
+       * above cannot reach, because it iterates `DECLARING` and a part's styles
+       * hang off `block.parts[]` rather than `block.baseStyles`.
+       *
+       * It matters more here than on a root. A part is markup an author cannot
+       * select with a style control, so a default that dangles is one nobody can
+       * put back; and the catalog check beside it cannot see this failure at all
+       * — the property is legitimate and the declaration reaches the stylesheet,
+       * carrying a `var()` nothing defines.
+       */
+      const guaranteed = new Set(defaultSiteTokens().map(token => token.name));
+      const named = tokenNamesIn(styles);
+      const undefinedTokens = named.filter(token => !guaranteed.has(token));
+
+      expect(
+        undefinedTokens,
+        `${name} part ${part} depends on ${undefinedTokens.join(", ")}, which ` +
+          `no guaranteed token defines. The reference compiles to a var() with ` +
+          `nothing behind it, so the property silently falls back to its ` +
+          `initial value — and a part is markup an author cannot reach with a ` +
+          `style control, so nobody can put it back.`
+      ).toEqual([]);
+    }
+  );
+
+  it("inspects at least one PART that DOES depend on a token", () => {
+    // The population control for the parts case, which passes by finding
+    // nothing exactly as the block case does. Without it a walk that returned
+    // no part styles — a renamed field, a changed shape — would leave every
+    // part green having inspected no token at all.
+    const withTokens = DECLARING_PARTS.filter(
+      ([, , styles]) => tokenNamesIn(styles).length > 0
+    ).map(([block, part]) => `${block}#${part}`);
+
+    expect(withTokens).toContain("core/form#control");
+  });
+
+  it.each(DECLARING.map(block => [block.name, block] as const))(
+    "%s uses each token where its KIND is accepted",
+    (name, block) => {
+      /*
+       * A name that exists is not a name that works. `backgroundColor` accepts
+       * a `color`; pointing it at the guaranteed DIMENSION `space.4` emits
+       * `background-color: var(--site-space-4)`, which the browser drops — and
+       * every check beside this one stays green, because the property is in the
+       * catalog, the declaration reaches the stylesheet, and the token is in the
+       * guaranteed set.
+       *
+       * Production cannot catch it either. `validateStyleValues` DOES refuse a
+       * kind mismatch, but only when it is given the site's token table, and a
+       * block default is compiled without one — so the check that exists never
+       * runs on the values in this file.
+       *
+       * Asked of `tokenKindsForProperty`, which is the engine's own answer, and
+       * a UNION across a composite property's leaves. That is looser than
+       * per-leaf: a token accepted at one leaf of a property passes here when
+       * written at another. It is the exported answer, and it catches the case
+       * that matters — a kind the property does not accept anywhere.
+       */
+      const guaranteed = new Map(
+        defaultSiteTokens().map(token => [token.name, token.kind])
+      );
+      const wrong = tokenReferencesIn(block.baseStyles as NodeStyles)
+        .filter(({ token }) => guaranteed.has(token))
+        .filter(({ property, token }) => {
+          const accepted = tokenKindsForProperty(property);
+          return !accepted.includes(guaranteed.get(token)!);
+        })
+        .map(
+          ({ property, token }) =>
+            `${property} takes ${tokenKindsForProperty(property).join(" or ") || "no token"} ` +
+            `but names ${token}, which is a ${guaranteed.get(token)!}`
+        );
+
+      expect(
+        wrong,
+        `${name} writes a token where its kind is refused, so the declaration ` +
+          `compiles to a var() the browser drops.`
+      ).toEqual([]);
+    }
+  );
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s uses each token where its KIND is accepted",
+    (name, part, styles) => {
+      const guaranteed = new Map(
+        defaultSiteTokens().map(token => [token.name, token.kind])
+      );
+      const wrong = tokenReferencesIn(styles)
+        .filter(({ token }) => guaranteed.has(token))
+        .filter(({ property, token }) => {
+          const accepted = tokenKindsForProperty(property);
+          return !accepted.includes(guaranteed.get(token)!);
+        })
+        .map(
+          ({ property, token }) =>
+            `${property} names ${token}, a ${guaranteed.get(token)!}`
+        );
+
+      expect(
+        wrong,
+        `${name} part ${part} writes a token where its kind is refused — and a ` +
+          `part is markup an author cannot reach with a style control, so ` +
+          `nobody can put the dropped declaration back.`
+      ).toEqual([]);
+    }
+  );
+
+  it("inspects a property that actually CONSTRAINS the kind", () => {
+    /*
+     * The control for the two cases above, which pass by finding nothing. If
+     * every property accepted every kind — or `tokenKindsForProperty` returned
+     * an empty union for the ones under test — they would be green having
+     * refused nothing.
+     */
+    expect(tokenKindsForProperty("backgroundColor")).toContain("color");
+    expect(tokenKindsForProperty("backgroundColor")).not.toContain("dimension");
+  });
 
   it("inspects at least one block that DOES depend on a token", () => {
     // The population control. Every case above passes by finding nothing, so a

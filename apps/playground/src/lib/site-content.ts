@@ -14,6 +14,7 @@
  *
  * @module lib/site-content
  */
+import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
 import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
 
@@ -94,3 +95,67 @@ export const siteReader: NextlyContentReader &
 export const SITE_STYLE_CONTEXT = {
   breakpoints: SITE_STYLE_DEFAULTS.breakpoints,
 };
+
+/**
+ * The site sheet's inputs, resolved PER REQUEST — the code-stated defaults with
+ * the stored Site Style document layered on top, so a token or class an admin
+ * saves reaches the next page view rather than the next deploy.
+ *
+ * ONE provider, because the routes had drifted. The collection route built this
+ * inline while `/` and `/landing` passed only {@link SITE_STYLE_CONTEXT}, which
+ * carries the breakpoints and NO token set — so those two synthesised a sheet
+ * without the site's tokens and fell back to the engine's default
+ * `[data-nx-theme="dark"]` selector. This app has no theme toggle and darkens
+ * through `prefers-color-scheme`, so every dark token value silently never
+ * applied on the two routes a visitor is most likely to land on.
+ *
+ * A shared export rather than three call sites agreeing by inspection: the
+ * failure had no symptom, because a route that omits this renders perfectly and
+ * merely resolves its tokens differently from the route beside it.
+ */
+export const SITE_STYLES = {
+  read: () =>
+    loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
+  /**
+   * What that read depends on. A cacheable route caches the whole render and
+   * only a tag it carries rebuilds it, and the Direct API read inside `read`
+   * contributes none — so without naming the single, an admin's save would
+   * invalidate a tag no cache entry holds and the page would keep serving the
+   * old sheet.
+   */
+  singles: [SITE_STYLE_SLUG],
+};
+
+/**
+ * The metadata a Single-backed page derives from its document.
+ *
+ * Shared by the two single-page routes, which had the same nine lines each. The
+ * SEO derivation wins over the stored field where it has an answer, because it
+ * reads the page's own first heading and opening paragraph — a title an author
+ * changed in the layout should not be contradicted by a `title` field they
+ * forgot.
+ *
+ * Not shared with the collection route, whose version also states `canonical`:
+ * an entry has a path within its collection and a Single does not.
+ */
+export function singleMetadata(
+  document: Record<string, unknown>,
+  _context: unknown,
+  derived: {
+    title?: string | undefined;
+    description?: string | undefined;
+    image?: string | undefined;
+  }
+): {
+  title: string | undefined;
+  description: string | undefined;
+  openGraph?: { images: { url: string }[] };
+} {
+  return {
+    title: derived.title ?? (document.title as string | undefined),
+    description: derived.description,
+    ...(derived.image
+      ? { openGraph: { images: [{ url: derived.image }] } }
+      : {}),
+  };
+}

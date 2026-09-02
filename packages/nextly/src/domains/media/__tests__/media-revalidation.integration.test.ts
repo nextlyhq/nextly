@@ -23,6 +23,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
 
 let current: TestNextly | undefined;
 
@@ -64,7 +65,7 @@ describe("media writes bust their cache tags (integration)", () => {
 
     const uploaded = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -86,7 +87,7 @@ describe("media writes bust their cache tags (integration)", () => {
 
     const uploaded = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "gone.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -115,7 +116,7 @@ describe("media writes bust their cache tags (integration)", () => {
     // while it sits in storage.
     const uploaded = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "resilient.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -140,7 +141,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     const legacy = new LegacyMediaService(handle.adapter, console as never);
 
     const result = await legacy.uploadMedia({
-      file: Buffer.from("x"),
+      file: pdfDocument("x"),
       filename: "via-action.pdf",
       mimeType: "application/pdf",
       size: 1,
@@ -176,7 +177,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     const folder = await unified.createFolder({ name: "doomed" }, ctx);
     const uploaded = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "inside.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -196,7 +197,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     // statement about a single-element list.
     const second = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("y"),
+        data: pdfDocument("y"),
         name: "also-inside.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -242,7 +243,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
 
     const original = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "original.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -308,7 +309,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
 
     const uploaded = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "wanderer.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -334,7 +335,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     const { handle, flush } = await bootWithSpy();
     const uploaded = await handle.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfDocument("x"),
         name: "ordered.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -369,7 +370,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
     for (let i = 0; i < count; i++) {
       const file = await handle.nextly.media.upload({
         file: {
-          data: Buffer.from(`bulk-${i}`),
+          data: pdfDocument(`bulk-${i}`),
           name: `bulk-${i}.pdf`,
           mimetype: "application/pdf",
           size: 1,
@@ -474,7 +475,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
     flush.mockClear();
     const result = await unified.bulkUpload(
       [0, 1, 2].map(i => ({
-        buffer: Buffer.from(`u${i}`),
+        buffer: pdfDocument(`u${i}`),
         filename: `unified-${i}.pdf`,
         mimeType: "application/pdf",
         size: 1,
@@ -505,7 +506,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
     flush.mockClear();
     const result = await legacy.uploadMediaBulk(
       [0, 1, 2].map(i => ({
-        file: Buffer.from(`l${i}`),
+        file: pdfDocument(`l${i}`),
         filename: `legacy-${i}.pdf`,
         mimeType: "application/pdf",
         size: 1,
@@ -529,7 +530,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
     const legacy = new LegacyMediaService(handle.adapter, console as never);
     const uploaded = await legacy.uploadMediaBulk(
       [0, 1, 2].map(i => ({
-        file: Buffer.from(`d${i}`),
+        file: pdfDocument(`d${i}`),
         filename: `doomed-${i}.pdf`,
         mimeType: "application/pdf",
         size: 1,
