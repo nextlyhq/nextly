@@ -318,9 +318,55 @@ function faceSpecimenStyle(face: FontFaceDef): React.CSSProperties {
     // declaration, and the specimen demonstrates the fallback — the one lie
     // this panel must not tell.
     fontFamily: `"${cssString(face.family)}"`,
-    ...(face.weight === undefined ? {} : { fontWeight: face.weight }),
+    ...(specimenWeight(face.weight) === undefined
+      ? {}
+      : { fontWeight: specimenWeight(face.weight) }),
     ...(face.style === undefined ? {} : { fontStyle: face.style }),
   };
+}
+
+/**
+ * One weight the specimen element can actually carry.
+ *
+ * A variable face declares a RANGE — `100 900` — which is valid in
+ * `@font-face` and invalid as a `font-weight` on an element: the browser drops
+ * the whole declaration and draws at its normal weight, so a range excluding
+ * 400 renders the specimen in a FALLBACK while the row claims to demonstrate
+ * the file.
+ *
+ * 400 when the range covers it, because that is what a reader sees in ordinary
+ * text; otherwise the lower bound, which the face definitely provides.
+ */
+function specimenWeight(weight: string | undefined): string | undefined {
+  if (weight === undefined) return undefined;
+  const parts = weight.trim().split(/\s+/);
+  if (parts.length < 2) return weight;
+  const low = Number(parts[0]);
+  const high = Number(parts[1]);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return undefined;
+  return low <= 400 && 400 <= high ? "400" : String(low);
+}
+
+/**
+ * Whether a string is a `font-weight` the browser will honour.
+ *
+ * The `datalist` below only SUGGESTS, so this field accepts anything typed
+ * into it. `validateFontFace` refuses characters that would break the
+ * stylesheet and says nothing about the grammar, so `70O` reached the sheet,
+ * the browser ignored the descriptor, and the face was matched at a weight
+ * nobody chose while the panel reported the add as a success.
+ *
+ * Both forms the descriptor allows: one absolute weight, or two making a
+ * variable range.
+ */
+function isUsableWeight(weight: string): boolean {
+  const parts = weight.trim().split(/\s+/);
+  if (parts.length === 0 || parts.length > 2) return false;
+  return parts.every(part => {
+    if (part === "normal" || part === "bold") return true;
+    const value = Number(part);
+    return Number.isFinite(value) && value >= 1 && value <= 1000;
+  });
 }
 
 /**
@@ -471,20 +517,29 @@ function FaceList({
    * spelled differently declare different families to the browser, and drawing
    * them under one heading would claim a coverage the page does not have.
    */
-  const families = new Map<string, FontFaceDef[]>();
+  const families = new Map<string, { display: string; faces: FontFaceDef[] }>();
   for (const face of emittable) {
-    const group = families.get(face.family);
-    if (group === undefined) families.set(face.family, [face]);
-    else group.push(face);
+    // Keyed the way `hostedFamilies` compares, because CSS resolves a family
+    // name case-insensitively: `Brand` and `brand` are ONE family to the
+    // browser, and two headings here would claim a split the page does not
+    // have. The first spelling seen is kept for display — the panel shows what
+    // an author wrote rather than a normalised form they never typed.
+    const key = face.family.toLowerCase();
+    const group = families.get(key);
+    if (group === undefined) {
+      families.set(key, { display: face.family, faces: [face] });
+    } else {
+      group.faces.push(face);
+    }
   }
 
   return (
     <ul className="nx-fonts__faces">
-      {[...families].map(([family, group]) => (
-        <li className="nx-fonts__family-group" key={family}>
-          <span className="nx-fonts__face-name">{family}</span>
+      {[...families].map(([key, group]) => (
+        <li className="nx-fonts__family-group" key={key}>
+          <span className="nx-fonts__face-name">{group.display}</span>
           <ul className="nx-fonts__family-faces">
-            {group.map(face => (
+            {group.faces.map(face => (
               <li className="nx-fonts__face" key={faceKey(face)}>
                 <span className="nx-fonts__face-cut">{faceCut(face)}</span>
                 <span
@@ -511,9 +566,17 @@ function FaceList({
  */
 function faceCut(face: FontFaceDef): string {
   const weight = face.weight?.trim() ?? "";
-  const italic = face.style?.trim().toLowerCase() === "italic";
-  if (weight === "" && !italic) return "Regular";
-  return [weight, italic ? "Italic" : ""].filter(part => part !== "").join(" ");
+  /*
+   * Any style that is not `normal`, rather than `italic` alone. `oblique` and
+   * `oblique 10deg` are valid descriptors the specimen renders faithfully, so
+   * recognising only italic labelled one of them `Regular` while the letters
+   * beside it visibly slanted — the row contradicting the thing it describes.
+   */
+  const style = face.style?.trim() ?? "";
+  const slanted = style !== "" && style.toLowerCase() !== "normal";
+  if (weight === "" && !slanted) return "Regular";
+  const label = slanted ? style.charAt(0).toUpperCase() + style.slice(1) : "";
+  return [weight, label].filter(part => part !== "").join(" ");
 }
 
 /**
@@ -551,13 +614,21 @@ function AddFaceForm({
   const [style, setStyle] = useState("normal");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /*
+   * Whether the family in the field came from an author or from a filename.
+   *
+   * Emptiness cannot answer this. Reading "is it blank" refuses to overwrite a
+   * GUESS as well as a typed name, so re-picking after choosing the wrong file
+   * left the first file's family in place and stored the second file's bytes
+   * under it — silently, which is the failure this form exists to avoid.
+   */
+  const [familyAuthored, setFamilyAuthored] = useState(false);
 
   const chooseFile = (chosen: File | null): void => {
     setFile(chosen);
     setError(null);
-    // Only when the author has not typed one. Overwriting what they wrote
-    // because they re-picked a file would discard the more reliable of the two.
-    if (chosen !== null && family.trim() === "") {
+    // A guess is replaced by a better guess; what an author typed is theirs.
+    if (chosen !== null && !familyAuthored) {
       setFamily(familyFromFilename(chosen.name));
     }
   };
@@ -565,6 +636,12 @@ function AddFaceForm({
   const submit = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
     if (file === null || family.trim() === "" || busy) return;
+    if (!isUsableWeight(weight)) {
+      setError(
+        "A weight is one number from 1 to 1000, or two making a variable range — 400, or 100 900."
+      );
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -578,10 +655,20 @@ function AddFaceForm({
         setError(refusal);
         return;
       }
-      // Cleared only on success, so a refusal leaves every field where the
-      // author left it and the fix is one edit rather than a re-entry.
+      /*
+       * Cleared only on success, so a refusal leaves every field where the
+       * author left it and the fix is one edit rather than a re-entry.
+       *
+       * The CUT is cleared with the rest. Adding a family means adding its
+       * regular, its bold and its italic in turn, so a retained `700 Italic`
+       * is applied to the NEXT file by default — a face stored under a weight
+       * nobody chose, which loads and matches nothing.
+       */
       setFile(null);
       setFamily("");
+      setFamilyAuthored(false);
+      setWeight("400");
+      setStyle("normal");
     } finally {
       setBusy(false);
     }
@@ -606,7 +693,10 @@ function AddFaceForm({
       <input
         className="nx-fonts__add-text"
         id="nx-fonts-family"
-        onChange={event => setFamily(event.target.value)}
+        onChange={event => {
+          setFamily(event.target.value);
+          setFamilyAuthored(true);
+        }}
         placeholder="Inter"
         type="text"
         value={family}

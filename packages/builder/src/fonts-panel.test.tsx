@@ -307,7 +307,13 @@ describe("adding a font file", () => {
   /** Choose a file the way a picker does, since jsdom has no picker. */
   async function chooseFile(file: File): Promise<void> {
     const input = screen.getByLabelText("Font file") as HTMLInputElement;
-    Object.defineProperty(input, "files", { value: [file], writable: false });
+    // `configurable`, because a case that re-picks defines this twice on one
+    // input — and a non-configurable property throws on the second, which reads
+    // as the component refusing the file rather than the harness refusing.
+    Object.defineProperty(input, "files", {
+      value: [file],
+      configurable: true,
+    });
     await act(async () => {
       fireEvent.change(input);
     });
@@ -395,6 +401,93 @@ describe("adding a font file", () => {
     );
   });
 
+  it("REFRESHES an untouched family guess when the file changes", async () => {
+    /*
+     * Emptiness cannot tell a guess from a typed name. Reading "is it blank"
+     * refused to overwrite the GUESS as well, so re-picking after choosing the
+     * wrong file left the first file's family in place and would have stored
+     * the second file's bytes under it.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    expect((screen.getByLabelText("Family") as HTMLInputElement).value).toBe(
+      "Inter"
+    );
+
+    await chooseFile(woff2("Roboto-Regular.woff2"));
+    expect((screen.getByLabelText("Family") as HTMLInputElement).value).toBe(
+      "Roboto"
+    );
+  });
+
+  it("resets the CUT once a face is stored", async () => {
+    /*
+     * Adding a family means adding its regular, its bold and its italic in
+     * turn. A retained `700 Italic` is applied to the NEXT file by default —
+     * a face stored under a weight nobody chose, which loads and matches
+     * nothing.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Bold.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "700" },
+    });
+    fireEvent.change(screen.getByLabelText("Style"), {
+      target: { value: "italic" },
+    });
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect((screen.getByLabelText("Weight") as HTMLInputElement).value).toBe(
+      "400"
+    );
+    expect((screen.getByLabelText("Style") as HTMLSelectElement).value).toBe(
+      "normal"
+    );
+  });
+
+  it("REFUSES a weight the browser would ignore, before uploading", async () => {
+    /*
+     * The `datalist` only suggests, and the stored-style validator checks these
+     * descriptors for characters that would break the sheet rather than for the
+     * `font-weight` grammar — so `70O` reached the sheet, the browser ignored
+     * the descriptor, and the face was matched at a weight nobody chose while
+     * the panel reported a successful add.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "70O" },
+    });
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toMatch(/1 to 1000/);
+  });
+
+  it("accepts a variable RANGE, which is the form a menu cannot express", () => {
+    // The control: a check that only allowed single numbers would refuse the
+    // one form the free-text field exists for.
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "100 900" },
+    });
+    expect((screen.getByLabelText("Weight") as HTMLInputElement).value).toBe(
+      "100 900"
+    );
+  });
+
   it("clears the file and family once the host stored one", async () => {
     // The control for the case above: without it, "keeps the fields" is also
     // satisfied by a form that never clears them.
@@ -452,5 +545,81 @@ describe("the faces this site loads", () => {
   it("calls a face declaring neither weight nor style the Regular", () => {
     render(<FontsPanel faces={[face("Brand")]} tokens={tokens} />);
     expect(screen.getByText("Regular")).toBeTruthy();
+  });
+});
+
+describe("what a cut label and a specimen say", () => {
+  const cut = (weight?: string, style?: string): FontFaceDef => ({
+    family: "Brand",
+    src: [{ url: `/f/${weight ?? "x"}${style ?? ""}.woff2`, format: "woff2" }],
+    ...(weight !== undefined && { weight }),
+    ...(style !== undefined && { style }),
+  });
+
+  it("names a NON-italic slant rather than calling it Regular", () => {
+    /*
+     * `oblique` is a valid descriptor the specimen renders faithfully, so a row
+     * labelled `Regular` beside visibly slanted letters contradicts the thing
+     * it describes.
+     */
+    render(<FontsPanel faces={[cut(undefined, "oblique")]} tokens={tokens} />);
+    const listed = within(
+      screen.getByRole("region", { name: "Font files this site loads" })
+    );
+    expect(listed.getByText("Oblique")).toBeTruthy();
+    expect(listed.queryByText("Regular")).toBeNull();
+  });
+
+  it("gives the specimen ONE weight when the face declares a range", () => {
+    /*
+     * `100 900` is valid in `@font-face` and invalid as an element's
+     * `font-weight`: the browser drops the whole declaration and draws at its
+     * normal weight, so a range excluding 400 would render the specimen in a
+     * fallback while the row claims to demonstrate the file.
+     */
+    render(<FontsPanel faces={[cut("100 900")]} tokens={tokens} />);
+    const specimen = screen
+      .getByRole("region", { name: "Font files this site loads" })
+      .querySelector(".nx-fonts__specimen") as HTMLElement;
+    expect(specimen.style.fontWeight).toBe("400");
+  });
+
+  it("uses the range's lower bound when it does not reach 400", () => {
+    // The control for the case above: a constant 400 would satisfy it while
+    // naming a weight this face does not provide.
+    render(<FontsPanel faces={[cut("500 900")]} tokens={tokens} />);
+    const specimen = screen
+      .getByRole("region", { name: "Font files this site loads" })
+      .querySelector(".nx-fonts__specimen") as HTMLElement;
+    expect(specimen.style.fontWeight).toBe("500");
+  });
+
+  it("groups two spellings of one family under a single heading", () => {
+    /*
+     * CSS resolves a family name case-insensitively, and `hostedFamilies`
+     * already compares that way — two headings here would claim a split the
+     * browser does not make.
+     */
+    render(
+      <FontsPanel
+        faces={[
+          { family: "Brand", src: [{ url: "/a.woff2" }], weight: "400" },
+          { family: "brand", src: [{ url: "/b.woff2" }], weight: "700" },
+        ]}
+        tokens={tokens}
+      />
+    );
+    /*
+     * The GROUP count, not a text match. `/^Brand$/` is case-sensitive, so it
+     * matches one heading whether the panel drew one group or two — an
+     * assertion that passes on the implementation it exists to reject.
+     */
+    const region = screen.getByRole("region", {
+      name: "Font files this site loads",
+    });
+    expect(region.querySelectorAll(".nx-fonts__family-group")).toHaveLength(1);
+    const listed = within(region);
+    expect(listed.getByText("400")).toBeTruthy();
+    expect(listed.getByText("700")).toBeTruthy();
   });
 });

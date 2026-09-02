@@ -1003,6 +1003,16 @@ function nextOrderIndex(library: readonly NamedClass[]): number {
 }
 
 /**
+ * The record an upload answers with, derived from the hook rather than restated.
+ *
+ * Naming the shape here would be this file's second opinion about what the
+ * media pipeline returns, and it would go on compiling after that shape moved.
+ */
+type UploadedMedia = Awaited<
+  ReturnType<ReturnType<typeof useUploadMedia>["mutateAsync"]>
+>;
+
+/**
  * Store a font file on this site, then declare the `@font-face` that loads it.
  *
  * Two writes that have to happen in this order and cannot be one: the file must
@@ -1019,26 +1029,61 @@ function nextOrderIndex(library: readonly NamedClass[]): number {
  *   the face is stored
  */
 function useFontFaceWriter(
-  stored: readonly FontFaceDef[] | undefined
+  stored: readonly FontFaceDef[] | undefined,
+  storedPending: boolean
 ): (request: FontFaceUpload) => Promise<string | undefined> {
   const { save: saveSiteStyle } = useSaveSiteStyle();
   const { mutateAsync: uploadMedia } = useUploadMedia();
+  /*
+   * The last file that reached storage, and what it became.
+   *
+   * The two writes cannot be one — the bytes must have an id before a face can
+   * point at one — so a refused style write leaves a stored object no face
+   * references. The form keeps the `File` on a refusal so the author can fix
+   * the descriptors and resubmit, and without this each attempt uploaded the
+   * same bytes again: a run of validation failures left a copy per attempt.
+   *
+   * Keyed on the `File` itself, which is the identity the picker hands over
+   * and which changes exactly when the author chooses a different file.
+   */
+  const uploaded = useRef<{ file: File; media: UploadedMedia } | null>(null);
 
   return useCallback(
     async (request: FontFaceUpload): Promise<string | undefined> => {
-      let media;
-      try {
-        media = await uploadMedia({ file: request.file });
-      } catch (reason) {
-        /*
-         * The upload's own refusal, which is the one an author can act on: it
-         * names the format, the size cap or the signature mismatch. Replacing
-         * it with wording of our own would describe a policy this surface does
-         * not hold.
-         */
-        return reason instanceof Error
-          ? reason.message
-          : "That file could not be uploaded.";
+      /*
+       * Refused rather than guessed at. `save` replaces the section outright,
+       * so appending to a stored tier that has not arrived writes the new face
+       * ALONE and discards every face already stored — and the author is told
+       * it saved.
+       *
+       * The panel does not render the form while the read is in flight, so
+       * nothing reaches this through the UI and no test drives it. It stays
+       * because the callback is the host's to hand out and a boolean over a
+       * value already in hand costs nothing, while the failure it prevents is
+       * silent data loss.
+       */
+      if (storedPending) {
+        return "This site's fonts are still loading. Try again in a moment.";
+      }
+
+      const stored_ = await storeOnce(request.file, uploaded, uploadMedia);
+      if (typeof stored_ === "string") return stored_;
+      const media = stored_;
+
+      /*
+       * The picker's `accept` is a hint a caller can bypass, and the media
+       * pipeline accepts far more than fonts. A PNG stored here would be saved
+       * as a face with no `format()` — which `validateFontFace` permits — and
+       * the byte route answers 404 for every type outside the servable set, so
+       * the site would carry a family that silently never loads.
+       *
+       * Decided on the type upload validation SETTLED on rather than the one
+       * the browser guessed, which is the same value the route will check the
+       * bytes against.
+       */
+      const format = fontFormatFor(media.mimeType);
+      if (format === undefined) {
+        return `A font file has to be .woff2 or .woff — this one was stored as ${media.mimeType}.`;
       }
 
       const face: FontFaceDef = {
@@ -1049,18 +1094,18 @@ function useFontFaceWriter(
          * carrying a scheme or an authority, and a backend that stores absolute
          * URLs would produce exactly that.
          */
-        src: [
-          {
-            url: `/api/media/${media.id}/raw`,
-            format: fontFormatFor(media.mimeType),
-          },
-        ],
+        src: [{ url: `/api/media/${media.id}/raw`, format }],
         weight: request.weight,
         style: request.style,
       };
 
       const result = await saveSiteStyle("fonts", [...(stored ?? []), face]);
-      if (result.saved) return undefined;
+      if (result.saved) {
+        // Stored and referenced, so the next add starts clean rather than
+        // pointing a second face at the first face's bytes.
+        uploaded.current = null;
+        return undefined;
+      }
       /*
        * Joined rather than picked from, for the reason the breakpoint writer
        * joins: `issues` is keyed by path, and taking the first tells an author
@@ -1071,7 +1116,7 @@ function useFontFaceWriter(
         ? reasons.join(" ")
         : "That font could not be saved.";
     },
-    [saveSiteStyle, stored, uploadMedia]
+    [saveSiteStyle, stored, storedPending, uploadMedia]
   );
 }
 
@@ -1089,10 +1134,12 @@ function FontsPanelWithUpload({
   absence,
   onOpenTokens,
   storedFaces,
+  storedPending,
 }: FontsPanelProps & {
   storedFaces: readonly FontFaceDef[] | undefined;
+  storedPending: boolean;
 }): React.JSX.Element {
-  const addFontFace = useFontFaceWriter(storedFaces);
+  const addFontFace = useFontFaceWriter(storedFaces, storedPending);
   return (
     <FontsPanel
       absence={absence}
@@ -1102,6 +1149,44 @@ function FontsPanelWithUpload({
       tokens={tokens}
     />
   );
+}
+
+/**
+ * Put a file on this site, at most once per file.
+ *
+ * The two writes an added face needs cannot be one — the bytes must have an id
+ * before a face can point at one — so a refused style write leaves a stored
+ * object no face references. The form keeps the `File` on a refusal so the
+ * author can correct the descriptors and press Add again, and re-uploading on
+ * each attempt turned a run of refusals into a copy per attempt.
+ *
+ * @param file - What the author chose, and the identity this remembers by
+ * @param seen - Where the last stored file and its record are kept
+ * @param upload - The media pipeline's own mutation
+ * @returns The stored record, or a message the author can act on
+ */
+async function storeOnce(
+  file: File,
+  seen: React.MutableRefObject<{ file: File; media: UploadedMedia } | null>,
+  upload: (input: { file: File }) => Promise<UploadedMedia>
+): Promise<UploadedMedia | string> {
+  const remembered = seen.current;
+  if (remembered !== null && remembered.file === file) return remembered.media;
+
+  try {
+    const media = await upload({ file });
+    seen.current = { file, media };
+    return media;
+  } catch (reason) {
+    /*
+     * The upload's own refusal, which is the one an author can act on: it names
+     * the format, the size cap or the signature mismatch. Replacing it with
+     * wording of our own would describe a policy this surface does not hold.
+     */
+    return reason instanceof Error
+      ? reason.message
+      : "That file could not be uploaded.";
+  }
 }
 
 /**
@@ -1574,6 +1659,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   );
   const {
     siteStyle: canvasSiteStyle,
+    stored: storedSiteStyle,
     pending: siteStylePending,
     error: siteStyleError,
   } = useSiteStyle(configSiteStyle);
@@ -2367,7 +2453,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   the right panel and the right row themselves.
                 */
                 onOpenTokens={() => requestPanel("tokens")}
-                storedFaces={configSiteStyle?.fonts}
+                storedFaces={storedSiteStyle?.fonts}
+                storedPending={siteStylePending}
               />
             ),
             /*
