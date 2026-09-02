@@ -34,7 +34,7 @@ import {
 } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
 import { lockBlockingMove } from "./locking";
-import { refusalAnnouncement, refusedMoveWording } from "./move-refusal";
+import { nestingRefusalForMove, refusalAnnouncement } from "./move-refusal";
 import {
   isRefusal,
   selectionDeletion,
@@ -428,6 +428,29 @@ export function useBlockKeyboardActions({
       // be an error message for pressing a key that did nothing.
       if (move === null) return;
 
+      /*
+       * ASKED BEFORE THE MOVE, which is the whole of this fix.
+       *
+       * The op store does not consult the nesting rule — measured, zero
+       * references in `ops.ts` — so a placement the rule forbids is applied
+       * rather than refused. The POINTER route is stopped because
+       * `drop-targets` asks `blockAllowedAt` before a drop resolves; asking
+       * here is the keyboard route's half of that same decision, of that same
+       * function, so the two surfaces cannot disagree about where a block may
+       * go. Without it a keyboard author builds documents a pointer author
+       * cannot, and nothing says so.
+       */
+      const refusal = nestingRefusalForMove(
+        editorNow.document,
+        selectedId,
+        move.to,
+        nestingSource
+      );
+      if (refusal !== null) {
+        announce(refusalAnnouncement(refusal));
+        return;
+      }
+
       const applied = editorNow.apply({
         kind: "move",
         id: selectedId,
@@ -435,45 +458,22 @@ export function useBlockKeyboardActions({
         dropSlotIfEmpty: move.dropSlotIfEmpty,
       });
       // Announced only once the store has accepted it. A keyboard author
-      // cannot see the result, and the store may refuse — announcing before
-      // it answered would report a move that did not happen, which is worse
-      // than silence because it cannot be told from one that did.
+      // cannot see the result, and announcing before it answered would report
+      // a move that did not happen, which is worse than silence because it
+      // cannot be told from one that did.
       if (applied !== null) {
         announce(EFFECT_ANNOUNCEMENT[move.effect]);
         return;
       }
       /*
-       * A refusal HERE is not the same event as the silent one above, and
-       * conflating them is what left the nesting rule reaching a pointer user
-       * and nobody else.
+       * The store refused something the nesting rule permits — a byte cap, a
+       * depth limit, an op the forest rejects. The sentence names no cause,
+       * because none was established: naming a nesting one here would send an
+       * author to change a container that was never the problem.
        *
-       * `move === null` is a boundary: the first block cannot move up, and
-       * saying so on every press is noise an author cannot act on. Reaching
-       * this line means the position was reachable and the STORE said no —
-       * which is a rule the author cannot see, and the same rule a drag
-       * explains on screen. Silence here is the editor knowing why and not
-       * saying.
-       *
-       * The reason is recovered rather than relayed, because `apply` answers
-       * `null` and carries none; and when the nesting rule would have allowed
-       * the placement, the move failed for some other reason and the sentence
-       * says only that, rather than naming a cause that was not the cause.
-       */
-      const why = refusedMoveWording(
-        editorNow.document,
-        selectedId,
-        move.to,
-        nestingSource
-      );
-      if (why !== null) {
-        announce(refusalAnnouncement(why));
-        return;
-      }
-      /*
-       * Nesting did not explain it, so the sentence names no cause. A block
-       * the document no longer holds cannot be named either, and "The block"
-       * is the honest subject there rather than a label invented for a node
-       * that is gone.
+       * Still spoken rather than silent. `move === null` above is a boundary
+       * with nowhere to go and is correctly quiet; reaching HERE means a move
+       * was attempted and did not happen, which a keyboard author cannot see.
        */
       const moved = findNode(editorNow.document.nodes, selectedId);
       const subject = moved === undefined ? "The block" : layerLabel(moved);

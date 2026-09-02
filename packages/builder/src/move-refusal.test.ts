@@ -1,11 +1,13 @@
 /**
- * What a refused move says, and when it admits it does not know.
+ * Whether the nesting rule refuses a move, and what it says when it does.
  *
- * The half most worth testing is the SILENCE. A wrong sentence here sends an
- * author to fix a container that was never the problem, and the store refuses
- * for reasons — a byte cap, a depth limit — that nesting has no words for. So
- * every case below that returns `null` is a case where inventing a reason would
- * have been easy and wrong.
+ * This DECIDES — the store never asks the rule, so a null here is what lets a
+ * move happen. That raises the stakes on both directions. A wrong refusal stops
+ * an author doing something legal; a wrong permission lets the keyboard build a
+ * document a drag would have refused, which is the defect this closes.
+ *
+ * The half most worth testing is still the NULL. Every case below that returns
+ * one is a case where inventing a refusal would have been easy and wrong.
  *
  * Pure, so none of it needs a DOM.
  *
@@ -14,7 +16,7 @@
 import type { BlockDocument, NestingSource } from "@nextlyhq/blocks-engine";
 import { describe, expect, it } from "vitest";
 
-import { refusalAnnouncement, refusedMoveWording } from "./move-refusal";
+import { refusalAnnouncement, nestingRefusalForMove } from "./move-refusal";
 
 /** A page holding a text block and a box that could contain one. */
 function documentOf(): BlockDocument {
@@ -36,7 +38,7 @@ const PERMISSIVE: NestingSource = { parentsOf: () => undefined };
 
 describe("explaining a refused move", () => {
   it("names the reason and the remedy when the rule refuses the root", () => {
-    const wording = refusedMoveWording(
+    const wording = nestingRefusalForMove(
       documentOf(),
       "text",
       { index: 0 },
@@ -55,7 +57,7 @@ describe("explaining a refused move", () => {
      * first sentence for the second case is told to do something they have
      * already done.
      */
-    const wording = refusedMoveWording(
+    const wording = nestingRefusalForMove(
       documentOf(),
       "text",
       { parentId: "box", slot: "default", index: 0 },
@@ -67,8 +69,8 @@ describe("explaining a refused move", () => {
   });
 });
 
-describe("refusing to invent a reason", () => {
-  it("says NOTHING when the nesting rule would have allowed the move", () => {
+describe("permitting, rather than inventing a refusal", () => {
+  it("PERMITS a placement the rule allows, rather than refusing it", () => {
     /*
      * The store refuses for reasons nesting has no words for — a document at
      * its byte cap, a depth limit, an op the forest rejects. Reporting a
@@ -77,24 +79,24 @@ describe("refusing to invent a reason", () => {
      * sentence was wrong.
      */
     expect(
-      refusedMoveWording(documentOf(), "text", { index: 0 }, PERMISSIVE)
+      nestingRefusalForMove(documentOf(), "text", { index: 0 }, PERMISSIVE)
     ).toBeNull();
   });
 
-  it("says nothing when the moving block is not in the document", () => {
+  it("permits when the moving block is not in the document", () => {
     expect(
-      refusedMoveWording(documentOf(), "gone", { index: 0 }, ONLY_IN_BOX)
+      nestingRefusalForMove(documentOf(), "gone", { index: 0 }, ONLY_IN_BOX)
     ).toBeNull();
   });
 
-  it("says nothing when the destination parent is not in the document", () => {
+  it("permits when the destination parent is not in the document", () => {
     /*
      * A position naming a parent the document does not hold cannot be judged:
      * the rule needs the parent's TYPE, and guessing one would answer about a
      * container that is not there.
      */
     expect(
-      refusedMoveWording(
+      nestingRefusalForMove(
         documentOf(),
         "text",
         { parentId: "gone", slot: "default", index: 0 },

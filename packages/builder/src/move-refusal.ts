@@ -1,34 +1,32 @@
 /**
- * Why a move the store refused was refused, in words an author can act on.
+ * Whether the nesting rule refuses a move, and the words for saying so.
  *
- * A DIAGNOSIS, never a decision, and the distinction is the whole design.
- * `keyboard-move` answers where a block goes and says in its own docblock that
- * it "answers WHERE, never WHETHER", because validity belongs to the op store
- * and asking a second time is a second implementation of one question. This
- * module does not ask whether the move may happen — the store has already said
- * no — it asks what the nesting rule would say about a placement that has
- * already been refused, so the refusal can be spoken.
+ * ## This DECIDES, and it has to
  *
- * That ordering is what keeps it from becoming a second gate. Nothing here can
- * permit or forbid anything: it runs only after `apply` returned null, and its
- * answer changes what is ANNOUNCED and nothing else.
+ * The op store does not ask the nesting rule — measured, zero references to it
+ * in `ops.ts`, with a control showing the symbol resolves elsewhere in the
+ * package. So a placement the rule forbids is not refused at apply time; it is
+ * applied. The POINTER route is stopped because `drop-targets` asks
+ * `blockAllowedAt` before a drop resolves, and until this module was called
+ * before the move rather than after it, the keyboard route asked nobody. A
+ * keyboard author could therefore build a document a pointer author cannot.
  *
- * ## Why the reason has to be recovered rather than relayed
+ * So this is the keyboard route's half of a decision the pointer route already
+ * makes, asked of the same function, rather than a second implementation of it:
+ * `blockAllowedAt` is the one answer and both surfaces ask it.
  *
- * `EditorState.apply` returns `BlockDocument | null`. The null carries no
- * reason, so a caller that wants to explain a refusal cannot pass one on. The
- * choice is between recovering the reason here and widening the store's return
- * type — and widening it would make every caller handle a value only this one
- * needs, for a case the store itself does not have words for.
+ * ## It does NOT move the question into `keyboard-move`
  *
- * ## Null is an honest answer
+ * That module answers where a block goes and says in its own docblock that it
+ * "answers WHERE, never WHETHER". It still does. The wiring asks whether — as
+ * the pointer wiring does — and the position function stays positional.
  *
- * The store refuses for reasons beyond nesting: a document at its byte cap, a
- * depth limit, an op the forest rejects. When the nesting rule would have
- * ALLOWED the placement, this returns null rather than inventing a reason, and
- * the caller says only that the move did not happen. Naming a nesting cause
- * that was not the cause would send an author to fix the wrong thing, which is
- * worse than a sentence that admits it does not know.
+ * ## Null is an honest answer, and it means ALLOWED
+ *
+ * Null is "the nesting rule does not refuse this", never "something went
+ * wrong". A move can still fail after this returns null — a byte cap, a depth
+ * limit, an op the forest rejects — and those are the store's to refuse and its
+ * caller's to report, without a nesting cause being invented for them.
  *
  * @module move-refusal
  */
@@ -40,15 +38,18 @@ import { blockAllowedAt } from "./inserter";
 import type { OpPosition } from "./ops";
 
 /**
- * The words for a refused move, or `null` when nesting does not explain it.
+ * The nesting rule's refusal for a proposed move, or `null` if it permits it.
  *
- * @param document - the document the move was attempted against
- * @param movingId - the block that was being moved
- * @param to - the position it was being moved to
+ * Asked BEFORE the move is applied, which is what makes it a refusal rather
+ * than a post-mortem.
+ *
+ * @param document - the document the move would change
+ * @param movingId - the block being moved
+ * @param to - the position it would move to
  * @param nesting - the rule source, the same one the pointer route asks
- * @returns the refusal's headline and remedy, or `null`
+ * @returns the refusal's headline and remedy, or `null` when it is permitted
  */
-export function refusedMoveWording(
+export function nestingRefusalForMove(
   document: BlockDocument,
   movingId: string,
   to: OpPosition,
@@ -74,8 +75,8 @@ export function refusedMoveWording(
       : ({ at: "slot", parentType: parent.type, slot: to.slot ?? "" } as const);
 
   const verdict = blockAllowedAt(moving.type, target, nesting);
-  // ALLOWED means nesting was not the cause. Something else in the store
-  // refused, and this module has nothing true to say about it.
+  // ALLOWED is null: the rule permits this placement. Whether it survives the
+  // store's own limits is a later question with a different answer.
   if (verdict.allowed) return null;
 
   return refusalWording(verdict, moving.type, parent?.type);

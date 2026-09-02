@@ -357,14 +357,14 @@ describe("useBlockKeyboardActions", () => {
 
   it("says the move did not happen, naming no cause, when the rule permitted it", () => {
     /*
-     * `apply` answering null means the document moved underneath the press:
-     * the nesting rule permitted the placement and the store still refused.
+     * The store refusing something the nesting rule permits: a byte cap, a
+     * depth limit, an op the forest rejects.
      *
-     * This case asserted SILENCE until 2026-09-02. It was changed rather than
-     * added to, because silence here is the defect: a keyboard author cannot
-     * see that nothing moved, and a status that never arrives is the failure
-     * WCAG 4.1.3 describes. What has not changed is that no cause is named —
-     * nesting allowed this, so any reason given would be invented.
+     * It is reported rather than passed over, because a keyboard author cannot
+     * see that nothing moved. And it names NO cause, because none was
+     * established — the rule allowed this placement, so any reason given here
+     * would be invented, and would send an author to change a container that
+     * was never the problem.
      */
     const editor = editorSpy(pair(), "a");
     editor.apply.mockReturnValue(null);
@@ -378,7 +378,7 @@ describe("useBlockKeyboardActions", () => {
     expect(said).not.toMatch(/take|inside|slot/i);
   });
 
-  it("says WHY when the nesting rule is what refused the move", () => {
+  it("REFUSES a move the nesting rule forbids, and says why", () => {
     /*
      * The gap this closes. A pointer author who drags a block somewhere it
      * cannot go is shown the reason and the remedy; before this, a keyboard
@@ -392,7 +392,6 @@ describe("useBlockKeyboardActions", () => {
      * root is refused by the rule, not by the store's other limits.
      */
     const editor = editorSpy(pair(), "a");
-    editor.apply.mockReturnValue(null);
     render(
       <ShortcutProvider>
         <BlockKeyboardActions
@@ -404,6 +403,13 @@ describe("useBlockKeyboardActions", () => {
 
     press("ArrowDown", { altKey: true });
 
+    /*
+     * REFUSED, not merely explained. The store never asks the nesting rule, so
+     * before this the move was applied and the document ended up holding a
+     * placement a drag would have refused. `apply` not being reached is the
+     * assertion that separates stopping it from narrating it.
+     */
+    expect(editor.apply).not.toHaveBeenCalled();
     const said = screen.getByRole("status").textContent ?? "";
     // A REASON, not merely that something failed — the assertion the previous
     // wording could not make, since "could not be moved" is true of both.
