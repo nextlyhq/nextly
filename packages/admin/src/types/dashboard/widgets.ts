@@ -24,6 +24,7 @@
 import type {
   WidgetAction,
   WidgetArchetype,
+  WidgetHeight,
   WidgetQuery,
   WidgetSize,
   WidgetChrome,
@@ -85,6 +86,15 @@ export interface DashboardWidget {
   icon?: string;
   archetype: WidgetArchetype;
   size: WidgetSize;
+  /**
+   * The DECLARED default height, when its author stated one.
+   *
+   * Carried for the same reason as `defaultOrder`: it is the value a placement
+   * seeds its own geometry FROM. The server already copies it onto a default
+   * placement, so an admin that dropped it here could not re-create a card the
+   * reader removed with the height it was declared with.
+   */
+  height?: WidgetHeight;
   /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
   query?: WidgetQuery;
   /** Present for `custom`; the path `PluginSlot` resolves. */

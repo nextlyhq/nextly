@@ -23,6 +23,7 @@ import {
   chromeProblem,
   DATA_ARCHETYPES,
   defaultOrderProblem,
+  legacySizeToWidgetSize,
   querylessQueryProblem,
   QUERYLESS_ARCHETYPES,
   widgetValueProblem,
@@ -450,13 +451,37 @@ function contributedText(
  * unknown one here would drop the whole card from the arrangement over a value
  * the admin already survives.
  */
+/**
+ * The size a contribution states, in the enum, whichever field it used.
+ *
+ * 🔴 The deprecated `size` alias is read too, through the SAME translation the
+ * admin's resolver applies. Reading `defaultSize` alone emitted a summary with
+ * no size for a declaration that legally states only `size: "half"`, so the
+ * default placement stored no geometry while the grid drew the card at half
+ * width -- and a later change to the plugin's declaration then silently resized
+ * what the reader had been told was their saved arrangement.
+ *
+ * The alias is read only when `defaultSize` is absent, which is the precedence
+ * `resolveOne` applies: a plugin that adopted the enum meant it.
+ */
+function contributedSize(
+  declaration: Record<string, unknown>
+): string | undefined {
+  const declared = contributedText(declaration, "defaultSize");
+  if (declared !== undefined) return declared;
+  const legacy = contributedText(declaration, "size");
+  return legacy === "full" || legacy === "half"
+    ? legacySizeToWidgetSize(legacy)
+    : undefined;
+}
+
 function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
   const declaration = widget as unknown as Record<string, unknown>;
   const id = contributedText(declaration, "id");
   if (id === undefined) return undefined;
 
   const requiredPermission = contributedText(declaration, "requiredPermission");
-  const defaultSize = contributedText(declaration, "defaultSize");
+  const defaultSize = contributedSize(declaration);
   const defaultHeight = contributedText(declaration, "defaultHeight");
   const defaultOrder = declaration.defaultOrder;
 

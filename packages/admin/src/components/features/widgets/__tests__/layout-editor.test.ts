@@ -16,6 +16,8 @@ import {
   togglePlacementHidden,
 } from "../layout-editor";
 
+import { MAX_PLACEMENTS } from "nextly/config";
+
 function placements(...ids: string[]): WidgetPlacement[] {
   return ids.map((id, index) => ({
     id,
@@ -190,5 +192,46 @@ describe("whether anything changed", () => {
     const before = placements("a");
     const resized = [{ ...before[0], size: "xl" }];
     expect(hasChanges(before, resized)).toBe(true);
+  });
+});
+
+describe("addPlacement at the write contract's ceiling", () => {
+  /** `MAX_PLACEMENTS` placements, which is exactly one submission's worth. */
+  function full(): WidgetPlacement[] {
+    return Array.from({ length: MAX_PLACEMENTS }, (_, i) => ({
+      id: `p${i}`,
+      widgetId: `core/w${i}`,
+      order: i * 10,
+      hidden: false,
+    }));
+  }
+
+  it("refuses rather than building an arrangement no write can carry", () => {
+    // 🔴 An install declaring more widgets than one submission may hold offers
+    // the surplus through `available`, so an unguarded add produced a draft the
+    // server was always going to refuse -- and the reader met a generic "could
+    // not be saved" naming no limit they knew they had reached.
+    const before = full();
+    const after = addPlacement(before, "core/surplus");
+
+    expect(after).toHaveLength(MAX_PLACEMENTS);
+    expect(after.map(p => p.widgetId)).not.toContain("core/surplus");
+  });
+
+  it("returns a NEW array even when it refuses", () => {
+    // The caller assigns the result into draft state, so returning the same
+    // reference would be indistinguishable from a change that did not render.
+    const before = full();
+    expect(addPlacement(before, "core/surplus")).not.toBe(before);
+  });
+
+  it("still adds one below the ceiling", () => {
+    // The control. Without it the refusal above is satisfied by an
+    // `addPlacement` that never adds anything at all.
+    const before = full().slice(0, MAX_PLACEMENTS - 1);
+    const after = addPlacement(before, "core/surplus");
+
+    expect(after).toHaveLength(MAX_PLACEMENTS);
+    expect(after.map(p => p.widgetId)).toContain("core/surplus");
   });
 });
