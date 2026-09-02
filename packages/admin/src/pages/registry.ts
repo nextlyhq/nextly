@@ -1,5 +1,6 @@
 import { lazy } from "react";
 
+import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { RELEASE_SECTION_PERMISSIONS } from "../constants/navigation";
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
@@ -41,6 +42,7 @@ import RolesEditPage from "./dashboard/roles/edit";
 import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
 import EditApiKeyPage from "./dashboard/settings/api-keys/edit/[id]";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
+import BackgroundJobsPage from "./dashboard/settings/background-jobs/index";
 import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
 import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
 import EmailProvidersPage from "./dashboard/settings/email-providers/index";
@@ -392,10 +394,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
 
   // Settings routes
+  // Any grant that reaches SOMETHING in the panel may open the panel's own URL.
+  // Narrowing it to `manage-settings` turned the rail entry into a door that
+  // closed in the face of anyone whose only destination was further in; the
+  // page itself sends them on to the first one they can reach.
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {
@@ -462,6 +468,15 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Webhooks settings. `update-webhooks` is the backend's management umbrella
   // (it satisfies read/create/delete too), so each route accepts it in addition
   // to the specific slug — a role with only `update-webhooks` still reaches them.
+  // The background job monitor is a READ, but it is gated on the management
+  // permission: `lastError` is whatever a handler threw, and there is no seeded
+  // read-only slug for this resource to widen to.
+  [ROUTES.SETTINGS_BACKGROUND_JOBS]: {
+    component: BackgroundJobsPage,
+    type: "private",
+    requiredPermission: "manage-background-jobs",
+    section: overridableBy("settings"),
+  },
   [ROUTES.SETTINGS_WEBHOOKS]: {
     component: WebhooksPage,
     type: "private",

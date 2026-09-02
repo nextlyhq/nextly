@@ -22,14 +22,24 @@ const HELD = "x-test-permissions";
 /** What `listRecent` was asked for, so the probe row can be asserted. */
 let requestedLimit = 0;
 
+/** What task the QUERY was narrowed to, if any. */
+let requestedSlug: string | undefined;
+
+/** Which stored states the QUERY was narrowed to, if any. */
+let requestedStates: readonly string[] | undefined;
+
 /** Rows the fake repository holds; each test sets its own count. */
 let stored: JobSummaryRow[] = [];
 
-function job(id: string, lastError: string | null = null): JobSummaryRow {
+function job(
+  id: string,
+  lastError: string | null = null,
+  slug = "releases:drain"
+): JobSummaryRow {
   const at = new Date("2026-01-01T00:00:00.000Z");
   return {
     id,
-    slug: "releases:drain",
+    slug,
     state: "failed",
     attemptCount: 1,
     runAt: null,
@@ -42,9 +52,20 @@ function job(id: string, lastError: string | null = null): JobSummaryRow {
 }
 
 const repository = {
-  listRecent: async (input: { limit: number }): Promise<JobSummaryRow[]> => {
+  listRecent: async (input: {
+    limit: number;
+    slug?: string;
+    states?: readonly string[];
+  }): Promise<JobSummaryRow[]> => {
     requestedLimit = input.limit;
-    return stored.slice(0, input.limit);
+    requestedSlug = input.slug;
+    requestedStates = input.states;
+    // Narrowed HERE, before the limit, exactly as the repository does it.
+    const matching =
+      input.slug === undefined
+        ? stored
+        : stored.filter(row => row.slug === input.slug);
+    return matching.slice(0, input.limit);
   },
 };
 
@@ -141,6 +162,84 @@ describe("GET /api/jobs", () => {
     expect(body.items[0].lastError).toBe(recorded);
     // The premise: the internal marker never reaches a client.
     expect(response.headers.get("x-nextly-skip-timezone-format")).toBeNull();
+  });
+
+  it("narrows to one task in the QUERY, not after the window", async () => {
+    /*
+     * The failure this closes: a caller wanting one task's recent jobs read the
+     * global window and filtered it afterwards. A busier task fills that window
+     * first, so the requested task's rows are simply not in it — and a caller
+     * asking "did releases:drain fail" gets "no" from a result that never
+     * looked.
+     *
+     * Fifty webhook jobs are more recent than the one release job here, so a
+     * window of ten cannot contain the release job unless the narrowing
+     * happened in the query.
+     */
+    stored = [
+      ...Array.from({ length: 50 }, (_, i) =>
+        job(`w${i}`, null, "webhooks:drain")
+      ),
+      job("r1", "boom", "releases:drain"),
+    ];
+
+    const response = await listJobsRoute(
+      request("?limit=10&slug=releases:drain")
+    );
+    const body = (await response.json()) as {
+      items: Array<{ id: string; slug: string }>;
+    };
+
+    expect(requestedSlug).toBe("releases:drain");
+    expect(body.items.map(item => item.id)).toEqual(["r1"]);
+  });
+
+  it("treats a blank slug as no filter rather than a task named nothing", async () => {
+    // A form submitting an empty field must not silently ask for jobs of a
+    // task that cannot exist, which would answer "nothing failed" forever.
+    stored = [job("j1")];
+    await listJobsRoute(request("?slug="));
+    expect(requestedSlug).toBeUndefined();
+  });
+
+  it("narrows to the asked-for stored states", async () => {
+    // How a caller asks "did anything fail" without scanning a window: N
+    // healthy jobs running after a failure would push it out of the recent
+    // rows, and the caller would report nothing wrong.
+    stored = [job("j1")];
+    await listJobsRoute(request("?state=failed"));
+    expect(requestedStates).toEqual(["failed"]);
+  });
+
+  it("REFUSES a state name it does not recognise", async () => {
+    /*
+     * Dropping the unknown name looks conservative and inverts the request: with
+     * every name dropped the filter disappears, so a caller asking to narrow
+     * receives a successful read of EVERY state — the widest possible answer to
+     * a request for a narrower one, with a 200 on it.
+     */
+    stored = [job("j1")];
+    requestedStates = undefined;
+
+    const response = await listJobsRoute(request("?state=faield"));
+
+    expect(response.status).toBe(400);
+    // And the query was never issued, so nothing widened on the way to failing.
+    expect(requestedStates).toBeUndefined();
+  });
+
+  it("refuses a partially unknown filter rather than honouring half of it", async () => {
+    stored = [job("j1")];
+    const response = await listJobsRoute(request("?state=failed,faield"));
+    expect(response.status).toBe(400);
+  });
+
+  it("still accepts every name it does recognise", async () => {
+    // The control: without it the two cases above pass against a route that
+    // refuses all filters.
+    stored = [job("j1")];
+    await listJobsRoute(request("?state=failed,pending"));
+    expect(requestedStates).toEqual(["pending", "failed"]);
   });
 
   it("refuses a caller without the jobs permission", async () => {

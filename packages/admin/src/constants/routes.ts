@@ -116,6 +116,10 @@ export const ROUTES = {
   SETTINGS_WEBHOOKS_DELIVERIES: "/admin/settings/webhooks/[id]/deliveries",
   SETTINGS_WEBHOOKS_DELIVERY_DETAIL:
     "/admin/settings/webhooks/[id]/deliveries/[deliveryId]",
+  // Background jobs: the queue's recent history, read-only. Under settings
+  // rather than in the rail because it is machinery an operator watches, not
+  // editorial work — the same reasoning that puts webhooks there.
+  SETTINGS_BACKGROUND_JOBS: "/admin/settings/background-jobs",
   SETTINGS_IMAGE_SIZES: "/admin/settings/image-sizes",
   SETTINGS_IMAGE_SIZES_CREATE: "/admin/settings/image-sizes/create",
   SETTINGS_IMAGE_SIZES_EDIT: "/admin/settings/image-sizes/edit/[id]",

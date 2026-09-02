@@ -335,6 +335,17 @@ export class JobsRepository {
     limit: number;
     /** Restrict to these states. Omitted means every state. */
     states?: readonly JobState[];
+    /**
+     * Restrict to one registered task. Omitted means every task.
+     *
+     * Applied in the QUERY rather than by the caller, and that is the whole
+     * point of it: this method returns the most recent `limit` rows, so a
+     * caller filtering afterwards is filtering a window that a busier task may
+     * already have filled. Its own task's failure would then be absent from a
+     * result that looks complete — a notice that stays silent about exactly the
+     * thing it was mounted to report.
+     */
+    slug?: string;
   }): Promise<JobSummaryRow[]> {
     // PROJECTED, deliberately. `input` is arbitrary caller data of unbounded
     // size and no consumer of this method reads it, so selecting it would let
@@ -342,13 +353,20 @@ export class JobsRepository {
     // database and into memory for nothing.
     return this.db.select<JobSummaryRow>(JOBS, {
       columns: [...SUMMARY_COLUMNS],
-      ...(input.states === undefined || input.states.length === 0
-        ? {}
-        : {
-            where: {
-              and: [{ column: "state", op: "IN", value: [...input.states] }],
-            },
-          }),
+      ...(() => {
+        const conditions: Array<Record<string, unknown>> = [];
+        if (input.states !== undefined && input.states.length > 0) {
+          conditions.push({
+            column: "state",
+            op: "IN",
+            value: [...input.states],
+          });
+        }
+        if (input.slug !== undefined) {
+          conditions.push({ column: "slug", op: "=", value: input.slug });
+        }
+        return conditions.length === 0 ? {} : { where: { and: conditions } };
+      })(),
       orderBy: [{ column: "updatedAt", direction: "desc" }],
       limit: input.limit,
     });
