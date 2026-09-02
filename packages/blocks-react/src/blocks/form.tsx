@@ -217,9 +217,13 @@ const FORM_PARTS = {
    *
    * Reused rather than restated: a form's submit and a button block are the
    * same control to an author, and describing that twice is how one page comes
-   * to carry two different-looking primary actions. `justifySelf` is the only
-   * addition — the form is a grid, so a stretched item would otherwise run the
-   * full column width and stop reading as a button at all.
+   * to carry two different-looking primary actions. `width: "fit-content"` is
+   * the only addition — the form is a grid, so a stretched item would otherwise
+   * run the full column width and stop reading as a button at all.
+   *
+   * The obvious spelling for that is `justify-self: start`, and it is NOT what
+   * this uses. The catalog carries no grid ITEM properties, so the compiler
+   * drops that declaration without a word; see the note on the addition itself.
    */
   submit: {
     /*
