@@ -156,12 +156,26 @@ export function tokenRows(
   tokens: SiteTokenSet | undefined,
   mode: TokenMode = "light"
 ): readonly TokenRow[] {
-  const all = tokens?.tokens ?? [];
-  // Built ONCE for the whole set rather than rediscovered per row. Asking
-  // "who else compiles to my custom property" with a linear scan inside a
-  // per-row call makes the projection quadratic, and a DTCG import is not
-  // bounded to a size where that stays invisible.
-  const claimed = firstByProperty(all);
+  const set: SiteTokenSet = tokens ?? { tokens: [] };
+  const all = set.tokens ?? [];
+  /*
+   * Built ONCE for the whole set rather than rediscovered per row: asking "who
+   * else compiles to my custom property" with a linear scan inside a per-row
+   * call makes the projection quadratic, and a DTCG import is not bounded to a
+   * size where that stays invisible.
+   *
+   * And built from what the emitter actually WROTE, not from document order.
+   * A token refused for its name, a missing light value, an unusable value or
+   * a value that fetches never reaches `seen`, so it claims no property and a
+   * later token with the same one is emitted normally. Ranking by position
+   * handed the property to the refused token and told the written one that
+   * only the refused one survives — the opposite of the compiled page.
+   *
+   * `emitTokenBlocks` reports `emitted` precisely so this question has one
+   * answer; its own docblock says a caller re-deriving it "would have to
+   * restate all five" refusals and would drift the first time one changed.
+   */
+  const claimed = firstByProperty(emitTokenBlocks(set, ":root").emitted);
   // Indexed against the WHOLE list, so `at` addresses the stored position
   // rather than a position within any later grouping or filter.
   const seen = new Map<string, number>();
@@ -247,17 +261,18 @@ function issuesOf(token: SiteToken): readonly string[] {
  * engine's; only the pairwise comparison is done here.
  */
 /**
- * Which token each custom property belongs to, by first claim.
+ * Which token each custom property belongs to.
  *
- * The compiler writes the FIRST token to claim a property and drops the rest,
- * so "who owns this name" is one question about the whole set. Answering it
- * once here is what keeps the projection linear.
+ * Takes the tokens the emitter WROTE, so a property is owned by whatever the
+ * page actually resolves rather than by whatever came first in the stored
+ * order. A refused token owns nothing, which is the whole point: it is not in
+ * the emitted list to be found.
  */
 function firstByProperty(
-  among: readonly SiteToken[]
+  emitted: readonly SiteToken[]
 ): ReadonlyMap<string, SiteToken> {
   const claimed = new Map<string, SiteToken>();
-  for (const token of among) {
+  for (const token of emitted) {
     const property = tokenCustomProperty(tokenIdentity(token), "");
     if (!claimed.has(property)) claimed.set(property, token);
   }
