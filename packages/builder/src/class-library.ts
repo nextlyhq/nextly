@@ -371,6 +371,23 @@ export type ClassNameOutcome =
   | { readonly ok: false; readonly refusal: NameRefusal };
 
 /**
+ * Whether the library has room for another class.
+ *
+ * Exported because two surfaces need the answer and only one of them is naming
+ * a class. `newClassName` refuses a name when there is no room; the manager
+ * panel has to decide whether to tell an author a class can be made at all,
+ * and inferring that from an empty drawn list is wrong in exactly the case
+ * that matters — `siteClasses` drops entries the compiler cannot use, so a
+ * library of malformed entries draws nothing while every slot is taken.
+ *
+ * Counts the STORED entries, which is what capacity is about. The drawn list
+ * is a different question and answering one with the other is the bug.
+ */
+export function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
+  return library.length < MAX_NAMED_CLASSES;
+}
+
+/**
  * Whether a typed name can become a new class, and what to store if it can.
  *
  * The grammar is the engine's, not a second one: a slug reaches a CSS selector,
@@ -405,7 +422,7 @@ export function newClassName(
    * the save outright rather than storing it quietly. Accepting the name here
    * would offer an author a class that cannot be saved OR rendered.
    */
-  if (library.length >= MAX_NAMED_CLASSES) {
+  if (!classLibraryHasRoom(library)) {
     return { ok: false, refusal: "library-full" };
   }
   return { ok: true, slug };

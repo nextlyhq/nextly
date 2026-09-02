@@ -280,6 +280,68 @@ describe("adding a token", () => {
     expect(next.tokens.at(-1)?.kind).toBe("color");
   });
 
+  it("shows the TEACHING empty state for a search that is only whitespace", () => {
+    /*
+     * `needle` is `query.trim().toLowerCase()`, so a query of spaces narrows
+     * nothing. Reading the raw query to decide the message made the two
+     * disagree: the list was unfiltered while the copy blamed a search, which
+     * suppressed the teaching state on an empty library.
+     */
+    render(<Panel tokens={{ tokens: [] }} onChange={vi.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText(/Search tokens/i), {
+      target: { value: "   " },
+    });
+    expect(screen.getByText("No tokens yet.")).toBeTruthy();
+    expect(screen.queryByText(/No tokens match this search/i)).toBeNull();
+
+    // Must-differ: a query that really does narrow still blames the search.
+    fireEvent.change(screen.getByPlaceholderText(/Search tokens/i), {
+      target: { value: "zzzz" },
+    });
+    expect(screen.getByText(/No tokens match this search/i)).toBeTruthy();
+    expect(screen.queryByText("No tokens yet.")).toBeNull();
+  });
+
+  it("clears a search that would HIDE the token just created", () => {
+    /*
+     * A new token is named after its kind, so any search not matching that
+     * name hides the row the moment it is written. The control then looks
+     * inert and a second press writes `shadow.2`, also hidden. The tabs could
+     * not produce this — they had nothing to narrow with.
+     */
+    /*
+     * HELD IN STATE, so the created token actually renders. With a mock
+     * `onChange` this asserted that the PRE-EXISTING row came back — true, and
+     * not the claim. The point is that the row just written is reachable, and
+     * only a host that stores what it is given can show it.
+     */
+    function Host(): React.JSX.Element {
+      const [tokens, setTokens] = React.useState<SiteTokenSet>({
+        tokens: [
+          { name: "color.ink", kind: "color", values: { light: "#111111" } },
+        ],
+      });
+      return <Panel tokens={tokens} onChange={setTokens} />;
+    }
+    render(<Host />);
+    const search = screen.getByPlaceholderText(/Search tokens/i);
+    fireEvent.change(search, { target: { value: "brand" } });
+    expect(screen.queryByDisplayValue("color.ink")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+    expect((search as HTMLInputElement).value).toBe("");
+    // The pre-existing row is back...
+    expect(screen.getByDisplayValue("color.ink")).toBeTruthy();
+    // ...and so is the one just created, which is the actual claim.
+    const names = Array.from(
+      document.querySelectorAll<HTMLInputElement>(".nx-tokens__name"),
+      node => node.value
+    );
+    expect(names).toContain("color.ink");
+    expect(names.length).toBe(2);
+    expect(names.some(value => value !== "color.ink")).toBe(true);
+  });
+
   it("adds into a site that has no table at all", () => {
     const onChange = vi.fn();
     render(<Panel tokens={{ tokens: [] }} onChange={onChange} />);
@@ -1006,5 +1068,210 @@ describe("an import where nothing landed", () => {
     expect(said.textContent).toContain("could be imported");
     // The half that matters beyond the wording: no no-op save.
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("the panel explains itself and shows the whole set", () => {
+  /** Tokens across three kinds, so grouping and search have something to cross. */
+  const MIXED: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "space.gutter", kind: "dimension", values: { light: "1.5rem" } },
+      { name: "motion.settle", kind: "duration", values: { light: "240ms" } },
+    ],
+  };
+
+  it("says what a token IS, in the words an author would use", () => {
+    // The panel opened with a mode switch, a transfer control and eight tabs of
+    // vocabulary, and never a sentence about what any of it does to the site.
+    mount(MIXED);
+    /*
+     * Read off the LEDE itself rather than the document. "Light" is also the
+     * mode switch's own button, so a document-wide match for it passes on a
+     * panel whose lede says nothing about the mode at all.
+     */
+    const lede = document.querySelector(".nx-tokens__lede");
+    expect(lede?.textContent).toMatch(/named values/i);
+    expect(lede?.textContent).toMatch(/every block using one/i);
+    /*
+     * And it NAMES the mode, because an edit reaches only the values of the
+     * mode on screen. "every block changes" described renderings a light edit
+     * deliberately leaves alone.
+     */
+    expect(lede?.textContent).toMatch(/editing the light values/i);
+    expect(lede?.textContent).not.toMatch(/changes with it, on every page/i);
+  });
+
+  it("BOUNDS how many rows of one kind it mounts", () => {
+    /*
+     * The grouped shape reads every kind at once where the tabs read only the
+     * open one, and a DTCG import is not bounded to a size where mounting them
+     * all stays invisible — each row carries two inputs and a preview. Same
+     * cap and same control as `class-manager-panel`, for the same reason.
+     */
+    const many: SiteTokenSet = {
+      tokens: Array.from({ length: 130 }, (_, at) => ({
+        name: `color.c${at}`,
+        kind: "color" as const,
+        values: { light: "#111111" },
+      })),
+    };
+    mount(many);
+    // The heading still reports the WHOLE group, not the mounted slice —
+    // otherwise the count would tell an author 50 tokens exist.
+    expect(screen.getByText("130")).toBeTruthy();
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
+
+    const more = screen.getByRole("button", { name: /Show 50 more/i });
+    fireEvent.click(more);
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(100);
+  });
+
+  it("reveals a token added PAST the page it would land behind", () => {
+    /*
+     * Clearing the search was only half of it. A new token is appended, so in a
+     * kind that already fills its page it lands after the mounted slice and is
+     * hidden by the CAP rather than by the query — the same invisible write,
+     * one control further on, and pressing Add again would make a second one.
+     */
+    const full: SiteTokenSet = {
+      tokens: Array.from({ length: 300 }, (_, at) => ({
+        name: `color.c${at}`,
+        kind: "color" as const,
+        values: { light: "#111111" },
+      })),
+    };
+    const onChange = vi.fn();
+    const view = render(<Panel tokens={full} onChange={onChange} />);
+    // The control: row 60 is genuinely behind the cap before the add.
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+    const next = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    const made = next.tokens[next.tokens.length - 1];
+    view.rerender(<Panel tokens={next} onChange={onChange} />);
+
+    expect(made).toBeDefined();
+    expect(screen.getByDisplayValue(made!.name)).toBeTruthy();
+    /*
+     * And it is revealed WITHOUT mounting everything before it. Raising the
+     * limit to reach an appended row mounts every preceding one, which in a
+     * DTCG-sized set is the exact freeze the cap exists to prevent — so the
+     * mounted count must stay near the page, not near the total.
+     */
+    /*
+     * And WITHOUT mounting everything before it: the head is still one page.
+     * Raising the limit to reach an appended row mounts every preceding one,
+     * which in a DTCG-sized set is the exact freeze the cap exists to prevent
+     * — with 300 stored, that is 300 rows rather than 50 plus the new one.
+     */
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
+  });
+
+  it("REMOUNTS the revealed row when a second add replaces it", () => {
+    /*
+     * The revealed entry sits at a fixed position, so without a key React
+     * reuses one `TokenEntry` across different tokens and carries its local
+     * state along — dropping a newly added token straight into the previous
+     * row's removal confirmation, an irreversible control armed against
+     * something the author never selected.
+     *
+     * HELD IN STATE rather than rerendered by hand, because that difference
+     * decides whether the bug is reachable at all. With a mock `onChange` the
+     * panel re-renders once with the NEW `revealAt` and the OLD token list, so
+     * the revealed row is momentarily absent, the block unmounts, and the leak
+     * cannot happen. A host that stores what it is given updates both together
+     * — which is what the product does, and the only composition that tests
+     * this.
+     */
+    function Host(): React.JSX.Element {
+      const [tokens, setTokens] = React.useState<SiteTokenSet>({
+        tokens: Array.from({ length: 60 }, (_, at) => ({
+          name: `color.c${at}`,
+          kind: "color" as const,
+          values: { light: "#111111" },
+        })),
+      });
+      return <Panel tokens={tokens} onChange={setTokens} />;
+    }
+    render(<Host />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+    // Read the name off the revealed block itself rather than inferring it
+    // from the generated pattern: the probe's subject must be resolved, not
+    // assumed, or a miss reads as a passing test.
+    const revealedName = (
+      document
+        .querySelector(".nx-tokens__revealed")
+        ?.querySelector("input") as HTMLInputElement | null
+    )?.value;
+    expect(revealedName).toBeDefined();
+    const first = revealedName;
+
+    // Arm the revealed row's removal confirmation.
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${first!}` }));
+    expect(screen.getByText(/loses that style/i)).toBeTruthy();
+
+    // A second add replaces WHICH token is revealed, in one update.
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+
+    // The new token must arrive UNARMED.
+    expect(screen.queryByText(/loses that style/i)).toBeNull();
+  });
+
+  it("groups every kind that HAS tokens into one list", () => {
+    // The must-be-found half. Three kinds are present, so three headings are.
+    mount(MIXED);
+    for (const heading of ["Colour", "Size", "Duration"]) {
+      expect(screen.getByRole("heading", { name: heading })).toBeTruthy();
+    }
+  });
+
+  it("does not draw a group for a kind with no tokens", () => {
+    /*
+     * The point of the shape. Eight tabs meant five clickable dead ends in a
+     * 320px rail; a kind with nothing in it should not be a place you can go.
+     *
+     * The control is the test above: it proves the query CAN find a heading, so
+     * this absence is about the kind being omitted rather than about the
+     * selector matching nothing.
+     */
+    mount(MIXED);
+    for (const heading of ["Font", "Weight", "Number", "Shadow", "Custom"]) {
+      expect(screen.queryByRole("heading", { name: heading })).toBeNull();
+    }
+  });
+
+  it("searches across every kind at once, which tabs could not", () => {
+    /*
+     * A tabbed panel can only search within a tab, or it crosses a boundary the
+     * tabs assert. One list has no boundary to cross, so a query matching two
+     * kinds returns both — and that is the capability the shape buys.
+     */
+    mount(MIXED);
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: /search tokens/i }),
+      {
+        target: { value: "e" },
+      }
+    );
+    // "color.ink" has no "e"; the other two do, and they are different kinds.
+    expect(screen.getByRole("heading", { name: "Size" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Duration" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Colour" })).toBeNull();
+  });
+
+  it("teaches at the empty state instead of reporting absence and stopping", () => {
+    // "No colour tokens yet." says what is missing and offers nothing. An empty
+    // panel is the first thing a new site shows, so it is the one surface that
+    // has to teach.
+    mount({ tokens: [] });
+    expect(screen.getByText(/no tokens yet/i)).toBeTruthy();
+    expect(
+      screen.getByText(/point at it instead of repeating it/i)
+    ).toBeTruthy();
+    // Not the absolute claim: an edit reaches one mode, so "the whole site
+    // follows" promised more than a single edit does.
+    expect(screen.queryByText(/the whole site follows/i)).toBeNull();
   });
 });

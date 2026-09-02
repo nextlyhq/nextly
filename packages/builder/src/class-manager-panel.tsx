@@ -41,6 +41,7 @@ import * as React from "react";
 
 import { useSurvivingReport } from "./builder-notices";
 import {
+  classLibraryHasRoom,
   classRows,
   deletionWarning,
   filterClassRows,
@@ -251,6 +252,18 @@ export function ClassManagerPanel({
 }: ClassManagerPanelProps): React.ReactElement {
   const [filter, setFilter] = React.useState<ClassFilter>("all");
   /*
+   * The supplied ids as a set, built once and handed to the rows.
+   *
+   * Two consumers ask "is this class supplied": each row, to decide whether it
+   * draws a delete control, and the lede, to decide whether it may offer
+   * deletion at all. One set, so the sentence and the controls cannot disagree.
+   */
+  const supplied = React.useMemo(
+    () => new Set(suppliedClassIds ?? []),
+    [suppliedClassIds]
+  );
+
+  /*
    * The name search, which is what makes every class REACHABLE.
    *
    * The list is capped so a library near its ceiling does not mount two
@@ -294,10 +307,33 @@ export function ClassManagerPanel({
   }
 
   const usageKnown = usage !== undefined;
-  const rows = searchClassRows(
-    filterClassRows(classRows(library, usage ?? {}, documentClassIds), active),
-    query
+  /*
+   * Every row this panel can draw, before any narrowing.
+   *
+   * `classRows` goes through `siteClasses`, which caps at `MAX_NAMED_CLASSES`
+   * and drops entries the compiler cannot use — so the stored library is NOT
+   * the set on screen, and asking it a question about the screen gives an
+   * answer about neither.
+   */
+  const visible = classRows(library, usage ?? {}, documentClassIds);
+  /*
+   * Whether deletion is reachable ANYWHERE, which neither the callback nor the
+   * stored library answers on its own. A row draws its delete control only
+   * when it is not supplied, and only if it is drawn at all — so a library
+   * whose one non-supplied entry is malformed, duplicated or past the cap
+   * offers deletion nowhere while both of those weaker tests say it does.
+   */
+  const anyDeletable = visible.some(row =>
+    rowIsDeletable(row, supplied, onDelete)
   );
+  /*
+   * Whether there is anything here to rename at all. A full library of entries
+   * the compiler cannot use draws no rows, so the empty state correctly says
+   * this panel can do nothing with them while the lede went on offering to
+   * rename them — two sentences contradicting each other in one view.
+   */
+  const anyRenameable = visible.length > 0;
+  const rows = searchClassRows(filterClassRows(visible, active), query);
 
   return (
     <div className="nx-classman">
@@ -320,16 +356,28 @@ export function ClassManagerPanel({
           Where these classes are used has not been read.
         </p>
       )}
+      {/*
+       * What a class IS, and where one is made.
+       *
+       * The second sentence is the load-bearing half. This panel deliberately
+       * has no create control — applying happens beside the style controls,
+       * where it is done constantly, while auditing happens here — and without
+       * saying so the absent button reads as a missing feature rather than as a
+       * split someone chose.
+       */}
+      <ClassesLede anyDeletable={anyDeletable} anyRenameable={anyRenameable} />
       <FilterChips active={active} filters={offerable} onChange={setFilter} />
       <ClassSearch query={query} onChange={setQuery} />
       <ClassList
         rows={rows}
         searching={query.trim() !== ""}
+        filter={active}
         pendingSlugs={pendingSlugs}
         pageSize={pageSize}
         library={library}
-        supplied={new Set(suppliedClassIds ?? [])}
+        supplied={supplied}
         usageKnown={usageKnown}
+        anyDeletable={anyDeletable}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -395,6 +443,176 @@ function FilterChips({
 }
 
 /**
+ * Whether one row can be deleted, asked in one place.
+ *
+ * The row drew its control from `isSupplied` and `onDelete` while the lede
+ * asked `onDelete` and the supplied set separately — two expressions of one
+ * rule, agreeing today and free to diverge the next time eligibility changes.
+ * Sharing the `Set` was not sharing the DECISION.
+ */
+function rowIsDeletable(
+  row: ClassRow,
+  supplied: ReadonlySet<string>,
+  onDelete: ((classId: string) => void) | undefined
+): boolean {
+  return onDelete !== undefined && !supplied.has(row.id);
+}
+
+/**
+ * Why the list is empty, in the terms of whatever actually emptied it.
+ *
+ * Extracted from `ClassList` because four narrowings with four different
+ * honest answers is its own question, and inlining them pushed that component
+ * past the cognitive-complexity gate. Mirrors `EmptyTokens` in tokens-panel.
+ */
+function EmptyClasses({
+  searching,
+  filter,
+  canDelete,
+  canCreate,
+}: {
+  searching: boolean;
+  filter: ClassFilter;
+  /**
+   * Whether the host wired a delete callback. The production `BlocksField`
+   * mount does not, so a row shows no delete control there and copy offering
+   * to clear classes out would name an action this panel cannot perform.
+   */
+  canDelete: boolean;
+  /**
+   * Whether `class-library` would accept a new class. Asked of it rather than
+   * inferred from an empty list, because the two disagree exactly when every
+   * stored entry is unusable.
+   */
+  canCreate: boolean;
+}): React.JSX.Element {
+  /*
+   * Which narrowing produced the empty list. Blaming the search when the box
+   * is blank sends an author to clear something that is not set, and hides
+   * the filter that actually did it.
+   */
+  if (searching) {
+    return <p className="nx-inspector__note">No classes match this search.</p>;
+  }
+  /*
+   * An empty "not in index" is the one absence here that is a RESULT rather
+   * than a lack: nothing is known to be stranded. Wording it like the others
+   * reports the outcome an author was hoping for as a failure to find
+   * anything.
+   *
+   * The sentence still refuses to claim more than the index can support. It
+   * says what is not KNOWN, never what is not USED — the same care the
+   * filter's own name takes, and for the same reason: the index errs in both
+   * directions, so an empty list is a floor rather than a measurement.
+   */
+  if (filter === "not-in-index") {
+    return (
+      <div className="nx-classman__empty">
+        <p className="nx-classman__empty-head">
+          Nothing here &mdash; and that is good news.
+        </p>
+        <p className="nx-inspector__note">
+          Every class has an index entry, so none is listed as stranded. That is
+          the whole claim: the index errs in BOTH directions — it can miss a
+          class that is still applied, and it keeps rows a failed removal left
+          behind — so an empty list here is evidence about the index rather than
+          a measurement of what is used.
+        </p>
+      </div>
+    );
+  }
+  /*
+   * An empty library is not a filter miss. With `all` active nothing is
+   * narrowing anything, so blaming "this filter" points an author at a
+   * control that is not doing what the sentence says it did — and stops at
+   * the absence, which is the dead end this panel was reported for.
+   *
+   * It teaches instead, and names where the next step happens. Classes are
+   * not created here (applying belongs beside the style controls, auditing
+   * belongs on a reading surface), so the action this state can honestly
+   * offer is where to go, not a button.
+   */
+  if (filter === "all") {
+    /*
+     * Whether a class can be made at all is `class-library`'s question, not
+     * something an empty list implies. A library whose stored entries are all
+     * malformed draws nothing here while every slot is still taken, and
+     * `newClassName` then refuses every creation as `library-full` — so "make
+     * the first one beside the style controls" would name an action that
+     * cannot succeed, on the one surface an author goes to for help.
+     */
+    if (!canCreate) {
+      return (
+        <div className="nx-classman__empty">
+          <p className="nx-classman__empty-head">
+            No classes can be shown, and none can be made.
+          </p>
+          <p className="nx-inspector__note">
+            This site&rsquo;s class library is full, and nothing in it can be
+            used — so no class is listed here and a new one would be refused.
+            Entries have to be removed from the stored classes before this panel
+            can do anything with them.
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className="nx-classman__empty">
+        <p className="nx-classman__empty-head">No classes yet.</p>
+        <p className="nx-inspector__note">
+          A class saves a set of styles under a name so other blocks can wear
+          the same one. You make the first beside the style controls, and it
+          appears here to rename
+          {canDelete ? " or clear out" : ""}.
+        </p>
+      </div>
+    );
+  }
+  return <p className="nx-inspector__note">No classes match this filter.</p>;
+}
+
+/**
+ * What a class is, and what this panel can do with one.
+ *
+ * Its own component so `ClassManagerPanel` stays under the cognitive gate, and
+ * because the sentence is conditional on something the panel derives: the copy
+ * and the row controls have to agree, so the condition travels with the words.
+ */
+function ClassesLede({
+  anyDeletable,
+  anyRenameable,
+}: {
+  /*
+   * Whether ANY row can actually be deleted, which is not the same question
+   * as whether the host passed `onDelete`.
+   *
+   * A row renders its delete control only when it is not supplied — a
+   * supplied class is labelled "Default" and `isSupplied` takes precedence
+   * over the callback — so a library made entirely of supplied classes
+   * offers deletion nowhere even with the callback wired. Deriving the
+   * sentence from the callback alone promised the action for that host
+   * shape. This asks the predicate the rows themselves ask.
+   */
+  anyDeletable: boolean;
+  /**
+   * Whether any row is drawn at all. With none there is no rename field
+   * either, so the sentence names only where a class is applied — otherwise it
+   * offers an action beside an empty state that has just said the panel can do
+   * nothing here.
+   */
+  anyRenameable: boolean;
+}): React.JSX.Element {
+  return (
+    <p className="nx-classman__lede">
+      <b>A class is a saved set of styles you can reuse.</b>{" "}
+      {anyRenameable
+        ? `${anyDeletable ? "Rename and clear them out" : "Rename them"} here; you apply one beside the style controls.`
+        : "You apply one beside the style controls."}
+    </p>
+  );
+}
+
+/**
  * How many rows the manager mounts at once.
  *
  * A library may hold `MAX_NAMED_CLASSES`, and the `All` filter matches every
@@ -427,22 +645,39 @@ function usablePageSize(pageSize: number | undefined): number {
 function ClassList({
   rows,
   searching,
+  filter,
   pendingSlugs,
   pageSize,
   library,
   supplied,
   usageKnown,
+  anyDeletable,
   onRename,
   onDelete,
 }: {
   rows: readonly ClassRow[];
   /** Whether a search is narrowing them, for the empty-list wording. */
   searching: boolean;
+  /**
+   * Which narrowing is active, because one of them is GOOD news when empty.
+   *
+   * An empty "not in index" is the outcome an author auditing a site wants, and
+   * wording it like the others reports a success as a failure.
+   */
+  filter: ClassFilter;
   pendingSlugs?: Readonly<Record<string, string>>;
   pageSize?: number;
   library: readonly NamedClass[];
   supplied: ReadonlySet<string>;
   usageKnown: boolean;
+  /**
+   * Whether deletion is reachable on ANY row, derived once by the panel.
+   *
+   * Passed rather than recomputed from `onDelete` and `supplied` here: the
+   * lede and this list must give one answer, and two derivations of "can
+   * anything be deleted" would drift the moment either changed.
+   */
+  anyDeletable: boolean;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
@@ -466,16 +701,12 @@ function ClassList({
   const limit = pagesOpen * page;
   if (rows.length === 0) {
     return (
-      <p className="nx-inspector__note">
-        {/*
-          Which narrowing produced the empty list. Blaming the search when the
-          box is blank sends an author to clear something that is not set, and
-          hides the filter that actually did it.
-        */}
-        {searching
-          ? "No classes match this search."
-          : "No classes match this filter."}
-      </p>
+      <EmptyClasses
+        searching={searching}
+        filter={filter}
+        canDelete={anyDeletable}
+        canCreate={classLibraryHasRoom(library)}
+      />
     );
   }
   const shown = rows.slice(0, limit);
@@ -495,6 +726,7 @@ function ClassList({
               pendingSlug={pendingSlugs?.[row.id]}
               library={library}
               isSupplied={supplied.has(row.id)}
+              canDelete={rowIsDeletable(row, supplied, onDelete)}
               usageKnown={usageKnown}
               onRename={onRename}
               onDelete={onDelete}
@@ -522,6 +754,7 @@ function ClassRowView({
   pendingSlug,
   library,
   isSupplied,
+  canDelete,
   usageKnown,
   onRename,
   onDelete,
@@ -531,11 +764,30 @@ function ClassRowView({
   pendingSlug?: string;
   library: readonly NamedClass[];
   isSupplied: boolean;
+  /**
+   * Whether this row may be deleted, decided by `rowIsDeletable` rather than
+   * here. The lede reports the same predicate over every row, so the sentence
+   * and the control cannot come apart.
+   */
+  canDelete: boolean;
   usageKnown: boolean;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
   const [confirming, setConfirming] = React.useState(false);
+  /*
+   * DISARMED, not merely hidden. Gating the render on `canDelete` stops the
+   * dialog being shown while the capability is gone, but leaves `confirming`
+   * true — so a class that becomes supplied and then supplied-no-longer, in a
+   * row that never unmounts, brings the confirmation back ALREADY ARMED. The
+   * author would then be one press from an irreversible removal they opened
+   * before the capability changed and never re-reviewed.
+   *
+   * Adjusted during render rather than in an effect: React re-runs the render
+   * with the corrected state before committing, so the armed dialog is never
+   * drawn even once.
+   */
+  if (confirming && !canDelete) setConfirming(false);
 
   return (
     <>
@@ -552,7 +804,7 @@ function ClassRowView({
           // author to hunt for the permission that would enable it, and there
           // is none — the class comes from the site's own configuration.
           <span className="nx-classman__origin">Default</span>
-        ) : onDelete === undefined ? null : (
+        ) : !canDelete || onDelete === undefined ? null : (
           <Button
             type="button"
             size="sm"
@@ -564,7 +816,14 @@ function ClassRowView({
           </Button>
         )}
       </div>
-      {confirming && onDelete !== undefined ? (
+      {/*
+       * Gated on the SAME predicate as the button that opens it. `confirming`
+       * is local state and survives a prop change, so a row whose class became
+       * supplied while its confirmation was open kept an armed, irreversible
+       * control after the row itself had stopped offering one — the capability
+       * was withdrawn and the dialog did not hear.
+       */}
+      {confirming && canDelete && onDelete !== undefined ? (
         <DeleteConfirm
           row={row}
           usageKnown={usageKnown}
