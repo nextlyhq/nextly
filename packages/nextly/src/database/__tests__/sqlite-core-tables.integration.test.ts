@@ -63,17 +63,28 @@ function bootstrappedConfigs(tables: Set<string>) {
 }
 
 /**
- * Whether SQLite carries this index under a name of its own choosing.
+ * The columns covered by every UNIQUE index in the built database.
  *
- * A single-column UNIQUE spelled inline on the column produces an implicit
- * `sqlite_autoindex_*`, which the reads below exclude. Those are checked by
- * the sibling suite's inline-UNIQUE classification rather than reported absent
- * here.
+ * Read back rather than inferred. A UNIQUE constraint spelled inline — on the
+ * column, or as `UNIQUE(a, b)` at the end of the table — produces an implicit
+ * `sqlite_autoindex_*` whose name this DDL never chose. Comparing NAMES alone
+ * calls those absent; comparing the columns they cover asks the question that
+ * matters, which is whether the uniqueness exists at all.
  */
-function isImplicitUnique(index: {
-  config: { unique?: boolean; columns: unknown[] };
-}) {
-  return Boolean(index.config.unique) && index.config.columns.length === 1;
+function uniqueIndexColumns(db: Database.Database, table: string): Set<string> {
+  const covered = new Set<string>();
+  const list = db.prepare(`PRAGMA index_list("${table}")`).all() as {
+    name: string;
+    unique: number;
+  }[];
+  for (const entry of list) {
+    if (entry.unique !== 1) continue;
+    const cols = db.prepare(`PRAGMA index_info("${entry.name}")`).all() as {
+      name: string | null;
+    }[];
+    covered.add(cols.map(column => column.name ?? "?").join(","));
+  }
+  return covered;
 }
 
 /**
@@ -84,15 +95,25 @@ function isImplicitUnique(index: {
  * have no table here.
  */
 function indexesDeclaredButAbsent(
+  db: Database.Database,
   tables: Set<string>,
   indexes: Set<string>
 ): string[] {
-  return bootstrappedConfigs(tables).flatMap(config =>
-    config.indexes
-      .filter(index => !isImplicitUnique(index))
-      .filter(index => !indexes.has(index.config.name))
-      .map(index => `${config.name}.${index.config.name}`)
-  );
+  return bootstrappedConfigs(tables).flatMap(config => {
+    const uniques = uniqueIndexColumns(db, config.name);
+    return config.indexes
+      .filter(index => {
+        if (indexes.has(index.config.name)) return false;
+        // Absent under its own name. It still exists if a UNIQUE constraint
+        // covers exactly these columns.
+        if (!index.config.unique) return true;
+        const columns = index.config.columns
+          .map(column => ("name" in column ? column.name : "?"))
+          .join(",");
+        return !uniques.has(columns);
+      })
+      .map(index => `${config.name}.${index.config.name}`);
+  });
 }
 
 describe("the SQLite bootstrap DDL, executed", () => {
@@ -107,6 +128,7 @@ describe("the SQLite bootstrap DDL, executed", () => {
   it("creates every index it declares, as a real index", () => {
     const db = bootstrapped();
     const missing = indexesDeclaredButAbsent(
+      db,
       namesOfType(db, "table"),
       namesOfType(db, "index")
     );
@@ -116,6 +138,46 @@ describe("the SQLite bootstrap DDL, executed", () => {
       `these indexes are declared by the schema and do not exist in a database ` +
         `built from the bootstrap DDL: ${missing.join(", ")}`
     ).toEqual([]);
+    db.close();
+  });
+
+  /**
+   * The upgrade case, which is the one that reaches existing installations.
+   *
+   * Modelled as what the previous bootstrap actually produced: its CREATE
+   * TABLE statements, minus the registry tables this change adds, and none of
+   * the index statements. Re-running the full set against that must supply the
+   * difference — which is the whole reason the caller reconciles an existing
+   * SQLite database rather than returning as soon as it sees `users`.
+   */
+  it("supplies what a database created by an earlier bootstrap lacks", () => {
+    const REGISTRY = [
+      "dynamic_collections",
+      "dynamic_singles",
+      "dynamic_components",
+    ];
+    const db = new Database(":memory:");
+    db.pragma("foreign_keys = ON");
+    for (const statement of generateSqliteCoreTableStatements()) {
+      if (!statement.includes("CREATE TABLE")) continue;
+      if (REGISTRY.some(table => statement.includes(`"${table}"`))) continue;
+      db.exec(statement);
+    }
+
+    // The premise: this really is a database missing what the change adds.
+    expect(namesOfType(db, "table").size).toBeGreaterThan(15);
+    expect(namesOfType(db, "table").has("dynamic_singles")).toBe(false);
+    expect(namesOfType(db, "index").has("media_folder_id_idx")).toBe(false);
+
+    for (const statement of generateSqliteCoreTableStatements()) {
+      db.exec(statement);
+    }
+
+    const tables = namesOfType(db, "table");
+    const indexes = namesOfType(db, "index");
+    expect(tables.has("dynamic_singles")).toBe(true);
+    expect(indexes.has("media_folder_id_idx")).toBe(true);
+    expect(indexesDeclaredButAbsent(db, tables, indexes)).toEqual([]);
     db.close();
   });
 

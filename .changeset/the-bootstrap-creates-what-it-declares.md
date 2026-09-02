@@ -35,9 +35,13 @@ missing index breaks no insert; it makes every query against that column a
 scan, which is why fifty of them were declared on all three dialects and
 created on none.
 
-Fifty added in total: thirty-five on tables the bootstrap already created, and
-fifteen on `dynamic_collections`, `dynamic_singles` and `dynamic_components`,
-which are now created too.
+Forty-three added in total: twenty-eight on tables the bootstrap already
+created, and fifteen on `dynamic_collections`, `dynamic_singles` and
+`dynamic_components`, which are now created too. A UNIQUE constraint the DDL
+already spells inline — on the column, or as `UNIQUE(a, b)` at the end of the
+table — is the same index under a name SQLite chooses, so those are recognised
+rather than emitted a second time; a named index beside one builds a second
+B-tree over the same columns for every write.
 
 Only `dynamic_singles` was entirely absent — nothing creates it outside tests.
 The other two are created by `SystemTableService`, which the same fallback calls
@@ -46,6 +50,15 @@ on SQLite where the schema declares 25. Those definitions disagree with the
 schema and with each other. The statements added here are generated from the
 Drizzle column configs and run first, so on SQLite the complete definition is
 the one that wins.
+
+These statements now also reach databases that already exist. The caller
+returned as soon as it saw a `users` table, so the only path that ran them was
+the one taken by a database that did not exist yet — leaving `nextly db:sync`,
+the documented recovery command, unable to supply anything added since an
+install was created. An existing SQLite database is reconciled instead; every
+statement is IF NOT EXISTS, so re-running adds only what is absent. A table
+whose COLUMNS drifted is not repaired this way, since SQLite skips a CREATE
+TABLE wholesale once the table exists.
 
 The guard that was meant to catch this could not see two of the tables. It read
 the schema SOURCE for a literal table name, and `dynamic_components` is built

@@ -62,8 +62,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "session_state" TEXT,
       UNIQUE("provider", "provider_account_id")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "accounts_provider_providerAccountId_unique"
-      ON "accounts" ("provider", "provider_account_id")`,
     `CREATE INDEX IF NOT EXISTS "accounts_user_id_idx"
       ON "accounts" ("user_id")`,
     `CREATE TABLE IF NOT EXISTS "sessions" (
@@ -82,8 +80,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "prt_identifier_token_hash_unique"
-      ON "password_reset_tokens" ("identifier", "token_hash")`,
     `CREATE INDEX IF NOT EXISTS "prt_expires_idx"
       ON "password_reset_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
@@ -96,8 +92,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "evt_identifier_token_hash_unique"
-      ON "email_verification_tokens" ("identifier", "token_hash")`,
     `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
       ON "email_verification_tokens" ("expires")`,
     `CREATE TABLE IF NOT EXISTS "refresh_tokens" (
@@ -144,8 +138,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("action", "resource")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "permissions_action_resource_unique"
-      ON "permissions" ("action", "resource")`,
     `CREATE INDEX IF NOT EXISTS "permissions_resource_idx"
       ON "permissions" ("resource")`,
     `CREATE INDEX IF NOT EXISTS "permissions_action_idx"
@@ -157,8 +149,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("role_id", "permission_id")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "role_permissions_role_permission_unique"
-      ON "role_permissions" ("role_id", "permission_id")`,
     `CREATE INDEX IF NOT EXISTS "role_permissions_role_id_idx"
       ON "role_permissions" ("role_id")`,
     `CREATE TABLE IF NOT EXISTS "user_roles" (
@@ -169,8 +159,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "expires_at" INTEGER,
       UNIQUE("user_id", "role_id")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "user_roles_user_role_unique"
-      ON "user_roles" ("user_id", "role_id")`,
     `CREATE INDEX IF NOT EXISTS "user_roles_user_id_idx"
       ON "user_roles" ("user_id")`,
     `CREATE INDEX IF NOT EXISTS "user_roles_expires_at_idx"
@@ -181,8 +169,6 @@ export function generateSqliteCoreTableStatements(): string[] {
       "child_role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
       UNIQUE("parent_role_id", "child_role_id")
     )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS "role_inherits_parent_child_unique"
-      ON "role_inherits" ("parent_role_id", "child_role_id")`,
     `CREATE INDEX IF NOT EXISTS "role_inherits_child_idx"
       ON "role_inherits" ("child_role_id")`,
     `CREATE INDEX IF NOT EXISTS "role_inherits_parent_idx"
@@ -268,7 +254,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     // wholesale once the table exists, so an index folded into one is never
     // added to a database that predates it.
     `CREATE TABLE IF NOT EXISTS "dynamic_collections" (
-      "id" TEXT PRIMARY KEY,
+      "id" TEXT PRIMARY KEY NOT NULL,
       "slug" TEXT NOT NULL UNIQUE,
       "labels" TEXT NOT NULL,
       "table_name" TEXT NOT NULL UNIQUE,
@@ -305,7 +291,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE INDEX IF NOT EXISTS "dynamic_collections_updated_at_idx"
       ON "dynamic_collections" ("updated_at")`,
     `CREATE TABLE IF NOT EXISTS "dynamic_singles" (
-      "id" TEXT PRIMARY KEY,
+      "id" TEXT PRIMARY KEY NOT NULL,
       "slug" TEXT NOT NULL UNIQUE,
       "label" TEXT NOT NULL,
       "table_name" TEXT NOT NULL UNIQUE,
@@ -340,7 +326,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE INDEX IF NOT EXISTS "dynamic_singles_updated_at_idx"
       ON "dynamic_singles" ("updated_at")`,
     `CREATE TABLE IF NOT EXISTS "dynamic_components" (
-      "id" TEXT PRIMARY KEY,
+      "id" TEXT PRIMARY KEY NOT NULL,
       "slug" TEXT NOT NULL UNIQUE,
       "label" TEXT NOT NULL,
       "table_name" TEXT NOT NULL UNIQUE,

@@ -93,6 +93,28 @@ function schemaTables(): Map<string, SchemaTable> {
   return tables;
 }
 
+/**
+ * Whether an inline constraint already carries this index.
+ *
+ * SQLite builds an implicit index for a UNIQUE constraint, so a declaration
+ * the DDL spells inline is the same index under a name SQLite chooses. Both
+ * spellings appear here: `"email" TEXT NOT NULL UNIQUE` on the column, and
+ * `UNIQUE("provider", "provider_account_id")` at the end of the table. Matching
+ * on the index NAME alone reports both as missing, and emitting a named index
+ * beside them builds a second B-tree over the same columns for every write.
+ */
+function satisfiedInline(
+  index: { columns: string[]; unique: boolean },
+  body: string
+): boolean {
+  if (!index.unique) return false;
+  if (index.columns.length === 1) {
+    return new RegExp(`"${index.columns[0]}"[^,\n]*UNIQUE`).test(body);
+  }
+  const composite = index.columns.map(column => `"${column}"`).join(", ");
+  return body.includes(`UNIQUE(${composite})`);
+}
+
 describe("the SQLite bootstrap DDL", () => {
   const ddl = ddlColumns();
   const schemas = schemaTables();
@@ -223,14 +245,7 @@ describe("the SQLite bootstrap DDL", () => {
       const declared = schemas.get(table)?.indexes ?? [];
       const missing = declared
         .filter(index => !joined.includes(`"${index.name}"`))
-        .filter(index => {
-          // Spelled inline on the column instead, which is the same index.
-          const inlineUnique =
-            index.unique &&
-            index.columns.length === 1 &&
-            new RegExp(`"${index.columns[0]}"[^,\n]*UNIQUE`).test(body);
-          return !inlineUnique;
-        })
+        .filter(index => !satisfiedInline(index, body))
         .map(index => index.name);
 
       expect(
