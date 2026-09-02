@@ -49,23 +49,38 @@ const TOKEN_LIGHT = "#1b7f5c";
 const TOKEN_DARK = "#8fe3c0";
 
 /**
- * The two forms a dark block can be written under, one per supported
- * `darkMode` strategy: `attribute` writes a selector the host activates,
- * `media` writes an at-rule the operating system activates. The emitter picks
- * one, so a sheet carries exactly one of these and never both.
+ * The dark block this app must emit, and the only one that can work here.
  *
- * Spelled out rather than imported from the engine, deliberately. Both are
- * published contract: a host wires its own theme toggle to `data-nx-theme` in
- * markup this repository never sees, so renaming it breaks every such host.
- * Importing the engine's constant would make this expectation follow a rename
- * and keep passing — expectation and output would be two derivations of one
- * source, which cannot detect the source changing. Written out, a rename fails
- * here, which is what an end-to-end test of a wire format is for.
+ * The engine supports two `darkMode` strategies. `attribute` writes
+ * `[data-nx-theme="dark"]`, which a host activates by setting that attribute;
+ * `media` writes an at-rule the operating system activates. **This app has no
+ * theme toggle and sets `data-nx-theme` nowhere**, so the attribute form would
+ * emit dark values that can never apply — which is not hypothetical: the
+ * docblock on `SITE_STYLE_RESOLVED` in `apps/playground/src/lib/site-content.ts`
+ * records routes that omitted the token set, fell back to the attribute
+ * default, and silently served dark values no visitor could ever see.
+ *
+ * So accepting either form here would leave the suite green across exactly
+ * that regression. The configured strategy decides which form is correct, and
+ * for this app it is settled: `media`.
+ *
+ * Spelled out rather than imported from the engine, deliberately. This string
+ * is published contract — a host wires its own toggle to `data-nx-theme` in
+ * markup this repository never sees — so importing the engine's constant would
+ * make the expectation follow a rename and keep passing. Expectation and
+ * output would be two derivations of one source, which cannot detect that
+ * source changing.
+ *
+ * Requires the at-rule to be followed IMMEDIATELY by `{`, because the guard
+ * has to OPEN the block rather than merely appear before it: `@media (...);`
+ * followed by a bare rule contains the same text while the browser discards
+ * the empty at-rule and applies the dark value unconditionally. The two
+ * `[^{}]*` runs are the selector and whatever declarations precede this one in
+ * the same block — the site's own dark tokens are emitted there too — neither
+ * of which can contain a brace.
  */
-const DARK_BLOCK_GUARDS = [
-  '[data-nx-theme="dark"]',
-  "@media (prefers-color-scheme:dark)",
-] as const;
+const DARK_BLOCK_OPENING =
+  /@media \(prefers-color-scheme:dark\)\{[^{}]*\{[^{}]*$/;
 
 /**
  * The stored font face, and the family its `@font-face` declares.
@@ -239,17 +254,46 @@ test("a stored token reaches the published page's site sheet, both modes", async
   // have put a dark block for this property into the sheet.
   const darkIndex = sheet.indexOf(`${TOKEN_PROPERTY}:${TOKEN_DARK}`);
   expect(darkIndex).toBeGreaterThan(-1);
-  // Which guard is correct is decided by this app's `darkMode` setting, not by
-  // this test: both strategies are supported and each emits the other's form
-  // never. Asserting one names a configuration rather than the property, and
-  // fails on an app that chose the other while nothing is wrong. What must
-  // hold under either is that the dark value is inside a dark guard at all —
-  // unguarded, it would apply in light mode, which is the actual defect.
-  const prelude = enclosingPreludeOf(sheet, darkIndex);
-  expect(
-    DARK_BLOCK_GUARDS.some(guard => prelude.includes(guard)),
-    `The dark value is not inside a dark-mode guard. The block enclosing it opens with: ${JSON.stringify(prelude)}`
-  ).toBe(true);
+  // The block the declaration actually sits in has to BE the media block. A
+  // search of everything before it would accept a guard belonging to some
+  // other token while this value sat unguarded in the light block, and
+  // accepting the attribute form would accept dark values this app can never
+  // activate.
+  expect(enclosingPreludeOf(sheet, darkIndex)).toMatch(DARK_BLOCK_OPENING);
+});
+
+test("the browser resolves the stored token to each mode's value", async ({
+  page,
+}) => {
+  // The sheet being correct and the sheet APPLYING are different claims, and
+  // the assertion above can only reach the first. The failure this app has
+  // already had produced a sheet that read correctly — dark values were
+  // present and syntactically fine — under a selector nothing in the app ever
+  // sets, so no visitor saw them and no text assertion could tell. Asking the
+  // browser under each colour scheme is what separates emitted from applied.
+  //
+  // Read off the heading rather than the root: custom properties inherit, so
+  // this resolves whether the emitter declared them on `:root` or on a scoped
+  // wrapper, and does not encode which one it chose.
+  const resolved = async (): Promise<string> =>
+    (
+      await page
+        .getByRole("heading", { name: PAGE_HEADING })
+        .evaluate(
+          (element, property) =>
+            getComputedStyle(element).getPropertyValue(property),
+          TOKEN_PROPERTY
+        )
+    ).trim();
+
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto(`/blocks/${PAGE_SLUG}`);
+  expect(await resolved()).toBe(TOKEN_LIGHT);
+
+  // No reload: a media query re-evaluates when the scheme changes, so this
+  // also proves the dark value is behind the query rather than merely present.
+  await page.emulateMedia({ colorScheme: "dark" });
+  expect(await resolved()).toBe(TOKEN_DARK);
 });
 
 test("a stored font face reaches the published page as a rule a browser would act on", async ({
