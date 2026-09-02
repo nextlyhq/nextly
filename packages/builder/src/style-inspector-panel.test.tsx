@@ -33,6 +33,7 @@ import * as React from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
+import { applyOps, type BuilderOp } from "./ops";
 import { InspectorPanel } from "./inspector-panel";
 import {
   breakpointLabel,
@@ -87,7 +88,18 @@ function documentOf(styles?: NodeStyles): BlockDocument {
     formatVersion: 1,
     kind: "page",
     nodes: [
-      { id: "a", type: "acme/box", version: 1, props: {}, styles },
+      {
+        id: "a",
+        type: "acme/box",
+        version: 1,
+        props: {},
+        // OMITTED rather than set to `undefined` when there are no styles. A
+        // node holding `undefined` is not a document the product can produce —
+        // it will not serialise — and the op layer refuses to edit one, so a
+        // fixture carrying the key made the unstyled case unusable for any
+        // assertion that applies an op.
+        ...(styles === undefined ? {} : { styles }),
+      },
     ] as BlockNode[],
   } as BlockDocument;
 }
@@ -2731,20 +2743,35 @@ describe("a segmented keyword control behaves as a toggle", () => {
       "button"
     ) as HTMLButtonElement[];
 
-  /** The styles one `applyAll` call would leave on the node. */
-  const committedStyles = (
+  /**
+   * The node's styles AFTER the recorded ops are applied to the document.
+   *
+   * Applied rather than read out of the patch, because reading the patch cannot
+   * tell a removal from an operation that does nothing: an update carrying no
+   * `styles` key at all answers `undefined` exactly as a clear does, so every
+   * clear assertion below would pass against a handler that submits an empty
+   * edit and leaves the value on the page. `applyOps` also REFUSES an update
+   * that changes nothing, so a no-op cannot even reach a document to be read.
+   */
+  const styleAfter = (
     editor: ReturnType<typeof editorFor>
-  ): NodeStyles | undefined => {
+  ): string | undefined => {
     const ops = editor.applyAll.mock.calls[0]?.[0] as
-      | readonly { kind: string; patch?: unknown }[]
+      | readonly BuilderOp[]
       | undefined;
-    const op = ops?.[0];
-    if (op === undefined || op.kind !== "update") return undefined;
-    return (op.patch as { styles?: NodeStyles }).styles;
+    if (ops === undefined) throw new Error("no ops were applied");
+    const applied = applyOps(editor.document, ops);
+    if (applied.document === null) {
+      throw new Error("the ops were refused, so nothing was applied");
+    }
+    const node = applied.document.nodes[0] as { styles?: NodeStyles };
+    return node.styles?.base?.[BASE_BREAKPOINT]?.fontStyle as
+      | string
+      | undefined;
   };
 
   /** The panel with one `fontStyle` value already stored, or none. */
-  const mountWith = (stored?: string) =>
+  const mountWith = (stored?: string | undefined) =>
     mount(
       { typography: true },
       stored === undefined
@@ -2794,9 +2821,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
       // Exactly once: a handler committing twice would satisfy "was called" and
       // spend two history entries on one gesture.
       expect(editor.applyAll).toHaveBeenCalledTimes(1);
-      expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
-        undefined
-      );
+      expect(styleAfter(editor)).toBeUndefined();
     }
   );
 
@@ -2804,6 +2829,15 @@ describe("a segmented keyword control behaves as a toggle", () => {
     ["italic", "normal"],
     ["italic", "oblique"],
     ["normal", "oblique"],
+    // `italic` as a DESTINATION, which the rows above never make it: they only
+    // ever click it while it is already pressed. Without this a handler reading
+    // `pressed || option === "italic" ? null : option` clears instead of
+    // storing it, and every row still passes.
+    ["normal", "italic"],
+    // And from UNSET, which is the state a newly styled node is in. A handler
+    // treating an absent value as nothing-to-do would make the first click on
+    // any option do nothing, with only this row to say so.
+    [undefined, "italic"],
   ])("writes %s -> %s when a different option is pressed", (stored, next) => {
     /*
      * The positive control for the clear case, and the option-to-value mapping
@@ -2815,9 +2849,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
     fireEvent.click(optionButton(next));
 
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
-    expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
-      next
-    );
+    expect(styleAfter(editor)).toBe(next);
   });
 
   it("marks EVERY button invalid when the store refuses the edit", () => {
@@ -2832,17 +2864,33 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
-    editor.applyAll.mockReturnValue(null);
 
+    // The positive control, BEFORE the refusal. Without it an implementation
+    // that marks every button invalid unconditionally passes — and that
+    // regression announces untouched, perfectly editable controls as erroneous.
+    for (const button of allOptions()) {
+      expect(button.getAttribute("aria-invalid")).toBeNull();
+    }
+
+    editor.applyAll.mockReturnValue(null);
     fireEvent.click(optionButton("italic"));
 
     for (const button of allOptions()) {
       expect(button.getAttribute("aria-invalid")).toBe("true");
     }
-    const message = screen.getByRole("alert");
-    expect(
-      fieldsOf("fontStyle").getByRole("group").getAttribute("aria-describedby")
-    ).toBe(message.getAttribute("id"));
+    /*
+     * Both identifiers are required to EXIST before they are compared. Omitting
+     * the alert's id and the group's `aria-describedby` leaves both reads
+     * `null`, and `null === null` would report the message as associated with
+     * the control while nothing connects them.
+     */
+    const messageId = screen.getByRole("alert").getAttribute("id");
+    const describedBy = fieldsOf("fontStyle")
+      .getByRole("group")
+      .getAttribute("aria-describedby");
+    expect(messageId).toBeTruthy();
+    expect(describedBy).toBeTruthy();
+    expect(describedBy).toBe(messageId);
   });
 
   it("does not write anything when the field's LABEL is clicked", () => {
