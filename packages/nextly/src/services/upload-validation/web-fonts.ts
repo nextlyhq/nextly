@@ -64,42 +64,6 @@ export function webFontMimeFromFilename(filename: string): string | undefined {
 }
 
 /**
- * The type an upload claims, filled in from its name where nothing was sent.
- *
- * ONE implementation, because four upload entry points need the same answer and
- * each names its file differently — so the resolution lives here rather than
- * beside each of them, where a reader looking for one spelling sees a subset.
- *
- * A browser reports no type for formats its platform does not register, which
- * fonts routinely are not, and several multipart clients send
- * `application/octet-stream` for the same reason. Both are refused by an
- * allowlist keyed on the type, whatever the allowlist contains.
- *
- * This NARROWS what a caller must send rather than widening what is believed:
- * only a name matching a declared font format resolves, everything else keeps
- * whatever arrived, and the resulting claim is still compared against the
- * file's own magic bytes downstream — so a renamed archive is refused exactly
- * as it was before.
- *
- * @param filename - The uploaded name
- * @param reportedType - The type the client sent, which may be empty
- * @returns The type to validate and store
- */
-export function resolveClaimedMimeType(
-  filename: string,
-  reportedType: string
-): string {
-  const claimed = reportedType.trim();
-  // Compared in lower case, because a client may spell the generic type
-  // `Application/Octet-Stream` — mime tokens are case-insensitive, and an exact
-  // comparison would skip the fallback and let the allowlist refuse a font the
-  // name could have identified.
-  const generic = claimed.toLowerCase();
-  if (generic !== "" && generic !== "application/octet-stream") return claimed;
-  return webFontMimeFromFilename(filename) ?? claimed;
-}
-
-/**
  * Whether a buffer actually begins as the font type it claims to be.
  *
  * The claim decides what an allowlist admits and what the public route will
@@ -124,4 +88,48 @@ export function matchesWebFontSignature(
     buffer.subarray(0, format.signature.length).toString("ascii") ===
     format.signature
   );
+}
+
+/**
+ * The type an upload claims, filled in from its name where nothing was sent.
+ *
+ * ONE implementation, because four upload entry points need the same answer and
+ * each names its file differently — so the resolution lives here rather than
+ * beside each of them, where a reader looking for one spelling sees a subset.
+ *
+ * A browser reports no type for formats its platform does not register, which
+ * fonts routinely are not, and several multipart clients send
+ * `application/octet-stream` for the same reason. Both are refused by an
+ * allowlist keyed on the type, whatever the allowlist contains.
+ *
+ * THE BYTES DECIDE, which is what keeps this from being a way to launder
+ * content. A name alone would let anything called `.woff2` acquire a type the
+ * public route serves to anonymous callers, and not every upload path runs the
+ * magic-byte comparison afterwards — the published server action reaches the
+ * legacy service, which does not. So the inference carries its own proof rather
+ * than relying on a check further down that some callers never reach.
+ *
+ * @param filename - The uploaded name
+ * @param reportedType - The type the client sent, which may be empty
+ * @param buffer - The uploaded bytes, which must back an inferred font type
+ * @returns The type to validate and store
+ */
+export function resolveClaimedMimeType(
+  filename: string,
+  reportedType: string,
+  buffer: Buffer
+): string {
+  const claimed = reportedType.trim();
+  // Compared in lower case, because a client may spell the generic type
+  // `Application/Octet-Stream` — mime tokens are case-insensitive, and an exact
+  // comparison would skip the fallback and let the allowlist refuse a font the
+  // name could have identified.
+  const generic = claimed.toLowerCase();
+  if (generic !== "" && generic !== "application/octet-stream") return claimed;
+
+  const inferred = webFontMimeFromFilename(filename);
+  if (inferred === undefined) return claimed;
+  // A name that does not match its contents infers nothing, and the caller is
+  // left with whatever it arrived with — which the allowlist then refuses.
+  return matchesWebFontSignature(buffer, inferred) ? inferred : claimed;
 }

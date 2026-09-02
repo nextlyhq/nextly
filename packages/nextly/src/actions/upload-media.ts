@@ -193,7 +193,11 @@ export async function uploadMediaAction(
      * this narrows what a caller must send rather than widening what is
      * believed.
      */
-    const claimedMimeType = resolveClaimedMimeType(file.name, file.type);
+    const claimedMimeType = resolveClaimedMimeType(
+      file.name,
+      file.type,
+      buffer
+    );
 
     const parseResult = UploadMediaInputSchema.safeParse({
       file: buffer,

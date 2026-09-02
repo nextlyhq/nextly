@@ -85,6 +85,11 @@ describe("inferring a font type from a filename", () => {
   });
 });
 
+/** Bytes that genuinely begin as the format they are named for. */
+function fontBytes(signature: string): Buffer {
+  return Buffer.concat([Buffer.from(signature, "ascii"), Buffer.alloc(32)]);
+}
+
 describe("resolving the type an upload claims", () => {
   it("keeps a real type the client sent, even for a font name", () => {
     /*
@@ -95,15 +100,21 @@ describe("resolving the type an upload claims", () => {
      * A client that says `font/woff` about `Inter.woff2` is telling us
      * something the filename cannot — the extension is not the format.
      */
-    expect(resolveClaimedMimeType("Inter.woff2", "font/woff")).toBe(
-      "font/woff"
-    );
-    expect(resolveClaimedMimeType("photo.png", "image/png")).toBe("image/png");
+    expect(
+      resolveClaimedMimeType("Inter.woff2", "font/woff", fontBytes("wOF2"))
+    ).toBe("font/woff");
+    expect(
+      resolveClaimedMimeType("photo.png", "image/png", Buffer.from("png"))
+    ).toBe("image/png");
   });
 
   it("fills in from the name when the client sent nothing", () => {
-    expect(resolveClaimedMimeType("Inter.woff2", "")).toBe("font/woff2");
-    expect(resolveClaimedMimeType("Inter.woff2", "   ")).toBe("font/woff2");
+    expect(resolveClaimedMimeType("Inter.woff2", "", fontBytes("wOF2"))).toBe(
+      "font/woff2"
+    );
+    expect(
+      resolveClaimedMimeType("Inter.woff2", "   ", fontBytes("wOF2"))
+    ).toBe("font/woff2");
   });
 
   it("fills in for the generic type, however it is spelled", () => {
@@ -114,10 +125,18 @@ describe("resolving the type an upload claims", () => {
      * have identified.
      */
     expect(
-      resolveClaimedMimeType("Inter.woff2", "application/octet-stream")
+      resolveClaimedMimeType(
+        "Inter.woff2",
+        "application/octet-stream",
+        fontBytes("wOF2")
+      )
     ).toBe("font/woff2");
     expect(
-      resolveClaimedMimeType("Inter.woff2", "Application/Octet-Stream")
+      resolveClaimedMimeType(
+        "Inter.woff2",
+        "Application/Octet-Stream",
+        fontBytes("wOF2")
+      )
     ).toBe("font/woff2");
   });
 
@@ -125,7 +144,11 @@ describe("resolving the type an upload claims", () => {
     // Absence of a font name is not licence to invent one; the value the caller
     // sent survives and the allowlist judges it as before.
     expect(
-      resolveClaimedMimeType("payload.bin", "application/octet-stream")
+      resolveClaimedMimeType(
+        "payload.bin",
+        "application/octet-stream",
+        Buffer.from("bin")
+      )
     ).toBe("application/octet-stream");
   });
 });
@@ -161,5 +184,38 @@ describe("checking a font claim against the bytes", () => {
     expect(
       matchesWebFontSignature(Buffer.from("<svg/>"), "image/svg+xml")
     ).toBe(true);
+  });
+});
+
+describe("the inference answers to the bytes", () => {
+  it("refuses to name a font when the content is not one", () => {
+    /*
+     * The inference invents a claim nobody made, and not every upload path runs
+     * a magic-byte comparison afterwards — the published server action reaches
+     * the legacy service, which does not. So a name alone would let anything
+     * called `.woff2` acquire a type the public route serves to anonymous
+     * callers as an immutable asset. The proof travels with the inference.
+     */
+    expect(
+      resolveClaimedMimeType("Evil.woff2", "", Buffer.from("not-a-font"))
+    ).toBe("");
+    expect(
+      resolveClaimedMimeType(
+        "Evil.woff2",
+        "application/octet-stream",
+        Buffer.from("not-a-font")
+      )
+    ).toBe("application/octet-stream");
+  });
+
+  it("still names a real font", () => {
+    // The control: a resolver refusing everything would satisfy the case above
+    // while making font uploads impossible.
+    expect(resolveClaimedMimeType("Inter.woff2", "", fontBytes("wOF2"))).toBe(
+      "font/woff2"
+    );
+    expect(resolveClaimedMimeType("Inter.woff", "", fontBytes("wOFF"))).toBe(
+      "font/woff"
+    );
   });
 });

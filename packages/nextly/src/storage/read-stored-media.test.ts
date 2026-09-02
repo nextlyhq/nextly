@@ -154,6 +154,30 @@ describe("reading a stored object", () => {
     expect(isStorageReadTooLarge(outcome)).toBe(false);
   });
 
+  it("takes a read-capable adapter's null as the answer, without fetching", async () => {
+    /*
+     * An adapter that implements `read` is authoritative about absence. Asking
+     * its public URL afterwards answers a different question badly: the local
+     * adapter's URL is a relative `/uploads/...` path, which `safeFetch`
+     * refuses as invalid, so a missing file came back as a blocked external URL
+     * rather than as missing.
+     *
+     * Asserted on `safeFetch` NEVER BEING CALLED, not on the `null` — a
+     * fallback that also ends in absence returns `null` too, which is how this
+     * hid: the outcome is identical and the route it took is not.
+     */
+    const storage = {
+      read: vi.fn().mockResolvedValue(null),
+      getPublicUrl: vi.fn(() => "/uploads/f.woff2"),
+    };
+
+    await expect(
+      readStoredMediaBytes(storage, "f.woff2", 1000)
+    ).resolves.toBeNull();
+    expect(safeFetch).not.toHaveBeenCalled();
+    expect(storage.getPublicUrl).not.toHaveBeenCalled();
+  });
+
   it("reports a MISSING object as absence, not as an outage", async () => {
     /*
      * A row can outlive its object — a lifecycle rule, a manual cleanup, a

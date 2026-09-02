@@ -428,7 +428,7 @@ async function handleUploadMedia(
   const input = {
     file: buffer,
     filename: file.name,
-    mimeType: resolveClaimedMimeType(file.name, file.type),
+    mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
     size: file.size,
     uploadedBy: uploadedByEnsured,
   };
@@ -448,7 +448,7 @@ async function handleUploadMedia(
       filename: file.name,
       // The same resolution the schema was given above. Validating one value
       // and storing another means the record can carry a type nothing checked.
-      mimeType: resolveClaimedMimeType(file.name, file.type),
+      mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
       size: file.size,
       folderId: folderId || undefined,
     },

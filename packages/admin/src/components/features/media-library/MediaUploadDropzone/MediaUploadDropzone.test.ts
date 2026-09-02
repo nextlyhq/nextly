@@ -4,6 +4,7 @@ import { WEB_FONT_FORMATS } from "nextly/config";
 
 import {
   describeFileError,
+  parseAcceptString,
   buildQueueFromDrop,
   DEFAULT_ACCEPTED_FILE_TYPES,
   getAcceptDescription,
@@ -283,5 +284,29 @@ describe("the browser boundary", () => {
         format.extension
       );
     }
+  });
+});
+
+describe("an explicit accept filter", () => {
+  it("carries the extension for a font type it names", () => {
+    /*
+     * An upload field or picker can pass `accept="font/woff2"`. Without the
+     * extension the entry is `{ "font/woff2": [] }`, and a browser reporting an
+     * empty `type` for that same file then matches neither the type nor a
+     * suffix — so the explicit filter refuses the very format it names, while
+     * the default map accepts it.
+     */
+    for (const format of WEB_FONT_FORMATS) {
+      const parsed = parseAcceptString(format.mimeType);
+      expect(parsed?.[format.mimeType]).toContain(format.extension);
+    }
+  });
+
+  it("still leaves an unknown type without invented extensions", () => {
+    // The control: a parser attaching a suffix to everything would satisfy the
+    // case above while telling Dropzone to accept files nothing asked for.
+    expect(parseAcceptString("application/zip")?.["application/zip"]).toEqual(
+      []
+    );
   });
 });

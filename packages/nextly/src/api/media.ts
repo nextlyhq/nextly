@@ -162,7 +162,11 @@ export const POST = withErrorHandler(
     const input = {
       file: buffer,
       filename: fileEnsured.name,
-      mimeType: resolveClaimedMimeType(fileEnsured.name, fileEnsured.type),
+      mimeType: resolveClaimedMimeType(
+        fileEnsured.name,
+        fileEnsured.type,
+        buffer
+      ),
       size: fileEnsured.size,
       uploadedBy: uploadedByEnsured,
     };
@@ -180,7 +184,11 @@ export const POST = withErrorHandler(
       {
         buffer,
         filename: fileEnsured.name,
-        mimeType: resolveClaimedMimeType(fileEnsured.name, fileEnsured.type),
+        mimeType: resolveClaimedMimeType(
+          fileEnsured.name,
+          fileEnsured.type,
+          buffer
+        ),
         size: fileEnsured.size,
         folderId: folderId || undefined,
       },

@@ -174,6 +174,17 @@ const MAX_FILES = 10;
 const UPLOAD_SUCCESS_DISPLAY_DURATION_MS = 4000;
 
 /**
+ * Each web font type against its extension, taken from the shared table.
+ *
+ * A lookup rather than a second list: the formats themselves are declared once
+ * on the server, and both the default map and an explicit filter read them from
+ * there so an added format reaches every path that decides what may be dragged.
+ */
+const WEB_FONT_MIME_BY_TYPE = new Map(
+  WEB_FONT_FORMATS.map(format => [format.mimeType, format.extension])
+);
+
+/**
  * Convert MIME type string to react-dropzone Accept format
  *
  * Supports formats like:
@@ -181,13 +192,17 @@ const UPLOAD_SUCCESS_DISPLAY_DURATION_MS = 4000;
  * - "image/png,image/jpeg" -> { "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"] }
  * - "application/pdf" -> { "application/pdf": [".pdf"] }
  */
-function parseAcceptString(acceptString?: string): Accept | undefined {
+export function parseAcceptString(acceptString?: string): Accept | undefined {
   if (!acceptString) return undefined;
 
   const accept: Accept = {};
   const types = acceptString.split(",").map(t => t.trim());
 
   for (const type of types) {
+    // Looked up once so the branch below narrows on the value rather than
+    // asserting it back out of the map.
+    const webFontExtension = WEB_FONT_MIME_BY_TYPE.get(type);
+
     if (type === "image/*") {
       accept["image/*"] = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
     } else if (type === "video/*") {
@@ -196,6 +211,15 @@ function parseAcceptString(acceptString?: string): Accept | undefined {
       accept["audio/*"] = [".mp3", ".wav", ".ogg"];
     } else if (type === "application/pdf") {
       accept["application/pdf"] = [".pdf"];
+    } else if (webFontExtension !== undefined) {
+      /*
+       * Fonts carry their extension for the same reason the default map does:
+       * a browser reports an empty `type` for a `.woff2` chosen from disk, and
+       * Dropzone then matches on the extension instead. Falling through to the
+       * generic branch below produces an empty list, so an explicit
+       * `accept="font/woff2"` refuses the very file it names.
+       */
+      accept[type] = [webFontExtension];
     } else if (type.startsWith("image/")) {
       // Specific image types
       const subtype = type.split("/")[1];

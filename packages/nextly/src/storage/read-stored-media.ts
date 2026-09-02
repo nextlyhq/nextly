@@ -91,10 +91,16 @@ export async function readStoredMediaBytes(
      * back: a size checked afterwards has already spent the memory it exists to
      * save. Adapters that find the object oversized refuse it themselves.
      */
-    const buffer = await storage.read(storagePath, { maxBytes });
-    if (buffer) return buffer;
-    // `null` is absence from THIS backend, and the URL route below is a second
-    // way of asking rather than a contradiction of it.
+    /*
+     * An adapter that implements `read` is AUTHORITATIVE about absence: `null`
+     * from it means the object is not there, and asking its public URL next
+     * answers a different question badly. The local adapter's URL is a relative
+     * `/uploads/...` path, which `safeFetch` refuses as invalid — so a missing
+     * file came back as a blocked external URL rather than as missing.
+     *
+     * The URL route below is for adapters that cannot read at all.
+     */
+    return await storage.read(storagePath, { maxBytes });
   }
 
   /*
