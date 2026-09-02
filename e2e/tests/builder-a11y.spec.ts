@@ -106,10 +106,22 @@ async function scanEditor(page: Page): Promise<Finding[]> {
   }));
 }
 
+/*
+ * The control that opens the page builder, in EITHER state.
+ *
+ * The card names itself for the document it is showing — an empty page invites
+ * you to build it, a populated one to open the builder — so a helper naming one
+ * wording breaks whenever the fixture gains or loses blocks, and breaks with a
+ * timeout that names the editor rather than the button. Kept as a literal
+ * because this suite is deliberately black box and imports no product code;
+ * the source of both strings is `PageBuilderCard`.
+ */
+const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
+
 /** Open a document and put its page builder on screen. */
 async function openEditor(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: "Edit blocks" }).click();
+  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
   // POPULATION BEFORE VERDICT. "No violations" is satisfied perfectly by an
   // editor that never opened, so the scan must not run until it has.
   await expect(page.locator(EDITOR_READY_ANCHOR)).toBeVisible({

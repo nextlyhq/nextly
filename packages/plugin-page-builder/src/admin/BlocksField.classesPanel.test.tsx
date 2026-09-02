@@ -26,6 +26,7 @@ import {
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -157,7 +158,7 @@ function Host({ tick = 0 }: { tick?: number }): React.JSX.Element {
 
 function openEditor(): ReturnType<typeof render> {
   const view = render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
   return view;
 }
 
