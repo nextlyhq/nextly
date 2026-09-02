@@ -35,6 +35,7 @@
  */
 import {
   TOKEN_KINDS,
+  referencesCustomProperty,
   tokenIdentity,
   type SiteToken,
   type SiteTokenSet,
@@ -1237,9 +1238,21 @@ function drawableValue(row: TokenRow): string | undefined {
    * engine writes a `var()` happily, but it resolves against the canvas's
    * custom properties and this panel has its own — so drawing it here would
    * show a value the page does not have.
+   *
+   * ASKED OF THE ENGINE, not matched here. This read `/var\s*\(/i` against the
+   * raw text, and a CSS function token is an identifier followed by `(` with the
+   * identifier read DECODED — so `v\61 r(--nx-measure-wide)` is a `var()` to a
+   * browser and was not one to that regex. It was previewed, resolving against
+   * this panel's own `--nx-*` properties, which is the exact false preview the
+   * guard exists to prevent.
+   *
+   * `referencesCustomProperty` parses and compares decoded function names, so it
+   * also sees a reference nested in a `calc()` or inside a fallback. A fourth
+   * hand-written answer to "is this a var()" — after `contrast.ts`, `dtcg.ts` and
+   * `css-value.ts` — is the defect rather than the fix.
    */
   const own = row.value.trim();
-  if (own === "" || /var\s*\(/i.test(own)) return undefined;
+  if (own === "" || referencesCustomProperty(own)) return undefined;
   return own;
 }
 

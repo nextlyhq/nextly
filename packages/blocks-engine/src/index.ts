@@ -255,6 +255,7 @@ export {
   // decode it the same way, or `font\2d family` reads as a different property
   // here than it does in a browser.
   decodeIdentifier,
+  referencesCustomProperty,
   // The other direction, public for the same reason. A caller that decoded a
   // name to compare it has to escape it again before writing it back, or a name
   // holding a space or a quote is emitted as tokens the parser reads apart.
