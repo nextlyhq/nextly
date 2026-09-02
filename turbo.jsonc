@@ -209,9 +209,35 @@
       // `main`, a redundant run costs minutes — and turbo still runs
       // independent packages concurrently.
       //
-      // NOT `^build`: this needs the dependency's HASH, not its `dist`, and
-      // requiring artifacts would make every typecheck wait on a build.
-      "dependsOn": ["^check-types"],
+      // `^build` as well, because the sentence above was true of the packages
+      // that motivated it and of almost none of the others. `packages/admin`
+      // maps the bare `nextly` specifier at its own source, so its program does
+      // need the dependency's hash rather than its `dist` — but only five
+      // packages declare such a mapping (`admin`, the three `storage-*`
+      // adapters, and `playground`). Every other one resolves `@nextlyhq/*`
+      // through package exports, and those point at the artifact:
+      // `blocks-react` publishes `"types": "./dist/index.d.ts"`. For those, a
+      // typecheck reads a BUILD, and a stale one answers about code that is no
+      // longer there.
+      //
+      // Measured rather than argued, by renaming an exported symbol in
+      // `blocks-engine` that `builder` imports: with `dist` untouched
+      // `builder#check-types` exits 0, and after a rebuild the same tree
+      // reports `TS2724`. It fails in the PASSING direction, which is the one
+      // nobody re-checks.
+      //
+      // The cost this note previously weighed against is a build that turbo has
+      // usually already done: warm, `turbo run build` across every package
+      // completes in ~0.2s on a full cache hit, and does real work only when a
+      // dependency actually changed — which is exactly when the answer would
+      // otherwise be stale.
+      //
+      // `^check-types` STAYS beside it rather than being replaced. The two
+      // cover different programs: a package's build compiles the sources it
+      // ships, while its `check-types` also covers the test files its shipping
+      // tsconfig excludes, so a type error confined to a dependency's tests is
+      // invisible to `^build` alone.
+      "dependsOn": ["^check-types", "^build"],
       // Every extension TypeScript follows, not only `.ts`/`.tsx`. A task input
       // glob decides what turbo HASHES: a change confined to an extension
       // missing here leaves the hash unmoved, so CI replays a cached green
