@@ -532,24 +532,59 @@ export function generateSqliteCoreTableStatements(): string[] {
 }
 
 /**
- * The bootstrap statements safe to replay over a database that already exists.
+ * The bootstrap statements for one database, given the registry it actually
+ * uses.
  *
- * Replaying the whole set is safe in one direction only. The field-group
- * registry has two spellings, and `chooseRegistryTable` prefers the LEGACY one
- * whenever it is present — so on a database whose registry has been migrated,
- * creating the legacy table beside it does not add a table, it makes every
- * reader switch to an empty one and every migrated component unreachable.
+ * The field-group registry has two spellings, and `chooseRegistryTable`
+ * prefers the LEGACY one whenever it is present — so creating
+ * `dynamic_components` beside a populated `dynamic_field_groups` does not add
+ * a table, it makes every reader switch to an empty one and every migrated
+ * component unreachable. Two rules follow, and they are different.
  *
- * A fresh database has neither spelling and takes the full set; this narrowing
- * applies only to a replay, which is the only path that can meet a database
- * that already chose.
+ * **The registry's CREATE TABLE.** Emitted only for a database that may still
+ * need one AND is not already using the migrated spelling. A replay over an
+ * established database never gets it: a point-in-time probe cannot make that
+ * statement safe, because a migration renaming the table between the probe and
+ * the replay puts the empty legacy table back, and the exclusion that would
+ * prevent that cannot be held here — its own lock table is one of the core
+ * tables this bootstrap creates. An established database gets its registry
+ * from the fresh path or from `SystemTableService`.
+ *
+ * **The registry's INDEXES.** Always emitted, retargeted to the registry this
+ * database really uses. Dropping them would mean a migrated installation never
+ * has its indexes reconciled — one created by the older fallback has none of
+ * the five, and the rename carries that gap across. An index statement naming
+ * a table a concurrent rename has moved fails harmlessly rather than
+ * resurrecting anything.
  */
-export function replayableSqliteCoreStatements(options: {
-  /** True when this database holds the MIGRATED field-group registry. */
-  hasMigratedFieldGroupRegistry: boolean;
+export function sqliteCoreStatementsFor(options: {
+  /**
+   * The registry table this database uses, resolved through the canonical
+   * resolver so this and the readers cannot disagree about case folding or
+   * preference order.
+   */
+  registryTable: string;
+  /**
+   * Whether this database may still have its registry TABLE created — true on
+   * the fresh path, false for a replay over a database that already exists.
+   */
+  mayCreateRegistryTable: boolean;
 }): string[] {
-  const statements = generateSqliteCoreTableStatements();
-  if (!options.hasMigratedFieldGroupRegistry) return statements;
-  const legacy = `"${STORAGE_FORMAT.registryTable}"`;
-  return statements.filter(statement => !statement.includes(legacy));
+  const legacy = STORAGE_FORMAT.registryTable;
+  const createsRegistry =
+    options.mayCreateRegistryTable && options.registryTable === legacy;
+
+  const statements: string[] = [];
+  for (const statement of generateSqliteCoreTableStatements()) {
+    if (statement.includes(`CREATE TABLE IF NOT EXISTS "${legacy}"`)) {
+      if (createsRegistry) statements.push(statement);
+      continue;
+    }
+    statements.push(
+      statement.includes(`ON "${legacy}"`)
+        ? statement.replace(`ON "${legacy}"`, `ON "${options.registryTable}"`)
+        : statement
+    );
+  }
+  return statements;
 }

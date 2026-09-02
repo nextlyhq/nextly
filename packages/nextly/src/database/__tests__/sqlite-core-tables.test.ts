@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import * as sqliteBundle from "../../schemas/_dialect-bundles/sqlite";
 import {
   generateSqliteCoreTableStatements,
-  replayableSqliteCoreStatements,
+  sqliteCoreStatementsFor,
 } from "../sqlite-core-tables";
 
 /** One table as the canonical Drizzle schema declares it. */
@@ -298,51 +298,76 @@ describe("the SQLite bootstrap DDL", () => {
   /**
    * What a replay over an EXISTING database may run.
    *
-   * The field-group registry has two spellings and the reader prefers the
-   * legacy one whenever it is present, so creating it beside a migrated
-   * registry does not add a table — it points every reader at an empty one.
-   * A fresh database has chosen neither and takes the full set.
+   * The field-group registry has two spellings and readers prefer the legacy
+   * one whenever it is present, so creating it beside a migrated registry
+   * points every reader at an empty table. The CREATE TABLE is therefore never
+   * replayed, while the indexes are — retargeted, because a migrated
+   * installation still needs them reconciled.
    */
-  describe("the statements safe to replay", () => {
-    const legacy = '"dynamic_components"';
+  describe("the statements for one database", () => {
+    const LEGACY = "dynamic_components";
+    const MIGRATED = "dynamic_field_groups";
 
-    it("keeps the legacy registry for a database that never migrated", () => {
-      const statements = replayableSqliteCoreStatements({
-        hasMigratedFieldGroupRegistry: false,
-      });
-      expect(statements.some(s => s.includes(legacy))).toBe(true);
-      expect(statements).toEqual(generateSqliteCoreTableStatements());
-    });
+    const forReplay = (registryTable: string) =>
+      sqliteCoreStatementsFor({ registryTable, mayCreateRegistryTable: false });
+    const forFresh = (registryTable: string) =>
+      sqliteCoreStatementsFor({ registryTable, mayCreateRegistryTable: true });
 
-    it("omits the legacy registry for a database that migrated", () => {
-      const statements = replayableSqliteCoreStatements({
-        hasMigratedFieldGroupRegistry: true,
-      });
-      expect(statements.some(s => s.includes(legacy))).toBe(false);
+    const creates = (statements: string[], table: string) =>
+      statements.some(statement =>
+        statement.includes(`CREATE TABLE IF NOT EXISTS "${table}"`)
+      );
+    const indexesOn = (statements: string[], table: string) =>
+      statements.filter(statement => statement.includes(`ON "${table}" (`));
+
+    it("creates the registry only on a fresh, un-migrated database", () => {
+      expect(creates(forFresh(LEGACY), LEGACY)).toBe(true);
     });
 
     /**
-     * Its indexes go with it. A CREATE INDEX naming a table this replay did
-     * not create fails, and a swallowed failure per statement would hide it.
+     * The dangerous statement, and the reason it is unconditional rather than
+     * gated on a probe: a rename landing between the probe and the replay puts
+     * the empty legacy table back, and the exclusion that would prevent it
+     * cannot be held here.
      */
-    it("omits the legacy registry's indexes too", () => {
-      const statements = replayableSqliteCoreStatements({
-        hasMigratedFieldGroupRegistry: true,
-      });
-      expect(statements.filter(s => s.includes("dynamic_components"))).toEqual(
-        []
-      );
+    it("never creates the registry on a replay, migrated or not", () => {
+      expect(creates(forReplay(LEGACY), LEGACY)).toBe(false);
+      expect(creates(forReplay(MIGRATED), LEGACY)).toBe(false);
     });
 
+    it("does not create the legacy registry for a migrated fresh database", () => {
+      expect(creates(forFresh(MIGRATED), LEGACY)).toBe(false);
+    });
+
+    /**
+     * Retargeted rather than dropped. An installation created by the older
+     * fallback has none of the five, and the rename carries that gap across —
+     * so dropping them would mean the migrated registry is never reconciled.
+     */
+    it("retargets the registry's indexes to the table in use", () => {
+      const statements = forReplay(MIGRATED);
+      expect(indexesOn(statements, MIGRATED).length).toBe(5);
+      expect(indexesOn(statements, LEGACY).length).toBe(0);
+    });
+
+    it("keeps the declared index names, which the migration retains", () => {
+      const statements = forReplay(MIGRATED);
+      expect(
+        statements.some(s => s.includes('"dynamic_components_source_idx"'))
+      ).toBe(true);
+    });
+
+    it("leaves the legacy spelling alone when that is what is in use", () => {
+      expect(indexesOn(forReplay(LEGACY), LEGACY).length).toBe(5);
+    });
+
+    /** Nothing outside the registry is touched by either option. */
     it("narrows nothing else", () => {
       const full = generateSqliteCoreTableStatements();
-      const replay = replayableSqliteCoreStatements({
-        hasMigratedFieldGroupRegistry: true,
-      });
+      const replay = forReplay(LEGACY);
       const removed = full.filter(s => !replay.includes(s));
-      // Exactly the registry table and its five indexes.
-      expect(removed.length).toBe(6);
-      expect(removed.every(s => s.includes("dynamic_components"))).toBe(true);
+      expect(removed.length).toBe(1);
+      expect(removed[0]).toContain(`CREATE TABLE IF NOT EXISTS "${LEGACY}"`);
     });
   });
 });

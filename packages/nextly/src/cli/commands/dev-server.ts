@@ -16,16 +16,17 @@ import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import {
   generateSqliteCoreTableStatements,
-  replayableSqliteCoreStatements,
+  sqliteCoreStatementsFor,
 } from "../../database/sqlite-core-tables";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
+import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 // F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
 // MySQL `databaseName` can be threaded through to drizzle-kit.pushSchema.
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -94,26 +95,31 @@ import type { ResolvedDevOptions } from "./db-sync";
  * these tables to exist.
  */
 /**
- * Whether replaying the bootstrap would resurrect a registry this database has
- * migrated away from.
+ * Which field-group registry this database uses.
  *
- * The field-group registry has two spellings, and `chooseRegistryTable` prefers
- * the LEGACY one whenever it is present. So creating `dynamic_components`
- * beside a populated `dynamic_field_groups` does not add a table — it makes
- * every reader switch to an empty one, and every migrated component becomes
- * unreachable. A fresh database has neither and is unaffected; only a replay
- * over an existing database can do this.
+ * Through the canonical resolver, not a `tableExists` probe on the migrated
+ * name. That probe compares `sqlite_master.name` exactly, while
+ * `chooseRegistryTable` applies SQLite's case-folding rules — so a database
+ * holding `DYNAMIC_FIELD_GROUPS` reads as un-migrated here and as migrated by
+ * every reader, and the bootstrap would create the legacy table that readers
+ * then prefer. One question, one implementation.
+ *
+ * Falls back to the migrated spelling when it cannot tell. That fails CLOSED:
+ * the returned name only ever suppresses a CREATE TABLE and retargets index
+ * DDL, so guessing "migrated" costs at most a table the fresh path adds, while
+ * guessing "legacy" on a database that has moved is silent and unrecoverable.
  */
-async function hasMigratedFieldGroupRegistry(
-  drizzleAdapter: DrizzleAdapter
-): Promise<boolean> {
+async function resolveRegistryTable(
+  adapter: DrizzleAdapter,
+  logger: CommandContext["logger"]
+): Promise<string> {
   try {
-    return await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable);
-  } catch {
-    // Cannot tell. Assume it HAS migrated: skipping a create on a database
-    // that did not is a table the next fresh path adds, while creating one on a
-    // database that did is silent data loss.
-    return true;
+    return await resolveRegistryNameFromCatalog(adapter);
+  } catch (error) {
+    logger.debug(
+      `Could not resolve the field-group registry: ${describeError(error)}`
+    );
+    return MIGRATION_TARGET.registryTable;
   }
 }
 
@@ -177,9 +183,11 @@ export async function ensureCoreTables(
         await applyCoreStatements(
           drizzleAdapter,
           logger,
-          replayableSqliteCoreStatements({
-            hasMigratedFieldGroupRegistry:
-              await hasMigratedFieldGroupRegistry(drizzleAdapter),
+          sqliteCoreStatementsFor({
+            registryTable: await resolveRegistryTable(drizzleAdapter, logger),
+            // This database already exists, so its registry is not this
+            // replay's to create.
+            mayCreateRegistryTable: false,
           })
         );
         logger.debug("Core tables reconciled");
@@ -219,7 +227,18 @@ export async function ensureCoreTables(
 
     if (dialect === "sqlite") {
       logger.debug("Falling back to raw SQL table creation for SQLite...");
-      await applyCoreStatements(drizzleAdapter, logger);
+      // The registry is resolved here too. `users` being absent does not mean
+      // the database is empty: one holding a MIGRATED registry and no `users`
+      // reaches this path, and creating the legacy spelling for it would hide
+      // its components exactly as a replay would.
+      await applyCoreStatements(
+        drizzleAdapter,
+        logger,
+        sqliteCoreStatementsFor({
+          registryTable: await resolveRegistryTable(drizzleAdapter, logger),
+          mayCreateRegistryTable: true,
+        })
+      );
 
       // Also create system tables (dynamic_collections, etc.)
       try {
