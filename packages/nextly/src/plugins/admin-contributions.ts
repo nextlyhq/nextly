@@ -1,5 +1,7 @@
 import type {
+  WidgetChrome,
   DataWidgetArchetype,
+  WidgetAction,
   QuerylessWidgetArchetype,
   WidgetArchetype,
   WidgetQuery,
@@ -175,6 +177,15 @@ interface PluginAdminWidgetBase {
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
   link?: { label: string; href: string };
+  /**
+   * Where this widget sits by default, ascending; omitted means "after
+   * everything that states one".
+   *
+   * On the BASE because position is not an archetype's business -- any widget
+   * may state one, and a plugin that could not would sit wherever the
+   * resolver's channel ordering happened to leave it.
+   */
+  defaultOrder?: number;
 }
 
 /**
@@ -188,13 +199,35 @@ interface PluginAdminWidgetBase {
  * crosses a version boundary and may be describing a card for a core that has
  * not shipped the renderer.
  */
-export interface PluginAdminCustomWidget extends PluginAdminWidgetBase {
+interface PluginAdminCustomWidgetBase extends PluginAdminWidgetBase {
   /** Component rendered for this widget. */
   component: ComponentPath;
-  archetype?: WidgetArchetype;
   /** Still executed server-side, and handed to the component as its slot. */
   query?: WidgetQuery;
 }
+
+/**
+ * @experimental A widget that ships its own component.
+ *
+ * `archetype` stays open because a component is also the FALLBACK body for an
+ * archetype this admin release cannot draw -- `{ component, archetype: "metric" }`
+ * with no query is a real declaration, and core reports that card as undrawable
+ * so the component is what renders.
+ *
+ * `chrome` is the part that cannot stay open. It is split across two
+ * alternatives so `"none"` is only WRITABLE where it is legal: a widget that
+ * declines the frame must supply the surface itself, and for every archetype
+ * core draws the card IS the surface the body is composed against -- it owns
+ * the title, the footer and the busy state. Expressed as a constraint rather
+ * than left to `validateChrome`, which still refuses the pair at boot: a type
+ * that permits it makes the runtime refusal the FIRST time an author learns,
+ * after the plugin ships.
+ */
+export type PluginAdminCustomWidget = PluginAdminCustomWidgetBase &
+  (
+    | { archetype?: "custom"; chrome?: WidgetChrome }
+    | { archetype: Exclude<WidgetArchetype, "custom">; chrome?: never }
+  );
 
 /**
  * @experimental A widget the HOST draws from a query result.
@@ -216,22 +249,68 @@ export interface PluginAdminDataWidget extends PluginAdminWidgetBase {
 }
 
 /**
- * @experimental A widget the HOST draws WITHOUT asking for data.
+ * @experimental A widget the HOST draws from its declared prose.
  *
- * `text` and `actions` have no query, and the registry validator refuses one on
- * them -- a query here would be a database read whose result nothing could
- * draw. `never` rather than merely absent, so declaring one is a compile error
- * at the point it is written instead of a boot failure later.
+ * No query -- the registry validator refuses one -- and no actions, which
+ * belong to the archetype named for them.
  */
-export interface PluginAdminQuerylessWidget extends PluginAdminWidgetBase {
-  archetype: QuerylessWidgetArchetype;
+export interface PluginAdminTextWidget extends PluginAdminWidgetBase {
+  archetype: "text";
   query?: never;
+  actions?: never;
   /**
    * Optional FALLBACK body, for an archetype this admin release cannot draw
    * yet. Omit it and the card says so by name.
    */
   component?: ComponentPath;
 }
+
+/**
+ * @experimental A widget the HOST draws as a card of shortcuts.
+ *
+ * `actions` is REQUIRED, because the widget is its list: one declaring none
+ * describes an empty card. Split from `text` rather than left optional on a
+ * shared queryless shape, so both mistakes fail where they are written --
+ * `{ archetype: "actions" }` with no shortcuts, and `{ archetype: "text" }`
+ * carrying some. Optional on one shape made the first a boot failure and let
+ * the second pass boot and silently drop what it declared.
+ */
+export interface PluginAdminActionsWidget extends PluginAdminWidgetBase {
+  archetype: "actions";
+  query?: never;
+  actions: WidgetAction[];
+  /**
+   * Optional FALLBACK body, for an archetype this admin release cannot draw
+   * yet. Omit it and the card says so by name.
+   */
+  component?: ComponentPath;
+}
+
+/**
+ * The queryless archetypes NO arm above covers -- `never` while all are armed.
+ *
+ * The arms ENUMERATE because each carries a different payload -- prose for one,
+ * shortcuts for the other -- so they cannot be derived from the vocabulary the
+ * way `DeclarativeWidgetArchetype` is. Adding a third queryless archetype to
+ * core must therefore be a decision about what it carries, and this type is
+ * what makes skipping that decision observable.
+ *
+ * Exported only so `__tests__/queryless-arms.test-d.ts` can ASSERT it is
+ * `never`. This was previously stated here as
+ * `type _Unused = <this> extends never ? true : never`, which enforced nothing:
+ * a standalone alias resolving to `never` is a perfectly valid unused alias and
+ * `tsc` reports no diagnostic for it, so the guard passed with an unarmed
+ * archetype present. Only an assertion the checker EVALUATES separates the two.
+ */
+export type UnarmedQuerylessArchetype = Exclude<
+  QuerylessWidgetArchetype,
+  PluginAdminTextWidget["archetype"] | PluginAdminActionsWidget["archetype"]
+>;
+
+/** @experimental A widget the HOST draws without asking for data. */
+export type PluginAdminQuerylessWidget =
+  | PluginAdminTextWidget
+  | PluginAdminActionsWidget;
 
 /** @experimental Either shape of a widget the host draws. */
 export type PluginAdminDeclarativeWidget =
@@ -255,9 +334,9 @@ export type PluginAdminDeclarativeWidget =
  * rendering nothing, reporting nothing. This contract said the requirement
  * would become conditional "when that grid exists and can draw a widget from
  * its archetype alone". `WidgetGrid` now does exactly that, draws `metric` from
- * a query, and names any archetype it cannot draw yet -- and nothing mounts
- * `PluginWidgetGrid` any longer. The consumer is behind the change rather than
- * ahead of it.
+ * a query, and names any archetype it cannot draw yet -- and the grid that
+ * required a component has since been deleted. The consumer is behind the
+ * change rather than ahead of it.
  *
  * Both arms allow `component`, so every existing `{ id, component, size }`
  * declaration keeps compiling untouched. What the union adds is the second

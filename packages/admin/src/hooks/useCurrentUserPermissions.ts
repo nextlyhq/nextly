@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { SYSTEM_RESOURCE_SET } from "../constants/permissions";
 import { protectedApi } from "../lib/api/protectedApi";
 import type {
@@ -63,15 +64,7 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
   canViewUsers: ["read-users"],
   canViewRoles: ["read-roles"],
   canViewMedia: ["read-media", "manage-media"],
-  canViewSettings: [
-    "manage-settings",
-    "read-api-keys",
-    "create-api-keys",
-    "update-api-keys",
-    "delete-api-keys",
-    "manage-email-providers",
-    "manage-email-templates",
-  ],
+  canViewSettings: settingsPanelSlugs(),
   canViewWebhooks: ["read-webhooks", "update-webhooks", "create-webhooks"],
   // Read alone. Unlike webhooks, assembling and publishing releases do not
   // reveal the section on their own — the list is a read, and a caller who may

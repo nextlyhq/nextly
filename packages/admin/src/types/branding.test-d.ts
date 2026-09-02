@@ -2,6 +2,7 @@ import type {
   PluginAdminCustomWidget,
   PluginAdminDeclarativeWidget,
   PluginAdminWidget,
+  WidgetDefinition,
 } from "nextly/config";
 import { expectTypeOf } from "vitest";
 
@@ -95,9 +96,25 @@ expectTypeOf<{ id: string }>().not.toMatchTypeOf<PluginWidgetMeta>();
 //
 // Only the reader's own field names are checked. Core growing a field the
 // resolver ignores is fine and expected; core losing one it reads is not.
+// Distributes over the union's ARMS. `keyof (A | B)` is only what A and B have
+// in COMMON, so a field declared on one arm -- `actions`, which only an
+// `actions` widget carries -- reads as a key core does not declare and trips
+// this guard for the wrong reason.
+type KeysOfUnion<T> = T extends unknown ? keyof T : never;
+
+// `WidgetDefinition` is in this union because the resolver reads BOTH channels,
+// not only the contributed one. `mergeCollision` composes a registration and a
+// contribution into a `ReadableWidgetDeclaration`, so a field only a
+// REGISTRATION can state -- `defaultHeight` is the first -- is legitimately read
+// through that type and is not a field core has stopped declaring. Narrowing
+// this to the contribution arms reported the reader as broken for reading a
+// registration correctly; widening it keeps the property that matters, which is
+// that a field renamed or removed in core fails the build here.
 type UnreadableKeys = Exclude<
   keyof ReadableWidgetDeclaration,
-  keyof PluginAdminCustomWidget | keyof PluginAdminDeclarativeWidget
+  KeysOfUnion<
+    PluginAdminCustomWidget | PluginAdminDeclarativeWidget | WidgetDefinition
+  >
 >;
 expectTypeOf<UnreadableKeys>().toBeNever();
 

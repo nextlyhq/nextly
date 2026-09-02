@@ -27,7 +27,6 @@ import {
   removeToken,
   renameToken,
   setTokenValue,
-  tokenCounts,
   tokenNameIssue,
   tokenRowsFor,
 } from "./tokens-studio";
@@ -87,18 +86,46 @@ describe("what each tab shows", () => {
     expect(tokenRowsFor(undefined, "color")).toEqual([]);
   });
 
+  it("gives a property to the token the EMITTER wrote, not the first stored", () => {
+    /*
+     * A token refused before `seen` is updated — a bad name, no light value, an
+     * unusable value, or a value that fetches — claims no custom property, so a
+     * later token with the same one is emitted normally.
+     *
+     * Ranking by stored position told that written token only the refused one
+     * survives, which is the opposite of the compiled page. `color.primary`
+     * here carries a value the guard rejects, so `color-primary` is what the
+     * page resolves.
+     */
+    const clashing: SiteTokenSet = {
+      tokens: [
+        { name: "color.primary", kind: "color", values: { light: "red;}" } },
+        { name: "color-primary", kind: "color", values: { light: "#00ff00" } },
+      ],
+    };
+    // The emitter is the oracle: it is what the page is compiled from.
+    const written = emitTokenBlocks(clashing, ":root").emitted.map(t => t.name);
+    expect(written).toEqual(["color-primary"]);
+
+    const rows = tokenRowsFor(clashing, "color");
+    const survivor = rows.find(row => row.name === "color-primary");
+    // Stated separately so a MISSING row reads as a missing row. The optional
+    // chain below already fails when it is absent — `expect(undefined).toBe(
+    // false)` is not satisfied — but it fails saying "expected undefined to be
+    // false", which describes the issue check rather than the row that never
+    // arrived.
+    expect(survivor).toBeDefined();
+    expect(survivor?.issues.some(issue => /both become/.test(issue))).toBe(
+      false
+    );
+  });
+
   it("labels every kind the engine defines", () => {
     // A kind added to the engine with no label here would draw a tab named
     // after its own identifier.
     for (const label of Object.values(TOKEN_KIND_LABELS)) {
       expect(label).not.toBe("");
     }
-  });
-
-  it("counts each kind for the tab", () => {
-    expect(tokenCounts(TOKENS).color).toBe(2);
-    expect(tokenCounts(TOKENS).dimension).toBe(1);
-    expect(tokenCounts(TOKENS).shadow).toBe(0);
   });
 });
 

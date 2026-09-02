@@ -39,11 +39,13 @@
 import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
-import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { previewDraftGate } from "nextly/runtime";
 
-import { siteReader, SITE_STYLE_CONTEXT } from "../../../lib/site-content";
-import { SITE_STYLE_DEFAULTS } from "../../../lib/site-style-defaults";
+import {
+  siteReader,
+  SITE_STYLE_CONTEXT,
+  SITE_STYLES,
+} from "../../../lib/site-content";
 
 /**
  * Access-enforced and per-request, which is the secure default.
@@ -93,21 +95,9 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
   styleContext: SITE_STYLE_CONTEXT,
-  // The site sheet's inputs, resolved PER REQUEST: the code-stated defaults
-  // with the stored Site Style document layered on top, so a token or class an
-  // admin saves reaches the next page view rather than the next deploy. The
-  // defaults are the same object `pageBuilder({ siteStyle })` was handed, so
-  // the canvas, the validator and this route agree by construction.
-  siteStyles: {
-    read: () =>
-      loadSiteStyle({ nextly: siteReader, defaults: SITE_STYLE_DEFAULTS }),
-    // What that read depends on. This route is cacheable, so the whole render
-    // is what is cached and only a tag it carries rebuilds it — and the Direct
-    // API read inside `read` contributes none. Without naming the single, an
-    // admin's save would invalidate a tag no cache entry here holds and the
-    // page would keep serving the old sheet.
-    singles: [SITE_STYLE_SLUG],
-  },
+  // The one provider, shared with the two single-page routes so all three
+  // resolve their tokens the same way. See `SITE_STYLES`.
+  siteStyles: SITE_STYLES,
   metadata: (entry, context, derived) => ({
     title: derived.title ?? (entry.title as string | undefined),
     description: derived.description,

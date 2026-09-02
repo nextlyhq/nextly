@@ -69,6 +69,42 @@ export const Homepage = defineSingle({
 
 In the Visual Schema Builder, the toggle lives in the same Settings → Advanced tab on the single's Builder page.
 
+## Localized documents: moving every language at once
+
+On a localized collection or single, the publication state lives per language:
+the main row carries the document's own `status`, and each translation carries
+its own `_status`. An ordinary write moves the language it names, which is what
+lets you publish a German translation without touching the English one.
+
+That leaves a third thing to say — "move the whole document, every language" —
+and it is spelled with the wildcard locale:
+
+```typescript
+// Take the document down in every language it has.
+await nextly.update({
+  collection: "pages",
+  id: page.id,
+  locale: "*",
+  data: { status: "draft" },
+});
+```
+
+Without it, a write that names no locale moves the DEFAULT language only, so a
+takedown would leave the other translations live.
+
+Two things to know about the wildcard:
+
+- **It moves a publication status and nothing else.** A write that names any
+  other field alongside it is rejected, because "write these values into every
+  language" would copy one translation's text over all the others. To change
+  field values, name the language they belong to.
+- **It only reaches languages that exist.** A translation with no stored row has
+  nothing to publish, and one is not created for it — the absence of a row is
+  the record that the document was never translated into that language.
+
+Scheduled releases use this automatically: a release member that names no
+language moves every translation of its document when the release runs.
+
 ## Filtering on the public site
 
 Use the standard field-filter syntax with the column name `status`:

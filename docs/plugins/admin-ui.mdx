@@ -189,16 +189,46 @@ A widget is drawn one of two ways, and you pick by what you declare.
 Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
 runs the query for the signed-in user and renders the card.
 
-> **What the host draws today: `metric` and `list`.**
-> `table`, `text` and `actions` are accepted by the contract but have no renderer
-> yet, so a widget declaring one shows "the … archetype is not rendered yet" in its
-> card unless it also ships a `component` to draw the body itself. Declare those
-> archetypes only with a component fallback until this note says otherwise.
+> **What the host draws today: `metric`, `list`, `table` and `actions`.**
+> `text` is accepted by the contract but has no renderer yet, so a widget
+> declaring it shows "the text archetype is not rendered yet" in its card unless
+> it also ships a `component` to draw the body itself.
 >
 > A `list` widget draws one row per result. Its query's `select` decides what each
 > row shows, in order: the first field is the row's label and the second, if there
-> is one, is the muted line under it. A `list` that selects nothing says so rather
-> than guessing at a field.
+> is one, is the muted line under it.
+>
+> A `table` widget draws a column per selected field, headed by that field's label
+> from your collection — so a heading reads "Published at", not `publishedAt`. The
+> columns come from what the SERVER returned, not from `select`: a field carrying
+> an `access.read` rule that denies the viewer is absent from their rows, and its
+> column and heading are absent with it.
+>
+> A `list` or `table` that selects nothing says so rather than guessing at a field,
+> and says it without running a query.
+>
+> An `actions` widget is a short column of shortcuts, declared rather than
+> queried:
+>
+> ```ts
+> {
+>   id: "acme/shortcuts",
+>   title: "Shortcuts",
+>   archetype: "actions",
+>   defaultSize: "sm",
+>   actions: [
+>     { label: "New post", href: "/admin/collections/posts/create" },
+>     { label: "Invite user", href: "/admin/users/create", requiredPermission: "create-users" },
+>     { label: "Docs", href: "https://nextly.dev/docs", external: true },
+>   ],
+> }
+> ```
+>
+> Each item is gated on its own `requiredPermission`: a reader who may not use a
+> shortcut does not see it, while the card itself stays. That is separate from
+> the widget's own `requiredPermission`, which decides whether the card appears
+> at all. `external: true` opens the destination in a new tab and says so to a
+> screen reader. A card shows at most six shortcuts and counts the rest.
 
 ```ts
 contributes: {
@@ -211,6 +241,7 @@ contributes: {
         defaultSize: "sm",                   // sm | md | lg | xl | full
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
+        defaultOrder: 40,                    // optional; lower sits higher
       },
     ],
   },
@@ -218,8 +249,50 @@ contributes: {
 ```
 
 `text` and `actions` are drawn without data, so they take no `query` — declaring one is
-a type error. Every other archetype requires it. (Neither of those two has a renderer
-yet; see the note above.)
+a type error. Every other archetype requires it. (`actions` is drawn by the host; `text`
+is not yet — see the note above.)
+
+### Where a card sits
+
+`defaultOrder` is optional and sorts ascending; a widget that omits it goes after every
+widget that states one. Leave it off unless you mean it — without it your card keeps its
+declaration order, which is what nearly every widget wants.
+
+It exists because position would otherwise depend on **how** a widget reached the
+dashboard rather than on anything it said: contributions resolve before registrations, so
+the same card moved across the grid when its author switched channels. Core's own
+dashboard cards state one, which is how they stay above contributed widgets.
+
+Numbers, not indexes — core spaces its own ten apart so a card can be placed between two
+without renumbering anything.
+
+A reader's saved layout, once they have arranged their dashboard, wins over this. Think
+of it as where the card starts, not where it stays.
+
+### Widgets that draw their own surface
+
+A `custom` widget may set `chrome: "none"` to decline the card frame entirely, and is
+then responsible for everything the card would have provided — its heading, its loading
+and error states, its own visual boundary.
+
+Reach for it only when your component **is** already a designed surface, such as a
+titled section with its own rules. Framing one of those draws a second heading above its
+own. If your component draws a body and expects a title around it, leave `chrome` alone.
+
+It is refused on every other archetype, because core composes those bodies **into** the
+card — the card owns the title, the footer and the busy state — so an unframed one would
+render with no heading and nothing reporting that it was loading.
+
+One consequence worth knowing: an unframed component that renders nothing costs no space
+at all. The grid collapses a cell whose widget drew nothing, so a card that hides itself
+when it has nothing to say leaves no gap behind.
+
+<Callout type="info">
+  `core#` is reserved. Core's own dashboard cards resolve their components under that
+  prefix, and the admin refuses to let anything else register or unregister one — a
+  plugin claiming the path would replace the body drawn for a card the registry still
+  attributes to core.
+</Callout>
 
 ### Draw it yourself
 

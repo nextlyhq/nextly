@@ -49,13 +49,21 @@
  * @module class-library
  */
 import {
+  BASE_BREAKPOINT,
+  breakpointContexts,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
+  STYLE_STATES,
+  compileStyleValues,
+  isPlainRecord,
   namedClassName,
   usableNamedClasses,
+  type Declaration,
   type NamedClass,
+  type NodeStyles,
+  type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -136,12 +144,18 @@ export interface ClassRow extends ClassChoice {
  * the whole library keeps a tail entry from being offered as though applying it
  * would do something.
  */
-export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
+export function usableSiteClasses(
+  library: readonly NamedClass[]
+): NamedClass[] {
   const bounded =
     library.length > MAX_NAMED_CLASSES
       ? library.slice(0, MAX_NAMED_CLASSES)
       : library;
-  return usableNamedClasses(bounded).map(entry => ({
+  return usableNamedClasses(bounded);
+}
+
+export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
+  return usableSiteClasses(library).map(entry => ({
     id: entry.id,
     slug: entry.slug,
     className: namedClassName(entry.slug),
@@ -166,6 +180,164 @@ function indexedUsage(usage: ClassUsageCounts, classId: string): number {
   // number on screen that cannot describe anything the index counted.
   if (!Number.isInteger(count) || count < 0) return 0;
   return count;
+}
+
+/**
+ * The path handed to the compiler for a SUMMARY compile.
+ *
+ * Short, constant, and deliberately not the class's own identity. `basePath` is
+ * only ever repeated into diagnostics, and this module discards them — but it is
+ * also charged against the style-issue budget, and an exhausted budget refuses
+ * the WHOLE map rather than the property that exhausted it.
+ *
+ * So path length decides what compiles. Measured on one map of 150 long unknown
+ * keys beside one valid `color`, with a 128-character slug:
+ *
+ *     compileStyleValues(values, `class:${slug}/hover/md`) -> 0 declarations
+ *     compileStyleValues(values, "class")                  -> 1 declaration
+ *
+ * `compilePageCss` compiles the same class under `/classes/<position>/styles/...`,
+ * so a longer path here would let the panel report "nothing" for styling the page
+ * does emit — a disagreement produced by the diagnostic string rather than by the
+ * styles. Kept shorter than the page's own path, so this can only ever be at
+ * least as permissive as what the visitor gets.
+ */
+const SUMMARY_PATH = "class";
+
+/**
+ * Every (state, breakpoint) pair this class stores values under.
+ *
+ * The WALK, separated from the judgement below, because a nested loop carrying
+ * three different reasons to skip a pair is the shape the cognitive gate exists
+ * to catch. Iterating `STYLE_STATES` rather than the record's own keys keeps
+ * the walk to states the engine defines.
+ */
+function storedContexts(
+  styles: NodeStyles
+): { state: string; breakpoint: string; values: Record<string, unknown> }[] {
+  const pairs: {
+    state: string;
+    breakpoint: string;
+    values: Record<string, unknown>;
+  }[] = [];
+  for (const state of STYLE_STATES) {
+    const byBreakpoint: unknown = styles[state];
+    // GUARDED at both levels, the way `compilePageCss` guards the same two.
+    //
+    // The type says these are records; the stored document only promises to be
+    // JSON. A persisted `{ base: { base: null } }` passes `usableSiteClasses`,
+    // and `Object.keys(null)` throws — which took the whole class manager down
+    // rather than hiding one row. Three shapes reached it: a null state map, a
+    // null values map under any state, and a null base that went on to
+    // `compileStyleValues` and threw inside the engine instead.
+    //
+    // `isPlainRecord` rather than a null check, because it is the predicate the
+    // compiler already uses for exactly this and it also excludes the shapes
+    // that do not throw and still style nothing — a number, a string, an array.
+    // Skipping silently is right HERE and not in the compiler: this is a
+    // summary of what a class does, and a context that writes no rule does
+    // nothing. `compilePageCss` is where the author is told why.
+    if (!isPlainRecord(byBreakpoint)) continue;
+    for (const breakpoint of Object.keys(byBreakpoint)) {
+      const values: unknown = byBreakpoint[breakpoint];
+      if (!isPlainRecord(values)) continue;
+      pairs.push({ state, breakpoint, values });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * How many of those pairs are a place the class behaves DIFFERENTLY.
+ *
+ * Three things disqualify a pair, and each is a separate fact rather than a
+ * step in a walk: it is the base the row already shows; the compiler emits no
+ * context for that breakpoint, so it writes no rule; or it sets nothing.
+ */
+function contextsElsewhere(
+  styles: NodeStyles,
+  emitted: ReadonlySet<string>,
+  context?: StyleCompileContext
+): number {
+  return storedContexts(styles).filter(
+    pair =>
+      !(pair.state === "base" && pair.breakpoint === BASE_BREAKPOINT) &&
+      emitted.has(pair.breakpoint) &&
+      // COMPILED, not counted. A stored key is not a declaration: a property
+      // the catalog does not define, or a value whose grammar it refuses,
+      // writes nothing — so counting keys claimed "1 more elsewhere" for
+      // styling the page does not have, which is the same class of lie as
+      // counting a breakpoint the site has since deleted. The one implementation
+      // of "stored values become declarations" is asked instead.
+      compileStyleValues(
+        pair.values,
+        SUMMARY_PATH,
+        undefined,
+        undefined,
+        undefined,
+        { mayFetchUrl: context?.mayFetchUrl }
+      ).declarations.length > 0
+  ).length;
+}
+
+/**
+ * What a class DOES, as the declarations it writes.
+ *
+ * A row named the class and counted its documents and never said what it was
+ * for, which is the half of the complaint a list cannot answer by being better
+ * organised.
+ *
+ * COMPILED, never formatted here. `compileStyleValues` is the one
+ * implementation of "stored style values become CSS declarations" — it knows
+ * which properties the engine writes, how a token reference becomes a `var()`,
+ * and which values it refuses. A second formatter in this panel would agree
+ * with it on the day it was written and describe a different stylesheet
+ * afterwards.
+ *
+ * ONE state at ONE breakpoint, and a count of the rest. `NodeStyles` is states
+ * by breakpoints, both sparse, and a row has space for neither the product nor
+ * a fair sample of it. Showing the base silently would misdescribe a class
+ * whose real behaviour is responsive; saying how much is not shown is the
+ * honest half of the same sentence.
+ */
+export function classDeclarations(
+  styles: NodeStyles,
+  /**
+   * The context the PAGE is compiled with, so the summary describes the same
+   * stylesheet the visitor gets.
+   *
+   * Two things come from it and neither can be guessed here. `mayFetchUrl` is
+   * the site's remote-host policy, and compiling without it lists a
+   * declaration the real compile drops. `breakpoints` decides which contexts
+   * are emitted at all, so a class holding styles for a breakpoint the site
+   * has since deleted writes no rule — counting that key would claim behaviour
+   * the page does not have.
+   *
+   * Absent is coherent rather than a gap: `breakpointContexts` answers with
+   * the base context alone, which is what a site with no configured
+   * breakpoints emits.
+   */
+  context?: StyleCompileContext
+): { shown: readonly Declaration[]; elsewhere: number } {
+  const base: unknown = styles.base?.[BASE_BREAKPOINT];
+  const shown =
+    // The same guard the walk below uses, for the same reason: a stored `null`
+    // here reached `Object.hasOwn` inside `compileStyleValues` and threw.
+    !isPlainRecord(base)
+      ? []
+      : compileStyleValues(
+          base,
+          SUMMARY_PATH,
+          undefined,
+          undefined,
+          undefined,
+          { mayFetchUrl: context?.mayFetchUrl }
+        ).declarations;
+  const emitted = new Set(
+    breakpointContexts(context?.breakpoints).map(entry => entry.id)
+  );
+  const elsewhere = contextsElsewhere(styles, emitted, context);
+  return { shown, elsewhere };
 }
 
 /**
@@ -371,6 +543,23 @@ export type ClassNameOutcome =
   | { readonly ok: false; readonly refusal: NameRefusal };
 
 /**
+ * Whether the library has room for another class.
+ *
+ * Exported because two surfaces need the answer and only one of them is naming
+ * a class. `newClassName` refuses a name when there is no room; the manager
+ * panel has to decide whether to tell an author a class can be made at all,
+ * and inferring that from an empty drawn list is wrong in exactly the case
+ * that matters — `siteClasses` drops entries the compiler cannot use, so a
+ * library of malformed entries draws nothing while every slot is taken.
+ *
+ * Counts the STORED entries, which is what capacity is about. The drawn list
+ * is a different question and answering one with the other is the bug.
+ */
+export function classLibraryHasRoom(library: readonly NamedClass[]): boolean {
+  return library.length < MAX_NAMED_CLASSES;
+}
+
+/**
  * Whether a typed name can become a new class, and what to store if it can.
  *
  * The grammar is the engine's, not a second one: a slug reaches a CSS selector,
@@ -405,7 +594,7 @@ export function newClassName(
    * the save outright rather than storing it quietly. Accepting the name here
    * would offer an author a class that cannot be saved OR rendered.
    */
-  if (library.length >= MAX_NAMED_CLASSES) {
+  if (!classLibraryHasRoom(library)) {
     return { ok: false, refusal: "library-full" };
   }
   return { ok: true, slug };

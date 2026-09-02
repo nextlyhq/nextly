@@ -13,7 +13,7 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
 
@@ -86,12 +86,16 @@ export interface PopulateCompanionArgs {
   /** The main-row primary-key property (defaults to `"id"`). */
   idKey?: string;
   /**
-   * Per-locale status filter (i18n M6). When set (e.g. `"published"`), only companion rows whose
-   * `_status` matches are considered — a draft translation is filtered out and the field falls
-   * back to the published default, so a draft never leaks to a public read. Undefined = no filter
+   * Per-locale status filter (i18n M6). When set, only companion rows whose `_status` is one of
+   * these are considered — a draft translation is filtered out and the field falls back to the
+   * published default, so a draft never leaks to a public read. Undefined = no filter
    * (admin/`status=all`, or a collection without per-locale status).
+   *
+   * A SET rather than one value, because a workflow names its own states: a read bounded to
+   * "not yet public" covers `in_review` and `legal_hold` as much as `draft`, and an equality here
+   * would silently treat every row in the other states as non-matching.
    */
-  statusValue?: string;
+  statusValues?: readonly string[];
   /**
    * Whether the companion table is physically there, resolved by the caller.
    *
@@ -153,23 +157,7 @@ export async function populateCompanionFields(
       )
     );
 
-  // Index: parentId -> locale -> companion row. A row whose `_status` fails the status filter is
-  // dropped here (i18n M6) so it can never be resolved onto a public row — the chain then falls
-  // back to the published default. Undefined `statusValue` keeps every row (admin / no per-locale
-  // status).
-  const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
-  for (const cr of companionRows) {
-    if (args.statusValue !== undefined && cr._status !== args.statusValue) {
-      continue;
-    }
-    const parent = cr._parent;
-    let perLocale = byParent.get(parent);
-    if (!perLocale) {
-      perLocale = {};
-      byParent.set(parent, perLocale);
-    }
-    perLocale[String(cr._locale)] = cr;
-  }
+  const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -312,7 +300,7 @@ export interface PopulateCompanionAllArgs {
    * `_status` differs is treated as absent, so a published `locale=all` read never surfaces a
    * draft translation. Undefined = no filter (admin / no per-locale status).
    */
-  statusValue?: string;
+  statusValues?: readonly string[];
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
 }
@@ -352,20 +340,7 @@ export async function populateCompanionFieldsAllLocales(
       )
     );
 
-  const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
-  for (const cr of companionRows) {
-    // Drop a row failing the status filter so a published locale=all read keys in
-    // only published translations (a draft locale then reads as null/absent).
-    if (args.statusValue !== undefined && cr._status !== args.statusValue) {
-      continue;
-    }
-    let perLocale = byParent.get(cr._parent);
-    if (!perLocale) {
-      perLocale = {};
-      byParent.set(cr._parent, perLocale);
-    }
-    perLocale[String(cr._locale)] = cr;
-  }
+  const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -392,25 +367,22 @@ export function buildLocalizedOrderExpr(args: {
   column: string;
   localeChain: string[];
   /**
-   * Per-locale status filter. When set, each subquery also requires
-   * `_status = statusValue`, so a public read never orders by a draft translation's
-   * value (an ordering-only leak otherwise).
+   * Per-locale status filter. When set, each subquery also requires `_status` to be one of
+   * these, so a public read never orders by a draft translation's value (an ordering-only leak
+   * otherwise).
    */
-  statusValue?: string;
+  statusValues?: readonly string[];
 }): SQL {
   const {
     companionTableName,
     mainIdColumn,
     column: columnName,
     localeChain,
-    statusValue,
+    statusValues,
   } = args;
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
-  const statusPredicate =
-    statusValue !== undefined
-      ? sql` AND ${t}.${sql.identifier("_status")} = ${statusValue}`
-      : sql``;
+  const statusPredicate = statusMembership(t, statusValues);
   const perLocale = localeChain.map(
     code =>
       sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
@@ -433,20 +405,17 @@ export function buildCompanionExists(args: {
    * companion row whose `_status` equals it, so a where/search filter can't match a draft
    * translation on a published read. Undefined = no status constraint (admin / no per-locale status).
    */
-  statusValue?: string;
+  statusValues?: readonly string[];
 }): SQL {
   const {
     companionTableName,
     mainIdColumn,
     locale,
     valueCondition,
-    statusValue,
+    statusValues,
   } = args;
   const t = sql.identifier(companionTableName);
-  const statusCond =
-    statusValue !== undefined
-      ? sql` AND ${t}.${sql.identifier("_status")} = ${statusValue}`
-      : sql``;
+  const statusCond = statusMembership(t, statusValues);
   return sql`EXISTS (
     SELECT 1 FROM ${t}
     WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn}
@@ -764,7 +733,7 @@ export interface TranslationStatusArgs {
    * `_status` differs is treated as absent, so a published read's overview never reports a
    * draft-only translation as present. Undefined = report every row (admin / no per-locale status).
    */
-  statusValue?: string;
+  statusValues?: readonly string[];
 }
 
 /**
@@ -938,7 +907,7 @@ export async function populateTranslationStatus(
         localizedFields,
         defaultLocale,
         hasStatus,
-        statusValue: args.statusValue,
+        statusValues: args.statusValues,
         isStale: (locale: string) =>
           staleKeys.has(`${String(row[idKey])}::${locale}`),
       });
@@ -960,12 +929,83 @@ export async function populateTranslationStatus(
  * but-draft. That is the rule the whole overview rests on: reporting a draft-only translation as
  * present would tell a reader the public site carries content it does not serve.
  */
+/**
+ * The `AND _status IN (...)` a per-locale subquery adds, or nothing when the read is unbounded.
+ *
+ * One helper for both subquery builders. They constrain the same column for the same reason —
+ * an ordering or an EXISTS check that ignored the lifecycle leaks a draft translation's value
+ * into a public read — and two copies of that predicate would agree until one of them was
+ * widened, which is the edit this function exists to make impossible.
+ *
+ * A single state stays an equality: it is the shape every existing plan and test sees, and the
+ * widening should be invisible to a workflow that names one public state.
+ */
+/**
+ * Companion rows keyed parent -> locale, with the lifecycle filter applied.
+ *
+ * One implementation for both population paths. They index the same rows for
+ * the same reason, and each carried its own copy of the `_status` test — which
+ * agreed until one of them was widened. A draft translation surviving that
+ * filter is not a display bug: it is unpublished text resolved onto a public
+ * row, so the two copies must never be able to answer differently.
+ *
+ * A row whose state is outside the filter is DROPPED rather than kept and
+ * marked, so the locale chain falls back to the published default exactly as it
+ * would for a locale with no translation at all.
+ */
+function indexCompanionRowsByParent(
+  companionRows: readonly Record<string, unknown>[],
+  statusValues: readonly string[] | undefined
+): Map<unknown, Record<string, Record<string, unknown>>> {
+  const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
+  for (const cr of companionRows) {
+    if (
+      statusValues !== undefined &&
+      !statusValues.includes(cr._status as string)
+    ) {
+      continue;
+    }
+    const parent = cr._parent;
+    let perLocale = byParent.get(parent);
+    if (!perLocale) {
+      perLocale = {};
+      byParent.set(parent, perLocale);
+    }
+    perLocale[String(cr._locale)] = cr;
+  }
+  return byParent;
+}
+
+function statusMembership(
+  table: SQLWrapper,
+  statusValues: readonly string[] | undefined
+): SQL {
+  if (statusValues === undefined) return sql``;
+  const column = sql`${table}.${sql.identifier("_status")}`;
+  /*
+   * An EMPTY set is a read bounded to nothing, and it has to say so in SQL.
+   * Rendered as written it becomes `_status IN ()`, which PostgreSQL and MySQL
+   * reject as a syntax error — the whole query fails rather than returning the
+   * no rows the caller asked for. It is reachable: a workflow whose every state
+   * is public leaves the non-public set empty, and an explicit draft read of
+   * that collection resolves to it.
+   */
+  if (statusValues.length === 0) return sql` AND 1 = 0`;
+  if (statusValues.length === 1)
+    return sql` AND ${column} = ${statusValues[0]}`;
+  const list = sql.join(
+    statusValues.map(value => sql`${value}`),
+    sql`, `
+  );
+  return sql` AND ${column} IN (${list})`;
+}
+
 function rowInStatusScope(
   row: Record<string, unknown> | undefined,
-  statusValue: string | undefined
+  statusValues: readonly string[] | undefined
 ): Record<string, unknown> | undefined {
-  if (row === undefined || statusValue === undefined) return row;
-  return row._status === statusValue ? row : undefined;
+  if (row === undefined || statusValues === undefined) return row;
+  return statusValues.includes(row._status as string) ? row : undefined;
 }
 
 /**
@@ -983,7 +1023,7 @@ function buildLocaleMeta(args: {
   localizedFields: LocalizedFieldRef[];
   defaultLocale: string;
   hasStatus: boolean;
-  statusValue: string | undefined;
+  statusValues: readonly string[] | undefined;
   /**
    * Whether the database reported this locale as stale against the source.
    *
@@ -995,7 +1035,7 @@ function buildLocaleMeta(args: {
 }): LocaleTranslationMeta {
   const { code, perLocaleRows, localizedFields, defaultLocale, hasStatus } =
     args;
-  const companionRow = rowInStatusScope(perLocaleRows[code], args.statusValue);
+  const companionRow = rowInStatusScope(perLocaleRows[code], args.statusValues);
 
   const hasContent =
     !!companionRow &&

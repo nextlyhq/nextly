@@ -21,7 +21,14 @@
  * @module types/dashboard/widgets
  */
 
-import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
+import type {
+  WidgetAction,
+  WidgetArchetype,
+  WidgetHeight,
+  WidgetQuery,
+  WidgetSize,
+  WidgetChrome,
+} from "nextly/config";
 
 /**
  * One executed query's payload, as `POST /api/dashboard/query` sends it.
@@ -79,9 +86,85 @@ export interface DashboardWidget {
   icon?: string;
   archetype: WidgetArchetype;
   size: WidgetSize;
+  /**
+   * The DECLARED default height, when its author stated one.
+   *
+   * Carried for the same reason as `defaultOrder`: it is the value a placement
+   * seeds its own geometry FROM. The server already copies it onto a default
+   * placement, so an admin that dropped it here could not re-create a card the
+   * reader removed with the height it was declared with.
+   */
+  height?: WidgetHeight;
   /** Present for the data archetypes; absent for `text`, `actions`, `custom`. */
   query?: WidgetQuery;
   /** Present for `custom`; the path `PluginSlot` resolves. */
   component?: string;
+  /**
+   * Present for `actions`, already filtered to the shortcuts this reader may
+   * use — `resolve-widgets` drops the rest, so the renderer never sees one it
+   * must hide.
+   */
+  actions?: WidgetAction[];
   link?: { label: string; href: string };
+  /**
+   * The DECLARED default position, ascending; absent means "after everything
+   * that states one".
+   *
+   * Carried through rather than consumed and dropped, because it is the value a
+   * stored layout defaults each placement's own order FROM. Resolving it here
+   * and discarding it would make that a second derivation of the same fact.
+   */
+  defaultOrder?: number;
+  /**
+   * Whether the host frames this widget; `"card"` when unstated.
+   *
+   * `"none"` belongs to a widget that is already a designed surface -- core's
+   * dashboard sections carry their own heading and rules, so framing one draws
+   * a second heading around the first.
+   */
+  chrome?: WidgetChrome;
+}
+
+/**
+ * One card's place in a reader's arrangement.
+ *
+ * 🔴 `size` and `height` are `string`, not the size/height unions, and that is
+ * load-bearing rather than sloppy. A placement's geometry is seeded from a
+ * widget's declaration, and that widget may come from a plugin built against a
+ * NEWER core — so a stored arrangement can legitimately name a size this admin
+ * has never heard of. `widgetSpanClass` already survives one by falling back;
+ * a narrower type here would be a promise this client cannot keep, and would
+ * push the lie into every consumer.
+ */
+export interface WidgetPlacement {
+  /** Opaque, and unique within a layout. Not a widget id, except by default. */
+  id: string;
+  widgetId: string;
+  order: number;
+  hidden: boolean;
+  size?: string;
+  height?: string;
+  config?: Record<string, unknown>;
+}
+
+/** What `GET /api/dashboard/layout` answers. */
+export interface DashboardLayoutResponse {
+  placements: WidgetPlacement[];
+  /**
+   * Widget ids this reader may see and has not placed.
+   *
+   * The server's answer, not something to re-derive here: it is the only party
+   * that filters by permission authoritatively. A newly installed widget is
+   * never inserted into an arrangement behind the reader's back, so this is
+   * what makes it reachable at all.
+   */
+  available: string[];
+  version: number;
+  /** Which layer the arrangement came from: their own row, or the registry. */
+  source: "own" | "default";
+  /**
+   * An opaque token for the set of widgets this reader could see when the
+   * arrangement was read. Echoed back on write; a mismatch is a 409.
+   */
+  scope: string;
 }

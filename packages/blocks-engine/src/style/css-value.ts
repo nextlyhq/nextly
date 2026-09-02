@@ -1094,6 +1094,84 @@ function hasStringChild(children: Iterable<CssNode>): boolean {
  */
 const MAX_VALUE_NESTING = 32;
 
+/**
+ * Whether CSS would make a custom-property substitution anywhere in this value.
+ *
+ * The question, not a spelling. A function token is an identifier immediately
+ * followed by `(`, and the identifier is read DECODED — so `v\61 r(--brand)` IS
+ * a `var()` to a browser, and any reader matching the literal text `var(` says it
+ * is not. That gap is a known sanitiser-bypass shape rather than a curiosity: it
+ * is how `url(` and `expression(` filters were historically defeated.
+ *
+ * **Exported because the answer must not be re-derived per consumer.** The
+ * builder's tokens panel refuses to preview a value carrying a reference, since
+ * a `var()` there resolves against the PANEL's own `--nx-*` properties and would
+ * draw a colour the canvas does not have. It asked that question with a regex
+ * over the raw text, so an escaped spelling was previewed — precisely the false
+ * preview the guard exists to prevent.
+ *
+ * **Not the same choice `dtcg.ts` makes, deliberately.** That module reads the
+ * raw spelling on purpose, and says so: a `var()` with an escaped name is then
+ * read as invalid rather than dynamic, which is safe THERE because its grammar
+ * refuses the parentheses anyway. The two want opposite defaults — reading raw
+ * fails closed for dtcg and fails OPEN for a preview, where unseen means drawn.
+ *
+ * **An unparseable value answers `true`.** It cannot be shown not to substitute,
+ * and every caller is deciding whether to render something whose appearance would
+ * be wrong; declining to draw a value that would not have rendered anyway costs
+ * nothing, while drawing one that substitutes is the defect. Fail-closed is a
+ * property of the question rather than of this implementation.
+ *
+ * `env()` is excluded. It substitutes, but from user-agent values that are the
+ * same in a panel and on a canvas, so it cannot produce the disagreement this
+ * exists to catch.
+ */
+export function referencesCustomProperty(value: string): boolean {
+  const parsed = parseValue(value);
+  if (parsed === null) return true;
+  return walkForVarCall(parsed, 0);
+}
+
+function walkForVarCall(node: CssNode, depth: number): boolean {
+  // Depth-bounded for the reason the URL walk is: parsing and walking are both
+  // recursive, so a deeply nested value exhausts the stack. Answering TRUE at
+  // the cap keeps the refusal fail-closed rather than declaring a value clean
+  // because it was too deep to read.
+  if (depth >= MAX_VALUE_NESTING) return true;
+  // A fallback arrives as raw text rather than as parsed children, so a
+  // reference nested inside one — `var(--a, v\61 r(--b))` — is invisible to a
+  // walk that only descends `children`.
+  if (node.type === "Raw") return rawCarriesVarCall(node.value, depth);
+  if (isVarCall(node)) return true;
+  for (const child of childrenOf(node)) {
+    if (walkForVarCall(child, depth + 1)) return true;
+  }
+  return false;
+}
+
+/** Whether THIS node is the substitution, as CSS reads its name. */
+function isVarCall(node: CssNode): boolean {
+  return node.type === "Function" && identifierOf(node) === "var";
+}
+
+/** A `var()` fallback, which the parser hands back as unparsed text. */
+function rawCarriesVarCall(text: string, depth: number): boolean {
+  const inner = parseValue(text);
+  return inner !== null && walkForVarCall(inner, depth + 1);
+}
+
+/**
+ * The children a node carries, or none.
+ *
+ * Separated so the walk reads as one loop rather than a guard and a loop. A
+ * node whose `children` is absent or null is a leaf, and a leaf has nothing to
+ * descend into — which is the same answer as an empty list.
+ */
+function childrenOf(node: CssNode): Iterable<CssNode> {
+  if (!("children" in node) || node.children === null) return [];
+  return node.children;
+}
+
 /** True when a stored string is longer than any declaration should carry. */
 export function isOverlongValue(value: string): boolean {
   return value.length > MAX_VALUE_LENGTH;

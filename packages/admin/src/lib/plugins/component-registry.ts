@@ -39,6 +39,12 @@
 
 import type { ComponentType } from "react";
 
+import {
+  componentRegistry,
+  CORE_COMPONENT_PREFIX,
+  writeComponent,
+} from "./component-registry-internal";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -89,7 +95,6 @@ export interface InjectionPointProps {
  * Internal component registry map.
  * Maps component path strings to actual React components.
  */
-const componentRegistry = new Map<ComponentPath, ComponentType>();
 
 /**
  * Register a component in the registry.
@@ -128,7 +133,18 @@ export function registerComponent(
     return;
   }
 
-  componentRegistry.set(path, component as ComponentType);
+  // Warned and refused rather than thrown, matching the two checks above: this
+  // runs while the admin is mounting, and a throw would trade one unresolvable
+  // card for the whole panel.
+  if (path.startsWith(CORE_COMPONENT_PREFIX)) {
+    console.warn(
+      `[ComponentRegistry] "${CORE_COMPONENT_PREFIX}" is reserved for Nextly's ` +
+        `own dashboard cards and cannot be registered by a plugin: ${path}`
+    );
+    return;
+  }
+
+  writeComponent(path, component);
 }
 
 /**
@@ -214,6 +230,17 @@ export function hasComponent(path: ComponentPath | undefined): boolean {
  * @returns true if component was unregistered, false if it wasn't registered
  */
 export function unregisterComponent(path: ComponentPath): boolean {
+  // Removing a core card is the same takeover by the other route: the
+  // definition still names `core#…`, so a deleted entry leaves the card
+  // unresolvable rather than merely unregistered.
+  if (path.startsWith(CORE_COMPONENT_PREFIX)) {
+    console.warn(
+      `[ComponentRegistry] "${CORE_COMPONENT_PREFIX}" is reserved and cannot be ` +
+        `unregistered: ${path}`
+    );
+    return false;
+  }
+
   return componentRegistry.delete(path);
 }
 
@@ -234,7 +261,19 @@ export function getRegisteredPaths(): ComponentPath[] {
  * Primarily used for testing.
  */
 export function clearRegistry(): void {
-  componentRegistry.clear();
+  // Reserved entries survive, because this is the third route into the same
+  // map and the other two already refuse them. Core registers its components
+  // once, when the grid's module is evaluated, so a plugin clearing them wholesale
+  // could not be recovered from -- every core card would resolve to nothing for
+  // the life of the page, with no error anywhere.
+  //
+  // Cleared by ITERATION rather than `Map.clear()` for that reason: the bulk
+  // call cannot express an exception, so reaching for it here would have been
+  // choosing convenience over the guarantee the other two writers make.
+  for (const path of componentRegistry.keys()) {
+    if (path.startsWith(CORE_COMPONENT_PREFIX)) continue;
+    componentRegistry.delete(path);
+  }
 }
 
 /**

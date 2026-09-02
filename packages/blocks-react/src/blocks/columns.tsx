@@ -80,6 +80,34 @@ export const COLUMNS_BASE_STYLES = {
       // column's `min-width: 0`, which governs the item rather than the track.
       // Capping the minimum by the available width lets that last track fit.
       gridTemplateColumns: "repeat(auto-fit, minmax(min(240px, 100%), 1fr))",
+      /*
+       * The gutter between columns, which this block laid out and then left at
+       * zero.
+       *
+       * `gap` on a grid defaults to `normal`, which computes to zero — so the
+       * one block whose whole purpose is side-by-side content rendered its
+       * columns touching. Measured on a published page: three tracks of 427px
+       * with no space between them.
+       *
+       * A LITERAL, matching `core/gallery` and `core/accordion`, and the reason
+       * is no longer the one those two were given. Both of them shipped
+       * `{ $token: "space.4" }` and rendered their children touching because
+       * nothing turned a token set into CSS; that is fixed, and `PageRenderer`
+       * now compiles a site sheet by default.
+       *
+       * It is still not safe HERE. A consumer holding a stored `styles`
+       * artifact and passing it back with no `styleContext` gets no site sheet
+       * at all — `PageRenderer` withholds one when no breakpoints are stated —
+       * while the stored page CSS still carries the reference. Measured on that
+       * path: `gap: var(--site-space-4)` present, `--site-space-4` undefined, so
+       * the declaration is invalid at computed-value time and the gutter is zero
+       * again. `core/card` is live in exactly that state today, which is what
+       * the token migration is waiting on rather than this block.
+       *
+       * `1rem` is what `space.4` declares, so the value survives the change back
+       * once the definition reaches every path a reference does.
+       */
+      gap: "1rem",
     },
   },
 } as const;

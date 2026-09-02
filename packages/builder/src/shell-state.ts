@@ -84,8 +84,32 @@ export const RAIL_WIDTH = 48;
  *
  * The canvas is the thing being edited, so it is the region with a floor rather
  * than the one that absorbs whatever is left.
+ *
+ * This is the EDITING SURFACE, not the panel holding it. The panel is wider by
+ * its gutters, and {@link MIN_CANVAS_PANEL_WIDTH} is what a bound is read from.
  */
 export const MIN_CANVAS_WIDTH = 480;
+
+/**
+ * The gap between the canvas region's edge and the page inside it, per side.
+ *
+ * Declared rather than written as a utility class because it is load-bearing
+ * twice: it is the space the page's own edge is painted into, and it is the
+ * difference between the editing surface and the panel that has to contain it.
+ * Spelled in one place so the two cannot drift.
+ */
+export const CANVAS_GUTTER = 16;
+
+/**
+ * The narrowest the canvas PANEL may become, gutters included.
+ *
+ * DERIVED, because the constraint is on the editing surface and the panel is
+ * the thing a resize bound can be expressed on. Bounding the panel at the
+ * surface's own floor spends the gutters out of the surface: at 480px of panel
+ * the page has 448px, so the drag stops only once the canvas is already
+ * narrower than the floor that exists to stop it.
+ */
+export const MIN_CANVAS_PANEL_WIDTH = MIN_CANVAS_WIDTH + CANVAS_GUTTER * 2;
 
 /**
  * The narrowest viewport the full shell is supported at (PB-D17 D10-5).
@@ -189,6 +213,17 @@ export const EMPTY_ELEMENTS_ATTRIBUTE = "data-nx-empty-elements";
  * the code asking about it and the test pinning the stylesheet all take from.
  */
 export const BUILDER_CHROME_CLASS = "nx-builder-chrome";
+
+/**
+ * A scope that resolves `--nx-builder-*` without claiming to be the chrome root.
+ *
+ * For a surface the shell mounts OUTSIDE {@link BUILDER_CHROME_CLASS} — custom
+ * properties inherit down and never across, so such a surface needs the tokens
+ * declared on an ancestor of its own. Giving it the chrome class instead would
+ * put a second chrome root in the document, and every selector and query
+ * meaning "the editor" would match whichever came first.
+ */
+export const BUILDER_TOKENS_CLASS = "nx-builder-tokens";
 
 /**
  * The class marking the canvas root, and the boundary the hit-test stops at.

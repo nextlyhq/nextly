@@ -537,6 +537,8 @@ export type {
   ShortcutManagerOptions,
   ShortcutRegistration,
 } from "./lib/shortcuts/manager";
+/** @experimental A layout effect in the browser, a plain effect where there is no DOM. */
+export { useIsomorphicLayoutEffect } from "./lib/isomorphic-layout-effect";
 /** @experimental Key-spec parsing, for a host rendering its own shortcut hints. */
 export { parseKeys } from "./lib/shortcuts/key-spec";
 /**

@@ -16,6 +16,7 @@
 import { container } from "../di/container";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../errors/nextly-error";
+import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import type {
   AccessControlContext,
   CollectionAccessControl,
@@ -140,6 +141,70 @@ export async function canReadEntity(
   // the safe direction; the route-level gate has already run for any real
   // request that reaches a dispatcher handler.
   return false;
+}
+
+/**
+ * Whether this caller holds one named permission, by its `{action}-{resource}`
+ * slug.
+ *
+ * The general form of {@link canReadEntity}, which asks the same two-branch
+ * question about the fixed slug `read-{entity}`. They live side by side so the
+ * two branch structures cannot drift apart unnoticed.
+ *
+ * The session branch delegates WHOLE to `rbac.checkAccess`, which is the same
+ * thing `requirePermission` does for a permission-gated route -- so a widget's
+ * `requiredPermission` is decided by exactly the machinery that would decide a
+ * route declaring the same slug. That includes the super-admin bypass and any
+ * registered code-access rule for the named resource, neither of which is
+ * reproduced here; a second implementation of either is a second thing to keep
+ * in step.
+ *
+ * Used to decide whether a dashboard widget declaring `requiredPermission` is
+ * even mentioned to this caller. That field was previously gated in the admin
+ * alone, which is a rendering decision rather than an access one -- a client
+ * that simply did not run the check saw every card's existence.
+ *
+ * Deny-by-default in both directions the way `canReadEntity` is: an empty
+ * caller id, an unparseable slug and an unreachable RBAC service each answer
+ * false.
+ */
+export async function callerHoldsPermission(
+  slug: string,
+  caller: ReadAccessCaller
+): Promise<boolean> {
+  if (!caller.userId || !slug) return false;
+
+  // An API key is judged on its OWN stamped grant, never on the roles of
+  // whoever minted it -- and a super admin does not bypass that, for the same
+  // reason spelled out on `canReadEntity`: a read-only key issued by an
+  // administrator must not become equivalent to their full account.
+  if (caller.authMethod === "api-key") {
+    return caller.permissions.includes(slug);
+  }
+
+  const rbac = getRBACService();
+  if (!rbac) return false;
+
+  const { action, resource } = parsePermissionSlug(slug);
+  // A slug with no hyphen parses to an empty resource. `checkAccess` would be
+  // asked about a resource that cannot exist, so refuse it here where the
+  // reason is legible rather than letting it read as an ordinary denial.
+  if (!action || !resource) return false;
+
+  return rbac.checkAccess({
+    // `CheckAccessParams` types `operation` as the five CRUD verbs, and a
+    // permission slug's action is not bounded by them -- `export-submissions`
+    // and `manage-settings` are both real grants in this codebase. The
+    // implementation reads it as a plain string throughout (it indexes
+    // `codeAccess` by it and forwards it to `hasPermission`), so the value is
+    // carried correctly; the type is simply narrower than the function. This
+    // is the identical cast `requirePermission` makes for the identical reason,
+    // and widening the parameter is a change to the RBAC service's own contract
+    // rather than something to settle from a caller.
+    operation: action as "create" | "read" | "update" | "delete",
+    userId: caller.userId,
+    resource,
+  });
 }
 
 /**

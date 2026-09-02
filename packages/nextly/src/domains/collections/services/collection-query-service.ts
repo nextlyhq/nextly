@@ -31,7 +31,7 @@ import { statusCondition } from "../../../lib/status-condition";
 import {
   expansionStatusScope,
   resolveStatusFilter,
-  type StatusFilterValue,
+  type StatusFilter,
   type StatusOption,
 } from "../../../lib/status-filter";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
@@ -313,10 +313,18 @@ export class CollectionQueryService extends BaseService {
    */
   private async releaseDecisions(
     collectionName: string,
-    statusFilter: { value: StatusFilterValue } | null,
+    statusFilter: StatusFilter | null,
     now: Date
   ): Promise<ReleaseDecisions> {
-    if (statusFilter?.value !== "published") return NO_DECISIONS;
+    // Asked of the workflow rather than compared against the word `published`:
+    // a release publishes into whatever state the workflow calls public, and a
+    // literal here would skip the lookup — and the due publication — for any
+    // team that renamed it.
+    // Read off the filter, which carries why its set was chosen. Asking the
+    // values again here would be a second answer to that question.
+    if (statusFilter === null || !statusFilter.isPublicRead) {
+      return NO_DECISIONS;
+    }
     return this.releaseVisibility.decisions({
       scopeKind: "collection",
       scopeSlug: collectionName,
@@ -403,7 +411,7 @@ export class CollectionQueryService extends BaseService {
     rows: Record<string, unknown>[],
     locale: string | undefined,
     preloaded?: CompanionSchema | null,
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): Promise<void> {
     if (!this.localization || locale !== "all" || rows.length === 0) return;
     const companion =
@@ -419,9 +427,9 @@ export class CollectionQueryService extends BaseService {
       locales: this.localization.locales.map(l => l.code),
       // Only constrain by status on a status-enabled collection with a resolved
       // single status, so a published locale=all read drops draft translations.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     });
   }
@@ -436,7 +444,7 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     rows: Record<string, unknown>[],
     preloaded?: CompanionSchema | null,
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): Promise<void> {
     if (!this.localization || rows.length === 0) return;
     const companion =
@@ -506,9 +514,9 @@ export class CollectionQueryService extends BaseService {
           : undefined,
 
       // On a status-scoped read, don't report a draft-only translation as present.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     });
   }
@@ -664,7 +672,7 @@ export class CollectionQueryService extends BaseService {
      * is filtered out so a draft translation never leaks — the field falls back to the published
      * default.
      */
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): Promise<void> {
     if (!localeChain || rows.length === 0) return;
     const companion =
@@ -677,9 +685,9 @@ export class CollectionQueryService extends BaseService {
       localizedFields: companion.localizedFields,
       rows,
       localeChain,
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     });
   }
@@ -877,11 +885,11 @@ export class CollectionQueryService extends BaseService {
     localeChain: string[] | null,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
-    statusFilterValue?: string | null
+    statusFilterValues?: readonly string[] | null
   ): LocalizedQueryContext | null {
     if (!companion || !localeChain || localeChain.length === 0) return null;
     // The caller resolves the Draft/Published filter before building the context and
-    // passes it as `statusFilterValue`, so per-locale where/search/order subqueries
+    // passes it as `statusFilterValues`, so per-locale where/search/order subqueries
     // constrain by the resolved status too (a public read never matches a draft).
     return {
       companionTableName: companion.companionTableName,
@@ -890,9 +898,9 @@ export class CollectionQueryService extends BaseService {
       locale: localeChain[0],
       // Only constrain by status when the collection has per-locale status and the
       // read resolved to a single status; otherwise leave it unfiltered.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
     };
   }
@@ -1274,7 +1282,7 @@ export class CollectionQueryService extends BaseService {
         companion,
         localeChain,
         schema,
-        statusFilter?.value
+        statusFilter?.values
       );
 
       // Apply search filter if provided
@@ -1548,7 +1556,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: schema.id,
             column: localizedSortField.column,
             localeChain,
-            statusValue: localizedCtx?.statusValue, // don't sort by draft translations
+            statusValues: localizedCtx?.statusValues, // don't sort by draft translations
           });
           query = query.orderBy(sortDesc ? desc(orderExpr) : asc(orderExpr));
         } else if (column) {
@@ -1676,7 +1684,7 @@ export class CollectionQueryService extends BaseService {
             entries,
             localeChain,
             companion,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
@@ -1689,7 +1697,7 @@ export class CollectionQueryService extends BaseService {
             entries,
             params.locale,
             companion,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // i18n M7: per-locale translation-status map for the admin overview (opt-in).
@@ -1702,7 +1710,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               entries,
               companion,
-              statusFilter?.value ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
         );
       }
@@ -2395,7 +2403,7 @@ export class CollectionQueryService extends BaseService {
         companion,
         localeChain,
         schema,
-        statusFilter?.value
+        statusFilter?.values
       );
 
       // Apply search filter if provided
@@ -2897,7 +2905,9 @@ export class CollectionQueryService extends BaseService {
       // the pending draft. When nothing is overlaid after all, the 404 below
       // still refuses to return the published row to a draft-only view.
       const suppressDraftStatusFilter =
-        draftOverlayPossible && statusFilter?.value === "draft";
+        draftOverlayPossible &&
+        statusFilter !== null &&
+        !statusFilter.isPublicRead;
       // Named `lifecycleCondition` rather than shadowing the imported
       // `statusCondition` helper it now delegates to.
       const readNow = new Date();
@@ -2956,7 +2966,7 @@ export class CollectionQueryService extends BaseService {
             [entry as Record<string, unknown>],
             localeChain,
             undefined,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // `locale=all` → language-keyed values per localized field (admin/export).
@@ -2969,7 +2979,7 @@ export class CollectionQueryService extends BaseService {
             [entry as Record<string, unknown>],
             params.locale,
             undefined,
-            statusFilter?.value ?? null // i18n M6: per-locale published filter
+            statusFilter?.values ?? null // i18n M6: per-locale published filter
           )
       );
       // i18n M7: per-locale translation-status map for the admin per-language pills (opt-in).
@@ -2982,7 +2992,7 @@ export class CollectionQueryService extends BaseService {
               params.collectionName,
               [entry as Record<string, unknown>],
               undefined,
-              statusFilter?.value ?? null // i18n M6: per-locale published filter
+              statusFilter?.values ?? null // i18n M6: per-locale published filter
             )
         );
       }
@@ -3322,7 +3332,9 @@ export class CollectionQueryService extends BaseService {
       if (
         suppressDraftStatusFilter &&
         !draftOverlaid &&
-        (expandedEntry as { status?: unknown }).status !== statusFilter?.value
+        !(statusFilter?.values ?? []).includes(
+          (expandedEntry as { status?: unknown }).status as string
+        )
       ) {
         return {
           success: false,
@@ -3699,7 +3711,7 @@ export class CollectionQueryService extends BaseService {
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
             valueCondition,
-            statusValue: localizedCtx.statusValue,
+            statusValues: localizedCtx.statusValues,
           });
         }
         const column = schema[fieldName];

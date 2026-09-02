@@ -50,22 +50,44 @@ export const WIDGET_SPAN_CLASSES: Readonly<Record<WidgetSize, string>> =
  * declaration over the wire, so a value outside the enum is a shape the admin
  * has to survive. Full width is the safe answer — a widget too wide is legible,
  * a widget with no span class at all collapses to the grid's implicit one.
+ *
+ * 🔴 The parameter is `string`, not `WidgetSize`, and widening it was a
+ * CORRECTION rather than a loosening. The narrow type asserted a guarantee the
+ * function never had and the codebase does not hold: the body exists precisely
+ * to survive a value outside the enum, and the callers now include a stored
+ * arrangement whose size may have been written by a plugin built against a
+ * newer core. A signature that refuses what the body handles pushes the cast to
+ * every call site, which is where the `Object.hasOwn` guard below stops being
+ * reachable.
  */
-export function widgetSpanClass(size: WidgetSize | undefined): string {
+export function widgetSpanClass(size: string | undefined): string {
   if (!size) return WIDGET_SPAN_CLASSES.full;
-  return WIDGET_SPAN_CLASSES[size] ?? WIDGET_SPAN_CLASSES.full;
+  // `Object.hasOwn`, not a plain lookup with `??`. The value arrives over the
+  // wire from a plugin declaration, so it can be any string -- and `constructor`
+  // or `toString` resolve to inherited `Object.prototype` members rather than
+  // `undefined`, which means the fallback never runs and the grid is handed a
+  // FUNCTION where it expected a class list. `__proto__` returns an object the
+  // same way.
+  //
+  // The fallback below is what makes an unknown size survivable at all, so a
+  // lookup that can silently skip it defeats the boundary rather than guarding
+  // it.
+  // `Object.hasOwn` narrows nothing for the compiler — it is a runtime guard,
+  // not a type predicate — so the indexed read is asserted rather than left to
+  // fail the build. The assertion is sound BECAUSE of the line above it: the
+  // key is known to be an own property of this exact table by the time it runs.
+  return Object.hasOwn(WIDGET_SPAN_CLASSES, size)
+    ? WIDGET_SPAN_CLASSES[size as WidgetSize]
+    : WIDGET_SPAN_CLASSES.full;
 }
 
 /**
  * The deprecated `size?: "full" | "half"` alias, as a real size.
  *
- * Plugin declarations still carry it, and `half` meant "6 of 12" — which is
- * `lg` in the enum. Mapping it here rather than at the call site is what stops
- * the old vocabulary reaching the span map, where it would miss and silently
- * become full width for every half widget on the dashboard.
+ * Re-exported from core rather than defined here. The server reduces the same
+ * contributed declaration to a canonical summary and has to read the same
+ * alias, so the mapping belongs beside the vocabulary it translates into --
+ * where both callers can ask it. Kept exported from this module because this is
+ * where the dashboard's size questions are answered from.
  */
-export function legacySizeToWidgetSize(
-  size: "full" | "half" | undefined
-): WidgetSize {
-  return size === "half" ? "lg" : "full";
-}
+export { legacySizeToWidgetSize } from "nextly/config";

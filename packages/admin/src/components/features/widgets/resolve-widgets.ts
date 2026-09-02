@@ -11,7 +11,14 @@
  * @module components/features/widgets/resolve-widgets
  */
 
-import type { WidgetArchetype, WidgetQuery, WidgetSize } from "nextly/config";
+import type {
+  WidgetAction,
+  WidgetArchetype,
+  WidgetHeight,
+  WidgetQuery,
+  WidgetSize,
+  WidgetChrome,
+} from "nextly/config";
 
 import type {
   PluginMetadata,
@@ -21,6 +28,32 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { coreDraws } from "./outcome";
 import { legacySizeToWidgetSize } from "./sizes";
+
+/**
+ * A widget's shortcuts, less the ones this reader may not use.
+ *
+ * Gated HERE because this is the one place holding `hasPermission`, and the
+ * same place the card's own `requiredPermission` is judged -- two gates for one
+ * question drift, and the renderer would need the predicate threaded through
+ * its signature to ask again.
+ *
+ * The two gates answer different questions and both are needed. The card's
+ * permission decides whether the widget appears at all; an item's decides
+ * whether that shortcut does. A card of five shortcuts where the reader may use
+ * two should show two, not disappear -- and a shortcut to something they may
+ * not do is worse than no shortcut, because it advertises a capability, costs a
+ * click, and answers with a refusal screen.
+ */
+function readableActions(
+  actions: WidgetAction[] | undefined,
+  hasPermission: (permission: string) => boolean
+): WidgetAction[] | undefined {
+  if (!actions) return undefined;
+  return actions.filter(
+    action =>
+      !action.requiredPermission || hasPermission(action.requiredPermission)
+  );
+}
 
 /**
  * A contributed widget as this file READS it, which is deliberately not how a
@@ -53,11 +86,15 @@ export interface ReadableWidgetDeclaration {
   category?: string;
   archetype?: WidgetArchetype;
   defaultSize?: WidgetSize;
+  defaultHeight?: WidgetHeight;
   minSize?: WidgetSize;
   maxSize?: WidgetSize;
   query?: WidgetQuery;
   component?: string;
+  actions?: WidgetAction[];
   link?: { label: string; href: string };
+  defaultOrder?: number;
+  chrome?: WidgetChrome;
 }
 
 /**
@@ -101,7 +138,14 @@ function resolveArchetype(
   meta: ReadableWidgetDeclaration
 ): DashboardWidget["archetype"] | undefined {
   if (meta.archetype) {
-    const undrawable = !meta.query || !coreDraws(meta);
+    // ONE question, asked once. This used to be `!meta.query || !coreDraws(meta)`,
+    // and the first half was wrong the moment an archetype was drawn WITHOUT a
+    // query: `actions` is queryless by design, so the query test called every
+    // actions widget undrawable and handed one carrying a component fallback to
+    // that component -- bypassing the host renderer and its per-item permission
+    // gating. Each archetype states its own precondition now, so `coreDraws`
+    // already knows a metric needs a query and an actions card does not.
+    const undrawable = !coreDraws(meta);
     if (meta.archetype !== "custom" && undrawable && meta.component) {
       return "custom";
     }
@@ -169,9 +213,13 @@ function resolveOne(
     // enum wins where both are declared, because a plugin that adopted the new
     // field meant it.
     size: meta.defaultSize ?? legacySizeToWidgetSize(meta.size),
+    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
     component: meta.component,
+    actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
+    defaultOrder: meta.defaultOrder,
+    chrome: meta.chrome,
   };
 }
 
@@ -209,9 +257,13 @@ function resolveRegistered(
     icon: meta.icon,
     archetype: meta.archetype,
     size: meta.defaultSize,
+    ...(meta.defaultHeight === undefined ? {} : { height: meta.defaultHeight }),
     query: meta.query,
     component: meta.component,
+    actions: readableActions(meta.actions, hasPermission),
     link: meta.link,
+    defaultOrder: meta.defaultOrder,
+    chrome: meta.chrome,
   };
 }
 
@@ -252,6 +304,11 @@ function mergeCollision(
     icon: registration.icon ?? contribution.icon,
     archetype: registration.archetype,
     defaultSize: registration.defaultSize,
+    // The registry wins where it states one, exactly as `defaultOrder` and
+    // `chrome` do below. Named in this list rather than left out because the
+    // list IS the contract: a field missing from it is dropped silently, and a
+    // merged widget would lose the height its contribution declared.
+    defaultHeight: registration.defaultHeight ?? contribution.defaultHeight,
     minSize: registration.minSize,
     maxSize: registration.maxSize,
     // The contributed size is the FALLBACK, read only when the registration
@@ -261,6 +318,14 @@ function mergeCollision(
     query: registration.query,
     link: registration.link ?? contribution.link,
     component: registration.component ?? contribution.component,
+    actions: registration.actions ?? contribution.actions,
+    // Both channels can state these, and the registry wins where it does --
+    // the rule `defaultSize` already follows above. Rebuilt field by field
+    // here, so a field added to the contract and not to THIS list is dropped
+    // silently: the merged widget loses its declared position, and an unframed
+    // custom widget is wrapped in the card it asked not to have.
+    defaultOrder: registration.defaultOrder ?? contribution.defaultOrder,
+    chrome: registration.chrome ?? contribution.chrome,
   };
 }
 
@@ -324,16 +389,29 @@ export function resolveDashboardWidgets(
     resolve: () => DashboardWidget | undefined
   ): DashboardWidget[] => {
     if (seen.has(id)) return [];
-    const widget = resolve();
-    // NOT marked seen when the resolver declines, so a later declaration of the
-    // same id still gets its turn. Whether that is right depends on the two
-    // declarations agreeing about the permission, which nothing here enforces:
-    // a contributed widget carrying no permission still renders behind a
-    // registration that was withheld only if the two are not merged, which is
-    // why the merge above is what closes it rather than this line.
-    if (!widget) return [];
+    // 🔴 The id is CLAIMED before the resolver runs, so a declaration that is
+    // declined still consumes it and no later declaration takes its place.
+    //
+    // The previous rule let a decline pass the id on, and that is a permission
+    // SHADOWING hole: widget ids are plugin-local, so a second plugin
+    // contributing the same id with no `requiredPermission` rendered exactly
+    // where the first plugin's gated widget had been withheld. Nothing else
+    // enforced agreement between the two declarations -- the registration merge
+    // closes that case and two contributions have no merge to close it.
+    //
+    // It is also what makes this agree with the server. `canonicalWidgets`
+    // resolves a collision by declaration order alone, and it MUST: positions
+    // in the default arrangement come from a placement's index in the
+    // whole-registry materialization, so a canonical set that varied per caller
+    // would move every reader's cards relative to each other. Deciding identity
+    // here by anything the caller affects would put the two back out of step,
+    // with the server placing one declaration and the grid drawing another.
+    //
+    // So: one id names one declaration, chosen without reference to who is
+    // asking or to whether the declaration turned out to be renderable.
     seen.add(id);
-    return [widget];
+    const widget = resolve();
+    return widget ? [widget] : [];
   };
 
   const contributed = declaredWidgets(plugins).flatMap(meta => {
@@ -353,5 +431,29 @@ export function resolveDashboardWidgets(
     )
   );
 
-  return [...contributed, ...registrations];
+  // ONE sort over both channels, after the merge and the permission gate, so a
+  // widget's position does not depend on which of the two declared it. That
+  // dependency was the defect: registrations are appended after contributions,
+  // so a card crossed the grid when its author moved it between channels
+  // without changing anything about the card.
+  //
+  // The sentinel is INFINITY, not `MAX_SAFE_INTEGER`. `validateDefaultOrder`
+  // accepts any finite number, and `Number.MAX_VALUE` is finite and far above
+  // `MAX_SAFE_INTEGER` -- so that sentinel let a widget with a perfectly valid
+  // order sort BELOW widgets claiming none, contradicting the one guarantee
+  // this field makes. Infinity is above the whole accepted range by
+  // construction, and nothing can tie with it because non-finite values are
+  // refused at declaration.
+  //
+  // STABLE, which `Array.prototype.sort` has guaranteed since ES2019 and which
+  // the whole compatibility story rests on: every widget shipping today states
+  // no order, so they all compare equal and keep the arrangement they have.
+  // Sorting by `?? 0` instead would order them against each other arbitrarily
+  // -- rearranging every existing dashboard while every assertion about a
+  // STATED order still passed.
+  return [...contributed, ...registrations].sort(
+    (a, b) =>
+      (a.defaultOrder ?? Number.POSITIVE_INFINITY) -
+      (b.defaultOrder ?? Number.POSITIVE_INFINITY)
+  );
 }

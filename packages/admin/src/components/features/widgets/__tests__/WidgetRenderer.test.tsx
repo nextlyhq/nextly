@@ -187,6 +187,37 @@ describe("WidgetRenderer — an archetype named off Object.prototype", () => {
   });
 });
 
+describe("WidgetRenderer — an archetype drawn without data", () => {
+  // `text` and `actions` are queryless by core's contract -- the registry
+  // validator refuses a query on them -- so they never enter the batch and no
+  // slot ever arrives. The outcome resolver used to read that absence as
+  // "drawn from a query, and this widget declares none", which would have made
+  // the FIRST body registered for one fail on every render, permanently.
+  const shortcuts: DashboardWidget = {
+    id: "core/shortcuts",
+    title: "Shortcuts",
+    archetype: "actions",
+    size: "sm",
+    actions: [{ label: "New post", href: "/admin/posts/new" }],
+  };
+
+  it("draws with NO slot, rather than reporting a missing query", () => {
+    render(<WidgetRenderer definition={shortcuts} slot={undefined} />);
+    expect(screen.getByTestId("widget-action")).toHaveTextContent("New post");
+    expect(screen.queryByTestId("widget-card-error")).not.toBeInTheDocument();
+  });
+
+  it("never waits on a request that is not coming", () => {
+    // The other half: absent must not read as "in flight" either, or the card
+    // sits loading for the life of the page with nothing saying why.
+    render(<WidgetRenderer definition={shortcuts} slot={undefined} />);
+    expect(screen.getByTestId("widget-card-body")).toHaveAttribute(
+      "aria-busy",
+      "false"
+    );
+  });
+});
+
 describe("WidgetRenderer — custom", () => {
   const custom: DashboardWidget = {
     id: "acme/panel",
@@ -427,5 +458,73 @@ describe("WidgetRenderer — archetypes not built yet", () => {
     );
     expect(screen.getByTestId("widget-card-error")).toHaveTextContent(/list/i);
     expect(screen.getByText("Recent entries")).toBeInTheDocument();
+  });
+});
+
+describe("WidgetRenderer — chrome", () => {
+  const Section = () => (
+    <section aria-labelledby="own-heading">
+      <h4 id="own-heading">Team</h4>
+      <p>body</p>
+    </section>
+  );
+
+  const bare: DashboardWidget = {
+    id: "core/team",
+    title: "Team",
+    archetype: "custom",
+    size: "lg",
+    component: "core#TeamSummary",
+    chrome: "none",
+  };
+
+  it("draws an unframed widget with no card around it", () => {
+    // The widget already IS a surface: it carries its own heading and rules.
+    // Framed, the card's title renders ABOVE the section's own -- two headings
+    // saying "Team", one inside the other.
+    registerComponent("@t/x#Section", Section);
+    render(
+      <WidgetRenderer
+        definition={{ ...bare, component: "@t/x#Section" }}
+        slot={undefined}
+      />
+    );
+
+    expect(screen.getByRole("heading", { name: "Team" })).toBeInTheDocument();
+    expect(screen.queryByTestId("widget-card-body")).not.toBeInTheDocument();
+  });
+
+  it("still frames a custom widget that says nothing about chrome", () => {
+    // The control, and the compatibility bound: every custom widget shipping
+    // today omits `chrome` and must keep the card it has. A renderer that
+    // unframed everything would satisfy the assertion above.
+    registerComponent("@t/x#Section", Section);
+    render(
+      <WidgetRenderer
+        definition={{
+          ...bare,
+          component: "@t/x#Section",
+          chrome: undefined,
+        }}
+        slot={undefined}
+      />
+    );
+
+    expect(screen.getByTestId("widget-card-body")).toBeInTheDocument();
+  });
+
+  it("renders literally nothing when an unframed component draws nothing", () => {
+    // What lets the grid collapse the cell. Anything wrapped around the slot
+    // here -- a div, a class -- fills the cell and reinstates the blank row
+    // that core's self-hiding sections never produced before they were widgets.
+    registerComponent("@t/x#Nothing", () => null);
+    const { container } = render(
+      <WidgetRenderer
+        definition={{ ...bare, component: "@t/x#Nothing" }}
+        slot={undefined}
+      />
+    );
+
+    expect(container).toBeEmptyDOMElement();
   });
 });

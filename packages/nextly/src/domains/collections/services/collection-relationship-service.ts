@@ -14,7 +14,10 @@ import {
 } from "../../../lib/case-conversion";
 import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import { statusCondition } from "../../../lib/status-condition";
-import { resolveStatusFilter } from "../../../lib/status-filter";
+import {
+  resolveStatusFilter,
+  type StatusFilter,
+} from "../../../lib/status-filter";
 import {
   AccessControlService,
   DEFAULT_OWNER_FIELD,
@@ -1319,10 +1322,16 @@ export class CollectionRelationshipService extends BaseService {
    */
   private async targetDecisions(
     targetCollection: string,
-    statusValue: string | undefined,
+    statusFilter: StatusFilter | null,
     now: Date
   ): Promise<ReleaseDecisions> {
-    if (statusValue !== "published") return NO_DECISIONS;
+    // Only a PUBLIC read is widened by a due release. Read off the filter,
+    // which carries why its set was chosen, rather than asking the values
+    // again — a second answer to that question disagrees the moment a
+    // workflow's public and non-public sets are not complementary.
+    if (statusFilter === null || !statusFilter.isPublicRead) {
+      return NO_DECISIONS;
+    }
     return this.releaseVisibility.decisions({
       scopeKind: "collection",
       scopeSlug: targetCollection,
@@ -1403,16 +1412,16 @@ export class CollectionRelationshipService extends BaseService {
    *
    * System entities have no lifecycle and no collection record to ask.
    */
-  private async resolveTargetStatusValue(
+  private async resolveTargetStatusFilter(
     targetCollection: string,
     schema: TargetTableColumns,
     access: RelatedRowAccess
-  ): Promise<string | undefined> {
-    if (isSystemEntity(targetCollection)) return undefined;
+  ): Promise<StatusFilter | null> {
+    if (isSystemEntity(targetCollection)) return null;
     // Guarded on the column, not only on the collection's flag: a collection
     // whose status was switched off keeps the flag until its schema is
     // reapplied, and naming a column the table lacks fails the whole read.
-    if (!schema.status) return undefined;
+    if (!schema.status) return null;
 
     let hasStatus: boolean;
     try {
@@ -1434,7 +1443,7 @@ export class CollectionRelationshipService extends BaseService {
       overrideAccess: widensLifecycle(access),
       explicit: access.status,
     });
-    return statusFilter?.value;
+    return statusFilter;
   }
 
   private async readTargetRows(
@@ -1453,7 +1462,7 @@ export class CollectionRelationshipService extends BaseService {
     // read of it. Without this, a caller who is 404'd asking for an unpublished
     // row is handed the whole thing — status column included — by populating a
     // relationship that points at it.
-    const statusValue = await this.resolveTargetStatusValue(
+    const statusFilter = await this.resolveTargetStatusFilter(
       targetCollection,
       schema,
       access
@@ -1484,19 +1493,22 @@ export class CollectionRelationshipService extends BaseService {
     // while a direct read of the same document honoured it.
     const decisions = await this.targetDecisions(
       targetCollection,
-      statusValue,
+      statusFilter,
       new Date()
     );
     const revealed = new Set(decisions.reveal);
     const hidden = new Set(decisions.hide);
-    const rows = statusValue
+    const rows = statusFilter
       ? fetched.filter(row => {
           const id = typeof row.id === "string" ? row.id : null;
           // Withdrawn wins over the stored status: the row still says
           // published, which is exactly what the release is undoing.
           if (id !== null && hidden.has(id)) return false;
+          // Membership, because a read bounded to "not yet public" covers every
+          // state the workflow does not publish.
           return (
-            row.status === statusValue || (id !== null && revealed.has(id))
+            statusFilter.values.includes(row.status as string) ||
+            (id !== null && revealed.has(id))
           );
         })
       : fetched;
@@ -1755,7 +1767,7 @@ export class CollectionRelationshipService extends BaseService {
         schema,
         access,
         constraint,
-        statusFilter?.value
+        statusFilter?.values
       );
 
       const untranslatable = describeUntranslatableConstraint(
@@ -1813,9 +1825,11 @@ export class CollectionRelationshipService extends BaseService {
         filter: statusFilter,
         statusColumn: schema.status,
         idColumn: schema.id,
+        // See collection-query-service: every call site names its workflow so
+        // the ones phase 2 must thread are greppable.
         decisions: await this.targetDecisions(
           targetCollection,
-          statusFilter?.value,
+          statusFilter,
           new Date()
         ),
       });
@@ -1897,7 +1911,7 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess,
     constraint: Record<string, unknown>,
     /** The status a read of this target resolves to, or undefined for none. */
-    statusValue: string | undefined
+    statusValues: readonly string[] | undefined
   ): Promise<LocalizedQueryContext | null> {
     if (!access.locale || isSystemEntity(targetCollection)) return null;
     // Judged on the raw constraint keys, which is what the untranslatable check
@@ -1926,7 +1940,7 @@ export class CollectionRelationshipService extends BaseService {
       // translation holding the permitted value would otherwise admit a row the
       // target's own list read, filtering on the same status, excludes. Gated on
       // the companion having the column, matching the read path.
-      statusValue: companion.hasStatus ? statusValue : undefined,
+      statusValues: companion.hasStatus ? statusValues : undefined,
     };
   }
 

@@ -25,6 +25,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 const DOCUMENT = { formatVersion: 1, kind: "page", nodes: [] };
 
@@ -155,7 +156,7 @@ function Host(): React.JSX.Element {
 
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: "Edit blocks" }));
+  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 /** What the inspector was handed for the class surface. */

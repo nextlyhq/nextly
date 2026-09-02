@@ -6,13 +6,16 @@
 
 export {
   WIDGET_SIZES,
+  WIDGET_CHROME,
   WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   DATA_ARCHETYPES,
   QUERYLESS_ARCHETYPES,
   validateWidgetDefinition,
   type WidgetDefinition,
+  type WidgetAction,
   type WidgetSize,
+  type WidgetChrome,
   type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,

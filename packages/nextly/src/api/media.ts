@@ -24,6 +24,7 @@ import type {
   ListMediaOptions,
 } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
+import { resolveClaimedMimeType } from "../services/upload-validation/mime";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
 import { readJsonBody } from "./read-json-body";
@@ -161,7 +162,11 @@ export const POST = withErrorHandler(
     const input = {
       file: buffer,
       filename: fileEnsured.name,
-      mimeType: fileEnsured.type,
+      mimeType: resolveClaimedMimeType(
+        fileEnsured.name,
+        fileEnsured.type,
+        buffer
+      ),
       size: fileEnsured.size,
       uploadedBy: uploadedByEnsured,
     };
@@ -179,7 +184,10 @@ export const POST = withErrorHandler(
       {
         buffer,
         filename: fileEnsured.name,
-        mimeType: fileEnsured.type,
+        // The value the schema ACCEPTED, not a second resolution of the same
+        // question — the one that reaches storage must be the one that was
+        // checked.
+        mimeType: input.mimeType,
         size: fileEnsured.size,
         folderId: folderId || undefined,
       },

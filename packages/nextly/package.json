@@ -179,6 +179,14 @@
       "types": "./dist/cli/utils/index.d.ts",
       "import": "./dist/cli/utils/index.mjs"
     },
+    "./storage/read-errors": {
+      "types": "./dist/storage/read-errors.d.ts",
+      "import": "./dist/storage/read-errors.mjs"
+    },
+    "./storage/fetch-stored-bytes": {
+      "types": "./dist/storage/fetch-stored-bytes.d.ts",
+      "import": "./dist/storage/fetch-stored-bytes.mjs"
+    },
     "./storage": {
       "types": "./dist/storage/index.d.ts",
       "import": "./dist/storage/index.mjs"
@@ -190,6 +198,14 @@
     "./api/email-provider-types": {
       "types": "./dist/api/email-provider-types.d.ts",
       "import": "./dist/api/email-provider-types.mjs"
+    },
+    "./api/email-template-preview-types": {
+      "types": "./dist/api/email-template-preview-types.d.ts",
+      "import": "./dist/api/email-template-preview-types.mjs"
+    },
+    "./api/jobs-list-types": {
+      "types": "./dist/api/jobs-list-types.d.ts",
+      "import": "./dist/api/jobs-list-types.mjs"
     }
   },
   "files": [

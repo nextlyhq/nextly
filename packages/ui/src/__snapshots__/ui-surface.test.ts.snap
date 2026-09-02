@@ -294,6 +294,7 @@ exports[`ui public export surface > . surface is unchanged 1`] = `
   "toast (value)",
   "useActiveShortcuts (value)",
   "useCommandHighlight (value)",
+  "useIsomorphicLayoutEffect (value)",
   "usePortalContainer (value)",
   "useShortcutManager (value)",
   "useShortcuts (value)",

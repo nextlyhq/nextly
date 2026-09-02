@@ -42,7 +42,7 @@ import { absolutizeMediaUrls } from "../../../lib/media-variant";
 import {
   expansionStatusScope,
   resolveStatusFilter,
-  type StatusFilterValue,
+  type StatusFilter,
 } from "../../../lib/status-filter";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
@@ -735,7 +735,7 @@ export class SingleQueryService extends BaseService {
     slug: string;
     documentId: unknown;
     storedStatus: string | undefined;
-    statusFilter: { value: StatusFilterValue };
+    statusFilter: StatusFilter;
     /**
      * The instant this READ resolves releases against.
      *
@@ -748,8 +748,17 @@ export class SingleQueryService extends BaseService {
      */
     now: Date;
   }): Promise<boolean> {
-    const matchesStatus = input.storedStatus === input.statusFilter.value;
-    if (input.statusFilter.value !== "published") return matchesStatus;
+    // Membership, not equality: a read bounded to "not yet public" covers every
+    // state the workflow does not publish, and comparing against one of them
+    // would hide a Single sitting in any of the others.
+    const matchesStatus =
+      input.storedStatus !== undefined &&
+      input.statusFilter.values.includes(input.storedStatus);
+    // Read off the filter rather than re-derived. Only a public read is widened
+    // by a due release; a read of pending work has nothing for one to reveal.
+    if (!input.statusFilter.isPublicRead) {
+      return matchesStatus;
+    }
     if (typeof input.documentId !== "string") return matchesStatus;
 
     const decisions = await this.releaseVisibility.decisions({
@@ -976,7 +985,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     doc: SingleDocument;
     options: GetSingleOptions;
-    statusFilterValue: string | undefined;
+    statusFilterValues: readonly string[] | undefined;
     /**
      * Whether to apply the TARGET collection's field rules to related rows.
      * Off for the copy an access rule is judged on: redaction removes the very
@@ -1010,7 +1019,7 @@ export class SingleQueryService extends BaseService {
       slug,
       singleMeta,
       options,
-      statusFilterValue,
+      statusFilterValues,
       enforceRelatedFieldAccess,
       strict = false,
     } = params;
@@ -1029,7 +1038,7 @@ export class SingleQueryService extends BaseService {
           doc,
           options.locale,
           options.fallbackLocale,
-          statusFilterValue
+          statusFilterValues
         );
       } catch (error) {
         // Normalized whether or not the caller is judging an access rule on the result. A
@@ -1338,7 +1347,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     doc: SingleDocument;
     options: GetSingleOptions;
-    statusFilterValue: string | undefined;
+    statusFilterValues: readonly string[] | undefined;
     skipLocalizedOverlay?: boolean;
   }): Promise<SingleDocument> {
     let references: SingleDocument | undefined;
@@ -1425,7 +1434,7 @@ export class SingleQueryService extends BaseService {
     singleMeta: DynamicSingleRecord;
     accessRules: CollectionAccessRules | undefined;
     options: GetSingleOptions;
-    statusFilterValue: string | undefined;
+    statusFilterValues: readonly string[] | undefined;
     /** The stored row, already loaded and already screened for visibility. */
     row: SingleDocument | null;
   }): Promise<{
@@ -1437,7 +1446,7 @@ export class SingleQueryService extends BaseService {
      */
     prospective?: DefaultDocumentDraft;
   }> {
-    const { slug, singleMeta, accessRules, options, statusFilterValue, row } =
+    const { slug, singleMeta, accessRules, options, statusFilterValues, row } =
       params;
     if (!accessRules) return {};
 
@@ -1467,7 +1476,7 @@ export class SingleQueryService extends BaseService {
       singleMeta,
       doc: row ?? prospective!.document,
       options,
-      statusFilterValue,
+      statusFilterValues,
       skipLocalizedOverlay: !row,
     });
 
@@ -1772,7 +1781,7 @@ export class SingleQueryService extends BaseService {
           singleMeta,
           accessRules: singleMeta.accessRules,
           options,
-          statusFilterValue: statusFilter ? statusFilter.value : undefined,
+          statusFilterValues: statusFilter ? statusFilter.values : undefined,
           row: storedRow,
         });
         if (custom.denied) return custom.denied;
@@ -1850,7 +1859,7 @@ export class SingleQueryService extends BaseService {
             singleMeta,
             accessRules: singleMeta.accessRules,
             options,
-            statusFilterValue: statusFilter ? statusFilter.value : undefined,
+            statusFilterValues: statusFilter ? statusFilter.values : undefined,
             row: null,
           });
           if (lateDraft.denied) return lateDraft.denied;
@@ -1910,7 +1919,7 @@ export class SingleQueryService extends BaseService {
         singleMeta,
         doc,
         options,
-        statusFilterValue: statusFilter ? statusFilter.value : undefined,
+        statusFilterValues: statusFilter ? statusFilter.values : undefined,
         enforceRelatedFieldAccess: true,
         // An ordinary read is still served when a companion query fails, but a
         // read about to be judged cannot be: the rule would decide on values
@@ -2093,7 +2102,7 @@ export class SingleQueryService extends BaseService {
     doc: Record<string, unknown>,
     locale: string | undefined,
     fallbackLocale: string | false | undefined,
-    statusFilterValue: string | undefined
+    statusFilterValues: readonly string[] | undefined
   ): Promise<void> {
     const localeChain = this.resolveLocaleChain(locale, fallbackLocale);
     if (!localeChain) return;
@@ -2119,9 +2128,9 @@ export class SingleQueryService extends BaseService {
       // Public reads pass the published filter so a draft translation never leaks;
       // admin/status=all passes undefined (no filter). Only meaningful when the
       // companion carries a per-locale `_status`.
-      statusValue:
-        companion.hasStatus && statusFilterValue
-          ? statusFilterValue
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
           : undefined,
       // A pooled read, so this may resolve rather than only read what is remembered.
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),

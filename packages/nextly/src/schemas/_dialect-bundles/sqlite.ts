@@ -17,6 +17,7 @@ export { users, accounts, sessions } from "../users/sqlite";
 // `reconcileCore` hands drizzle-kit.
 export { nextlyFieldGroupLock } from "../field-group-lock/sqlite";
 export { nextlyDocumentLock } from "../document-lock/sqlite";
+export { nextlyWidgetLayout } from "../widget-layout/sqlite";
 
 export {
   emailVerificationTokens,

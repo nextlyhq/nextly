@@ -10,6 +10,7 @@
  * permission.
  */
 import {
+  Activity,
   FileText,
   Image,
   Key,
@@ -20,6 +21,7 @@ import {
   Users,
   Webhook,
 } from "@admin/components/icons";
+import { API_KEYS_LIST_PERMISSIONS } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 
 /**
@@ -40,6 +42,17 @@ export interface SettingsNavItem {
   icon: typeof Settings;
   href: string;
   gate: SettingsNavGate;
+  /**
+   * The grant the destination's own ROUTE demands, when that is narrower than
+   * the gate above.
+   *
+   * `gate` answers "may this reader see the link"; this answers "may they open
+   * it". They are usually the same fact and this is then omitted. Where they
+   * differ, a landing decision that consults only `gate` sends someone to a
+   * page the route guard refuses, which reads to them as the panel being
+   * broken. Any-of when a list, matching `PermissionGuard`.
+   */
+  routePermission?: string | readonly string[];
   /**
    * Match the route exactly instead of by prefix, for a destination whose path
    * is a prefix of its siblings'.
@@ -91,6 +104,9 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Key,
         href: ROUTES.SETTINGS_API_KEYS,
         gate: { kind: "capability", capability: "apiKeys" },
+        // Taken from the route's own constant rather than copied, so the two
+        // cannot drift in either direction.
+        routePermission: API_KEYS_LIST_PERMISSIONS,
       },
       {
         id: "webhooks",
@@ -98,6 +114,18 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Webhook,
         href: ROUTES.SETTINGS_WEBHOOKS,
         gate: { kind: "capability", capability: "webhooks" },
+      },
+      {
+        id: "background-jobs",
+        label: "Background Jobs",
+        icon: Activity,
+        href: ROUTES.SETTINGS_BACKGROUND_JOBS,
+        // The same permission the queue trigger takes. `lastError` carries
+        // whatever a handler threw, which is internal detail rather than
+        // content, and there is no seeded read-only slug to gate on — inventing
+        // one here would change what preset roles grant as a side effect of
+        // adding a screen.
+        gate: { kind: "permission", permission: "manage-background-jobs" },
       },
       {
         id: "image-sizes",
@@ -197,4 +225,57 @@ export function visibleSettingsNav(
       items: group.items.filter(item => isSettingsNavItemVisible(item, access)),
     }))
     .filter(group => group.items.length > 0 || group.pluginPlacement);
+}
+
+/**
+ * Any grant that reaches the API-keys screen.
+ *
+ * The grants that OPEN it, not every grant naming the resource. `create-` and
+ * `delete-api-keys` let a holder act through the API but not list keys, so
+ * counting them here offered a rail entry whose only destination turned them
+ * away.
+ */
+const API_KEY_SLUGS = API_KEYS_LIST_PERMISSIONS;
+
+/** Any grant that reaches the webhooks screen, for the same reason. */
+const WEBHOOK_SLUGS = [
+  "read-webhooks",
+  "update-webhooks",
+  "create-webhooks",
+] as const;
+
+/**
+ * Every grant that reaches SOMETHING in the Settings panel.
+ *
+ * Read off the table rather than listed beside it, and consumed by three
+ * separate decisions that were each maintained by hand: whether the rail entry
+ * appears, whether `/admin/settings` opens at all, and which destination a
+ * viewer without `manage-settings` lands on. Background Jobs was added to the
+ * panel and to none of the three, so the destination passed its own gate while
+ * the rail was suppressed — and once the rail was fixed, the link led to a page
+ * that bounced. A destination added here now satisfies all three by
+ * construction.
+ *
+ * User Management is excluded deliberately. Those destinations answer to
+ * `canViewUsers` and `canViewRoles`, which the rail consults separately, and
+ * folding them in would widen every consumer of the settings capability to
+ * anybody who may read users.
+ */
+export function settingsPanelSlugs(): string[] {
+  const slugs = new Set<string>();
+  for (const group of SETTINGS_NAV) {
+    if (group.id === "users") continue;
+    for (const item of group.items) {
+      if (item.gate.kind === "permission") {
+        slugs.add(item.gate.permission);
+        continue;
+      }
+      for (const slug of item.gate.capability === "apiKeys"
+        ? API_KEY_SLUGS
+        : WEBHOOK_SLUGS) {
+        slugs.add(slug);
+      }
+    }
+  }
+  return [...slugs];
 }

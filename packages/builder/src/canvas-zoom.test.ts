@@ -99,4 +99,40 @@ describe("stepping the zoom", () => {
       scale: 0.75,
     });
   });
+
+  it("steps a scale it cannot paint from the fit, as the canvas does", () => {
+    /*
+     * `CanvasZoom` is exported, so a host can construct a fixed scale holding
+     * any number the type admits. Stepping from the raw value makes every
+     * comparison against `NaN` false, so both directions return the zoom
+     * unchanged and the stepper can never leave it — while the canvas is
+     * painting the fit those steps should have come from.
+     *
+     * Asserted in BOTH directions, because a single direction passes on an
+     * implementation that merely returns the first step of a hardcoded list.
+     */
+    const unusable = { kind: "fixed", scale: Number.NaN } as const;
+    expect(steppedZoom(unusable, 1, "in")).toEqual({
+      kind: "fixed",
+      scale: 1.5,
+    });
+    expect(steppedZoom(unusable, 1, "out")).toEqual({
+      kind: "fixed",
+      scale: 0.75,
+    });
+  });
+
+  it("steps an out-of-range scale from the fit as well", () => {
+    /*
+     * The non-finite case above is not the whole of what `usableScale` rejects,
+     * and a guard written only against `NaN` passes it while leaving a scale
+     * outside the bounds stepping from a value the canvas refused. 12 is past
+     * `MAX_ZOOM`, so a press to shrink must come back to the step below the
+     * fit rather than to the step below 12.
+     */
+    expect(steppedZoom({ kind: "fixed", scale: 12 }, 1, "out")).toEqual({
+      kind: "fixed",
+      scale: 0.75,
+    });
+  });
 });

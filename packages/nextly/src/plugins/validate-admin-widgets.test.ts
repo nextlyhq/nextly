@@ -23,6 +23,14 @@ afterEach(() => {
   resetArchetypeWarnings();
 });
 
+/**
+ * A real admin route, so the fixtures do not teach a URL that resolves nowhere.
+ *
+ * The admin registers entry creation as `/admin/collections/[slug]/create`; the
+ * `/admin/<collection>/new` shape these fixtures once used is not a route.
+ */
+const NEW_ENTRY_HREF = "/admin/collections/posts/create";
+
 const withWidget = (widget: unknown): PluginDefinition =>
   ({
     name: "@acme/p",
@@ -111,7 +119,7 @@ describe("contributed widgets are validated at boot", () => {
     // and nothing else. A plugin authored in JavaScript, or one whose manifest
     // arrives as parsed JSON, passes the JSON round trip with `component: ""`
     // and is then CAST to `PluginAdminWidget` and published -- and
-    // `PluginWidgetGrid` hands that empty path straight to `PluginSlot`, which
+    // The grid hands that empty path straight to `PluginSlot`, which
     // draws the blank dashboard cell making `component` required was supposed
     // to prevent.
     expect(() =>
@@ -264,6 +272,271 @@ describe("contributed widgets are validated at boot", () => {
           id: "acme/posts",
           archetype: "metric",
           query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a contributed action missing its label or href", () => {
+    // A JavaScript plugin or a decoded manifest reaches this check with nothing
+    // enforced by the type. Checking only that the array was non-empty let
+    // `actions: [{}]` through, and the admin drew a blank link with an
+    // undefined destination -- while a REGISTERED widget carrying the same
+    // shortcut was refused. One contract, two channels, one rule.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{}],
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post" }],
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a malformed shortcut even when a component is ALSO supplied", () => {
+    // The per-action rule ran only as the fallback for a widget that described
+    // no component, so naming one skipped it -- and a component on an `actions`
+    // widget is a FALLBACK for an admin too old to draw the archetype, not a
+    // replacement for it. A current admin draws the shortcuts itself, from the
+    // same malformed array the gate declined to read, and renders the blank
+    // link the check beside this one exists to prevent.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          component: "@acme/p/admin#Shortcuts",
+          actions: [{}],
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("still accepts a COMPLETE shortcut list beside a component", () => {
+    // The control for the refusal above. A gate that refused every `actions`
+    // widget carrying a component would satisfy that assertion while making the
+    // fallback -- the whole reason a plugin ships one -- undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          component: "@acme/p/admin#Shortcuts",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("leaves a DATA archetype's component fallback alone when it has no query", () => {
+    // The bound on that refusal. Core draws a queryless archetype from the
+    // declaration unconditionally, so the declaration has to be sound there;
+    // a `metric` missing its query is a card core reports as undrawable, and
+    // the component is then the body that actually renders. Holding the two
+    // halves to one rule would reject a widget which draws correctly today.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          component: "@acme/p/admin#Revenue",
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a query on a queryless archetype, as the registry does", () => {
+    // The registry contract forbids a query on `text`/`actions`, and this
+    // channel accepted one -- so a contributed widget could carry a query the
+    // registry would have refused. Not merely inconsistent: core draws
+    // `actions` from the declaration, so the grid batched a read on every mount
+    // and refetch whose result the declared renderer never looks at.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    // The other queryless archetype, so the rule is the vocabulary's rather
+    // than one arm's.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/note",
+          archetype: "text",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses that query even behind a component fallback", () => {
+    // Same bypass the shortcut rule had: the component short-circuit must not
+    // skip a declaration core will draw from.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          component: "@acme/p/admin#Shortcuts",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).toThrow(NextlyError);
+  });
+
+  it("leaves a DATA archetype's query alone", () => {
+    // The bound. The refusal is the queryless vocabulary's, not a ban on
+    // queries -- a `metric` is drawn FROM one.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a defaultOrder this channel cannot sort by", () => {
+    // The registry refuses a non-finite order; this channel had no check at
+    // all. `NaN` compares false against every value, so a widget carrying one
+    // sorted as equal to whatever it met and the explicit orders around it
+    // stopped holding -- intermittently, depending on the order the array
+    // happened to arrive in, which is the worst way for it to fail.
+    for (const defaultOrder of ["soon", Number.NaN, null, {}]) {
+      expect(() =>
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/shortcuts",
+            archetype: "actions",
+            actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+            defaultOrder,
+          }),
+        ])
+      ).toThrow(NextlyError);
+    }
+  });
+
+  it("accepts a finite order", () => {
+    // The control. A gate refusing every order would satisfy the assertion
+    // above while making the field undeclarable.
+    for (const defaultOrder of [0, -1, 2.5]) {
+      expect(() =>
+        assertAdminWidgets([
+          withWidget({
+            id: "acme/shortcuts",
+            archetype: "actions",
+            actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+            defaultOrder,
+          }),
+        ])
+      ).not.toThrow();
+    }
+  });
+
+  it("accepts a widget that states no order at all", () => {
+    // OMITTED, not `defaultOrder: undefined`. An explicitly undefined value is
+    // refused on every field here, `description` and `icon` included, because
+    // it does not survive the JSON round trip this gate runs -- so writing the
+    // absent case that way would assert the serialization rule rather than
+    // this one.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses a chrome this channel cannot honour", () => {
+    // The registry refuses `chrome: "none"` on an archetype core draws, and on
+    // a value outside the vocabulary. This channel accepted both, so the
+    // documented refusal was true of one channel only -- and the admin then
+    // ignored the value rather than reporting it, which is the shape where an
+    // author sees no card frame, no error, and nothing to search for.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          chrome: "none",
+        }),
+      ])
+    ).toThrow(NextlyError);
+
+    // NOT the vocabulary case. A chrome value this core does not know belongs
+    // to a newer one, and refusing it here would abort the install of a plugin
+    // whose card this admin frames anyway -- the same version boundary the
+    // sizes obey. That check is the registry's.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/thing",
+          component: "@acme/p/admin#Thing",
+          chrome: "borderless",
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("accepts chrome where it IS valid", () => {
+    // The control, both arms. A gate refusing every chrome would satisfy the
+    // assertions above while making the field undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/thing",
+          archetype: "custom",
+          component: "@acme/p/admin#Thing",
+          chrome: "none",
+        }),
+      ])
+    ).not.toThrow();
+
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/revenue",
+          archetype: "metric",
+          query: { source: "collection:posts", op: "count" },
+          chrome: "card",
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("accepts a contributed actions widget whose shortcuts are complete", () => {
+    // The control. A gate that refused every actions widget would satisfy the
+    // assertions above while making the archetype undeclarable.
+    expect(() =>
+      assertAdminWidgets([
+        withWidget({
+          id: "acme/shortcuts",
+          archetype: "actions",
+          actions: [{ label: "New post", href: NEW_ENTRY_HREF }],
         }),
       ])
     ).not.toThrow();

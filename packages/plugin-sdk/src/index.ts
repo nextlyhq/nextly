@@ -452,6 +452,7 @@ export type {
  */
 export {
   WIDGET_SIZES,
+  WIDGET_CHROME,
   WIDGET_HEIGHTS,
   WIDGET_ARCHETYPES,
   WIDGET_OPS,
@@ -460,8 +461,10 @@ export {
   registerWidget,
   registerSource,
   type WidgetDefinition,
+  type WidgetAction,
   type WidgetQuery,
   type WidgetSize,
+  type WidgetChrome,
   type WidgetHeight,
   type WidgetArchetype,
   type DataWidgetArchetype,

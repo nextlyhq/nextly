@@ -62,7 +62,7 @@ export { pageStyleTrace } from "./style-trace";
  * Exported for slot content that PORTALS out of the shell, which the shell cannot reach with
  * `hidden` and `inert` and so has to inform instead.
  */
-export { useShellIsActive } from "./builder-shell";
+export { useShellIsActive } from "./shell-active";
 
 /**
  * The command palette, published here beside the shell because it is a client

@@ -1,0 +1,231 @@
+/**
+ * Reading the queue, as distinct from running it.
+ *
+ * A background job that fails is invisible: there is no request to inspect, no
+ * status code, and no page that went blank. The outcome, the attempt count and
+ * the error are all written to the row and, until this route existed, could
+ * only be read with SQL. So a scheduled release that did not publish looked
+ * exactly like one that was not due yet.
+ *
+ * ## Read-only, deliberately
+ *
+ * No retry, no cancel, no requeue. Those are writes on already-authorized work
+ * and each needs its own decision about who may perform it; shipping them
+ * beside a read would settle those questions by omission. What this closes is
+ * the silent-failure gap, which is the part that costs somebody a morning.
+ *
+ * ## Why it takes the same permission as running the queue
+ *
+ * `lastError` carries whatever the handler threw — a database message, a remote
+ * endpoint's response — which is internal detail rather than content. There is
+ * no seeded `read-background-jobs`, and inventing one here would change what
+ * preset roles grant as a side effect of adding a screen. Reusing
+ * `manage-background-jobs` keeps that a separate, deliberate decision.
+ *
+ * @module api/jobs-list-route
+ */
+
+import { container } from "../di";
+import { jobDisplayStatus } from "../domains/jobs/job-display-status";
+import type { JobsRepository } from "../domains/jobs/jobs-repository";
+import { NextlyError } from "../errors";
+import { getCachedNextly } from "../init";
+import { JOB_STATES, type JobState } from "../schemas/jobs";
+import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
+
+import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
+import type { JobListRow } from "./jobs-list-types";
+import { respondList } from "./response-shapes";
+import { requireRouteAnyPermission } from "./route-auth";
+import { withErrorHandler } from "./with-error-handler";
+
+/**
+ * How many rows one read returns.
+ *
+ * A ceiling rather than a page size: this endpoint answers "what recently
+ * happened", and a caller wanting more than this wants an archive, which the
+ * seven-day prune means the table cannot supply anyway.
+ */
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+/**
+ * The task to restrict the window to, or `undefined` for every task.
+ *
+ * Read as an opaque string and passed to the query, never interpolated: the
+ * repository parameterises it. An empty value is "no filter" rather than a task
+ * named "", which is what a form submitting a blank field sends.
+ */
+function readSlug(request: Request): string | undefined {
+  const raw = new URL(request.url).searchParams.get("slug");
+  return raw === null || raw.length === 0 ? undefined : raw;
+}
+
+/**
+ * The stored states to restrict the window to, or `undefined` for every state.
+ *
+ * A caller asking "did anything fail" must be able to ask the DATABASE. This
+ * endpoint answers "the most recent N", so a caller that fetched the window and
+ * looked for failures inside it would find none whenever N healthy jobs ran
+ * more recently — and would report that nothing failed, which is the one wrong
+ * answer such a question has.
+ *
+ * An unrecognised name is REFUSED, not dropped. Dropping looks conservative and
+ * inverts the request: drop every name in `?state=faield` and the filter is
+ * gone, so a caller asking to narrow gets a successful read of every state
+ * instead — the widest possible answer to a request for a narrower one, with a
+ * 200 on it. Refusing keeps a typo a typo.
+ */
+function readStates(request: Request): JobState[] | undefined {
+  const raw = new URL(request.url).searchParams.get("state");
+  if (raw === null || raw.length === 0) return undefined;
+  const asked = raw.split(",").map(value => value.trim());
+  const unknown = asked.filter(
+    value => !JOB_STATES.some(state => state === value)
+  );
+  if (unknown.length > 0) {
+    throw NextlyError.validation({
+      errors: unknown.map(value => ({
+        path: "state",
+        code: "unknown_job_state",
+        message: `Unknown job state "${value}". Known states: ${JOB_STATES.join(", ")}.`,
+      })),
+      logContext: { unknown, known: [...JOB_STATES] },
+    });
+  }
+  return JOB_STATES.filter(state => asked.includes(state));
+}
+
+/** Clamped rather than refused: a caller asking for too much gets the ceiling. */
+function readLimit(request: Request): number {
+  const raw = new URL(request.url).searchParams.get("limit");
+  if (raw === null) return DEFAULT_LIMIT;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LIMIT;
+  return Math.min(parsed, MAX_LIMIT);
+}
+
+/**
+ * GET /api/jobs — the most recently touched jobs.
+ *
+ * Each row carries its DERIVED status beside the stored state, because the
+ * stored one cannot distinguish a job that is retrying from one that has never
+ * run — both are `pending` — and that is the distinction an operator needs
+ * most. Deriving it here rather than in each client keeps one answer.
+ *
+ * The `input` column is deliberately NOT returned. It is arbitrary caller data
+ * that may carry anything the enqueuing code put there, and a list view has no
+ * use for it.
+ */
+export const listJobsRoute = withErrorHandler(async (request: Request) => {
+  /*
+   * `requireRouteAnyPermission`, not `requireAnyPermission`. The latter RETURNS
+   * an `ErrorResponse` rather than throwing, so awaiting it and discarding the
+   * result authorizes nobody — an unauthorized caller walks straight past it to
+   * the read. The throwing wrapper exists so a route cannot make that mistake,
+   * and it is the one every other authenticated route here uses.
+   */
+  await requireRouteAnyPermission(request, [
+    { action: "manage", resource: "background-jobs" },
+  ]);
+
+  await getCachedNextly();
+  const repository = container.get<JobsRepository>("jobsRepository");
+  const limit = readLimit(request);
+  /*
+   * One row beyond the limit, as the versions window does. Its PRESENCE is what
+   * proves more exists; inferring truncation from a full page instead would
+   * claim more whenever the queue length is an exact multiple of the limit, and
+   * an operator reading "showing the most recent 50 of more" would go looking
+   * for jobs that are not there.
+   */
+  const slug = readSlug(request);
+  /*
+   * The slug is applied by the QUERY, not after it.
+   *
+   * This endpoint returns the most recent N rows, so a caller that fetched the
+   * global window and filtered it afterwards would be filtering rows a busier
+   * task had already crowded out: its own task's failure would be missing from
+   * a result that looks complete. The filter has to happen before the limit or
+   * it does not happen at all.
+   */
+  const states = readStates(request);
+  const window = await repository.listRecent({
+    limit: limit + 1,
+    ...(slug === undefined ? {} : { slug }),
+    ...(states === undefined ? {} : { states }),
+  });
+  const hasNext = window.length > limit;
+  const rows = hasNext ? window.slice(0, limit) : window;
+  const now = new Date();
+
+  // Annotated with the PUBLISHED row type, so the shape this route emits and
+  // the shape the admin is typed against are one declaration. A field added
+  // here without adding it there is a compile error rather than a property the
+  // client renders as `undefined`.
+  const items: JobListRow[] = rows.map(row => ({
+    id: row.id,
+    slug: row.slug,
+    state: row.state,
+    status: jobDisplayStatus(row, now),
+    attemptCount: row.attemptCount,
+    lastError: row.lastError,
+    runAt: row.runAt,
+    nextAttemptAt: row.nextAttemptAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  }));
+
+  /*
+   * The canonical list envelope, not a shape invented for this endpoint. A
+   * generic consumer reads `items` and `meta` from every list in this API, and
+   * a bespoke `{ jobs }` would be the one it cannot.
+   *
+   * `total` is the page's own length and the page count is 1, stated honestly
+   * rather than fabricated: this endpoint answers "the most recent N", the seam
+   * it reads through offers no count, and a second query for one would produce
+   * a total that can disagree with the page beside it. A caller needing true
+   * pagination should ask for it rather than infer it from a number that looks
+   * like one.
+   *
+   * `hasNext` is the one field a probe row CAN answer honestly, and it is the
+   * one that matters here: without it a truncated monitor view is
+   * indistinguishable from a complete one, which is how an operator concludes
+   * that the failure they are looking for never happened.
+   */
+  return respondList(
+    items,
+    {
+      total: items.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext,
+      hasPrev: false,
+    },
+    {
+      headers: {
+        // Permission-scoped, and `lastError` is arbitrary internal text.
+        // Without this a browser or shared cache can replay the body after
+        // logout, or to another session, without authorization running again.
+        ...PRIVATE_NO_STORE_HEADERS,
+        /*
+         * Opt out of the global timezone rewrite, as the webhook delivery
+         * endpoints do for the same reason. That pass rewrites every
+         * date-looking STRING in a payload by value, and `lastError` is
+         * whatever a handler threw — a message quoting a timestamp is exactly
+         * the debugging record an operator is inspecting, and it must arrive
+         * as it was recorded rather than shifted into the installation's
+         * timezone.
+         *
+         * The cost is that this row's own timestamps arrive in UTC rather than
+         * pre-shifted, which is what the pass itself falls back to when no
+         * timezone is configured and what the webhook delivery endpoints
+         * already deliver. A client renders them in the viewer's zone; no
+         * client can recover an error string the server rewrote.
+         */
+        [SKIP_TIMEZONE_FORMAT_HEADER]: "1",
+      },
+    }
+  );
+});

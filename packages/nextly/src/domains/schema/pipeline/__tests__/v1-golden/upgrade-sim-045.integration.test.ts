@@ -134,6 +134,15 @@ const POST_045_TABLES = [
   // disagrees between any two of them is re-proposed on every reconcile rather
   // than settling to silence.
   "nextly_document_lock",
+  // One reader's dashboard arrangement, post-0.45 like the tables above: an
+  // existing install gains it on upgrade, so its CREATE TABLE is legitimate
+  // rather than phantom. The pass-2 assertion below is what proves the
+  // declaration round-trips — this table is reached through the core schema,
+  // the dialect bundles AND the SQLite bootstrap DDL, and a shape that
+  // disagrees between any two of them is re-proposed on every reconcile
+  // instead of settling to silence. It declares no index, so the CREATE TABLE
+  // is the whole of what an upgrade emits for it.
+  "nextly_widget_layout",
 ];
 
 // The post-045 names are static identifiers, but escape defensively so the

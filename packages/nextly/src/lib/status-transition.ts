@@ -15,6 +15,26 @@
 export type PublishTransition = "publish" | "unpublish";
 
 /**
+ * The two values the draft/published lifecycle admits.
+ *
+ * Stated once because two callers need to REJECT anything else, and a rejection
+ * written from memory is a second answer to this question. Note the asymmetry
+ * with {@link resolvePublishTransition}, which is deliberately permissive: it
+ * treats every non-`"published"` value as an unpublish so a coerced `0`/`false`
+ * cannot slip a takedown past the gate. That is the right reading for a gate
+ * deciding which permission a write needs, and the wrong one for a caller
+ * deciding whether a write is well formed at all.
+ */
+export const LIFECYCLE_STATUSES = ["draft", "published"] as const;
+
+/** Whether a value is one the lifecycle can actually hold. */
+export function isLifecycleStatus(
+  value: unknown
+): value is (typeof LIFECYCLE_STATUSES)[number] {
+  return (LIFECYCLE_STATUSES as readonly unknown[]).includes(value);
+}
+
+/**
  * The publish-lifecycle operation a status change amounts to, or `null` when
  * the change is an ordinary update.
  *

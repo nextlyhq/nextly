@@ -18,10 +18,16 @@ import { coreDraws } from "../outcome";
 import { WidgetGrid } from "../WidgetGrid";
 
 let mockBranding: AdminBranding | undefined;
+let mockBrandingStatus: {
+  isPending: boolean;
+  isUnavailable: boolean;
+  isBrandingUnavailable: boolean;
+} = { isPending: false, isUnavailable: false, isBrandingUnavailable: false };
 let granted: string[] = [];
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => mockBranding,
+  useBrandingStatus: () => mockBrandingStatus,
 }));
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: () => ({
@@ -102,6 +108,55 @@ afterEach(() => {
   mockBranding = undefined;
   vi.restoreAllMocks();
 });
+
+/**
+ * Live regions the GRID owns, excluding the one dnd-kit contributes.
+ *
+ * dnd-kit's `DndContext` renders exactly one hidden `role="status"` region of
+ * its own, and it is not optional: it is what narrates pick up, move over, drop
+ * and cancel to a screen reader, which is the whole reason a drag is usable
+ * without sight. Counting it would make "the grid announces once" and
+ * "the drag announces at all" mutually exclusive.
+ *
+ * Excluded BY ITS OWN ID rather than by loosening the count to two. A bare
+ * `toHaveLength(2)` would keep passing if the grid grew a second announcer of
+ * its own and dnd-kit's disappeared, which is the pair of mistakes this
+ * invariant exists to catch.
+ */
+/**
+ * A `POST /dashboard/query` mock that answers the query it was ASKED.
+ *
+ * Positional fixtures — an array of results lined up with the widgets as
+ * declared — encode the batch's ORDER into every test that uses one. The batch
+ * is built in a stable identity order rather than in display order, so that
+ * moving a card cannot change the query key and re-issue every request; the
+ * order is therefore an implementation detail, and a fixture that depends on it
+ * fails for a reason that has nothing to do with what it is testing.
+ *
+ * Keyed by source, so each widget gets its own number however the batch is
+ * arranged. A source the caller did not name comes back as a failed slot rather
+ * than as a silent zero, so a test that mis-names one is told.
+ */
+function mockCountsBySource(counts: Record<string, number>): void {
+  vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => {
+    const queries = (body as { queries: Array<{ source: string }> }).queries;
+    return {
+      results: queries.map(query =>
+        query.source in counts
+          ? { ok: true, result: { op: "count", total: counts[query.source] } }
+          : { ok: false, error: `no fixture for ${query.source}` }
+      ),
+    };
+  });
+}
+
+function gridLiveRegions(container: HTMLElement): Element[] {
+  return [
+    ...container.querySelectorAll(
+      '[aria-live], [role="status"], [role="alert"]'
+    ),
+  ].filter(node => !node.id.startsWith("DndLiveRegion"));
+}
 
 describe("WidgetGrid — collection and gating", () => {
   it("renders nothing when no plugin contributes a widget", () => {
@@ -451,6 +506,133 @@ describe("WidgetGrid — collection and gating", () => {
     });
   });
 
+  it("shows an actions card's empty state when the reader may use none of them", async () => {
+    // The declaration is valid and carries shortcuts; the PERMISSION FILTER
+    // empties it. A drawability check that re-tested the length could not tell
+    // that apart from a widget declaring none, so it reported a malformed
+    // widget and made the card's own empty state unreachable.
+    mockBranding = brandingWith([
+      {
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        actions: [
+          {
+            label: "Invite user",
+            href: "/admin/users/new",
+            requiredPermission: "create-users",
+          },
+        ],
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("widget-cell-core/shortcuts")
+      ).toBeInTheDocument()
+    );
+    expect(screen.getByTestId("widget-actions-empty")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/declares no shortcuts/i)
+    ).not.toBeInTheDocument();
+  });
+
+  it("draws an actions card through the HOST even when a component is offered", async () => {
+    // `actions` is queryless by design, so a drawability test that asked "does
+    // it declare a query" called every actions widget undrawable and handed one
+    // carrying a component fallback to that component -- bypassing the host
+    // renderer and, with it, the per-item permission gating.
+    registerComponents({ "@acme/admin#Shortcuts": () => <div>plugin ui</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        component: "@acme/admin#Shortcuts",
+        actions: [{ label: "New post", href: "/admin/posts/new" }],
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-action")).toHaveTextContent("New post")
+    );
+    expect(screen.queryByText("plugin ui")).not.toBeInTheDocument();
+  });
+
+  it("STILL prefers the component when core cannot draw the declaration", async () => {
+    // The control for the change above: a metric with no query is genuinely
+    // undrawable, and the contributed component remains the only thing that can
+    // draw that card. Removing the query test must not have removed this.
+    registerComponents({ "@acme/admin#Panel": () => <div>panel body</div> });
+    mockBranding = brandingWith([
+      {
+        id: "acme/queryless",
+        title: "Queryless",
+        archetype: "metric",
+        component: "@acme/admin#Panel",
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByText("panel body")).toBeInTheDocument()
+    );
+  });
+
+  it("draws a TABLE end to end, headed by the columns the server described", async () => {
+    // The whole path for the third host-drawn archetype: a declaration with no
+    // component, its query batched, the `list` arm validated with its column
+    // descriptions intact, and the headings taken from those rather than from
+    // `select` -- which is what keeps a field the reader may not see out of the
+    // header row.
+    mockBranding = brandingWith([
+      {
+        id: "acme/posts",
+        title: "Recent posts",
+        archetype: "table",
+        defaultSize: "lg",
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title", "publishedAt"],
+          limit: 5,
+        },
+      },
+    ]);
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ title: "First post", publishedAt: "yesterday" }],
+            fields: [
+              { name: "title", label: "Title" },
+              { name: "publishedAt", label: "Published at" },
+            ],
+          },
+        },
+      ],
+    });
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-table")).toBeInTheDocument()
+    );
+    expect(screen.getByText("Published at")).toBeInTheDocument();
+    expect(screen.getByText("First post")).toBeInTheDocument();
+    // The label reached the browser through the batch parser, which rebuilds a
+    // list result from the fields it names -- so this also proves the
+    // descriptions survive that boundary.
+    expect(screen.queryByText("publishedAt")).not.toBeInTheDocument();
+  });
+
   it("puts a registered widget's query in the same batch as a contributed one", async () => {
     mockBranding = {
       plugins: [
@@ -477,21 +659,30 @@ describe("WidgetGrid — collection and gating", () => {
         },
       ],
     } as unknown as AdminBranding;
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 1 } },
-        { ok: true, result: { op: "count", total: 2 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 1,
+      "collection:pages": 2,
     });
 
     renderGrid();
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
-      queries: [
+    // The SET, not the sequence. The batch is built in a stable identity order
+    // rather than in display order, so that moving a card cannot change the
+    // query key and re-issue every request -- which makes the sequence an
+    // implementation detail. What this test is about is that both channels land
+    // in ONE request, and that survives whatever order they are sent in.
+    const sent = (
+      vi.mocked(protectedApi.post).mock.calls[0][1] as {
+        queries: Array<{ source: string; op: string }>;
+      }
+    ).queries;
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(
+      expect.arrayContaining([
         { source: "collection:posts", op: "count" },
         { source: "collection:orders", op: "count" },
-      ],
-    });
+      ])
+    );
   });
 
   it("gates a registered widget on its permission like any other", () => {
@@ -666,11 +857,9 @@ describe("WidgetGrid — batching", () => {
         query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 12 } },
-        { ok: true, result: { op: "count", total: 34 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 12,
+      "collection:pages": 34,
     });
 
     renderGrid();
@@ -921,9 +1110,7 @@ describe("WidgetGrid — accessibility", () => {
     await waitFor(() =>
       expect(screen.getAllByTestId("widget-card-error")).toHaveLength(3)
     );
-    expect(
-      container.querySelectorAll('[aria-live], [role="status"], [role="alert"]')
-    ).toHaveLength(1);
+    expect(gridLiveRegions(container)).toHaveLength(1);
   });
 
   it("counts a card that cannot RENDER as failed, not as updated", async () => {
@@ -968,14 +1155,23 @@ describe("WidgetGrid — accessibility", () => {
         /1 of 3 widgets updated, 2 failed/i
       )
     );
-    // Two queries for three widgets, and the positional keying still lands each
-    // result on the widget that asked for it.
-    expect(vi.mocked(protectedApi.post).mock.calls[0][1]).toEqual({
-      queries: [
+    // Two queries for three widgets -- the undrawable one is never asked -- and
+    // the keying still lands each result on the widget that asked for it. The
+    // SET rather than the sequence: the batch is built in a stable identity
+    // order rather than in display order, so which of the two goes first is an
+    // implementation detail and not what this test is about.
+    const sent = (
+      vi.mocked(protectedApi.post).mock.calls[0][1] as {
+        queries: Array<{ source: string; op: string }>;
+      }
+    ).queries;
+    expect(sent).toHaveLength(2);
+    expect(sent).toEqual(
+      expect.arrayContaining([
         { source: "collection:posts", op: "count" },
         { source: "collection:pages", op: "count" },
-      ],
-    });
+      ])
+    );
   });
 
   it("has exactly ONE live region for the whole grid", async () => {
@@ -993,18 +1189,16 @@ describe("WidgetGrid — accessibility", () => {
         query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 1 } },
-        { ok: true, result: { op: "count", total: 2 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 1,
+      "collection:pages": 2,
     });
 
     const { container } = renderGrid();
     await waitFor(() =>
       expect(screen.getByTestId("widget-cell-posts")).toHaveTextContent("1")
     );
-    expect(container.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(gridLiveRegions(container)).toHaveLength(1);
   });
 
   it("announces once for the batch, not once per widget", async () => {
@@ -1022,11 +1216,9 @@ describe("WidgetGrid — accessibility", () => {
         query: { source: "collection:pages", op: "count" },
       },
     ]);
-    vi.mocked(protectedApi.post).mockResolvedValue({
-      results: [
-        { ok: true, result: { op: "count", total: 1 } },
-        { ok: true, result: { op: "count", total: 2 } },
-      ],
+    mockCountsBySource({
+      "collection:posts": 1,
+      "collection:pages": 2,
     });
 
     renderGrid();
@@ -1074,5 +1266,43 @@ describe("WidgetGrid — accessibility", () => {
     expect(
       screen.getByRole("region", { name: /dashboard widgets/i })
     ).toBeInTheDocument();
+  });
+});
+
+describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", () => {
+  beforeEach(() => {
+    mockBranding = {};
+    mockBrandingStatus = {
+      isPending: false,
+      isUnavailable: false,
+      isBrandingUnavailable: false,
+    };
+  });
+
+  it("says nothing when the workspace settled and declared no widgets", () => {
+    // The genuinely empty case, and the control for the two below: an app with
+    // no widgets should render no grid rather than a permanent skeleton.
+    const { container } = renderGrid();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("holds space while the workspace query is still in flight", () => {
+    // Every card on the dashboard now arrives through this query. Treating a
+    // PENDING response as "no widgets" blanked the entire page on first paint
+    // and on any slow request -- the sections used to mount immediately and
+    // draw their own skeletons, so the regression was invisible to every test
+    // that supplied widgets.
+    mockBrandingStatus = { ...mockBrandingStatus, isPending: true };
+    renderGrid();
+    expect(screen.getByTestId("widget-grid-loading")).toBeInTheDocument();
+  });
+
+  it("says so when the workspace never answered", () => {
+    // Distinct from pending, and distinct from empty. Silence here told the
+    // reader their dashboard has no content, when what happened is that we
+    // could not find out.
+    mockBrandingStatus = { ...mockBrandingStatus, isUnavailable: true };
+    renderGrid();
+    expect(screen.getByTestId("widget-grid-unavailable")).toBeInTheDocument();
   });
 });

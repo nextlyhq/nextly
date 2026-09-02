@@ -240,6 +240,15 @@ describe("safeFetch", () => {
     ).rejects.toMatchObject({
       name: "SafeFetchError",
       reason: "response-too-large",
+      /*
+       * The STATUS travels with it, and this is the real path rather than a
+       * hand-built error. A compressed body can fit the cap on the wire and
+       * exceed it decoded — a genuine oversized object on a genuine 2xx — and a
+       * caller that classifies "too large" only when it can see a successful
+       * status would otherwise treat this one as unclassifiable and report a
+       * storage failure instead of a size one.
+       */
+      status: 200,
     });
   });
 

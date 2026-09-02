@@ -59,10 +59,12 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   type PutObjectCommandInput,
+  type GetObjectCommandOutput,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type {
+  StorageReadOptions,
   IStorageAdapter,
   UploadOptions,
   UploadResult,
@@ -71,6 +73,8 @@ import type {
   FileMetadata,
   BulkDeleteResult,
 } from "nextly/storage";
+import { resolveReadBounds } from "nextly/storage/fetch-stored-bytes";
+import { StorageReadTooLargeError } from "nextly/storage/read-errors";
 
 import type { S3StorageConfig, ResolvedS3Config } from "./types";
 
@@ -84,6 +88,35 @@ import type { S3StorageConfig, ResolvedS3Config } from "./types";
  * Implements the IStorageAdapter interface for AWS S3 and S3-compatible services.
  * Provides full support for uploads, downloads, signed URLs, and client-side uploads.
  */
+/**
+ * The SDK request options carrying the caller's deadline, or none.
+ *
+ * A free function rather than a branch inside `read`, because it is the only
+ * part of that method with nothing to do with telling an absent key apart from
+ * an unreachable bucket — which is the distinction a reader has to hold in
+ * their head there.
+ *
+ * `AbortSignal.timeout` rather than a controller and a `setTimeout`: it needs no
+ * clearing, so it cannot leak a timer when the read resolves first. The signal
+ * covers the BODY as well as the request, because the SDK threads it through
+ * the response stream — and a backend that answers headers promptly and then
+ * stalls mid-transfer is exactly the case a request-only deadline misses.
+ */
+function abortAfter(options?: StorageReadOptions): {
+  abortSignal: AbortSignal;
+} {
+  /*
+   * ALWAYS a signal, defaulted through the shared resolver.
+   * `StorageReadOptions` promises the deadline whether or not a caller names
+   * one, and the URL-backed adapters keep that promise by inheriting
+   * `safeFetch`'s. Returning nothing here left the no-options read — which is
+   * what the media pipeline does — able to hang on a stalled bucket forever.
+   */
+  return {
+    abortSignal: AbortSignal.timeout(resolveReadBounds(options).timeoutMs),
+  };
+}
+
 export class S3StorageAdapter implements IStorageAdapter {
   private client: S3Client;
   private resolvedConfig: ResolvedS3Config;
@@ -413,6 +446,90 @@ export class S3StorageAdapter implements IStorageAdapter {
   }
 
   /**
+   * Read a stored object back as bytes, or `null` when it is not there.
+   *
+   * The contract declares this OPTIONAL and, until now, no adapter supplied
+   * it — so a caller reaching for `adapter.read` got `undefined` and fell
+   * through whatever branch followed. An optional member nothing implements is
+   * a contract that reads as a capability and behaves as an absence.
+   *
+   * BUFFERS rather than streams, because that is the declared return type and
+   * widening it here would make this adapter answer a different question from
+   * its siblings. That bounds what it should be used for: an asset the server
+   * must serve from its own origin — a font file, a small document — rather
+   * than arbitrarily large media, which belongs behind {@link getSignedUrl} or
+   * a public URL. A streaming variant is a separate contract member, not a
+   * quiet change to this one.
+   *
+   * `null` for a missing key rather than a throw, matching
+   * {@link getMetadata}: absence is an ordinary answer about the bucket, while
+   * a credential or network failure is not, so only the first is folded into
+   * the return value.
+   *
+   * @param filePath - Storage path/key
+   * @returns The object's bytes, or `null` when no such key exists
+   */
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.resolvedConfig.bucket,
+        Key: filePath,
+      });
+
+      /*
+       * The caller's deadline reaches the SDK, or it is advertised and inert.
+       * `StorageReadOptions` promises a bound, and the URL-backed adapters keep
+       * it by handing `timeoutMs` to `safeFetch`; without this the same option
+       * does nothing here, so a stalled bucket holds the read open past a
+       * deadline the caller was told applied — the worst kind of option, one
+       * that validates and then has no effect.
+       *
+       * Aborting covers the BODY as well as the request. `transformToByteArray`
+       * pulls the stream after `send` resolves, and a backend that answers
+       * headers promptly and then stalls mid-transfer is exactly the case a
+       * request-only timeout misses.
+       */
+      const response = await this.client.send(command, abortAfter(options));
+      /*
+       * An empty body is not a missing object, and the two must not collapse.
+       * `GetObject` on a zero-byte key succeeds with no stream to transform,
+       * so returning `null` here would report a stored empty file as absent —
+       * and a caller deleting "missing" keys would then delete a real one.
+       */
+      if (response.Body === undefined) return Buffer.alloc(0);
+
+      /*
+       * Refused on the LENGTH the store reports, before the body is pulled
+       * down. `transformToByteArray` buffers the whole object, so a caller that
+       * knows its own limit has to be able to stop an oversized read rather
+       * than discover the size after paying for it — which is what an
+       * attachment path does when it checks a size only after buffering.
+       */
+      const cap = resolveReadBounds(options).maxBytes;
+      // Cheap refusal first, where the store told us the size up front.
+      this.refuseOverCap(filePath, response.ContentLength, cap);
+      return await this.readCapped(filePath, response.Body, cap);
+    } catch (error: unknown) {
+      /*
+       * Only an OBJECT-level absence becomes `null`. `isNotFoundError` treats
+       * any 404 as missing, and `NoSuchBucket` is a 404 — so a bucket that was
+       * deleted, renamed or mistyped would report every key in it as absent,
+       * which is the configuration failure this method's contract exists to
+       * tell apart from an ordinary miss. Named explicitly rather than by
+       * status, because the status cannot separate them.
+       */
+      if (error instanceof Error && error.name === "NoSuchBucket") throw error;
+      if (this.isNotFoundError(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Generate signed URL for temporary private file access.
    *
    * Creates a pre-signed GetObject URL that grants temporary read access
@@ -523,6 +640,85 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @param error - Error to check
    * @returns true if error indicates file not found
    */
+  /**
+   * The object's bytes, refusing once more than `cap` have actually arrived.
+   *
+   * `ContentLength` is OPTIONAL in the SDK's response type, and this adapter
+   * explicitly supports MinIO, R2 and other compatible services — any of which
+   * may omit it or report it wrongly. A preflight check against metadata is
+   * therefore a courtesy that fails OPEN: trusting it alone leaves the cap
+   * unenforced exactly where an unusual backend is involved, which is where a
+   * caller most needs it.
+   *
+   * Counted while consuming, so an oversized body is abandoned partway rather
+   * than after it has all been buffered — the cap exists to bound memory, and
+   * one applied after `transformToByteArray` has already spent it.
+   *
+   * Falls back to buffering when the body is not async-iterable, which the SDK
+   * types permit. Stated rather than hidden: on that path the cap bounds what a
+   * caller RECEIVES rather than what the process allocates.
+   */
+  private async readCapped(
+    filePath: string,
+    body: NonNullable<GetObjectCommandOutput["Body"]>,
+    cap: number
+  ): Promise<Buffer> {
+    /*
+     * Probed rather than assumed. The SDK types the body as a union whose Node
+     * member is async-iterable and whose browser members are not, and this
+     * package supports compatible services whose transport may differ — so the
+     * capability is read off the value in hand instead of from the type.
+     */
+    const iterable = body as Partial<AsyncIterable<Uint8Array>>;
+    if (typeof iterable[Symbol.asyncIterator] !== "function") {
+      const whole = Buffer.from(await body.transformToByteArray());
+      if (whole.byteLength > cap) {
+        throw new StorageReadTooLargeError(filePath, cap, whole.byteLength);
+      }
+      return whole;
+    }
+
+    const chunks: Buffer[] = [];
+    let received = 0;
+    for await (const chunk of body as AsyncIterable<Uint8Array>) {
+      received += chunk.byteLength;
+      if (received > cap) {
+        throw new StorageReadTooLargeError(filePath, cap, received);
+      }
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
+  /**
+   * Refuse a read whose object is already known to exceed the caller's cap.
+   *
+   * Its own method rather than three conditions inside `read`, because the
+   * decision has nothing to do with the surrounding error handling and reads
+   * as noise there — and because `read`'s branching is the part a reviewer has
+   * to hold in their head to check the absent-versus-unavailable distinction.
+   *
+   * Both `undefined` cases mean "no opinion" and pass: a caller that named no
+   * cap has none, and a store that reported no length gives nothing to compare.
+   * The second is deliberately permissive — refusing an unmeasured object would
+   * reject valid reads whenever S3 omits the header.
+   */
+  private refuseOverCap(
+    filePath: string,
+    declared: number | undefined,
+    cap: number | undefined
+  ): void {
+    if (cap === undefined || declared === undefined || declared <= cap) return;
+    /*
+     * The SHARED refusal rather than a generic internal error, because callers
+     * act on the difference. The email attachment path answers an over-cap read
+     * with a size error the author can do something about; anything else is
+     * wrapped as an opaque storage failure, so throwing `internal` here would
+     * turn a fixable refusal into one that tells them nothing.
+     */
+    throw new StorageReadTooLargeError(filePath, cap, declared);
+  }
+
   private isNotFoundError(error: unknown): boolean {
     if (error && typeof error === "object") {
       const e = error as {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { validateWidgetDefinition } from "../definition";
+import { validateWidgetDefinition, widgetValueProblem } from "../definition";
 
 const valid = {
   id: "core/recent-entries",
@@ -114,15 +114,94 @@ describe("validateWidgetDefinition", () => {
       })
     ).toThrow(/query is only valid for/);
 
+    // Carries its shortcuts, so it reaches the QUERY rule rather than being
+    // refused earlier for describing an empty card. Isolating the rule under
+    // test is the point: without them this asserts the actions rule instead and
+    // the query rule goes unexercised.
     expect(() =>
       validateWidgetDefinition({
         id: "core/shortcuts",
         title: "Shortcuts",
         archetype: "actions",
         defaultSize: "md",
+        actions: [{ label: "New post", href: "/admin/posts/new" }],
         query: { source: "collection:posts", op: "count", limit: 5 },
       })
     ).toThrow(/query is only valid for/);
+  });
+
+  it("requires an actions widget to carry its shortcuts", () => {
+    // An `actions` widget IS its list, so an empty one describes an empty card.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+      })
+    ).toThrow(/requires a non-empty actions array/);
+  });
+
+  it("forbids actions on an archetype that cannot draw them", () => {
+    // The other direction, the same reading `component` takes: shortcuts on a
+    // metric describe something nothing will draw -- accepted at every layer,
+    // rendering nothing, reporting nothing.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/posts",
+        title: "Posts",
+        archetype: "metric",
+        defaultSize: "sm",
+        query: { source: "collection:posts", op: "count" },
+        actions: [{ label: "New post", href: "/admin/posts/new" }],
+      })
+    ).toThrow(/only valid for archetype "actions"/);
+  });
+
+  it("requires each shortcut to carry a label and an href", () => {
+    // Neither has a sensible default, and a blank one is a shortcut that looks
+    // broken rather than absent.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        actions: [{ label: "   ", href: "/admin/posts/new" }],
+      })
+    ).toThrow(/requires a non-empty label/);
+
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        actions: [{ label: "New post", href: "" }],
+      })
+    ).toThrow(/requires a non-empty href/);
+  });
+
+  it("accepts a well-formed actions widget", () => {
+    // The positive control. A validator that refused every actions widget would
+    // satisfy all three assertions above.
+    expect(() =>
+      validateWidgetDefinition({
+        id: "core/shortcuts",
+        title: "Shortcuts",
+        archetype: "actions",
+        defaultSize: "md",
+        actions: [
+          { label: "New post", href: "/admin/posts/new" },
+          {
+            label: "Docs",
+            href: "https://nextly.dev/docs",
+            external: true,
+            requiredPermission: "read-docs",
+          },
+        ],
+      })
+    ).not.toThrow();
   });
 
   it("still allows a query on the custom archetype", () => {
@@ -166,10 +245,28 @@ describe("defaultHeight is checked against the height vocabulary", () => {
     ).toThrow(/defaultHeight must be one of short, tall/);
   });
 
-  it("refuses a non-string height", () => {
+  it("refuses a non-string height, on SHAPE rather than vocabulary", () => {
+    // The shape rule is shared by both declaration channels — a height is a
+    // string in every version — so it is checked before the closed vocabulary,
+    // which is the registry's alone. The message says which of the two refused.
     expect(() =>
       validateWidgetDefinition({ ...valid, defaultHeight: 2 })
-    ).toThrow(/defaultHeight must be one of/);
+    ).toThrow(/defaultHeight, when given, must be a string/);
+  });
+
+  it("refuses a BLANK height", () => {
+    // Blank names no height in any version, so it is shape rather than
+    // vocabulary — and it is refused rather than read as absent, because the
+    // two channels disagreed about which it was.
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultHeight: "" })
+    ).toThrow(/defaultHeight, when given, must not be empty/);
+  });
+
+  it("refuses a BLANK size for the same reason", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...valid, defaultSize: "" })
+    ).toThrow(/defaultSize, when given, must not be empty/);
   });
 });
 
@@ -201,5 +298,137 @@ describe("a custom widget's component must be able to resolve", () => {
     expect(() =>
       validateWidgetDefinition({ ...custom, component: "   " })
     ).toThrow(/requires a component path/);
+  });
+});
+
+describe("defaultOrder places a widget without depending on which channel it came through", () => {
+  const base = {
+    id: "core/notes",
+    title: "Notes",
+    archetype: "text" as const,
+    defaultSize: "md" as const,
+  };
+
+  it("accepts a definition that omits it", () => {
+    // The control, and the compatibility bound: every widget that exists today
+    // declares none, so an absent value must stay valid.
+    expect(() => validateWidgetDefinition(base)).not.toThrow();
+  });
+
+  it("accepts any finite number, negative and fractional included", () => {
+    // Not an index. A caller inserting between two neighbours should not have
+    // to renumber them, which is the whole reason this is a number and not a
+    // position.
+    for (const defaultOrder of [0, 3, -1, 1.5]) {
+      expect(() =>
+        validateWidgetDefinition({ ...base, defaultOrder })
+      ).not.toThrow();
+    }
+  });
+
+  it("refuses a non-finite number", () => {
+    // `1e400` is valid JSON and parses to Infinity, so this is reachable from a
+    // decoded manifest rather than only from a test double. An Infinity sort
+    // key is not a diagnosable position -- it silently pins the card to one end
+    // and compares equal to every other Infinity.
+    for (const defaultOrder of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        validateWidgetDefinition({ ...base, defaultOrder })
+      ).toThrow();
+    }
+  });
+
+  it("refuses a value that is not a number at all", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...base, defaultOrder: "1" })
+    ).toThrow();
+  });
+});
+
+describe("chrome decides whether the HOST frames the widget", () => {
+  const custom = {
+    id: "core/team",
+    title: "Team",
+    archetype: "custom" as const,
+    defaultSize: "lg" as const,
+    component: "core#TeamSummary",
+  };
+
+  it("defaults to being framed by leaving it unstated", () => {
+    // The compatibility bound: every widget shipping today states nothing and
+    // must keep the card it has.
+    expect(() => validateWidgetDefinition(custom)).not.toThrow();
+  });
+
+  it("lets a CUSTOM widget decline the frame", () => {
+    // A `custom` widget supplies its own component, so it can already be a
+    // designed surface -- a section with its own heading and rules. Framing one
+    // draws a second heading around the first.
+    expect(() =>
+      validateWidgetDefinition({ ...custom, chrome: "none" })
+    ).not.toThrow();
+  });
+
+  it("refuses to unframe an archetype CORE draws", () => {
+    // Core fills a metric/list/table/actions/text body and the card IS that
+    // body's surface -- its title, its footer, its busy state. Unframed, the
+    // content has no heading and nothing owning its states.
+    //
+    // The fixture deliberately omits `component`: spreading the custom one in
+    // made every case throw on `component is only valid for archetype "custom"`
+    // instead, so the assertion passed with no chrome rule present at all. The
+    // MESSAGE is asserted for the same reason -- `toThrow()` alone cannot tell
+    // which rule refused.
+    for (const [archetype, extra] of [
+      ["metric", { query: { source: "collection:posts", op: "count" } }],
+      ["list", { query: { source: "collection:posts", op: "find" } }],
+      ["table", { query: { source: "collection:posts", op: "find" } }],
+      ["actions", { actions: [{ label: "New", href: "/admin/users/create" }] }],
+      ["text", {}],
+    ] as const) {
+      expect(() =>
+        validateWidgetDefinition({
+          id: "core/x",
+          title: "X",
+          defaultSize: "lg",
+          archetype,
+          chrome: "none",
+          ...extra,
+        })
+      ).toThrow(/chrome/i);
+    }
+  });
+
+  it("refuses a chrome value outside the vocabulary", () => {
+    expect(() =>
+      validateWidgetDefinition({ ...custom, chrome: "borderless" })
+    ).toThrow();
+  });
+});
+
+describe("a declared permission", () => {
+  it("is refused when it is not a string", () => {
+    // The field was declared and never checked, and the gap failed OPEN: the
+    // dashboard's server filter reads "not a string" as "no permission
+    // declared", so a widget whose author wrote `requiredPermission: { read:
+    // true }` was gated for nobody and returned to every authenticated caller.
+    // Refusing the declaration is the only place the mistake is still visible
+    // to the person who made it.
+    expect(widgetValueProblem({ requiredPermission: { read: true } })).toMatch(
+      /requiredPermission, when given, must be a string/
+    );
+    expect(widgetValueProblem({ requiredPermission: 42 })).toMatch(
+      /requiredPermission/
+    );
+  });
+
+  it("accepts a slug this core has never minted", () => {
+    // Shape, not vocabulary. A newer core may mint new slugs; it cannot make a
+    // slug stop being a string, and refusing an unknown one here would abort a
+    // whole plugin install over a permission this core has not learned yet.
+    expect(
+      widgetValueProblem({ requiredPermission: "invent-something" })
+    ).toBeUndefined();
+    expect(widgetValueProblem({})).toBeUndefined();
   });
 });

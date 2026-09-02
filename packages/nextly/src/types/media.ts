@@ -87,11 +87,15 @@ export const UploadMediaInputSchema = z.object({
   file: z.instanceof(Buffer),
   filename: z.string().min(1, "Filename is required"),
   mimeType: z.string().min(1, "MIME type is required"),
-  size: z
-    .number()
-    .int()
-    .positive()
-    .max(10 * 1024 * 1024, "File too large (max 10MB)"),
+  /*
+   * Shape only — a positive whole number of bytes. The LIMIT is
+   * `security.limits.fileSize`, which a static schema cannot know: a constant
+   * here overrode the configured policy, so an install documented as accepting
+   * 20mb refused anything past 10. `UploadValidator` enforces the configured
+   * cap on the bytes themselves, which is also the number a client cannot lie
+   * about, and every upload path runs it.
+   */
+  size: z.number().int().positive(),
   // Nullable: CLI seeds, data imports, and other system-context uploads
   // may not have a user to attribute the upload to.
   uploadedBy: z.string().uuid("Invalid user ID").nullable(),

@@ -17,9 +17,16 @@
  * @module plugins/validate-admin-widgets
  */
 
+import type { CanonicalWidget } from "../domains/widgets/canonical";
 import {
+  actionProblem,
+  chromeProblem,
   DATA_ARCHETYPES,
+  defaultOrderProblem,
+  legacySizeToWidgetSize,
+  querylessQueryProblem,
   QUERYLESS_ARCHETYPES,
+  widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
 import { getNextlyLogger } from "../observability/logger";
@@ -61,6 +68,49 @@ const QUERYLESS_ARCHETYPE_SET: ReadonlySet<string> = new Set(
 );
 
 /**
+ * Why core cannot draw a QUERYLESS widget from its declaration, or `undefined`.
+ *
+ * Its own function rather than a branch inside {@link describesDrawableBody},
+ * because two callers ask it: that one, deciding whether a body exists at all,
+ * and {@link undrawableReason}, holding the declaration to its shape even when
+ * a component is supplied beside it. One question, one implementation -- the
+ * two would otherwise agree today and drift silently.
+ *
+ * `actions` IS its shortcuts, so an empty one describes an empty card. Every
+ * item goes through the SAME rule the registry applies: checking only that the
+ * array was non-empty let a JavaScript plugin publish `actions: [{}]`, which
+ * the admin drew as a blank link with an undefined destination -- while a
+ * registered widget carrying that shortcut was refused. One contract, two
+ * channels, one rule.
+ *
+ * The other queryless archetypes are drawn from the declaration alone and need
+ * nothing further here.
+ */
+function querylessProblem(widget: Record<string, unknown>): string | undefined {
+  // Through the SAME rule the registry applies. A queryless archetype is drawn
+  // from its declaration, so a query beside it is never read -- and because
+  // `coreDraws` is true for one, the grid batched a request per mount and
+  // refetch for a result the declared renderer discards.
+  const queryProblem = querylessQueryProblem(widget.archetype, widget.query);
+  if (queryProblem !== undefined) return queryProblem;
+
+  if (widget.archetype !== "actions") return undefined;
+
+  if (!Array.isArray(widget.actions) || widget.actions.length === 0) {
+    return 'names the "actions" archetype, which IS its shortcuts, and declares none';
+  }
+
+  for (const [index, action] of widget.actions.entries()) {
+    const problem = actionProblem(action);
+    if (problem !== undefined) {
+      return `declares an unusable shortcut at #${index}: ${problem}`;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Whether this widget describes a body CORE can draw without the plugin.
  *
  * DERIVED from core's two vocabularies rather than restated. Restating it is
@@ -87,7 +137,9 @@ function describesDrawableBody(widget: Record<string, unknown>): boolean {
   const archetype = widget.archetype;
   if (typeof archetype !== "string" || archetype === "custom") return false;
 
-  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) return true;
+  if (QUERYLESS_ARCHETYPE_SET.has(archetype)) {
+    return querylessProblem(widget) === undefined;
+  }
 
   if (DATA_ARCHETYPE_SET.has(archetype)) {
     return typeof widget.query === "object" && widget.query !== null;
@@ -199,7 +251,8 @@ function warnUnknownArchetype(
  * is the tier the whole widget query contract exists for, and which this gate
  * previously made unreachable by requiring `component` on every widget.
  *
- * That requirement was justified on `PluginWidgetGrid` being "the only
+ * That requirement was justified on `PluginWidgetGrid` (since deleted) being
+ * "the only
  * consumer", and it renders `PluginSlot path={widget.component}`, so a widget
  * with no component drew an empty cell. `WidgetGrid` replaced it and nothing
  * mounts `PluginWidgetGrid` any more: the current grid draws a `metric` from
@@ -210,21 +263,85 @@ function warnUnknownArchetype(
  * collides with every other blank one and React reconciles two different
  * widgets as one.
  */
-function undrawableReason(widget: Record<string, unknown>): string | undefined {
-  if (!isUsableText(widget.id)) return 'declares no usable "id"';
+/**
+ * The field checks a widget must pass whatever kind of body it describes.
+ *
+ * A LIST rather than a ladder of `if`s, because this is a growing set with no
+ * ordering between its members -- each asks about one field and none depends on
+ * another's answer. Every addition was previously another branch in one
+ * function, which is how it reached the point where the shape of the function
+ * hid what it was doing.
+ *
+ * First problem wins, so the diagnostic names the field an author can act on
+ * rather than the last one checked.
+ */
+const FIELD_RULES: ReadonlyArray<
+  (widget: Record<string, unknown>) => string | undefined
+> = [
+  // `id` keys the grid cell, so a blank one collides with every other blank one
+  // and React reconciles two different widgets as one.
+  widget => (isUsableText(widget.id) ? undefined : 'declares no usable "id"'),
 
   // A SUPPLIED component must be usable, whether or not the declarative route
-  // would also have carried this widget.
+  // would also have carried this widget. Checking it only as an ALTERNATIVE let
+  // `component: "   "` through beside a valid archetype and query -- and the
+  // admin resolver reads the component for TRUTHINESS, not usability, so a
+  // whitespace string won the archetype fallback, reached `PluginSlot` as a
+  // path nothing resolves, and drew a blank card where the archetype's own
+  // "not rendered yet" diagnostic belonged. An absent component is a choice; an
+  // unusable one is a mistake, and only the second is worth refusing.
+  widget =>
+    widget.component !== undefined && !isUsableText(widget.component)
+      ? 'supplies a "component" that is empty or not a string'
+      : undefined,
+
+  // Through the SAME rule the registry applies. This channel had no order check
+  // at all, so `defaultOrder: "soon"` shipped and the admin's comparator made
+  // it `NaN` -- which compares false against every value, so the widget sorted
+  // as equal to whatever it was measured against and the explicit orders around
+  // it quietly stopped holding.
+  widget => defaultOrderProblem(widget.defaultOrder),
+
+  // Through the SAME rule the registry applies. Without it a contributed
+  // `{ archetype: "metric", chrome: "none" }` passed boot while the registry
+  // refused the identical declaration, and the admin then ignored the value --
+  // so the documented refusal was true of one channel only.
+  widget => chromeProblem(widget.chrome, widget.archetype),
+
+  // The rules that hold whatever core version a plugin was built against: a
+  // title that is a string, a query that is an object, orderings between sizes
+  // this core can rank, and `actions` on an archetype it recognises.
   //
-  // Checking it only as an alternative let `component: "   "` through beside a
-  // valid archetype and query -- and the admin resolver reads the component for
-  // TRUTHINESS, not usability, so a whitespace string won the archetype
-  // fallback, reached `PluginSlot` as a path nothing resolves, and drew a blank
-  // card where the archetype's own "not rendered yet" diagnostic belonged. An
-  // absent component is a choice; an unusable one is a mistake, and only the
-  // second is worth refusing.
-  if (widget.component !== undefined && !isUsableText(widget.component)) {
-    return 'supplies a "component" that is empty or not a string';
+  // Vocabulary checks are deliberately NOT among them. A contribution crosses a
+  // version boundary, so refusing a size, height or chrome value this core has
+  // not learned yet would abort a whole plugin install over a card the admin
+  // renders anyway -- those belong to `validateWidgetDefinition`, which judges
+  // the resolved widget rather than a declaration from an unknown vintage.
+  widget => widgetValueProblem(widget),
+
+  // A QUERYLESS archetype is drawn from its declaration ALONE, so a component
+  // beside it is a fallback for an admin too old to draw the archetype -- never
+  // a substitute for a well-formed declaration. A current admin prefers the
+  // host renderer and reads this same declaration, so checking the shortcuts
+  // only as the ALTERNATIVE to a component meant naming one skipped the rule,
+  // and `actions: [{}]` beside a component reached the grid as exactly the
+  // blank link that rule exists to prevent.
+  //
+  // The queryless half only. A DATA archetype missing its query is a card core
+  // genuinely cannot fill, so the admin reports it undrawable and the component
+  // fallback is what renders -- refusing that here would reject a widget which
+  // draws correctly today.
+  widget =>
+    typeof widget.archetype === "string" &&
+    QUERYLESS_ARCHETYPE_SET.has(widget.archetype)
+      ? querylessProblem(widget)
+      : undefined,
+];
+
+function undrawableReason(widget: Record<string, unknown>): string | undefined {
+  for (const rule of FIELD_RULES) {
+    const problem = rule(widget);
+    if (problem !== undefined) return problem;
   }
 
   if (isUsableText(widget.component)) return undefined;
@@ -297,4 +414,121 @@ export function assertAdminWidgets(plugins: PluginDefinition[]): void {
       warnUnknownArchetype(plugin.name, widget);
     }
   }
+}
+
+/**
+ * Every contributed widget across every plugin, reduced to the summary layout
+ * resolution reads.
+ *
+ * Built from `validatedAdminWidgets`, which is the same reduction admin-meta
+ * publishes — so the server's canonical set and the payload the admin renders
+ * from cannot disagree about which contributed widgets exist. A plugin whose
+ * declaration this validator refuses contributes nothing here, exactly as it
+ * contributes nothing to the admin.
+ *
+ * Reads the fields WITHOUT narrowing them: a contribution may come from a
+ * plugin built against a newer core, so `defaultSize` is copied as whatever
+ * string it is rather than checked against this core's vocabulary. Refusing an
+ * unknown one here would drop the whole card from the arrangement over a value
+ * the admin already survives.
+ */
+/** A contributed field, when it is a usable string. */
+function contributedText(
+  declaration: Record<string, unknown>,
+  field: string
+): string | undefined {
+  const value = declaration[field];
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+/**
+ * One contributed declaration, reduced to the summary layout resolution reads,
+ * or `undefined` when it carries no usable id.
+ *
+ * Reads the fields WITHOUT narrowing them: a contribution may come from a
+ * plugin built against a newer core, so `defaultSize` is copied as whatever
+ * string it is rather than checked against this core's vocabulary. Refusing an
+ * unknown one here would drop the whole card from the arrangement over a value
+ * the admin already survives.
+ */
+/**
+ * The size a contribution states, in the enum, whichever field it used.
+ *
+ * 🔴 The deprecated `size` alias is read too, through the SAME translation the
+ * admin's resolver applies. Reading `defaultSize` alone emitted a summary with
+ * no size for a declaration that legally states only `size: "half"`, so the
+ * default placement stored no geometry while the grid drew the card at half
+ * width -- and a later change to the plugin's declaration then silently resized
+ * what the reader had been told was their saved arrangement.
+ *
+ * The alias is read only when `defaultSize` is absent, which is the precedence
+ * `resolveOne` applies: a plugin that adopted the enum meant it.
+ */
+function contributedSize(
+  declaration: Record<string, unknown>
+): string | undefined {
+  const declared = contributedText(declaration, "defaultSize");
+  if (declared !== undefined) return declared;
+  const legacy = contributedText(declaration, "size");
+  return legacy === "full" || legacy === "half"
+    ? legacySizeToWidgetSize(legacy)
+    : undefined;
+}
+
+function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
+  const declaration = widget as unknown as Record<string, unknown>;
+  const id = contributedText(declaration, "id");
+  if (id === undefined) return undefined;
+
+  const requiredPermission = contributedText(declaration, "requiredPermission");
+  const defaultSize = contributedSize(declaration);
+  const defaultHeight = contributedText(declaration, "defaultHeight");
+  const defaultOrder = declaration.defaultOrder;
+
+  return {
+    id,
+    ...(requiredPermission === undefined ? {} : { requiredPermission }),
+    ...(defaultSize === undefined ? {} : { defaultSize }),
+    ...(defaultHeight === undefined ? {} : { defaultHeight }),
+    // `Number.isFinite`, so a `NaN` or an infinity a plugin computed cannot
+    // become a sort key that puts the card nowhere in particular.
+    ...(typeof defaultOrder === "number" && Number.isFinite(defaultOrder)
+      ? { defaultOrder }
+      : {}),
+  };
+}
+
+/**
+ * Every contributed widget across every plugin, reduced to the summary layout
+ * resolution reads.
+ *
+ * Built from `validatedAdminWidgets`, which is the same reduction admin-meta
+ * publishes — so the server's canonical set and the payload the admin renders
+ * from cannot disagree about which contributed widgets exist. A plugin whose
+ * declaration that validator refuses contributes nothing here, exactly as it
+ * contributes nothing to the admin.
+ */
+export function contributedWidgetSummaries(
+  plugins: readonly PluginDefinition[]
+): CanonicalWidget[] {
+  return plugins.flatMap(plugin =>
+    // 🔴 Disabled plugins contribute NOTHING, matching `buildPluginAdminMeta`,
+    // which withholds every behavioural admin surface — menu, pages, settings,
+    // widgets — from a plugin the config has switched off. Without this the two
+    // answers drifted: the layout endpoint put a disabled plugin's widget ids
+    // into default placements, into `available` and into the scope token, while
+    // the admin had no declaration to draw any of them with. Ghost cards the
+    // reader could arrange and never see.
+    //
+    // `enabled !== false` rather than `enabled === true`, because the field is
+    // optional and its absence means enabled — the same reading admin-meta,
+    // `reload-config` and the field-type registry each apply.
+    plugin.enabled === false
+      ? []
+      : (validatedAdminWidgets(plugin) ?? [])
+          .map(toSummary)
+          .filter(
+            (summary): summary is CanonicalWidget => summary !== undefined
+          )
+  );
 }

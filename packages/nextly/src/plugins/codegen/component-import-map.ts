@@ -104,7 +104,25 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
   const paths = [...fieldTypePaths];
   for (const page of admin.pages ?? []) paths.push(page.component);
   if (admin.settings) paths.push(admin.settings.component);
-  for (const view of Object.values(admin.views ?? {})) {
+  paths.push(...collectCollectionViewPaths(admin.views));
+  paths.push(...collectWidgetPaths(admin.widgets));
+  paths.push(...collectAdminSlotPaths(admin));
+  return paths;
+}
+
+/**
+ * Every override and injection point a plugin declares per collection.
+ *
+ * Its own function rather than two nested loops inline, because the six slots
+ * are one list and the enclosing collector already answers several unrelated
+ * questions -- pages, settings, field types, header slots, widgets. Flattening
+ * them all into one body is what pushed it past the complexity gate.
+ */
+function collectCollectionViewPaths(
+  views: PluginAdminContributions["views"]
+): string[] {
+  const paths: string[] = [];
+  for (const view of Object.values(views ?? {})) {
     for (const slot of [
       view.list,
       view.edit,
@@ -116,8 +134,27 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
       if (slot) paths.push(slot);
     }
   }
-  paths.push(...collectAdminSlotPaths(admin));
   return paths;
+}
+
+/**
+ * Every widget component a plugin declares.
+ *
+ * Being pre-bundled by this map is what puts a component in the registry
+ * `PluginSlot` reads; the registry's runtime fallback cannot resolve a bare
+ * package specifier in a bundled browser. So while widgets were excluded here,
+ * a `custom` widget drew its card and then nothing inside it, unless the plugin
+ * called `registerComponents` itself from its admin entry -- which the
+ * documented contract never asked it to do.
+ */
+function collectWidgetPaths(
+  widgets: PluginAdminContributions["widgets"]
+): string[] {
+  // Optional now: a declarative widget names an archetype and a query and ships
+  // no component at all, so only the ones that HAVE a path contribute one.
+  return (widgets ?? []).flatMap(widget =>
+    widget.component ? [widget.component] : []
+  );
 }
 
 /**

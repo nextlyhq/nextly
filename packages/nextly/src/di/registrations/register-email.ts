@@ -22,10 +22,66 @@ import { EmailService } from "../../services/email/email-service";
 import { EmailTemplateService } from "../../services/email/email-template-service";
 import type { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { SYSTEM_CONTEXT } from "../../shared/types";
-import { SafeFetchError, safeFetch } from "../../utils/validate-external-url";
+import { isStorageReadTooLarge } from "../../storage/read-errors";
+import {
+  readStoredMediaBytes,
+  StoredMediaUnreachableError,
+} from "../../storage/read-stored-media";
 import { container } from "../container";
 
 import type { RegistrationContext } from "./types";
+
+/**
+ * A storage read failure, in the vocabulary the attachment path answers in.
+ *
+ * Named and exported rather than inlined in the reader, so the mapping can be
+ * asserted without standing up the whole DI container. That is not tidiness:
+ * this rule regressed silently once already — implementing `read` on the cloud
+ * adapters moved attachments off a capped fetch and NOTHING failed — and the
+ * reason nothing failed is that the rule lived in a closure inside a factory.
+ *
+ * An over-cap read becomes the SAME size error the URL-backed branch produces.
+ * `attachment-resolver` passes through only `VALIDATION_ERROR` and wraps
+ * everything else as an opaque storage failure, so an over-cap read arriving as
+ * anything else tells the author their storage broke — when what happened is
+ * that their attachment is too big and they can fix it by attaching something
+ * smaller. Which branch read the bytes must not change which error they see.
+ *
+ * Everything else is returned UNCHANGED for the resolver to wrap, because a
+ * timeout or a refused address says nothing an author can act on and its
+ * message must not reach them.
+ */
+export function asAttachmentReadError(
+  error: unknown,
+  maxBytes: number
+): unknown {
+  if (error instanceof StoredMediaUnreachableError) {
+    // Unchanged in what it reports: the URL route used to raise this inline,
+    // and it is the storage read that failed rather than the attachment that
+    // was too big.
+    return NextlyError.internal({
+      logContext: {
+        emailAttachmentCode: EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
+        url: error.url,
+        status: error.status,
+      },
+    });
+  }
+  if (!isStorageReadTooLarge(error)) return error;
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "attachments",
+        code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+        message: "Attachment size exceeds the limit.",
+      },
+    ],
+    logContext: {
+      emailAttachmentCode: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
+      max: maxBytes,
+    },
+  });
+}
 
 export function registerEmailServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, storage } = ctx;
@@ -131,63 +187,27 @@ export function registerEmailServices(ctx: RegistrationContext): void {
           }
         },
         readBytes: async storagePath => {
-          // 1. Try native read() (local disk, S3, etc.)
-          if (typeof storage.read === "function") {
-            const buffer = await storage.read(storagePath);
-            if (buffer) return buffer;
-          }
-          // 2. Fallback: fetch via URL.
-          //    Vercel Blob (and similar adapters) store the full public
-          //    URL as the media filename, so storagePath may already be
-          //    a URL. Only call getPublicUrl for relative paths.
-          //    Use safeFetch to reject URLs that resolve to private/
-          //    loopback/link-local/cloud-metadata addresses — closes
-          //    SSRF when an attacker controls the `storagePath` field.
-          const url = storagePath.startsWith("http")
-            ? storagePath
-            : storage.getPublicUrl(storagePath);
+          /*
+           * ONE snapshot, because reading the policy twice let the two routes
+           * enforce and report different caps: the environment backing it can
+           * change between the calls, and nothing would have said so.
+           */
           const limits = getAttachmentLimits();
-          // Cap the fetch at the attachment size limit so a valid large
-          // attachment is not rejected by the smaller default safeFetch cap. A
-          // body over the limit surfaces as the same size-exceeded validation
-          // error the local/S3 path produces, not an opaque storage failure.
-          let response: Response;
           try {
-            response = await safeFetch(url, {
-              maxResponseBytes: limits.maxTotalBytes,
-            });
-          } catch (err) {
-            if (
-              err instanceof SafeFetchError &&
-              err.reason === "response-too-large"
-            ) {
-              throw NextlyError.validation({
-                errors: [
-                  {
-                    path: "attachments",
-                    code: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
-                    message: "Attachment size exceeds the limit.",
-                  },
-                ],
-                logContext: {
-                  emailAttachmentCode: EmailErrorCode.ATTACHMENT_SIZE_EXCEEDED,
-                  max: limits.maxTotalBytes,
-                },
-              });
+            const bytes = await readStoredMediaBytes(
+              storage,
+              storagePath,
+              limits.maxTotalBytes
+            );
+            // An attachment whose object is gone cannot be sent, and the author
+            // is owed the same answer as any other failure to read it.
+            if (bytes === null) {
+              throw new StoredMediaUnreachableError(storagePath, 404);
             }
-            throw err;
+            return bytes;
+          } catch (err) {
+            throw asAttachmentReadError(err, limits.maxTotalBytes);
           }
-          if (!response.ok) {
-            throw NextlyError.internal({
-              logContext: {
-                emailAttachmentCode:
-                  EmailErrorCode.ATTACHMENT_STORAGE_READ_FAILED,
-                url,
-                status: response.status,
-              },
-            });
-          }
-          return Buffer.from(await response.arrayBuffer());
         },
       };
     }

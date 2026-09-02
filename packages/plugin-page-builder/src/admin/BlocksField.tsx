@@ -4,9 +4,16 @@
  * The blocks field's control: a summary of what the field holds, and the way in
  * to the editor that changes it.
  *
- * Composes `BlocksSummary` rather than replacing it. The summary is a pure
- * read-only account of the document and stays that way — it is what the form
- * shows at rest, and it is worth keeping testable without an editor around it.
+ * At rest it draws `PageBuilderCard`: the page itself, small and inert, and one
+ * way in. A list of block TYPE NAMES was what stood here, and it read as an
+ * inert summary rather than as the door to the editor — the confusion
+ * Gutenberg's own design discussion of editor switching warns about.
+ *
+ * `BlocksSummary` is NOT deleted. It remains exported and registered at the
+ * component path `@nextlyhq/plugin-page-builder/admin#BlocksSummary`, which a
+ * host may address by string, so removing it would break a published surface.
+ * It stays a pure read-only account of the document; both it and the card ask
+ * `page-summary` what the document holds, so they cannot disagree.
  *
  * ## Why the editor opens OVER the form rather than inside it
  *
@@ -35,9 +42,6 @@
 
 import {
   resolveSiteTokens,
-  isPlainRecord,
-  DEFAULT_LIMITS,
-  type DocumentLimits,
   getBlock,
   hasBlock,
   registerBlocks,
@@ -67,7 +71,6 @@ import {
   type CanvasZoom,
   breakpointsAtWidth,
   editedBreakpointAtWidth,
-  offeredTiers,
   selectableTiers,
   widthForBreakpoint,
   BlockContextMenu,
@@ -137,16 +140,21 @@ import {
   classOverrideOf,
   tokenOverrideOf,
   tokenSaveOutcome,
-  siteBreakpoints,
   siteSheet,
   type SiteStyleData,
 } from "../site-style";
 import { readSiteStyleRecord } from "../site-style-record";
 
-import { BlocksSummary } from "./BlocksSummary";
 import { DocumentStatusPill } from "./DocumentStatusPill";
+import { pageRenderInputs, readDocumentLimits } from "./page-render-inputs";
+import { PageBuilderCard } from "./PageBuilderCard";
+/* The save state, which the status pill cannot carry: it renders nothing on a
+   collection with no publish lifecycle, and took the only reading of unsaved
+   work down with it. */
 import { useSaveSiteStyle, useSiteStyle } from "./site-style-client";
 import { withValueAtPath } from "./snapshot-merge";
+import { UnsavedChangesPill } from "./UnsavedChangesPill";
+import { useRestingPageRender } from "./use-resting-page-render";
 import { useShown } from "./use-shown";
 
 export interface BlocksFieldProps<
@@ -309,6 +317,29 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   const editable = canEditBlocks({ readOnly, disabled });
 
   /*
+   * The site's own style, read at REST as well as inside the editor.
+   *
+   * The miniature below is the published renderer, so it needs the sheet that
+   * renderer needs. Omitting it is not a neutral choice: `PageRenderer` still
+   * emits the DEFAULT token set, so the page draws plausibly while missing this
+   * site's named classes and block-type defaults — which is the failure
+   * `canvas.tsx` makes the prop required to prevent.
+   *
+   * The same query the editor makes, so the two share one cache entry rather
+   * than fetching twice; `pending` is forwarded so the card can decline to draw
+   * a page it cannot draw faithfully yet.
+   */
+  /*
+   * What the resting card draws with, asked as ONE question.
+   *
+   * The site's style, whether it has arrived, its config and a container name
+   * for this field's own box — four reads, each of which produces a
+   * faithful-looking wrong page when got subtly wrong. They belong together and
+   * not in a control whose job is choosing between two surfaces.
+   */
+  const resting = useRestingPageRender(PLUGIN_SOURCE);
+
+  /*
    * Closed if the form becomes read-only while the editor is up.
    *
    * Not a hypothetical: a permission can be revoked and a form can start
@@ -334,28 +365,17 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       control={control}
     />
   ) : (
-    <div className="flex flex-col gap-3">
-      <BlocksSummary name={name} control={control} />
-      {/*
-        No button at all rather than a disabled one.
-        
-        A disabled control says "you could do this, but not now", which is the
-        wrong sentence for a document that cannot be edited at all — and the
-        summary above already says what the field holds. An affordance that
-        cannot ever act here is one an author spends attention on.
-      */}
-      {editable ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-sm font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Edit blocks
-          </button>
-        </div>
-      ) : null}
-    </div>
+    <PageBuilderCard
+      document={documentFrom(field.value)}
+      siteStyles={resting.siteStyles}
+      styleState={resting.styleState}
+      render={resting.render}
+      // The gate is passed through rather than restated: `canEditBlocks`
+      // already answers it for the editor above, and two readings of "may this
+      // author edit" is one more than the question has.
+      canEdit={editable}
+      onOpen={() => setOpen(true)}
+    />
   );
 }
 
@@ -713,53 +733,6 @@ function useClassWrites(
   );
 
   return { run };
-}
-
-/**
- * The document bounds the host renders under, as published to the browser.
- *
- * Read DEFENSIVELY and one key at a time: `clientConfig` is JSON that crossed a
- * transport, so nothing here can assume a shape. Anything unreadable falls back
- * to the engine's defaults, which is what the renderer itself falls back to —
- * so the two still agree rather than diverging in the direction that would
- * misreport which classes a page applies.
- */
-function readDocumentLimits(
-  clientConfig: Record<string, unknown> | undefined
-): DocumentLimits {
-  const declared = clientConfig?.limits;
-  if (!isPlainRecord(declared)) return DEFAULT_LIMITS;
-  // Built by overriding the defaults key by key rather than by asserting a
-  // shape onto the transported value: the keys come from `DEFAULT_LIMITS`, so
-  // a bound the engine adds later is carried without this being edited, and a
-  // key the host sent that the engine does not have is ignored.
-  const merged: DocumentLimits = { ...DEFAULT_LIMITS };
-  for (const key of Object.keys(DEFAULT_LIMITS) as (keyof DocumentLimits)[]) {
-    const supplied = declared[key];
-    /*
-     * Zero and Infinity are both LEGITIMATE bounds, so neither may be narrowed
-     * away here. A host setting `maxNodes: 0` gets a renderer that draws
-     * nothing, and substituting the default would have the panel mark classes
-     * as present on a page that renders none of them; the engine supports an
-     * infinite byte limit outright. What is refused is a value that is not a
-     * number, or one below zero, which no bound can mean.
-     */
-    // `null` is the wire spelling for an INFINITE bound: `Infinity` is not a
-    // JSON value and the client config is refused unless it survives the round
-    // trip unchanged, so the publisher encodes it and this decodes it.
-    if (supplied === null) {
-      merged[key] = Number.POSITIVE_INFINITY;
-      continue;
-    }
-    if (
-      typeof supplied === "number" &&
-      !Number.isNaN(supplied) &&
-      supplied >= 0
-    ) {
-      merged[key] = supplied;
-    }
-  }
-  return merged;
 }
 
 /**
@@ -1424,7 +1397,22 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const entryFields = useEntryFieldsPanel(name);
 
-  const documentDirty = useDocumentDirty(control, editor.undoDepth > 0);
+  /*
+   * `hasUnsavedWork` rather than `undoDepth` alone, so an inline edit that is
+   * OPEN counts. Until it commits, the typed value lives in the DOM and neither
+   * the editor's history nor the form's dirty fields have moved — so a reading
+   * built on those two says "nothing outstanding" while an author is midway
+   * through a paragraph.
+   *
+   * The same answer the navigation guard reports, asked once here. The guard
+   * keeps reporting only the EDITOR's half, because it tells the form about
+   * work the form's own values do not contain; this composes that half with the
+   * form's own dirtiness, which is what a reading of the whole document needs.
+   */
+  const documentDirty = useDocumentDirty(
+    control,
+    hasUnsavedWork(editor, inline)
+  );
 
   /*
    * The getting-started card, and the host's switch for it.
@@ -1496,6 +1484,18 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    */
   const remotePatterns = useMemo(
     () => readRemotePatterns(clientConfig?.remotePatterns),
+    [clientConfig]
+  );
+
+  /*
+   * The site's document caps, read once.
+   *
+   * Two readers now — the renderer inputs, which repair the document against
+   * them, and the class-usage count. Read separately they would agree until the
+   * day one of them was pointed at a different config.
+   */
+  const documentLimits = useMemo(
+    () => readDocumentLimits(clientConfig),
     [clientConfig]
   );
 
@@ -1666,51 +1666,31 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     undefined
   );
 
-  const canvasRender = useMemo(() => {
-    /*
-     * ONE read of the site's breakpoints, feeding both the context and the
-     * decision about whether to preview at all.
-     *
-     * Two calls returned equal sets today and would stop the day `siteBreakpoints`
-     * normalises or defaults anything — and then preview eligibility would be
-     * answering from a different set than the canvas renders, which is the
-     * box/compile mismatch this whole seam exists to make unrepresentable. The
-     * docblock above already says this about the context's THREE readers; the
-     * eligibility question is a fourth.
-     */
-    const breakpoints = siteBreakpoints(canvasSiteStyle);
-    return {
-      styleContext: {
-        breakpoints,
-        /*
-         * Carried on the SAME context the cascade and the inspector read, so
-         * all three describe one compile. Supplied unconditionally rather than
-         * only while a tier is selected: at the full width the box is still a
-         * box, and a region narrower than the widest tier is already showing a
-         * narrower tier's rules. Compiling `@media` there would answer for the
-         * admin WINDOW instead — a wide window around a narrow canvas reports
-         * the desktop tier live while the box paints the tablet one.
-         */
-        ...(offeredTiers(breakpoints).length === 0 ? {} : { previewContainer }),
-        /*
-         * Unconditional, unlike the container above. A page cannot force a
-         * pseudo-class on itself, so the sheet has to carry a class alternative
-         * beside each one before the canvas can show an author the hover
-         * appearance they are editing — and whether they are editing one is not
-         * known when the sheet is compiled.
-         *
-         * It costs a few bytes per state rule in a sheet only the editor sees,
-         * and nothing at all in weight: the marker sits inside the `:where()`
-         * that already wrapped the pseudo-class, which contributes nothing. The
-         * published sheet is compiled elsewhere and never asks for this.
-         */
+  /*
+   * The renderer inputs, from the ONE derivation the entry screen's miniature
+   * also asks.
+   *
+   * This used to be assembled here, and the resting field assembled a poorer
+   * copy of its own — which is how the miniature came to render with no
+   * breakpoint container, no host policy and default caps while the canvas had
+   * all three. Two surfaces drawing one document must not answer "what does
+   * this site render like" separately.
+   *
+   * `previewStates` is the editor's alone: the canvas needs a class alternative
+   * beside each pseudo-class rule so it can show an author the state being
+   * edited, and a surface showing the page as published must not have one.
+   */
+  const canvasRender = useMemo(
+    () =>
+      pageRenderInputs({
+        siteStyle: canvasSiteStyle,
+        clientConfig,
+        previewContainer,
         previewStates: true,
-      },
-      ...(remotePatterns === undefined
-        ? {}
-        : { hostPolicy: { remotePatterns } }),
-    };
-  }, [canvasSiteStyle, remotePatterns, previewContainer]);
+        limits: documentLimits,
+      }),
+    [canvasSiteStyle, clientConfig, previewContainer, documentLimits]
+  );
 
   /*
    * What the canvas is previewing under, read back from the ONE context that
@@ -1864,8 +1844,8 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     // lowered them renders under those, and a walk here under different bounds
     // selects different nodes — which would report a class as absent from a
     // page that renders it, or present on one that does not.
-    () => classUsageOf(editor.document, readDocumentLimits(clientConfig)),
-    [editor.document, clientConfig]
+    () => classUsageOf(editor.document, documentLimits),
+    [editor.document, documentLimits]
   );
 
   /*
@@ -2038,6 +2018,10 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
         topBar={
           <>
             <DocumentStatusPill isDirty={documentDirty} />
+            {/* Beside the publish state, not folded into it. The two answer
+                different questions and one of them has no answer where a
+                collection declares no lifecycle. */}
+            <UnsavedChangesPill isDirty={documentDirty} />
             {/*
              * Gated on the SAME read the canvas and the cascade are gated on.
              * Until the stored style has answered, `canvasSiteStyle` is the
@@ -2366,6 +2350,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 // box actually got rather than from what it was offered.
                 preview={canvasPreview}
                 dragHandlers={drag.handlers}
+                // The same object those handlers came from, forwarded whole.
+                // The canvas draws what the pointer currently means — which
+                // block is in flight, which container is receiving it, and why
+                // a region will not take it — and decides none of it.
+                //
+                // Whole rather than picked apart for the reason the handlers
+                // are: a set spread across several props can be partially
+                // wired, and a canvas told about a refusal but not about the
+                // block in flight explains a refusal while dimming nothing.
+                drag={drag}
                 // The pointer route into typing a block's text. Its keyboard
                 // counterpart is the Enter binding above, registered in the same
                 // place so a surface cannot gain one without the other.

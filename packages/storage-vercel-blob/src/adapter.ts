@@ -27,7 +27,7 @@
  * ```
  */
 
-import { put, del, head, list } from "@vercel/blob";
+import { put, del, head, list, BlobNotFoundError } from "@vercel/blob";
 import { NextlyError } from "nextly/errors";
 import type {
   IStorageAdapter,
@@ -37,7 +37,12 @@ import type {
   ClientUploadData,
   FileMetadata,
   BulkDeleteResult,
+  StorageReadOptions,
 } from "nextly/storage";
+import {
+  fetchStoredBytes,
+  DEFAULT_READ_TIMEOUT_MS,
+} from "nextly/storage/fetch-stored-bytes";
 
 import type {
   VercelBlobStorageConfig,
@@ -239,6 +244,86 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       // Vercel Blob throws an error if the blob doesn't exist
       return false;
     }
+  }
+
+  /**
+   * Read a stored blob back as bytes, or `null` when it is not there.
+   *
+   * A NETWORK round trip, unlike the local adapter's disk read, because the
+   * bytes live on Vercel's CDN and there is no other way to reach them. That
+   * cost is the reason a caller serving these from its own origin has to cache:
+   * the privacy rule that forces same-origin serving does not also make the
+   * fetch free, and an uncached proxy pays it on every request.
+   *
+   * The URL is taken from `head` rather than assembled from `filePath`,
+   * because a blob's address is issued by the service — it carries a random
+   * suffix this adapter never chose — so deriving one here would be guessing at
+   * a string another system owns.
+   *
+   * `null` for a missing blob rather than a throw, matching {@link exists}.
+   *
+   * @param filePath - Blob path/key
+   * @returns The blob's bytes, or `null` when it does not exist
+   */
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
+    /*
+     * ONE deadline for both phases, started before the lookup.
+     *
+     * `head` can stall exactly as the fetch can, and it runs first — so a
+     * deadline that begins only at the fetch leaves the lookup unbounded and
+     * the read can outlive what the caller was promised. Created here and
+     * handed to both.
+     *
+     * ALWAYS, not only when the caller named a timeout. `safeFetch` applies a
+     * default deadline of its own, so a caller stating none was still bounded
+     * for the fetch and unbounded for the lookup — which is the commonest call,
+     * the email path among them, since it supplies only a byte cap. The default
+     * comes from the same constant `safeFetch` uses rather than being restated.
+     */
+    const deadline = AbortSignal.timeout(
+      options?.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS
+    );
+
+    let target: string;
+    try {
+      const meta = await head(filePath, {
+        token: this.resolvedConfig.token,
+        abortSignal: deadline,
+      });
+      target = meta.downloadUrl ?? meta.url;
+    } catch (error: unknown) {
+      /*
+       * ONLY the not-found class becomes `null`. `head` also rejects for an
+       * expired token, a suspended or missing store, an aborted request and a
+       * plain network failure, and every one of those says nothing about
+       * whether the blob exists. Catching them all reports an outage as a
+       * deletion, which a caller may act on by writing a replacement over a
+       * file that is still there.
+       *
+       * Identified by the CLASS the SDK exports rather than by matching the
+       * message, because the message is prose this package does not own.
+       */
+      if (error instanceof BlobNotFoundError) return null;
+      throw error;
+    }
+
+    /*
+     * OUTSIDE the catch above, deliberately, and through the shared helper so
+     * that separation is stated once rather than in each adapter. A failed
+     * fetch of a blob whose metadata just resolved is a transport failure
+     * rather than an absence, and folding it into `null` would report a
+     * network outage as a deleted file.
+     */
+    return await fetchStoredBytes(
+      target,
+      filePath,
+      "Vercel Blob",
+      options,
+      deadline
+    );
   }
 
   /**

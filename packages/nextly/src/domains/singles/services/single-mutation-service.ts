@@ -31,6 +31,8 @@ import type { HookRegistry } from "../../../hooks/hook-registry";
 import { keysToSnakeCase, toSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import {
+  LIFECYCLE_STATUSES,
+  isLifecycleStatus,
   resolvePublishTransition,
   stripUndefinedStatus,
 } from "../../../lib/status-transition";
@@ -78,12 +80,18 @@ import { extractFieldGroupReferences } from "../../field-groups/storage/field-gr
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import {
+  COMPANION_PARENT_COLUMN,
+  COMPANION_STATUS_COLUMN,
+} from "../../i18n/companion-columns";
+import {
   isBlank,
   companionRowExists,
   populateCompanionFields,
   readCompanionLocaleStatus,
+  readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   isValidLocale,
   resolveRequestedLocale,
@@ -332,9 +340,53 @@ export class SingleMutationService extends BaseService {
   async update(
     slug: string,
     data: Record<string, unknown>,
-    options: UpdateSingleOptions = {}
+    // Named `rawOptions` because the body must not read it: the wildcard locale
+    // is resolved away into `options` immediately below. See there.
+    rawOptions: UpdateSingleOptions = {}
   ): Promise<SingleResult> {
+    // {@link EVERY_LOCALE} is a SWEEP INSTRUCTION, not a write locale. Resolved
+    // once, here, so the twenty-odd places below that derive from
+    // `options.locale` — `writeLocale`, the snapshot locale, the event payloads
+    // — keep receiving a real locale or nothing. Mirrors the collection write
+    // path exactly, because a Single scheduled in a release must behave the way
+    // an entry scheduled in the same release behaves.
+    const sweepAllLocales = rawOptions.locale === EVERY_LOCALE;
+    const options: UpdateSingleOptions = sweepAllLocales
+      ? { ...rawOptions, locale: undefined }
+      : rawOptions;
+
     this.logger.debug("Updating Single document", { slug, options });
+
+    // The wildcard moves a LIFECYCLE and nothing else — see the same guard on
+    // `updateEntry` for why Strapi withholds `"*"` from its update method and
+    // why Nextly, having one door for both, has to enforce the split here.
+    if (sweepAllLocales) {
+      const named = Object.keys(data);
+      const statusOnly = named.length === 1 && named[0] === "status";
+      // The VALUE, not merely the key — see the collection guard for why a
+      // coerced non-string splits the write instead of refusing it.
+      if (statusOnly && !isLifecycleStatus(data.status)) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `locale '${EVERY_LOCALE}' moves a publication status, so 'status' ` +
+            `must be one of ${LIFECYCLE_STATUSES.join(", ")}. Received: ` +
+            `${JSON.stringify(data.status)}.`,
+        };
+      }
+      if (!statusOnly) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `locale '${EVERY_LOCALE}' moves the publication status of every ` +
+            `language and writes nothing else, so it accepts a 'status' patch ` +
+            `alone. Received: ${named.length === 0 ? "an empty patch" : named.join(", ")}. ` +
+            `To write field values, name the language they belong to.`,
+        };
+      }
+    }
 
     // Set true once the update transaction commits with a real write (which
     // always appends the outbox event); lets the catch and the `!updated`
@@ -374,6 +426,27 @@ export class SingleMutationService extends BaseService {
           success: false,
           statusCode: 404,
           message: `Single "${slug}" not found`,
+        };
+      }
+
+      // 1.05. The wildcard moves a LIFECYCLE, so a Single that has none has
+      // nothing for it to move. Mirrors the collection path, and for the same
+      // reason: a Single carrying an ordinary user field named `status` has the
+      // column and no lifecycle, and letting the wildcard through would write
+      // that business field on one locale — a field write, which the wildcard
+      // contract refuses. Refused rather than answered as a no-op success, so a
+      // scheduled release cannot report itself applied having moved nothing.
+      if (
+        sweepAllLocales &&
+        (singleMeta as { status?: boolean }).status !== true
+      ) {
+        return {
+          success: false,
+          statusCode: 400,
+          message:
+            `Single '${slug}' has no draft/published lifecycle, so locale ` +
+            `'${EVERY_LOCALE}' has no publication status to move across its ` +
+            `languages.`,
         };
       }
 
@@ -646,6 +719,24 @@ export class SingleMutationService extends BaseService {
       // without the gate.
       stripUndefinedStatus(currentData);
       const finalStatus = (currentData as { status?: unknown }).status;
+
+      // A wildcard that no longer carries a status after hooks has nothing to
+      // move — same rule, same reasoning, as the collection path. A hook that
+      // clears `status` would otherwise turn a document-wide lifecycle change
+      // into a write that succeeds having moved nothing, which the release then
+      // records as applied because the one language it re-reads was already
+      // where it wanted to be.
+      if (sweepAllLocales && !isLifecycleStatus(finalStatus)) {
+        return {
+          success: false,
+          statusCode: 409,
+          message:
+            `locale '${EVERY_LOCALE}' was asked to move this Single's ` +
+            `publication status, but after hooks the write carries no status ` +
+            `to move. A hook that clears 'status' turns a document-wide ` +
+            `lifecycle change into a write that silently does nothing.`,
+        };
+      }
       const isNonDefaultLocaleWrite =
         companion?.hasStatus === true &&
         writeLocale !== undefined &&
@@ -995,7 +1086,13 @@ export class SingleMutationService extends BaseService {
                   lockedCompanionStatus,
                   companionNextStatus
                 ) === transitionGuard.op;
-              if (firesOnMainRow || firesOnCompanion) {
+              // The sweep moves companion rows NEITHER test above can see, so a
+              // wildcard write is judged as the lifecycle move it is,
+              // unconditionally — the same reasoning, and the same hole, as the
+              // collection path. With the main row and the default translation
+              // already at the target status both tests answer no, while the
+              // sweep still takes every other language there.
+              if (firesOnMainRow || firesOnCompanion || sweepAllLocales) {
                 // Permission first (pre-resolved, no DB read): a caller lacking
                 // publish-<slug>/unpublish-<slug> is denied regardless of the row.
                 if (transitionGuard.permissionDenied) {
@@ -1102,6 +1199,56 @@ export class SingleMutationService extends BaseService {
             // already serializes writers via BEGIN IMMEDIATE).
             await tx.lockRow(singleMeta.tableName, existingDoc.id);
 
+            // Asked UNDER THE LOCK, for the reason the collection path states:
+            // a draft save serialises on this same row, so a check that ran
+            // before the transaction can be overtaken by one that commits
+            // first, and the release would proceed over work it never saw.
+            if (
+              sweepAllLocales &&
+              singleMeta.versions?.drafts?.enabled === true
+            ) {
+              const writeDraftLocale = workingDraftLocale({
+                documentLocalized: singleMeta.localized === true,
+                // A wildcard carries no request locale by the time it reaches
+                // here: it was resolved away so the body never sees it as one.
+                requestLocale: null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              });
+              const heldBy = (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                })
+              )
+                .map(draft => draft.locale)
+                .filter(
+                  (locale): locale is string =>
+                    locale !== null && locale !== writeDraftLocale
+                )
+                // Only a configured language can block — see the collection
+                // path for why a removed one would make this refusal
+                // unsatisfiable rather than merely cautious.
+                .filter(locale =>
+                  new Set(
+                    this.localization?.locales.map(l => l.code) ?? []
+                  ).has(locale)
+                );
+              if (heldBy.length > 0) {
+                transitionDeniedResult = {
+                  success: false,
+                  statusCode: 409,
+                  message:
+                    `This Single has unpublished changes in ${heldBy.join(", ")}. ` +
+                    `Publish or discard them first, or publish each language on ` +
+                    `its own — locale '${EVERY_LOCALE}' moves every language's ` +
+                    `status and will not decide what happens to work that has ` +
+                    `not been released.`,
+                };
+                throw new SingleStatusTransitionDeniedError();
+              }
+            }
+
             // Read the pre-write main row on THIS transaction before the update
             // overwrites it, so the outbox `previous` reports the prior state
             // and the changed-field diff is accurate. Re-read every attempt
@@ -1134,10 +1281,51 @@ export class SingleMutationService extends BaseService {
             // row's own flag is what governs a main-row column.
             const mainStatusWritten = (mainPayload as Record<string, unknown>)
               .status;
+            let priorStatuses = new Map<string, string | null>();
+            // {@link EVERY_LOCALE}: a document already reachable in ANY language
+            // is not being published for the first time.
+            //
+            // The main row can be draft beside a translation that has been live
+            // since before this column existed, and the main row's own
+            // transition then reads as a first publication for a document the
+            // public could already see. Such a row carries null precisely
+            // because its history was never captured, so dating it today would
+            // record a publication that never happened. Asked only for a
+            // wildcard write, which is the only one that moves languages the
+            // main row says nothing about.
+            let anotherLanguageWasAlreadyLive = false;
+            // Kept for the event step: which language held which status BEFORE
+            // the sweep is unrecoverable once it lands, and it decides which
+            // transitions are real.
+            if (
+              sweepAllLocales &&
+              companion &&
+              companionPhysicallyExists &&
+              companion.hasStatus
+            ) {
+              priorStatuses = await readCompanionLocaleStatusAll(
+                tx.getDrizzle<
+                  Parameters<typeof readCompanionLocaleStatusAll>[0]
+                >(),
+                companion.table,
+                existingDoc.id,
+                // READ inside the transaction, never resolved: resolving issues
+                // a query, and a query against a missing relation aborts the
+                // whole transaction on PostgreSQL.
+                cachedCompanionReadiness(
+                  this.adapter,
+                  companion.companionTableName
+                )
+              );
+              anotherLanguageWasAlreadyLive = [...priorStatuses.values()].some(
+                status => status === "published"
+              );
+            }
             if (
               (singleMeta as { status?: boolean }).status === true &&
               mainStatusWritten === "published" &&
               preRowMainStatus !== "published" &&
+              !anotherLanguageWasAlreadyLive &&
               (preRow as { first_published_at?: unknown } | undefined)
                 ?.first_published_at == null
             ) {
@@ -1665,11 +1853,57 @@ export class SingleMutationService extends BaseService {
             // status still reaches here, and upserting `_status` into a table that does not exist
             // fails inside the transaction and rolls back the very write the fallback exists to
             // let through.
+            // Whether the promoted locale already HAS a row decides what the
+            // promotion may do with it. Read before the upsert, since the
+            // upsert is what would change the answer. `readCompanionLocaleStatusAll`
+            // keys by locale, so membership is the existence test.
+            const promotedLocaleRowExists =
+              sweepAllLocales &&
+              promotedDraft &&
+              companion &&
+              companionPhysicallyExists &&
+              writeLocale !== undefined
+                ? // The wildcard transaction already read every locale's status
+                  // above, before any companion write, so the map answers this
+                  // without a second round trip while the row lock is held.
+                  // It is only populated when the companion carries `_status`;
+                  // without one, ask the canonical probe.
+                  companion.hasStatus
+                  ? priorStatuses.has(writeLocale)
+                  : await companionRowExists(
+                      tx.getDrizzle<Parameters<typeof companionRowExists>[0]>(),
+                      companion.table,
+                      existingDoc.id,
+                      writeLocale,
+                      cachedCompanionReadiness(
+                        this.adapter,
+                        companion.companionTableName
+                      )
+                    )
+                : false;
+
             if (
               // A held edit writes no companion row: the translation stored
               // there IS live content, so writing it would publish the
               // translated half of a change whose rest is still pending.
               !holdEdit &&
+              // A wildcard does not manufacture a translation: the sweep moves
+              // rows that exist rather than inventing a default-language row
+              // for a document that has none. A PROMOTED draft is the one thing
+              // that is not invention — an author wrote those values and this
+              // write is publishing them — so it carries its own permission to
+              // land. Without the exception the promotion below still consumes
+              // the draft, and the edit reaches no read path at all.
+              (!sweepAllLocales ||
+                (promotedDraft &&
+                  // An EXISTING row takes its authored write unconditionally,
+                  // clears included: refusing one leaves the old translation
+                  // live while the promotion deletes the draft that asked for
+                  // it. An ABSENT row is only brought into being by content
+                  // that is genuinely translated, which `isBlank` defines —
+                  // an empty string means "not translated" under it.
+                  (promotedLocaleRowExists ||
+                    Object.values(companionData).some(v => !isBlank(v))))) &&
               companion &&
               companionPhysicallyExists &&
               writeLocale !== undefined &&
@@ -1693,6 +1927,42 @@ export class SingleMutationService extends BaseService {
                   row[f.column] = companionData[f.column];
                 }
               }
+            }
+
+            // {@link EVERY_LOCALE}: carry the lifecycle to the languages the
+            // write above did not name.
+            //
+            // The write above reaches ONE companion row. Without this a
+            // scheduled takedown of a localized Single would leave every
+            // translation of it live — the same defect the collection path
+            // carried, and it has to be closed in both places because a release
+            // member holds either kind.
+            //
+            // Same transaction as the main-row write, and an UPDATE rather than
+            // an upsert: a language with no companion row has no translation,
+            // and creating one to mark it published would invent the row whose
+            // absence is the record that it was never translated.
+            if (
+              sweepAllLocales &&
+              !holdEdit &&
+              companion &&
+              companionPhysicallyExists &&
+              companion.hasStatus &&
+              companionStatus !== undefined
+            ) {
+              await tx.update(
+                companion.companionTableName,
+                { [COMPANION_STATUS_COLUMN]: companionStatus },
+                {
+                  and: [
+                    {
+                      column: COMPANION_PARENT_COLUMN,
+                      op: "=",
+                      value: existingDoc.id,
+                    },
+                  ],
+                }
+              );
             }
 
             // Capture a version snapshot atomically with the write when the single
@@ -2257,6 +2527,70 @@ export class SingleMutationService extends BaseService {
                   fields: webhookFields,
                   actor,
                 });
+              }
+
+              // {@link EVERY_LOCALE}: the languages the sweep moved that the
+              // write locale's events above do not cover.
+              //
+              // Without this a scheduled German publish records nothing for
+              // German, so locale-routed consumers stay stale while the release
+              // reports success — the same gap the collection path had, and a
+              // Single reaches it through a different branch.
+              if (
+                sweepAllLocales &&
+                singleHasStatus &&
+                writtenStatus !== undefined &&
+                companion &&
+                companionPhysicallyExists
+              ) {
+                // A locale the app no longer configures still has a
+                // companion row, and an event tagged with one that normal reads
+                // and writes reject would mislead a locale-routed consumer —
+                // it names content the application no longer exposes. Both the
+                // collection sweep and the publish-all route already filter
+                // these, so this is the same decision rather than a new one.
+                const configuredLocales = new Set(
+                  this.localization?.locales.map(l => l.code) ?? []
+                );
+                for (const [locale, prior] of priorStatuses) {
+                  if (locale === eventLocale) continue;
+                  if (
+                    configuredLocales.size > 0 &&
+                    !configuredLocales.has(locale)
+                  ) {
+                    continue;
+                  }
+                  const nowPublished = dataLocaleStatus === "published";
+                  const wasPublished = prior === "published";
+                  if (nowPublished === wasPublished) continue;
+                  const localeValues = await readCompanionLocaleValues(
+                    this.adapter,
+                    tx,
+                    companion,
+                    existingDoc.id,
+                    locale
+                  );
+                  // THIS language on both sides, with only the status differing:
+                  // a payload tagged `de` carrying the default language's text
+                  // would be worse than none, because a consumer cannot tell it
+                  // is wrong.
+                  const localeDoc = { ...dataDoc, ...localeValues };
+                  await recordMutationEvent(tx, {
+                    type: nowPublished
+                      ? "single.published"
+                      : "single.unpublished",
+                    resource: {
+                      kind: "single",
+                      slug,
+                      id: existingDoc.id,
+                      locale,
+                    },
+                    data: localeDoc,
+                    previous: { ...localeDoc, status: prior },
+                    fields: webhookFields,
+                    actor,
+                  });
+                }
               }
             }
 

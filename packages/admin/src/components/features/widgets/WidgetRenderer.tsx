@@ -22,15 +22,13 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
-import type { ReactNode } from "react";
-
-import * as Icons from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type {
   DashboardWidget,
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { resolveIconName } from "./archetypes/icon";
 import { resolveWidgetOutcome } from "./outcome";
 import { WidgetCard } from "./WidgetCard";
 
@@ -42,15 +40,6 @@ import { WidgetCard } from "./WidgetCard";
  * meant to be functional here, and a stand-in that means nothing is worse than
  * the header simply not having one.
  */
-function resolveIcon(name: string | undefined): ReactNode {
-  if (!name) return undefined;
-  const icons = Icons as unknown as Record<
-    string,
-    Icons.LucideIcon | undefined
-  >;
-  const Icon = icons[name];
-  return Icon ? <Icon className="h-4 w-4" /> : undefined;
-}
 
 export interface WidgetRendererProps {
   definition: DashboardWidget;
@@ -82,7 +71,7 @@ export function WidgetRenderer({
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
-    icon: resolveIcon(definition.icon),
+    icon: resolveIconName(definition.icon),
     link: definition.link,
   };
 
@@ -114,6 +103,28 @@ export function WidgetRenderer({
   // grid only reports them for a widget that asked -- so nothing here puts a
   // freshness line under a card that never made a request.
   if (outcome.state === "self-drawn") {
+    // A widget that declines the frame draws its own surface, so the card would
+    // be a second one around it -- a heading above its heading, a border around
+    // its border. Core's dashboard sections are exactly that: each already
+    // carries a title, a rule and its own loading and error states.
+    //
+    // Reached only for `custom`, which `validateWidgetDefinition` enforces:
+    // every other archetype has its body composed INTO the card, so unframing
+    // one would leave content with no heading and nothing owning its states.
+    //
+    // Nothing is wrapped around it at all -- not even a fragment with a class --
+    // so a component returning null leaves the grid cell genuinely empty and
+    // `empty:hidden` can collapse it. Anything drawn here to "help" would fill
+    // the cell and reinstate the blank row.
+    if (definition.chrome === "none") {
+      return (
+        <PluginSlot
+          path={definition.component}
+          props={{ widgetId: definition.id, slot, isFetching }}
+        />
+      );
+    }
+
     return (
       <WidgetCard
         {...shared}
