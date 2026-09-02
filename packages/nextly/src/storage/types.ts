@@ -99,6 +99,27 @@ export type StorageType = "s3" | "vercel-blob" | "local" | "uploadthing";
  * Information about a storage adapter's capabilities.
  * Returned by adapter.getInfo() method.
  */
+/**
+ * Bounds for a read that pulls an object into memory.
+ *
+ * Reading a stored object means BUFFERING it, so its size is the caller's
+ * problem whether or not the caller says so. Left unbounded, a large object
+ * consumes as much process memory as it happens to occupy, and a stalled
+ * backend holds the request until something further out gives up.
+ *
+ * OPTIONAL, with the defaults living in the fetch layer rather than being
+ * restated per adapter — a second set of numbers agrees today and drifts. What
+ * this type exists for is the caller that already knows its own limit: the
+ * email attachment path caps a read at the configured attachment size, so an
+ * oversized object fails as a size error rather than after it has been read.
+ */
+export interface StorageReadOptions {
+  /** Refuse once this many bytes have arrived. Defaults to the fetch cap. */
+  maxBytes?: number;
+  /** Give up after this long. Defaults to the fetch deadline. */
+  timeoutMs?: number;
+}
+
 export interface StorageAdapterInfo {
   /** Storage type identifier */
   type: StorageType;
@@ -290,7 +311,7 @@ export interface IStorageAdapter {
   getType(): string;
 
   /** Read file contents from storage (optional - not all adapters support this) */
-  read?(filePath: string): Promise<Buffer | null>;
+  read?(filePath: string, options?: StorageReadOptions): Promise<Buffer | null>;
 
   /** Get adapter info including capabilities (optional but recommended) */
   getInfo?(): StorageAdapterInfo;

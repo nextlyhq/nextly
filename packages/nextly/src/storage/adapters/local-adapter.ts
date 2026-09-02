@@ -27,7 +27,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { UploadOptions, UploadResult, BulkDeleteResult } from "../types";
+import { resolveReadBounds } from "../fetch-stored-bytes";
+import { StorageReadTooLargeError } from "../read-errors";
+import type {
+  UploadOptions,
+  UploadResult,
+  BulkDeleteResult,
+  StorageReadOptions,
+} from "../types";
 
 import { BaseStorageAdapter } from "./base-adapter";
 
@@ -171,11 +178,56 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
 
   /**
    * Read file contents from local disk.
-   * Returns the file buffer, or null if file not found.
+   *
+   * Returns the file buffer, or `null` if the file is not found.
+   *
+   * Honours the caller's cap, which matters MORE here than anywhere else: this
+   * is the default backend, so a bound the cloud adapters keep and this one
+   * ignores is a bound that does nothing in the commonest deployment. Checked
+   * against the file's size before reading, because `readFile` buffers the
+   * whole thing — a cap enforced afterwards has already spent the memory it
+   * exists to save.
    */
-  async read(filePath: string): Promise<Buffer | null> {
+  async read(
+    filePath: string,
+    options?: StorageReadOptions
+  ): Promise<Buffer | null> {
+    let fullPath: string;
     try {
-      const fullPath = this.resolveAndValidate(filePath);
+      fullPath = this.resolveAndValidate(filePath);
+    } catch {
+      // A path escaping the storage directory, which is a refusal rather than
+      // an absence — but this method's contract has no way to say so, and its
+      // callers have always read a traversal attempt as "no such file".
+      return null;
+    }
+
+    /*
+     * The DEFAULTS apply here too, which is the whole reason this goes through
+     * the shared resolver. A caller naming no cap still gets one — the media
+     * pipeline reads without options — and before this the URL-backed adapters
+     * inherited a bound from `safeFetch` while this one, the default backend,
+     * had none at all.
+     */
+    const bounds = resolveReadBounds(options);
+
+    let size: number;
+    try {
+      size = (await fs.stat(fullPath)).size;
+    } catch {
+      return null;
+    }
+
+    /*
+     * Thrown rather than returned as `null`, because refusing a file that IS
+     * there is not the same answer as not finding one — and a caller told
+     * `null` would go on to treat a present file as missing.
+     */
+    if (size > bounds.maxBytes) {
+      throw new StorageReadTooLargeError(filePath, bounds.maxBytes, size);
+    }
+
+    try {
       return await fs.readFile(fullPath);
     } catch {
       return null;

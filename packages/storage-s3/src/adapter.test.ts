@@ -1,0 +1,265 @@
+/**
+ * What `read` means when the bucket answers, and when it does not.
+ *
+ * The first tests in this package. `read` is where that matters most: it is the
+ * one method whose contract is a DISTINCTION — a key that is absent answers
+ * `null`, a backend that cannot answer throws — and a distinction is exactly
+ * what goes wrong silently, because both outcomes look like an ordinary result
+ * at the call site.
+ *
+ * @module adapter.test
+ */
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+import { S3Client } from "@aws-sdk/client-s3";
+
+import {
+  isStorageReadTooLarge,
+  StorageReadTooLargeError,
+} from "nextly/storage/read-errors";
+
+import { S3StorageAdapter } from "./adapter";
+
+vi.mock("@aws-sdk/client-s3", () => {
+  class S3Client {
+    send = vi.fn();
+  }
+  /*
+   * The commands are inert carriers here: the adapter builds one and hands it
+   * to `send`, and every assertion below is about what `send` answers. Faking
+   * them as plain objects keeps the test about the adapter's branching rather
+   * than about the SDK's request shapes.
+   */
+  return {
+    S3Client,
+    GetObjectCommand: class {},
+    HeadObjectCommand: class {},
+    PutObjectCommand: class {},
+    DeleteObjectCommand: class {},
+    DeleteObjectsCommand: class {},
+  };
+});
+vi.mock("@aws-sdk/lib-storage", () => ({ Upload: class {} }));
+vi.mock("@aws-sdk/s3-request-presigner", () => ({ getSignedUrl: vi.fn() }));
+
+/** A `send` that behaves however a case needs, reachable from the assertions. */
+function adapterWithSend(): {
+  adapter: S3StorageAdapter;
+  send: ReturnType<typeof vi.fn>;
+} {
+  const adapter = new S3StorageAdapter({
+    bucket: "test-bucket",
+    region: "us-east-1",
+  });
+  // The client the adapter built for itself, so the stub is the one it uses.
+  const send = (adapter as unknown as { client: { send: typeof vi.fn } }).client
+    .send as unknown as ReturnType<typeof vi.fn>;
+  return { adapter, send };
+}
+
+/**
+ * A `GetObject` body in the shape the Node SDK exposes: async-iterable, and
+ * also able to buffer itself.
+ *
+ * Iterable because that is the path the adapter takes — it counts bytes as they
+ * arrive rather than trusting `ContentLength`, which compatible services may
+ * omit or misreport. `transformToByteArray` stays on it so the non-iterable
+ * fallback can be exercised by a body that omits the iterator.
+ */
+function body(
+  bytes: string,
+  chunkSize = 1024
+): {
+  transformToByteArray: () => Promise<Uint8Array>;
+  [Symbol.asyncIterator]: () => AsyncGenerator<Uint8Array>;
+} {
+  const encoded = new TextEncoder().encode(bytes);
+  return {
+    transformToByteArray: async () => encoded,
+    async *[Symbol.asyncIterator]() {
+      for (let at = 0; at < encoded.length; at += chunkSize) {
+        yield encoded.subarray(at, at + chunkSize);
+      }
+    },
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("S3StorageAdapter.read", () => {
+  it("returns the object's bytes", async () => {
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("hello"), ContentLength: 5 });
+    expect((await adapter.read("f.woff2"))?.toString("utf8")).toBe("hello");
+  });
+
+  it("answers null for a key that is not in the bucket", async () => {
+    /*
+     * ITS CONTROL IS "returns the object's bytes" ABOVE. On its own this case
+     * is satisfied by a `read` that answers `null` for every input, so the
+     * positive case is what makes this `null` mean "absent" rather than "this
+     * method never answers". Declared rather than left to adjacency.
+     */
+    const { adapter, send } = adapterWithSend();
+    const missing = Object.assign(new Error("Not Found"), {
+      name: "NotFound",
+      $metadata: { httpStatusCode: 404 },
+    });
+    send.mockRejectedValueOnce(missing);
+    expect(await adapter.read("gone.woff2")).toBeNull();
+  });
+
+  it("THROWS when the BUCKET is missing, rather than reporting the key absent", async () => {
+    /*
+     * The distinction the case above cannot make, and the reason `read` does
+     * not simply reuse the adapter's existing not-found predicate: that
+     * predicate treats ANY 404 as a missing object, and `NoSuchBucket` is a
+     * 404. A deleted, renamed or mistyped bucket would therefore report every
+     * key in it as absent — a configuration failure wearing the costume of an
+     * ordinary miss, which is the confusion this method exists to prevent.
+     */
+    const { adapter, send } = adapterWithSend();
+    const noBucket = Object.assign(new Error("The bucket does not exist"), {
+      name: "NoSuchBucket",
+      $metadata: { httpStatusCode: 404 },
+    });
+    send.mockRejectedValueOnce(noBucket);
+
+    const outcome = await adapter.read("f.woff2").then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(outcome).toBe(noBucket);
+    expect(outcome).not.toBeNull();
+  });
+
+  it("refuses an object larger than the caller's cap BEFORE downloading it", async () => {
+    /*
+     * Asserted on the reported length rather than on the body, because the
+     * point is that the body is never pulled: `transformToByteArray` buffers
+     * the whole object, so a cap enforced afterwards has already paid the cost
+     * it exists to avoid. The email attachment path is the caller that has a
+     * configured limit of its own.
+     */
+    const { adapter, send } = adapterWithSend();
+    const stream = body("x".repeat(50));
+    const spy = vi.spyOn(stream, "transformToByteArray");
+    send.mockResolvedValueOnce({ Body: stream, ContentLength: 50 });
+
+    /*
+     * Asserted on the REFUSAL'S IDENTITY, not merely that something threw.
+     * `rejects.toThrow()` alone is satisfied by any failure, so it cannot tell
+     * the intended over-cap refusal from a generic internal error — and the
+     * difference is load-bearing: the email attachment path answers this one
+     * with a size error the author can act on, and wraps anything else as an
+     * opaque storage failure.
+     */
+    const outcome = await adapter.read("big.woff2", { maxBytes: 10 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
+    expect((outcome as StorageReadTooLargeError).maxBytes).toBe(10);
+    expect((outcome as StorageReadTooLargeError).size).toBe(50);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("reads an object that fits under the cap", async () => {
+    // The control for the case above: without it, a `read` that refused every
+    // bounded call would satisfy the refusal assertion perfectly.
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("small"), ContentLength: 5 });
+    expect(
+      (await adapter.read("ok.woff2", { maxBytes: 10 }))?.toString("utf8")
+    ).toBe("small");
+  });
+
+  it("hands the caller's deadline to the SDK rather than ignoring it", async () => {
+    /*
+     * `StorageReadOptions` promises a bound and the URL-backed adapters keep it
+     * by forwarding `timeoutMs` to `safeFetch`. Read through the SDK there is
+     * no fetch to hand it to, so without this the same option is advertised and
+     * inert — the worst kind, one that validates and then does nothing, leaving
+     * a stalled bucket holding the read past a deadline the caller was told
+     * applied.
+     *
+     * Asserted on what `send` RECEIVED, because the resolved value is identical
+     * whether or not a signal was attached, which is exactly how this regresses
+     * unnoticed.
+     */
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("x"), ContentLength: 1 });
+    await adapter.read("f.woff2", { timeoutMs: 1234 });
+    const options = send.mock.calls[0]?.[1] as
+      | { abortSignal?: AbortSignal }
+      | undefined;
+    expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("still bounds the read when the caller named NO deadline", async () => {
+    /*
+     * This case previously asserted the opposite and so locked the defect in.
+     * `StorageReadOptions` promises the deadline whether or not a caller names
+     * one, and the URL-backed adapters keep that promise by inheriting
+     * `safeFetch`'s — while this one, reached by the media pipeline with no
+     * options at all, had none.
+     */
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("x"), ContentLength: 1 });
+    await adapter.read("f.woff2");
+    const options = send.mock.calls[0]?.[1] as
+      | { abortSignal?: AbortSignal }
+      | undefined;
+    expect(options?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("REFUSES an oversized body when the store reported no length at all", async () => {
+    /*
+     * `ContentLength` is optional in the SDK response, and MinIO/R2 and other
+     * compatible services may omit it or report it wrongly — so a preflight
+     * check against metadata fails OPEN exactly where an unusual backend is
+     * involved. The cap is counted against bytes that actually arrive.
+     */
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: body("x".repeat(500), 100) });
+
+    const outcome = await adapter.read("big.bin", { maxBytes: 150 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
+  });
+
+  it("REFUSES a body larger than a LYING ContentLength", async () => {
+    // The sharper half: metadata that is present but wrong passes the
+    // preflight, so only counting what arrives can catch it.
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({
+      Body: body("x".repeat(500), 100),
+      ContentLength: 5,
+    });
+
+    const outcome = await adapter.read("liar.bin", { maxBytes: 150 }).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTooLarge(outcome)).toBe(true);
+  });
+
+  it("answers an empty buffer for a zero-byte object, not null", async () => {
+    /*
+     * A stored empty file is not a missing one. Collapsing them would let a
+     * caller cleaning up "missing" keys delete a real object.
+     */
+    const { adapter, send } = adapterWithSend();
+    send.mockResolvedValueOnce({ Body: undefined, ContentLength: 0 });
+    const bytes = await adapter.read("empty.bin");
+    expect(bytes).not.toBeNull();
+    expect(bytes?.length).toBe(0);
+  });
+});
+
+// The mocked client class, referenced so the import is not flagged as unused.
+void S3Client;
