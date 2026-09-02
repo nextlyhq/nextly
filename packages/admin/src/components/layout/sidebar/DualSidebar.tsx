@@ -28,10 +28,22 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
-import { hasPluginsSection } from "./lib/has-plugins-section";
+import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
+import {
+  hasPluginsSection,
+  hasVisiblePluginCollection,
+} from "./lib/has-plugins-section";
+import {
+  canAccessApiKeys,
+  canAccessWebhooks,
+  hasSettingsSection as hasSettingsSectionHelper,
+} from "./lib/has-settings-section";
 import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
+import { placeStandalonePlugins } from "./lib/place-standalone-plugins";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
+import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
+import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
@@ -84,80 +96,25 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     });
   }, [standalonePlugins, readableResources, capabilities.canViewSettings]);
 
-  // Build dynamic menu items for standalone plugins, positioned by `after` + `order`
+  // Standalone plugins take their place in the rail by the anchor they declare.
+  // The placement rule lives in `lib/` with the other rail decisions; what stays
+  // here is the icon resolution, which needs this module's icon registry.
   const filteredMenuItems = useMemo(() => {
-    const ID_TO_ANCHOR: Record<string, string> = {
-      dashboard: "dashboard",
-      collections: "collections",
-      singles: "singles",
-      media: "media",
-      plugins: "plugins",
-      settings: "settings",
-    };
-
-    if (visibleStandalonePlugins.length === 0) return baseMenuItems;
-
     const iconMap = Icons as unknown as Record<string, React.ElementType>;
-
-    const byAnchor = new Map<
-      string,
-      Array<{ item: MainMenuItem; order: number }>
-    >();
-    for (const sp of visibleStandalonePlugins) {
-      const slug = pluginSlug(sp.name);
-      // A menu item stores an ElementType rendered as `<Icon className=… />`,
-      // so this surface cannot show an image. It says so rather than resolving
-      // an asset and discarding it, which would also discard the lucide name a
-      // plugin declared alongside the asset for precisely this surface.
-      const resolved = resolvePluginIcon(sp, {
-        fallback: "Database",
-        allowAsset: false,
-      });
-      const iconName = resolved.name;
-      const IconComponent = iconMap[iconName] || Database;
-      // The former top-level Users icon is gone; User Management now lives
-      // under Settings, so a plugin still declaring `after: "users"` is anchored
-      // next to Settings instead of falling through to the end of the rail.
-      const rawAnchor = sp.after || "plugins";
-      const anchor = rawAnchor === "users" ? "settings" : rawAnchor;
-
-      const entry = {
-        item: {
-          id: `standalone-${slug}` as MainMenuCategory,
-          label: sp.appearance?.label || sp.name,
-          icon: IconComponent,
-          href: "#",
-        },
-        order: sp.order ?? 100,
-      };
-
-      if (!byAnchor.has(anchor)) byAnchor.set(anchor, []);
-      byAnchor.get(anchor)!.push(entry);
-    }
-
-    for (const group of byAnchor.values()) {
-      group.sort((a, b) => a.order - b.order);
-    }
-
-    const result: MainMenuItem[] = [];
-    for (const item of baseMenuItems) {
-      result.push(item);
-      const anchor = ID_TO_ANCHOR[item.id];
-      if (anchor && byAnchor.has(anchor)) {
-        for (const { item: standaloneItem } of byAnchor.get(anchor)!) {
-          result.push(standaloneItem);
-        }
-        byAnchor.delete(anchor);
-      }
-    }
-
-    for (const group of byAnchor.values()) {
-      for (const { item: standaloneItem } of group) {
-        result.push(standaloneItem);
-      }
-    }
-
-    return result;
+    return placeStandalonePlugins(baseMenuItems, visibleStandalonePlugins, {
+      slugOf: pluginSlug,
+      iconFor: plugin => {
+        // A menu item stores an ElementType rendered as `<Icon className=… />`,
+        // so this surface cannot show an image. It says so rather than
+        // resolving an asset and discarding it, which would also discard the
+        // lucide name a plugin declared alongside the asset for this surface.
+        const resolved = resolvePluginIcon(plugin, {
+          fallback: "Database",
+          allowAsset: false,
+        });
+        return iconMap[resolved.name] || Database;
+      },
+    });
   }, [baseMenuItems, visibleStandalonePlugins]);
 
   // Fetch data for automatic navigation
@@ -206,19 +163,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     isPermissionsLoading ||
     (!!permissionsError && permissions.length === 0);
 
-  const hasCollectionsSection =
-    capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
-      isCollectionsLoading ||
-      isCollectionsError ||
-      permittedCollections.some(collection => {
-        if (collection.admin?.hidden) return false;
-        if (collection.admin?.isPlugin) {
-          const placement = getCollectionPlacement(collection);
-          return placement === "collections" || !placement;
-        }
-        return true;
-      }));
+  const hasCollectionsSection = hasCollectionsSectionHelper(capabilities, {
+    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isError: isCollectionsError,
+    permittedCollections,
+    placementOf: getCollectionPlacement,
+  });
 
   const hasSinglesSection =
     capabilities.canViewCollections &&
@@ -233,37 +183,21 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     // `canManageSettings` the panel then has no destination at all, so keeping
     // the rail item would open an empty panel rather than defer a decision.
     isPending: hasPermissionDataPending || isCollectionsLoading,
-    hasVisiblePluginCollection: permittedCollections.some(collection => {
-      if (!collection.admin?.isPlugin || collection.admin?.hidden) return false;
-      const placement = getCollectionPlacement(collection);
-      return !placement || placement === "plugins";
-    }),
+    hasVisiblePluginCollection: hasVisiblePluginCollection(
+      permittedCollections,
+      getCollectionPlacement
+    ),
   });
 
   const hasMediaSection = hasPermissionDataPending
     ? true
     : capabilities.canViewMedia;
-  const canAccessApiKeys =
-    hasPermission("read-api-keys") ||
-    hasPermission("create-api-keys") ||
-    hasPermission("update-api-keys");
-  // Any webhook grant reveals the link, matching the list route: read/update
-  // view the list, create reaches the create form from it.
-  const canAccessWebhooks =
-    hasPermission("read-webhooks") ||
-    hasPermission("update-webhooks") ||
-    hasPermission("create-webhooks");
-  // Settings now also hosts User Management (Users, User Fields, Roles), so a
-  // user whose only access is users/roles must still see the Settings icon.
-  const hasSettingsSection = hasPermissionDataPending
-    ? true
-    : capabilities.canViewSettings ||
-      capabilities.canManageEmailProviders ||
-      capabilities.canManageEmailTemplates ||
-      canAccessApiKeys ||
-      canAccessWebhooks ||
-      capabilities.canViewUsers ||
-      capabilities.canViewRoles;
+  const apiKeysReachable = canAccessApiKeys(hasPermission);
+  const webhooksReachable = canAccessWebhooks(hasPermission);
+  const hasSettingsSection = hasSettingsSectionHelper(capabilities, {
+    isPending: hasPermissionDataPending,
+    hasPermission,
+  });
   const hasBuildersSection = showBuilder;
 
   const visibleMenuItems = useMemo(
@@ -363,28 +297,18 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const hasSubSidebarCategory = (id: string) =>
     isSubSidebarCategory(id, isFolderTreeVisible);
 
-  // The Settings icon lands on the first subpage the user can actually OPEN —
-  // gated on each route's own guard, not the broader "can see the link" flag, so
-  // it never resolves to a page that would redirect. General needs
-  // manage-settings; the API Keys route needs update-api-keys; Webhooks accepts
-  // any webhook grant (its route's any-of). User Management now lives here too,
-  // so a role whose only access is read-users / read-roles lands on Users (or
-  // Roles) instead of bouncing off the manage-settings-guarded General page.
-  const settingsHref = hasPermission("manage-settings")
-    ? ROUTES.SETTINGS
-    : hasPermission("update-api-keys")
-      ? ROUTES.SETTINGS_API_KEYS
-      : canAccessWebhooks
-        ? ROUTES.SETTINGS_WEBHOOKS
-        : hasPermission("manage-email-providers")
-          ? ROUTES.SETTINGS_EMAIL_PROVIDERS
-          : hasPermission("manage-email-templates")
-            ? ROUTES.SETTINGS_EMAIL_TEMPLATES
-            : hasPermission("read-users")
-              ? ROUTES.USERS
-              : hasPermission("read-roles")
-                ? ROUTES.SECURITY_ROLES
-                : ROUTES.SETTINGS;
+  // The Settings icon lands on the first subpage the user can actually OPEN.
+  // Read off the panel's own table rather than listed here: this chain named
+  // seven destinations in an order of its own, and a destination added to the
+  // table and not to the chain became unreachable from the rail. Background
+  // Jobs was exactly that — the entry appeared, the link fell through every
+  // arm, and a jobs-only operator landed on General Settings, which answers to
+  // manage-settings and returns 403.
+  const settingsHref = resolveSettingsLanding({
+    hasPermission,
+    canAccessApiKeys: apiKeysReachable,
+    canAccessWebhooks: webhooksReachable,
+  });
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(
@@ -414,12 +338,15 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   }, [selectedMain, visibleStandalonePlugins, authorizedPlugins]);
 
   // Resolve the label for the active standalone plugin
-  const standaloneLabel = useMemo(() => {
-    if (!selectedMain.startsWith("standalone-")) return "";
-    const slug = selectedMain.replace("standalone-", "");
-    const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
-    return sp?.appearance?.label || sp?.name || slug;
-  }, [selectedMain, visibleStandalonePlugins]);
+  const standaloneLabel = useMemo(
+    () =>
+      resolveStandaloneLabel(
+        selectedMain,
+        visibleStandalonePlugins,
+        pluginSlug
+      ),
+    [selectedMain, visibleStandalonePlugins]
+  );
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -533,8 +460,8 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
           onPluginSearchChange: setPluginSearch,
           isActive,
           hasPermission,
-          canAccessApiKeys,
-          canAccessWebhooks,
+          canAccessApiKeys: apiKeysReachable,
+          canAccessWebhooks: webhooksReachable,
           pluginCollectionsForSection,
           showBuilder,
         }}
