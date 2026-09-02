@@ -1257,19 +1257,22 @@ describe("a free-form value the panel must let an author repair", () => {
     expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
-  it("still draws a SELECT for a value the keyword arm accepts", () => {
+  it("still draws the KEYWORD control for a value the keyword arm accepts", () => {
     // The control that separates "the rank learned something" from "the panel
-    // stopped drawing selects".
+    // stopped drawing keyword controls and hands everything a text field".
+    //
+    // Which keyword control it is, is not the property under test. `fontStyle`
+    // offers three short values, so it draws them as a group of buttons rather
+    // than a menu — the discriminator here is that an accepted keyword does NOT
+    // fall through to the free-form field the case above repairs in.
     const styles = {
       base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
     } as NodeStyles;
     mount({ typography: true }, styles);
 
-    // Named, because a union property draws TWO comboboxes — the form selector
-    // and the value — and an unnamed query would pass on either.
     expect(fieldsOf("fontStyle").queryByRole("textbox")).toBeNull();
     expect(
-      fieldsOf("fontStyle").getByRole("combobox", { name: "Font style" })
+      fieldsOf("fontStyle").getByRole("button", { name: "italic" })
     ).toBeDefined();
   });
 });

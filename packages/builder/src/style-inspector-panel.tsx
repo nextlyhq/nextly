@@ -3162,14 +3162,14 @@ function ToggleField({
 }: {
   id: string;
   labelledBy: string;
-  options: readonly [string, string];
+  options: readonly string[];
   stored: StyleValue | undefined;
   describedBy: string | undefined;
   onCommit: (value: StyleValue | null) => CommitOutcome;
 }): React.JSX.Element {
   return (
     <div
-      // The field's id sits on the GROUP rather than on either button. The
+      // The field's id sits on the GROUP rather than on any one button. The
       // field label carries `htmlFor`, and a label pointing at a button
       // forwards a click to it — so naming the first option that way would make
       // clicking the property label press it, or clear it when already pressed,
@@ -3197,8 +3197,8 @@ function ToggleField({
             // announces the message as a hint rather than as a failure.
             aria-invalid={describedBy === undefined ? undefined : true}
             // Pressing the pressed option CLEARS rather than re-writing it,
-            // which is the only way a two-button group can reach unset without
-            // a third button standing for "neither".
+            // which is the only way a group of options can reach unset without
+            // spending a button on "neither".
             onClick={() => onCommit(pressed ? null : option)}
           >
             {option}
