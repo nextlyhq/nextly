@@ -152,25 +152,22 @@ describe("the columns pair", () => {
 
     it("keeps the gutter on a STORED stylesheet handed back with no context", () => {
       /*
-       * The path a token reference does not survive, and the reason this gutter
-       * is a length.
+       * The gutter as a VALUE on the rendered page, on the path a consumer with
+       * no write path takes: compile once, store the artifact, hand it back as
+       * `styles`.
        *
-       * A consumer with no write path compiles once and stores the artifact,
-       * then hands it back as `styles`. `PageRenderer` withholds the site sheet
-       * when no breakpoints are stated, so nothing defines `--site-*` — while
-       * the stored page CSS still carries whatever it referenced. A `{ $token }`
-       * gutter therefore arrives as a `var()` with nothing behind it, which is
-       * invalid at computed-value time, and `gap` falls back to `normal`: zero
-       * for a grid, which is the exact defect this block was fixed for.
+       * This case was written when that path defined no `--site-*` at all, so a
+       * `{ $token }` gutter arrived as a `var()` with nothing behind it — invalid
+       * at computed-value time, `gap` falling back to `normal`, which is zero for
+       * a grid and the exact defect this block was fixed for. The renderer now
+       * emits the token tier alongside the page CSS, so that reason no longer
+       * holds and the gutter is a length only because nothing has migrated it.
        *
-       * Measured, not assumed: `core/card` is live in that state today, its
-       * `background-color: var(--site-color-surface)` reaching this path with
-       * the property undefined.
-       *
-       * So this asserts the gutter as a VALUE on the rendered page. It fails the
-       * moment the gutter becomes a token again, which is the point — the
-       * migration is waiting on the definition reaching every path a reference
-       * does, and this is what says so.
+       * Which changes what the assertion below DOES. It was a guard against a
+       * silent regression; it is now a pin, and it will fail on a migration that
+       * would render correctly. Read a failure here as the migration having
+       * happened and this case needing to assert the resolved gutter instead —
+       * not as the gutter having been lost.
        */
       const resolver = createBlockResolver([...coreBlocks]);
       const stored = resolvePageStyles(
