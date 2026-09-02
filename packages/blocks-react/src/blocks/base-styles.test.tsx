@@ -121,17 +121,40 @@ function countLeaves(value: unknown): number {
 }
 
 /**
- * Declared properties whose value carries NO leaf, named per state and
- * breakpoint.
+ * Every branch of a declaration that bottoms out in NOTHING, as a dotted path.
+ *
+ * Recursive, and that is the whole of it. A top-level `border: {}` is easy to
+ * spot by counting leaves; `border: { width: {}, style: "solid" }` is not,
+ * because the surviving sibling keeps the total nonzero. That shape is what
+ * removing all four of the form control's border widths actually leaves behind,
+ * and the emitted-versus-expected comparison cannot see it either — both sides
+ * fall together, so the counts still agree while the border stops drawing.
+ *
+ * A `{ $token }` is a leaf rather than a branch: it compiles to one `var()`, so
+ * descending into it would report the token's own fields as empty.
+ */
+function emptyBranches(value: unknown, path: string): string[] {
+  if (typeof value !== "object" || value === null) return [];
+  if (typeof (value as { $token?: unknown }).$token === "string") return [];
+  const entries = Object.entries(value as Record<string, unknown>);
+  // The base case that matters: an object with no entries declares nothing,
+  // wherever it sits.
+  if (entries.length === 0) return [path];
+  return entries.flatMap(([key, nested]) =>
+    emptyBranches(nested, `${path}.${key}`)
+  );
+}
+
+/**
+ * Declared branches that carry no value, named per state and breakpoint.
  *
  * A separate question from "does every leaf reach the stylesheet", and separate
  * for a reason. That one compares TOTALS — leaves summed over every context
- * against declarations found under the block's selector — so a property that is
- * empty in one context and populated in another still totals correctly and
- * passes. `border: {}` in `hover` beside a real `border` in `base` is exactly
- * that shape.
+ * against declarations found under the block's selector — so a property empty in
+ * one context and populated in another still totals correctly and passes.
+ * `border: {}` in `hover` beside a real `border` in `base` is exactly that shape.
  *
- * This one needs no stylesheet at all: an empty composite is wrong where it is
+ * This one needs no stylesheet at all: an empty branch is wrong where it is
  * written, whatever its siblings emit. `declaredProperties` lists a key whatever
  * its value, so without this `border: {}` was 0 emitted of 0 expected — not
  * "fewer than expected", and it passed. Emptying `BUTTON_BASE_STYLES.border`
@@ -147,8 +170,8 @@ function emptyDeclarations(styles: NodeStyles): string[] {
       for (const [property, value] of Object.entries(
         values as Record<string, unknown>
       )) {
-        if (countLeaves(value) === 0) {
-          empty.push(`${property} at ${state}/${breakpoint}`);
+        for (const branch of emptyBranches(value, property)) {
+          empty.push(`${branch} at ${state}/${breakpoint}`);
         }
       }
     }
@@ -402,6 +425,26 @@ describe("every default the core library declares", () => {
         hover: { base: { border: {} } },
       } as NodeStyles)
     ).toEqual(["border at hover/base"]);
+
+    /*
+     * And the NESTED shape, which counting leaves cannot reach: the surviving
+     * `style` keeps the total nonzero, and the emitted-versus-expected check
+     * agrees with itself because both sides fall together. This is what
+     * removing all four of the form control's border widths actually leaves.
+     */
+    expect(
+      emptyDeclarations({
+        base: {
+          base: {
+            border: {
+              width: {},
+              style: "solid",
+              color: { $token: "color.border-strong" },
+            },
+          },
+        },
+      } as NodeStyles)
+    ).toEqual(["border.width at base/base"]);
 
     // Must-differ: a populated declaration is silent, so the control is about
     // emptiness rather than about `border` being unreadable.
