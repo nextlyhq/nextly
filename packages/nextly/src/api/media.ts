@@ -24,7 +24,7 @@ import type {
   ListMediaOptions,
 } from "../services/media/media-service";
 import type { RequestContext } from "../services/shared";
-import { resolveClaimedMimeType } from "../services/upload-validation/web-fonts";
+import { resolveClaimedMimeType } from "../services/upload-validation/mime";
 import { UploadMediaInputSchema, UpdateMediaInputSchema } from "../types/media";
 
 import { readJsonBody } from "./read-json-body";

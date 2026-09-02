@@ -355,15 +355,86 @@ describe("useBlockKeyboardActions", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
-  it("says nothing when the store refuses the op", () => {
-    // `apply` answering null means the document moved underneath the press.
-    // The rule permitted it; the store did not.
+  it("says the move did not happen, naming no cause, when the rule permitted it", () => {
+    /*
+     * The store refusing something the nesting rule permits: a byte cap, a
+     * depth limit, an op the forest rejects.
+     *
+     * It is reported rather than passed over, because a keyboard author cannot
+     * see that nothing moved. And it names NO cause, because none was
+     * established — the rule allowed this placement, so any reason given here
+     * would be invented, and would send an author to change a container that
+     * was never the problem.
+     */
     const editor = editorSpy(pair(), "a");
     editor.apply.mockReturnValue(null);
     mount(editor);
 
     press("ArrowDown", { altKey: true });
 
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toContain("could not be moved");
+    // No cause, because none was established.
+    expect(said).not.toMatch(/take|inside|slot/i);
+  });
+
+  it("REFUSES a move the nesting rule forbids, and says why", () => {
+    /*
+     * A pointer author who drags a block somewhere it cannot go is shown the
+     * reason and the remedy. The same move by keyboard must be refused and
+     * explained too: a rule that reaches one route and not the other costs
+     * exactly the people the keyboard route exists for, and a status that
+     * never arrives is the failure WCAG 4.1.3 describes.
+     *
+     * The nesting source is supplied rather than registered so the refusal is a
+     * property of THIS test rather than of whatever the registry happens to
+     * hold: `acme/text` may only sit inside `acme/box`, so moving it to the
+     * root is refused by the rule, not by the store's other limits.
+     */
+    const editor = editorSpy(pair(), "a");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          editor={editor}
+          nesting={{ parentsOf: () => ["acme/box"] }}
+        />
+      </ShortcutProvider>
+    );
+
+    press("ArrowDown", { altKey: true });
+
+    /*
+     * REFUSED, not merely explained. The store never asks the nesting rule, so
+     * a move that reaches `apply` is applied — and the document would then hold
+     * a placement a drag refuses. `apply` not being reached is the assertion
+     * that separates stopping the move from narrating it.
+     */
+    expect(editor.apply).not.toHaveBeenCalled();
+    const said = screen.getByRole("status").textContent ?? "";
+    // A REASON, not merely that something failed — the assertion the previous
+    // wording could not make, since "could not be moved" is true of both.
+    expect(said).toMatch(/has to sit inside a container/i);
+    // And the remedy, which is what turns a refusal into an instruction.
+    expect(said).toMatch(/goes inside/i);
+  });
+
+  it("stays silent at a BOUNDARY, which is not a refusal", () => {
+    /*
+     * The other half, and the reason this fix is not simply "announce more".
+     * The first block cannot move up: there is nowhere to go, the store is
+     * never asked, and saying "already first" on every press is noise an
+     * author cannot act on. Only a move the RULES refused has something to
+     * explain.
+     *
+     * Without this, the natural next change — announcing on every path that
+     * ends without a move — would pass every other case here.
+     */
+    const editor = editorSpy(pair(), "a");
+    mount(editor);
+
+    press("ArrowUp", { altKey: true });
+
+    expect(editor.apply).not.toHaveBeenCalled();
     expect(screen.getByRole("status").textContent).toBe("");
   });
 

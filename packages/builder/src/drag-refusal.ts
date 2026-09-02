@@ -35,6 +35,18 @@
 import type { DropRefusal } from "./drop-targets";
 import { blockLabel } from "./inserter";
 
+/**
+ * The two facts a refusal's wording is built from.
+ *
+ * Narrower than {@link DropRefusal} on purpose. A drop carries a region id and
+ * a parent id because the canvas needs them to draw the refusal in place; the
+ * WORDS need only the reason and what the rule permits. Taking the pair rather
+ * than the whole lets a caller that never had a region — a keyboard move, which
+ * has a position and no pointer — reuse these sentences instead of inventing a
+ * second vocabulary, without fabricating a region id to satisfy a type.
+ */
+export type RefusalFacts = Pick<DropRefusal, "reason" | "permitted">;
+
 /** The two lines a refusal draws. */
 export interface RefusalWording {
   /** Why the drop will not happen, in one sentence. */
@@ -114,7 +126,7 @@ function permittedLabel(entry: string): string {
  * a sentence rather than a gap where a name should be.
  */
 export function refusalWording(
-  refusal: DropRefusal,
+  refusal: RefusalFacts,
   movingType: string,
   regionType: string | undefined
 ): RefusalWording {

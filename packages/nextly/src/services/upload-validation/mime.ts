@@ -8,7 +8,11 @@
  * @module services/upload-validation/mime
  */
 
-import { WEB_FONT_FORMATS } from "./web-fonts";
+import {
+  canonicalWebFontMime,
+  matchesWebFontSignature,
+  WEB_FONT_FORMATS,
+} from "./web-fonts";
 
 export const BLOCKED_MIME_TYPES: ReadonlySet<string> = new Set([
   "text/html",
@@ -97,7 +101,13 @@ export function resolveAllowlist(
     resolved = [...DEFAULT_ALLOWED_MIME_TYPES];
   }
 
-  resolved = resolved.map(t => t.toLowerCase().trim());
+  /*
+   * Canonicalised, not merely lowercased. A full override naming a font by its
+   * legacy spelling — `allowedMimeTypes: ["application/x-font-woff"]` — would
+   * otherwise hold that spelling while an upload's claim arrives canonicalised,
+   * and the two never meet: the install advertises a format it then refuses.
+   */
+  resolved = resolved.map(canonicalMimeType);
 
   const blockedInConfig = resolved.filter(t => BLOCKED_MIME_TYPES.has(t));
   for (const t of blockedInConfig) {
@@ -109,6 +119,32 @@ export function resolveAllowlist(
 }
 
 /**
+ * A media type reduced to the format it names.
+ *
+ * Two things travel with a type without being part of its identity, and both
+ * have made a comparison disagree with itself here:
+ *
+ * - PARAMETERS. `audio/ogg; codecs=opus` is an Ogg audio file, and a sniffer
+ *   that names the codec is describing the same format as a client that does
+ *   not. Comparing the whole string refuses a valid upload for being described
+ *   more precisely.
+ * - LEGACY SPELLINGS. The web font formats each answer to several names, and
+ *   the allowlist knows one.
+ *
+ * Both sides of every comparison pass through here, so an install and an
+ * upload cannot be talking about one format under two names.
+ *
+ * @param claimed - A type as some client, config file or sniffer spelled it
+ * @returns The type it names, or `""` when it named nothing
+ */
+export function canonicalMimeType(claimed: string): string {
+  // `split` on a non-empty string always yields a first element; the fallback
+  // is for the empty claim, where there is nothing to canonicalise.
+  const essence = claimed.split(";")[0]?.toLowerCase().trim() ?? "";
+  return canonicalWebFontMime(essence) ?? essence;
+}
+
+/**
  * Validate a claimed MIME type against the allowlist. Hard-block takes
  * precedence; wildcard entries like `"image/*"` match any
  * `image/<subtype>`.
@@ -117,7 +153,10 @@ export function validateMimeType(
   claimedMime: string,
   allowlist: readonly string[]
 ): MimeValidationResult {
-  const normalized = claimedMime.toLowerCase().trim();
+  // Canonicalised rather than merely lowercased, so the claim and the
+  // allowlist are compared in one spelling — the config side is canonicalised
+  // by `resolveAllowlist`, and a claim left raw meets it as a different string.
+  const normalized = canonicalMimeType(claimedMime);
 
   if (BLOCKED_MIME_TYPES.has(normalized)) {
     return { ok: false, reason: "blocked" };
@@ -131,4 +170,82 @@ export function validateMimeType(
   });
 
   return isAllowed ? { ok: true } : { ok: false, reason: "not-allowed" };
+}
+
+/**
+ * The accepted format a filename implies, if any.
+ *
+ * Over EVERY accepted format, not only fonts. A browser reports no type for
+ * anything its platform does not register, and the dropzone offers each of
+ * these by suffix — so a file it accepts locally and the server then refuses
+ * for having no type is the same defect fonts had, wearing another extension.
+ *
+ * @param filename - The uploaded name, read case-insensitively
+ */
+export function acceptedMimeFromFilename(filename: string): string | undefined {
+  const lower = filename.toLowerCase();
+  return DEFAULT_ACCEPTED_FORMATS.find(format =>
+    format.extensions.some(extension => lower.endsWith(extension))
+  )?.mimeType;
+}
+
+/**
+ * The type an upload claims, filled in from its name where nothing was sent.
+ *
+ * ONE implementation, because four upload entry points need the same answer and
+ * each names its file differently — so the resolution lives here rather than
+ * beside each of them, where a reader looking for one spelling sees a subset.
+ *
+ * A browser reports no type for formats its platform does not register, and
+ * several multipart clients send `application/octet-stream` for the same
+ * reason. Both are refused by an allowlist keyed on the type.
+ *
+ * A FONT claim answers to its signature here, under any spelling, because
+ * `file-type` recognises neither WOFF nor WOFF2 — so nothing downstream can
+ * check it, and this route serves those types to anonymous callers. Every other
+ * inferred type is compared against the file's own bytes by
+ * `detectAndCompareMime` further down the same pipeline, which every upload
+ * path now runs.
+ *
+ * @param filename - The uploaded name
+ * @param reportedType - The type the client sent, which may be empty
+ * @param buffer - The uploaded bytes, which must back an inferred font type
+ * @returns The type to validate and store, or `""` when a font claim's bytes
+ *   do not support it
+ */
+export function resolveClaimedMimeType(
+  filename: string,
+  reportedType: string,
+  buffer: Buffer
+): string {
+  const claimed = reportedType.trim();
+  // Compared in lower case, because a client may spell the generic type
+  // `Application/Octet-Stream` — mime tokens are case-insensitive.
+  const generic = claimed.toLowerCase();
+
+  /*
+   * A font claim under ANY of its spellings, canonical or legacy, answers to
+   * the bytes and comes back canonical. The allowlist knows one name per
+   * format, so a claim arriving as `application/x-font-woff` is a font the
+   * product accepts being refused for how the client spelled it.
+   */
+  const canonicalFont = canonicalWebFontMime(generic);
+  if (canonicalFont !== undefined) {
+    return matchesWebFontSignature(buffer, canonicalFont) ? canonicalFont : "";
+  }
+
+  if (generic !== "" && generic !== "application/octet-stream") {
+    // Not a font by any spelling, so its bytes are somebody else's check.
+    return claimed;
+  }
+
+  const inferred = acceptedMimeFromFilename(filename);
+  if (inferred === undefined) return claimed;
+
+  // A font name infers nothing unless the content agrees, since nothing
+  // downstream can check this one.
+  if (canonicalWebFontMime(inferred) !== undefined) {
+    return matchesWebFontSignature(buffer, inferred) ? inferred : claimed;
+  }
+  return inferred;
 }

@@ -278,6 +278,7 @@ describe("every default the core library declares", () => {
       "core/column",
       "core/columns",
       "core/divider",
+      "core/embed",
       "core/form",
       "core/gallery",
       "core/image",

@@ -1766,16 +1766,15 @@ function DropRefusalNotice({
        * from it: this describes a POINTER gesture, and a live region here
        * would speak to someone who is not the one dragging.
        *
-       * What must NOT be claimed is that the keyboard path covers it.
-       * `keyboardMovePosition` is purely positional and never asks the nesting
-       * question, so an `alt+Arrow` move is refused by the STORE rather than by
-       * the rule, and `keyboard-actions` returns silently — its own test pins
-       * that. So the nesting reason this message carries currently has no
-       * spoken counterpart anywhere.
+       * The spoken counterpart is `keyboard-actions`, which refuses a move the
+       * nesting rule forbids and announces the same reason and remedy through
+       * its own live region. `keyboardMovePosition` stays purely positional —
+       * it answers where a block goes, never whether it may — so the question
+       * is asked by the wiring on both routes, of one function.
        *
-       * That gap is real and it is not this element's to close. Announcing a
-       * pointer drag would put the sentence on the wrong gesture; the fix
-       * belongs where the keyboard move is refused.
+       * Which is why announcing here would be wrong rather than redundant: it
+       * would put the sentence on a pointer gesture, spoken to someone who is
+       * not the one dragging.
        */
       aria-hidden="true"
     >
