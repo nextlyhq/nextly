@@ -37,9 +37,15 @@ created on none.
 
 Fifty added in total: thirty-five on tables the bootstrap already created, and
 fifteen on `dynamic_collections`, `dynamic_singles` and `dynamic_components`,
-which are now created too. Those three hold the metadata for every collection,
-single and component in a project, so a database built from this fallback
-previously could not describe its own content.
+which are now created too.
+
+Only `dynamic_singles` was entirely absent — nothing creates it outside tests.
+The other two are created by `SystemTableService`, which the same fallback calls
+next, but from its own hand-written DDL that has 19 columns on PostgreSQL and 21
+on SQLite where the schema declares 25. Those definitions disagree with the
+schema and with each other. The statements added here are generated from the
+Drizzle column configs and run first, so on SQLite the complete definition is
+the one that wins.
 
 The guard that was meant to catch this could not see two of the tables. It read
 the schema SOURCE for a literal table name, and `dynamic_components` is built
