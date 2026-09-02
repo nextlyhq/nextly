@@ -28,11 +28,16 @@ import type { ApiCollection } from "@admin/types/entities";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
 
-import { hasPluginsSection } from "./lib/has-plugins-section";
+import { hasCollectionsSection as hasCollectionsSectionHelper } from "./lib/has-collections-section";
+import {
+  hasPluginsSection,
+  hasVisiblePluginCollection,
+} from "./lib/has-plugins-section";
 import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
 import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
+import { resolveStandaloneLabel } from "./lib/resolve-standalone-label";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
@@ -207,19 +212,12 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     isPermissionsLoading ||
     (!!permissionsError && permissions.length === 0);
 
-  const hasCollectionsSection =
-    capabilities.canViewCollections &&
-    (hasPermissionDataPending ||
-      isCollectionsLoading ||
-      isCollectionsError ||
-      permittedCollections.some(collection => {
-        if (collection.admin?.hidden) return false;
-        if (collection.admin?.isPlugin) {
-          const placement = getCollectionPlacement(collection);
-          return placement === "collections" || !placement;
-        }
-        return true;
-      }));
+  const hasCollectionsSection = hasCollectionsSectionHelper(capabilities, {
+    isPending: hasPermissionDataPending || isCollectionsLoading,
+    isError: isCollectionsError,
+    permittedCollections,
+    placementOf: getCollectionPlacement,
+  });
 
   const hasSinglesSection =
     capabilities.canViewCollections &&
@@ -234,11 +232,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
     // `canManageSettings` the panel then has no destination at all, so keeping
     // the rail item would open an empty panel rather than defer a decision.
     isPending: hasPermissionDataPending || isCollectionsLoading,
-    hasVisiblePluginCollection: permittedCollections.some(collection => {
-      if (!collection.admin?.isPlugin || collection.admin?.hidden) return false;
-      const placement = getCollectionPlacement(collection);
-      return !placement || placement === "plugins";
-    }),
+    hasVisiblePluginCollection: hasVisiblePluginCollection(
+      permittedCollections,
+      getCollectionPlacement
+    ),
   });
 
   const hasMediaSection = hasPermissionDataPending
@@ -405,12 +402,15 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   }, [selectedMain, visibleStandalonePlugins, authorizedPlugins]);
 
   // Resolve the label for the active standalone plugin
-  const standaloneLabel = useMemo(() => {
-    if (!selectedMain.startsWith("standalone-")) return "";
-    const slug = selectedMain.replace("standalone-", "");
-    const sp = visibleStandalonePlugins.find(p => pluginSlug(p.name) === slug);
-    return sp?.appearance?.label || sp?.name || slug;
-  }, [selectedMain, visibleStandalonePlugins]);
+  const standaloneLabel = useMemo(
+    () =>
+      resolveStandaloneLabel(
+        selectedMain,
+        visibleStandalonePlugins,
+        pluginSlug
+      ),
+    [selectedMain, visibleStandalonePlugins]
+  );
 
   return (
     <div className="flex h-full overflow-hidden">
