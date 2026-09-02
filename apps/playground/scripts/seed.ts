@@ -243,8 +243,28 @@ async function seedPosts(
  * than overwritten — a re-seed must not discard whatever a developer was in the
  * middle of trying on the page.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Nextly instance has dynamic shape
-async function seedBlockPages(nextly: any) {
+/**
+ * The slice of the Nextly client this seeder uses, stated rather than widened.
+ *
+ * The seeders around it take the instance as `any`, because they reach across
+ * users, media and dynamic collections and the instance's shape is assembled at
+ * boot. This one asks two questions of one collection, so the contract is small
+ * enough to write down — and writing it down is what makes a change to either
+ * call a type error here rather than a runtime failure during a seed.
+ */
+interface BlockPageStore {
+  find(args: {
+    collection: string;
+    where: { slug: { equals: string } };
+    limit: number;
+  }): Promise<{ meta: { total: number } }>;
+  create(args: {
+    collection: string;
+    data: Record<string, unknown>;
+  }): Promise<unknown>;
+}
+
+async function seedBlockPages(nextly: BlockPageStore) {
   const existing = await nextly.find({
     collection: "block-pages",
     where: { slug: { equals: KITCHEN_SINK_SLUG } },
@@ -315,7 +335,24 @@ export async function seedIfEmpty(): Promise<SeedResult> {
   const nextly = await getNextly({ config });
   const existing = await nextly.users.find({ limit: 1 });
   if (existing.meta.total > 0) {
-    return { ...EMPTY_RESULT, skipped: true, reason: "users-exist" };
+    /*
+     * The content seeders are gated on an empty database because they write
+     * rows an author may since have edited or deleted, and re-creating those
+     * would fight whoever owns the database.
+     *
+     * The kitchen-sink page is not one of those. It is keyed on a slug nothing
+     * else writes and it is idempotent on that slug, so it is safe to offer to a
+     * database that already has users — and gating it behind the empty check
+     * meant an existing checkout never received the page at all, since a
+     * contributor reaches this path on every run after their first.
+     */
+    const blockPages = await seedBlockPages(nextly);
+    return {
+      ...EMPTY_RESULT,
+      skipped: true,
+      reason: "users-exist",
+      blockPagesCreated: blockPages.created,
+    };
   }
   return seedForce();
 }
@@ -327,7 +364,14 @@ if (isCliEntry(import.meta.url)) {
     try {
       const result = await seedIfEmpty();
       if (result.skipped) {
-        console.log(`[nextly] seed skipped (${result.reason ?? "no-op"})`);
+        // The page is reported separately, because the skip message otherwise
+        // says nothing happened on a run that created it.
+        console.log(
+          `[nextly] seed skipped (${result.reason ?? "no-op"})` +
+            (result.blockPagesCreated > 0
+              ? `, added ${result.blockPagesCreated} block page`
+              : "")
+        );
       } else {
         console.log(
           `[nextly] seed complete: ${result.usersCreated} user, ` +

@@ -538,6 +538,23 @@ jobs:
         env:
           TURBO_CACHE_DIR: .turbo
 
+      # The playground is an APP, so `turbo test`'s filter list above — which
+      # names the seventeen publishable packages — never reaches it, and its
+      # suites ran nowhere. That was already true of its dev-tooling tests
+      # (doctor, reset, the style-fixture manifest); it now also covers the
+      # seeded block-page fixture, whose whole job is to fail when a block is
+      # added to the library and not to the page.
+      #
+      # Run directly rather than added to the filter list above: `test`
+      # dependsOn `^build`, and an app is a leaf that depends on nearly every
+      # package, so filtering turbo to it would pull the whole graph into a step
+      # that needs only what the Build step has already produced.
+      - name: Playground tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: pnpm --filter playground exec vitest run
+        env:
+          TURBO_CACHE_DIR: .turbo
+
       # Strict: package.json shape / publish-readiness across all 13 publishable
       # packages (nextly + create-nextly-app + 11 @nextlyhq/*). Failures here
       # block the release pipeline.

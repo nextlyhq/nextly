@@ -1,41 +1,39 @@
 /**
  * Every block the core library ships, on one page, at its DEFAULTS.
  *
- * ## Why this exists
+ * ## What it is for
  *
- * Nothing in version control rendered a single block. The seed data held
- * categories, tags and posts; block content had to be authored by hand in the
- * admin, which meant it lived in whoever's database and vanished on a reset. So
- * the only way to look at the block library was to build a page first — which is
- * how the U-5 sweep was run, and why four defects had gone unseen: a form whose
- * controls a host reset made invisible, a row of columns with no gutter, an embed
- * with no shape, and a card whose content sits flush against its own border.
+ * The block library is otherwise only visible by authoring a page by hand in the
+ * admin, which stores it in one contributor's database and loses it on a reset.
+ * This document is version-controlled, so the whole library can be looked at on a
+ * fresh checkout and the same page can be compared between two revisions.
  *
- * ## Defaults ONLY, and that is the point
+ * ## Defaults ONLY
  *
- * No node here carries `styles`. A block library is judged by what an author gets
- * before they style anything, and every one of those four defects was a block that
- * took a visual commitment and stopped one property short of finishing it. Adding
- * styling here would hide exactly the class of defect this page exists to show — a
- * page that looks good because it was dressed proves nothing about the library.
+ * No node carries `styles`. A block library is judged by what an author gets
+ * before styling anything, and a default that stops one property short — a
+ * container that lays out a grid and leaves the gutter at zero, a control with a
+ * border and no space behind it — is only visible undressed. Styling this page
+ * would hide precisely what it exists to show, so a node that looks wrong here is
+ * reporting something about the block rather than about the fixture.
  *
- * So: if this page looks wrong, that is a finding rather than a fixture to fix.
+ * ## Where the values come from
  *
- * ## Why a typed module rather than JSON
+ * Prop values are each block's own `example`, which its definition declares and
+ * the inserter shows an author, so this page and the palette cannot disagree
+ * about what a working block looks like.
  *
- * `BlockDocument` is checked at compile time, so a node with a misspelled type or
- * a prop shape the block does not declare fails `check-types` rather than
- * rendering an unknown-block placeholder nobody looks at.
+ * ## What the type does and does not check
  *
- * Prop values are taken from each block's own `example`, which the definitions
- * declare and the palette already shows, so this page and the inserter cannot
- * disagree about what a working block looks like.
+ * `BlockDocument` checks the SHAPE — that a node carries an id, a type, a version
+ * and props, and that slots hold nodes. It does not check the type NAME:
+ * `BlockNode.type` is `string` and `props` is `Record<string, unknown>`, so a
+ * misspelled block or a prop the block never declares compiles cleanly and renders
+ * a placeholder or nothing at all.
  *
- * ## The guard
- *
- * `kitchen-sink.test.ts` asserts that every name in `coreBlocks` appears below. A
- * block added to the library without a place here fails that test, which is what
- * keeps this page complete rather than merely large.
+ * `kitchen-sink.test.ts` is what checks those, and it is the reason this file can
+ * be trusted: it resolves every node type against `coreBlocks`, requires every
+ * registered block to appear, and holds the nesting rules the engine enforces.
  *
  * @module seed/kitchen-sink
  */
@@ -71,7 +69,11 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
             id: "ks-intro-heading",
             type: "core/heading",
             version: 1,
-            props: { text: "Every block, at its defaults", level: "h1" },
+            // The SAME string the row is stored under. The route derives page
+            // metadata from the first heading in preference to the stored
+            // title, so two spellings would disagree across the admin, the tab
+            // and the document with nothing reporting it.
+            props: { text: KITCHEN_SINK_TITLE, level: "h1" },
           },
           {
             id: "ks-intro-text",
@@ -379,9 +381,10 @@ export const KITCHEN_SINK_DOCUMENT: BlockDocument = {
             version: 1,
             props: { label: "Get started", href: "/signup" },
           },
-          // A form's controls are the U-5 defect that a host CSS reset caused:
-          // an input with no border and no background on a page of the same
-          // colour is present, focusable, submittable and invisible.
+          // A form is here for its controls. A host CSS reset takes away the
+          // border and background a user agent draws on an input, and a control
+          // with neither, on a page of the same colour, is present, focusable,
+          // submittable and invisible.
           {
             id: "ks-form",
             type: "core/form",
