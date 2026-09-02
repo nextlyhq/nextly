@@ -1,3 +1,5 @@
+import { STORAGE_FORMAT } from "../schemas/storage-format";
+
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
 //
 // Kept here (not in cli/commands/dev.ts where it used to live) so that any
@@ -527,4 +529,27 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE INDEX IF NOT EXISTS "email_deliveries_retention_idx"
       ON "email_deliveries" ("retention_class", "created_at")`,
   ];
+}
+
+/**
+ * The bootstrap statements safe to replay over a database that already exists.
+ *
+ * Replaying the whole set is safe in one direction only. The field-group
+ * registry has two spellings, and `chooseRegistryTable` prefers the LEGACY one
+ * whenever it is present — so on a database whose registry has been migrated,
+ * creating the legacy table beside it does not add a table, it makes every
+ * reader switch to an empty one and every migrated component unreachable.
+ *
+ * A fresh database has neither spelling and takes the full set; this narrowing
+ * applies only to a replay, which is the only path that can meet a database
+ * that already chose.
+ */
+export function replayableSqliteCoreStatements(options: {
+  /** True when this database holds the MIGRATED field-group registry. */
+  hasMigratedFieldGroupRegistry: boolean;
+}): string[] {
+  const statements = generateSqliteCoreTableStatements();
+  if (!options.hasMigratedFieldGroupRegistry) return statements;
+  const legacy = `"${STORAGE_FORMAT.registryTable}"`;
+  return statements.filter(statement => !statement.includes(legacy));
 }

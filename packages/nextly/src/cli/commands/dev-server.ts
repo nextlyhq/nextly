@@ -14,13 +14,17 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "../../collections/fields/types/index";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
-import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
+import {
+  generateSqliteCoreTableStatements,
+  replayableSqliteCoreStatements,
+} from "../../database/sqlite-core-tables";
+import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { MIGRATION_TARGET } from "../../domains/field-groups/migration/target";
 // F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
 // MySQL `databaseName` can be threaded through to drizzle-kit.pushSchema.
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
 // MySQL because it has no caller-supplied URL. Once F8 PR 2/3 collapses
 // the two paths, this can collapse back to a single import.
-import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -90,6 +94,30 @@ import type { ResolvedDevOptions } from "./db-sync";
  * these tables to exist.
  */
 /**
+ * Whether replaying the bootstrap would resurrect a registry this database has
+ * migrated away from.
+ *
+ * The field-group registry has two spellings, and `chooseRegistryTable` prefers
+ * the LEGACY one whenever it is present. So creating `dynamic_components`
+ * beside a populated `dynamic_field_groups` does not add a table — it makes
+ * every reader switch to an empty one, and every migrated component becomes
+ * unreachable. A fresh database has neither and is unaffected; only a replay
+ * over an existing database can do this.
+ */
+async function hasMigratedFieldGroupRegistry(
+  drizzleAdapter: DrizzleAdapter
+): Promise<boolean> {
+  try {
+    return await drizzleAdapter.tableExists(MIGRATION_TARGET.registryTable);
+  } catch {
+    // Cannot tell. Assume it HAS migrated: skipping a create on a database
+    // that did not is a table the next fresh path adds, while creating one on a
+    // database that did is silent data loss.
+    return true;
+  }
+}
+
+/**
  * Run the SQLite core bootstrap statements against this database.
  *
  * Every statement is IF NOT EXISTS, so this both creates a fresh database and
@@ -102,9 +130,10 @@ import type { ResolvedDevOptions } from "./db-sync";
  */
 async function applyCoreStatements(
   drizzleAdapter: DrizzleAdapter,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  statements: string[] = generateSqliteCoreTableStatements()
 ): Promise<void> {
-  for (const statement of generateSqliteCoreTableStatements()) {
+  for (const statement of statements) {
     try {
       await drizzleAdapter.executeQuery(statement);
     } catch (error) {
@@ -145,7 +174,14 @@ export async function ensureCoreTables(
     const usersExists = await drizzleAdapter.tableExists("users");
     if (usersExists) {
       if (dialect === "sqlite") {
-        await applyCoreStatements(drizzleAdapter, logger);
+        await applyCoreStatements(
+          drizzleAdapter,
+          logger,
+          replayableSqliteCoreStatements({
+            hasMigratedFieldGroupRegistry:
+              await hasMigratedFieldGroupRegistry(drizzleAdapter),
+          })
+        );
         logger.debug("Core tables reconciled");
       } else {
         logger.debug("Core tables already exist, skipping ensureCoreTables");
