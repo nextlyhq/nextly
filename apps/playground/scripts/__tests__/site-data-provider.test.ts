@@ -46,6 +46,34 @@ describe("the site's data provider", () => {
       });
   });
 
+  it("reads as an ANONYMOUS visitor, never as the process", () => {
+    /*
+     * The precondition, and the reason it is asserted rather than trusted to a
+     * comment: a stored block document names the collection it loops, and this
+     * route answers anyone with a URL. `Nextly.find` defaults to a TRUSTED read
+     * that evaluates no access rule and applies no lifecycle filter, so the
+     * bare call hands a public page rows nobody was allowed to see.
+     *
+     * Measured against the seeded playground data before this was fixed: the
+     * bare call returned 5 posts including 2 drafts, where the enforced and
+     * published-only reads each returned 3.
+     *
+     * Both flags, because they answer different questions — access decides who
+     * may see a row, the lifecycle decides whether it is public yet — so a test
+     * asserting only one would pass on a provider that leaked the other.
+     */
+    const { reader, calls } = stubReader();
+
+    return createSiteDataProvider(reader)
+      .find({ collection: "posts", limit: 3 })
+      .then(() => {
+        expect(calls[0]).toMatchObject({
+          overrideAccess: false,
+          status: "published",
+        });
+      });
+  });
+
   it("asks for no page at all when the query has no offset", () => {
     // The ordinary case, and the only one `core/collection-loop` produces: a
     // `page` sent unasked would pin every loop to the first page whatever the

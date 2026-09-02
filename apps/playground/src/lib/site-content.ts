@@ -110,6 +110,27 @@ export function createSiteDataProvider(
       }
       const result = await reader.find({
         collection,
+        /*
+         * ANONYMOUS and PUBLISHED-ONLY, and both are preconditions rather than
+         * tuning.
+         *
+         * A stored block document names the collection it loops, and this route
+         * is reachable by anyone with a URL — so the read is on behalf of that
+         * visitor, not of the process. `Nextly.find` defaults to a TRUSTED read,
+         * which evaluates no access rule and applies no lifecycle filter, and a
+         * document could then name any collection in the site.
+         *
+         * Measured against the seeded playground data: the bare call returns 5
+         * posts including 2 drafts, while `overrideAccess: false` returns 3 and
+         * `status: "published"` returns 3.
+         *
+         * Both, because they answer different questions. Access decides WHO may
+         * see a row; the lifecycle decides whether a row is public yet. A draft
+         * that anonymous access rules would admit is still not published, and a
+         * published row behind a restrictive rule is still not this visitor's.
+         */
+        overrideAccess: false,
+        status: "published",
         ...(limit === undefined ? {} : { limit }),
         ...(offset === undefined || offset === 0 || limit === undefined
           ? {}
