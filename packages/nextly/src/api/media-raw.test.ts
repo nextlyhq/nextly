@@ -18,7 +18,15 @@ import { createMediaHandlers } from "./media-handlers";
 
 const mocks = vi.hoisted(() => ({
   mediaService: { findById: vi.fn() },
-  storage: { read: vi.fn(), getPublicUrl: vi.fn() },
+  /*
+   * The ADAPTER is the thing that can read. Kept separate from the manager
+   * below, and the manager deliberately has NO `read` and NO `getPublicUrl`,
+   * because the real one has neither — an earlier double carried both and so
+   * passed while the route handed the manager over and could not serve a byte
+   * on any backend.
+   */
+  adapter: { read: vi.fn(), getPublicUrl: vi.fn() },
+  manager: { getAdapterForCollection: vi.fn() },
   requirePermission: vi.fn(),
 }));
 
@@ -32,7 +40,7 @@ vi.mock("../di", () => ({
 }));
 
 vi.mock("../storage/storage", () => ({
-  getMediaStorage: vi.fn(() => mocks.storage),
+  getMediaStorage: vi.fn(() => mocks.manager),
 }));
 
 vi.mock("../auth/middleware", async importOriginal => {
@@ -62,7 +70,8 @@ function storedAs(mimeType: string): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.storage.read.mockResolvedValue(Buffer.from("OTTO-bytes"));
+  mocks.manager.getAdapterForCollection.mockReturnValue(mocks.adapter);
+  mocks.adapter.read.mockResolvedValue(Buffer.from("OTTO-bytes"));
 });
 
 describe("the public byte route", () => {
@@ -91,7 +100,7 @@ describe("the public byte route", () => {
 
     expect(response.status).toBe(404);
     expect(response.status).not.toBe(403);
-    expect(mocks.storage.read).not.toHaveBeenCalled();
+    expect(mocks.adapter.read).not.toHaveBeenCalled();
     expect(await response.text()).toBe("");
   });
 
@@ -110,6 +119,37 @@ describe("the public byte route", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.requirePermission).not.toHaveBeenCalled();
+  });
+
+  it("reads through the media collection's ADAPTER, not the manager", async () => {
+    /*
+     * The manager routes to an adapter and cannot read; it also needs the
+     * collection to choose one, so `getPublicUrl` called without it answers
+     * from the local default and yields a relative path `safeFetch` refuses.
+     * Handing the manager over therefore fails on EVERY backend — which the
+     * previous double concealed by implementing `read` itself.
+     *
+     * Asserted on the collection as well as on the bytes: an install routing
+     * media to S3 while everything else stays local gets the wrong backend
+     * from an omitted argument, and the bytes alone cannot show that.
+     */
+    storedAs("font/woff2");
+    const response = await getRaw("m1");
+
+    expect(response.status).toBe(200);
+    expect(mocks.manager.getAdapterForCollection).toHaveBeenCalledWith("media");
+    expect(mocks.adapter.read).toHaveBeenCalled();
+  });
+
+  it("serves a font whose stored type is spelled in another case", async () => {
+    /*
+     * `validateMimeType` lowercases what it compares and the record keeps what
+     * the client sent, so `Font/WOFF2` is accepted on upload and stored with
+     * that spelling. An exact lookup here would refuse to serve a font this
+     * same product had just approved.
+     */
+    storedAs("Font/WOFF2");
+    expect((await getRaw("m1")).status).toBe(200);
   });
 
   it("answers 404 for a record that is not there", async () => {

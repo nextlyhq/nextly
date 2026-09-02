@@ -18,6 +18,7 @@
  *
  * @module storage/read-stored-media
  */
+import { NextlyError } from "../errors/nextly-error";
 import { safeFetch } from "../utils/validate-external-url";
 
 import { classifyFetchFailure } from "./fetch-stored-bytes";
@@ -48,14 +49,24 @@ export interface StoredMediaSource {
  * Carries the status rather than a sentence, so a caller can decide what to say
  * — an API route answering a visitor and an attachment path answering an author
  * owe different explanations for the same failure.
+ *
+ * A `NextlyError` because this is product code in this package: a caller
+ * reaching for `NextlyError.is` must be able to classify what it caught without
+ * matching on a class name, and the envelope and structured logging follow from
+ * the code rather than from the message.
  */
-export class StoredMediaUnreachableError extends Error {
+export class StoredMediaUnreachableError extends NextlyError {
   constructor(
     readonly url: string,
     readonly status: number
   ) {
-    super(`Stored object could not be read (status ${String(status)}).`);
-    this.name = "StoredMediaUnreachableError";
+    super({
+      code: "STORAGE_READ_UNREACHABLE",
+      publicMessage: "The stored file could not be read.",
+      // The URL is operator-side only: it names a bucket and a key, and whoever
+      // asked for the file has no use for either.
+      logContext: { url, status },
+    });
   }
 }
 

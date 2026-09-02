@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 
-import { describeFileError, buildQueueFromDrop } from "./index";
+import {
+  describeFileError,
+  buildQueueFromDrop,
+  DEFAULT_ACCEPTED_FILE_TYPES,
+  getAcceptDescription,
+} from "./index";
 
 const MB = 1024 * 1024;
 
@@ -195,5 +200,39 @@ describe("buildQueueFromDrop", () => {
     expect(failed[0].error).toBe(
       "File type is not supported, File is too large (max 10 MB)"
     );
+  });
+});
+
+describe("the default accept map", () => {
+  /*
+   * React Dropzone rejects a file whose type is absent from this map as
+   * `file-invalid-type`, in the browser, before any request is made — so a
+   * server allowlist that accepts a font is inert on its own. The upload an
+   * author actually performs is the one gated here.
+   */
+  it("accepts the web font formats, by type AND by extension", () => {
+    expect(DEFAULT_ACCEPTED_FILE_TYPES).toHaveProperty("font/woff2");
+    expect(DEFAULT_ACCEPTED_FILE_TYPES).toHaveProperty("font/woff");
+    // Both halves matter: some browsers report no type for a `.woff2` chosen
+    // from disk, and Dropzone then matches on the extension instead.
+    expect(DEFAULT_ACCEPTED_FILE_TYPES["font/woff2"]).toContain(".woff2");
+    expect(DEFAULT_ACCEPTED_FILE_TYPES["font/woff"]).toContain(".woff");
+  });
+
+  it("does NOT accept a font format the server refuses", () => {
+    /*
+     * The control. A map that accepted every font would satisfy the case above
+     * while letting an author drop a 4x larger TTF that the server then
+     * refuses — a rejection they only see after the upload, explained by
+     * nothing they can act on.
+     */
+    expect(DEFAULT_ACCEPTED_FILE_TYPES).not.toHaveProperty("font/ttf");
+    expect(DEFAULT_ACCEPTED_FILE_TYPES).not.toHaveProperty("font/otf");
+  });
+
+  it("names the fonts in the copy an author reads before dragging", () => {
+    // A format the dropzone accepts but the description omits is a format
+    // nobody tries, so the two have to move together.
+    expect(getAcceptDescription(undefined, 10 * MB)).toContain("WOFF2");
   });
 });

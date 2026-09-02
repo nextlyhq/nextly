@@ -42,6 +42,10 @@ export const NEXTLY_ERROR_STATUS = {
   // is sending, this one refuses to buffer an object already stored. Kept
   // apart so a caller discriminating on the code cannot match both.
   STORAGE_READ_TOO_LARGE: 413,
+  // The store answered, and answered badly. 502 rather than 500 because the
+  // fault is UPSTREAM of this process: a caller can retry it, and an operator
+  // reading the log needs to look at the bucket rather than at this service.
+  STORAGE_READ_UNREACHABLE: 502,
   MAGIC_BYTE_MISMATCH: 400,
   SVG_SANITIZATION_FAILED: 400,
   UNSUPPORTED_FOR_BACKEND: 415,

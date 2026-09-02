@@ -52,6 +52,15 @@ export const PUBLIC_SERVE_MIME_TYPES: ReadonlySet<string> = new Set([
  */
 const IMMUTABLE_FOR_A_YEAR = "public, max-age=31536000, immutable";
 
+/**
+ * The collection whose adapter serves these bytes.
+ *
+ * Named rather than passed as `undefined`, because the manager resolves an
+ * adapter FROM it — and an install routing media to S3 while everything else
+ * stays local gets the wrong backend from an omitted argument, not a default.
+ */
+const MEDIA_COLLECTION = "media";
+
 /** The response for a record this route will not talk about. */
 function notFound(): Response {
   return new Response(null, { status: 404 });
@@ -85,12 +94,28 @@ export async function handleServeMediaBytes(
     throw error;
   }
 
-  if (!PUBLIC_SERVE_MIME_TYPES.has(media.mimeType)) {
+  /*
+   * Normalised before the lookup, because upload validation and storage
+   * disagree about spelling: `validateMimeType` lowercases what it compares
+   * and the record keeps whatever the client sent. So `Font/WOFF2` is accepted
+   * on upload, stored with that spelling, and an exact match here would refuse
+   * to serve a font the same product had just approved. Mime tokens are
+   * case-insensitive, so the comparison has to be too.
+   */
+  if (!PUBLIC_SERVE_MIME_TYPES.has(media.mimeType.toLowerCase().trim())) {
     return notFound();
   }
 
+  /*
+   * The media collection's ADAPTER, not the manager that routes to it. The
+   * manager implements no `read` at all, so handing it over takes the URL
+   * fallback every time — and its `getPublicUrl` needs the collection to pick
+   * an adapter, so called without one it answers from the local default and
+   * produces a relative path that `safeFetch` refuses. Every backend fails,
+   * including the local one this route was supposed to work on first.
+   */
   const bytes = await readStoredMediaBytes(
-    getMediaStorage(),
+    getMediaStorage().getAdapterForCollection(MEDIA_COLLECTION),
     media.filename,
     DEFAULT_READ_MAX_BYTES
   );

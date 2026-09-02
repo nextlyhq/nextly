@@ -28,7 +28,7 @@
  * - Drag reject: `border-destructive` (live feedback while dragging only)
  * - Uploading: spinner + count (shown where the target stays open, e.g. the picker)
  *
- * **Supported file types** (default): PNG, JPG, JPEG, GIF, WebP, MP4, MOV, AVI, PDF
+ * **Supported file types** (default): PNG, JPG, JPEG, GIF, WebP, MP4, MOV, AVI, PDF, WOFF2, WOFF
  * **File size limit**: 10MB per file by default (server default; overridable via `maxFileSize`)
  * **Batch cap**: 10 files per drop
  *
@@ -130,11 +130,23 @@ export interface MediaUploadDropzoneProps {
  * - Images: PNG, JPG, JPEG, GIF, WebP
  * - Videos: MP4, MOV, AVI
  * - Documents: PDF
+ * - Fonts: WOFF2, WOFF
  */
-const DEFAULT_ACCEPTED_FILE_TYPES: Accept = {
+export const DEFAULT_ACCEPTED_FILE_TYPES: Accept = {
   "image/*": [".png", ".jpg", ".jpeg", ".gif", ".webp"],
   "video/*": [".mp4", ".mov", ".avi"],
   "application/pdf": [".pdf"],
+  /*
+   * Web fonts, matching the server's own allowlist. React Dropzone rejects a
+   * file whose type is absent here as `file-invalid-type` before any request
+   * is made, so a server that accepts a font is not enough on its own: the
+   * upload the author actually performs never leaves the browser.
+   *
+   * Both halves are needed. Some browsers report no type at all for a `.woff2`
+   * chosen from disk, and Dropzone then falls back to matching the extension.
+   */
+  "font/woff2": [".woff2"],
+  "font/woff": [".woff"],
 };
 
 /**
@@ -201,14 +213,17 @@ function parseAcceptString(acceptString?: string): Accept | undefined {
 /**
  * Get human-readable file type description from accept string
  */
-function getAcceptDescription(
+export function getAcceptDescription(
   acceptString: string | undefined,
   maxSize: number
 ): string {
   const sizeLimit = ` up to ${formatFileSize(maxSize)}`;
 
   if (!acceptString) {
-    return `PNG, JPG, GIF, WebP, MP4, MOV, PDF${sizeLimit}`;
+    // Kept in step with DEFAULT_ACCEPTED_FILE_TYPES: this string is what an
+    // author reads to decide whether a file is worth dragging, so a format the
+    // dropzone accepts but the copy omits is a format nobody tries.
+    return `PNG, JPG, GIF, WebP, MP4, MOV, PDF, WOFF2${sizeLimit}`;
   }
 
   const types: string[] = [];
@@ -225,6 +240,9 @@ function getAcceptDescription(
   }
   if (acceptString.includes("application/pdf")) {
     types.push("PDF");
+  }
+  if (acceptString.includes("font/")) {
+    types.push("Fonts");
   }
 
   if (types.length === 0) {
