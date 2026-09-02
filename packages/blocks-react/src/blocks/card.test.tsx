@@ -137,6 +137,27 @@ describe("the surface and border it carries", () => {
     expect(css).toContain("border-style: solid");
   });
 
+  it("makes ROOM inside the border it draws", () => {
+    /*
+     * A card drew a hairline on all four sides and left no space behind it, so
+     * a heading and its body sat flush against the border. Measured on a
+     * published page: `padding: 0px` with a 1px border and a 12px radius —
+     * which reads as a rendering fault rather than as a card, and gives an
+     * author no way to tell whether the block or their content is wrong.
+     *
+     * A literal, on the same reasoning the surface comment gives from the
+     * other side: a colour carries a light/dark asymmetry and needs a token,
+     * a length does not.
+     */
+    const css = compiledCss();
+
+    expect(css).toContain("padding-block-start: 1.25rem");
+    expect(css).toContain("padding-inline-start: 1.25rem");
+    // Must-differ: the border is still there, so this is about the space
+    // inside it rather than about the border having been dropped instead.
+    expect(css).toContain("border-block-start-width: 1px");
+  });
+
   it("still clips, because a border does not remove the reason for the clip", () => {
     // A bordered card with square-cornered image children is the same defect the
     // clip exists for; adding the border must not have displaced it.

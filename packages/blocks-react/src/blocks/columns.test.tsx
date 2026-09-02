@@ -125,6 +125,26 @@ describe("the columns pair", () => {
       expect(css).toContain("minmax(min(240px, 100%), 1fr)");
     });
 
+    it("emits a GAP, so the columns do not touch", () => {
+      /*
+       * `gap` on a grid defaults to `normal`, which computes to zero — so the
+       * one block whose whole purpose is side-by-side content rendered its
+       * columns flush against each other. Measured on a published page before
+       * this: three tracks of 427px with nothing between them.
+       *
+       * Asserted on the compiled CSS rather than on the declaration, because a
+       * declaration the catalog does not carry is dropped silently and would
+       * leave a property that reads correct in the source and never reaches a
+       * page.
+       */
+      const css = compiledCss();
+
+      expect(css).toContain("gap: 1rem");
+      // Must-differ: the row is still a grid, so this is about the gutter and
+      // not about the layout having been replaced by something simpler.
+      expect(css).toContain("display: grid");
+    });
+
     it("emits the column's min-width so a long child cannot force overflow", () => {
       // Separate from the row assertion because it is a different node type
       // and a different failure: the row can size correctly while one

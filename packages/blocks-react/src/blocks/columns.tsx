@@ -80,6 +80,24 @@ export const COLUMNS_BASE_STYLES = {
       // column's `min-width: 0`, which governs the item rather than the track.
       // Capping the minimum by the available width lets that last track fit.
       gridTemplateColumns: "repeat(auto-fit, minmax(min(240px, 100%), 1fr))",
+      /*
+       * The gutter between columns, which this block laid out and then left at
+       * zero.
+       *
+       * `gap` on a grid defaults to `normal`, which computes to zero — so the
+       * one block whose whole purpose is side-by-side content rendered its
+       * columns touching. Measured on a published page: three tracks of 427px
+       * with no space between them.
+       *
+       * A LITERAL rather than a token reference, and `core/gallery` and
+       * `core/accordion` both carry this same note for the same reason: a
+       * reference to a token no site defines compiles to a `var()` with
+       * nothing behind it and the gap falls back to `normal`, which is zero —
+       * the exact failure this line exists to fix. `1rem` matches both of them,
+       * because three grid containers spacing their children differently is a
+       * difference an author has to learn rather than one that helps.
+       */
+      gap: "1rem",
     },
   },
 } as const;
