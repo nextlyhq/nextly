@@ -326,6 +326,13 @@ export function ClassManagerPanel({
   const anyDeletable = visible.some(row =>
     rowIsDeletable(row, supplied, onDelete)
   );
+  /*
+   * Whether there is anything here to rename at all. A full library of entries
+   * the compiler cannot use draws no rows, so the empty state correctly says
+   * this panel can do nothing with them while the lede went on offering to
+   * rename them — two sentences contradicting each other in one view.
+   */
+  const anyRenameable = visible.length > 0;
   const rows = searchClassRows(filterClassRows(visible, active), query);
 
   return (
@@ -358,7 +365,7 @@ export function ClassManagerPanel({
        * saying so the absent button reads as a missing feature rather than as a
        * split someone chose.
        */}
-      <ClassesLede anyDeletable={anyDeletable} />
+      <ClassesLede anyDeletable={anyDeletable} anyRenameable={anyRenameable} />
       <FilterChips active={active} filters={offerable} onChange={setFilter} />
       <ClassSearch query={query} onChange={setQuery} />
       <ClassList
@@ -573,6 +580,7 @@ function EmptyClasses({
  */
 function ClassesLede({
   anyDeletable,
+  anyRenameable,
 }: {
   /*
    * Whether ANY row can actually be deleted, which is not the same question
@@ -586,12 +594,20 @@ function ClassesLede({
    * shape. This asks the predicate the rows themselves ask.
    */
   anyDeletable: boolean;
+  /**
+   * Whether any row is drawn at all. With none there is no rename field
+   * either, so the sentence names only where a class is applied — otherwise it
+   * offers an action beside an empty state that has just said the panel can do
+   * nothing here.
+   */
+  anyRenameable: boolean;
 }): React.JSX.Element {
   return (
     <p className="nx-classman__lede">
       <b>A class is a saved set of styles you can reuse.</b>{" "}
-      {anyDeletable ? "Rename and clear them out" : "Rename them"} here; you
-      apply one beside the style controls.
+      {anyRenameable
+        ? `${anyDeletable ? "Rename and clear them out" : "Rename them"} here; you apply one beside the style controls.`
+        : "You apply one beside the style controls."}
     </p>
   );
 }
@@ -759,6 +775,19 @@ function ClassRowView({
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
   const [confirming, setConfirming] = React.useState(false);
+  /*
+   * DISARMED, not merely hidden. Gating the render on `canDelete` stops the
+   * dialog being shown while the capability is gone, but leaves `confirming`
+   * true — so a class that becomes supplied and then supplied-no-longer, in a
+   * row that never unmounts, brings the confirmation back ALREADY ARMED. The
+   * author would then be one press from an irreversible removal they opened
+   * before the capability changed and never re-reviewed.
+   *
+   * Adjusted during render rather than in an effect: React re-runs the render
+   * with the corrected state before committing, so the armed dialog is never
+   * drawn even once.
+   */
+  if (confirming && !canDelete) setConfirming(false);
 
   return (
     <>

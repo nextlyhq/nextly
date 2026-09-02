@@ -1070,17 +1070,19 @@ describe("the panel explains itself", () => {
      * Both halves are asserted: with the callback the promise must come back,
      * or this test would also pass on copy that had simply lost the word.
      */
+    // A library with a row in it, so RENAME is genuinely on offer and the only
+    // question under test is deletion. An empty library now offers neither,
+    // which would make the assertion below pass for the wrong reason.
     const view = render(
       <ClassManagerPanel
-        library={[]}
+        library={[cls("id-own", "own-class", 1)]}
         usage={undefined}
         documentClassIds={[]}
         onRename={vi.fn()}
       />
     );
-    expect(screen.queryByText(/clear them out here/i)).toBeNull();
-    expect(screen.queryByText(/or clear out/i)).toBeNull();
-    expect(screen.getByText(/Rename them\s+here/i)).toBeTruthy();
+    expect(screen.queryByText(/clear them out/i)).toBeNull();
+    expect(screen.getByText(/Rename them here/i)).toBeTruthy();
 
     // Must-differ: a callback AND a row that can actually take it.
     view.rerender(
@@ -1228,6 +1230,63 @@ describe("the panel explains itself", () => {
     expect(screen.getByText("Default")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Delete hero$/ })).toBeNull();
     expect(document.querySelector(".nx-classman__confirm")).toBeNull();
+
+    /*
+     * And DISARMED, not merely hidden — which the assertion above cannot tell
+     * apart on its own. Giving the capability back must not bring the
+     * confirmation with it: an author who opened it before the class became
+     * supplied never reviewed it under the new state, so it has to be reopened
+     * deliberately.
+     */
+    view.rerender(
+      <ClassManagerPanel
+        library={library}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.getByRole("button", { name: "Delete hero" })).toBeTruthy();
+    expect(document.querySelector(".nx-classman__confirm")).toBeNull();
+  });
+
+  it("offers no rename when there is nothing drawn to rename", () => {
+    /*
+     * A full library of entries `siteClasses` omits draws no rows, so the
+     * empty state says this panel can do nothing with them — while the lede
+     * went on promising "Rename them here" beside it, with no rename field on
+     * screen. Two sentences in one view contradicting each other.
+     */
+    const unusable = Array.from({ length: MAX_NAMED_CLASSES }, (_, at) =>
+      cls(`id-${at}`, "Not A Slug", at)
+    );
+    const view = render(
+      <ClassManagerPanel
+        library={unusable}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/Rename them/i)).toBeNull();
+    expect(screen.queryByText(/clear them out/i)).toBeNull();
+    expect(
+      screen.getByText(/apply one beside the style controls/i)
+    ).toBeTruthy();
+
+    // Must-differ: one drawable row and the offer comes back.
+    view.rerender(
+      <ClassManagerPanel
+        library={[cls("id-hero", "hero", 0)]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/Rename and clear them out/i)).toBeTruthy();
   });
 
   it("keeps the filters, because they answer questions that OVERLAP", () => {
