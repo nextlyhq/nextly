@@ -37,8 +37,6 @@
  * @module domains/widgets/collection-widgets
  */
 
-import { entryTitleField } from "../collections/entry-title";
-
 import { refreshCollectionSources } from "./collection-sources";
 import { isValidWidgetId, type WidgetDefinition } from "./definition";
 import { listSources, type WidgetSource } from "./sources";
@@ -108,11 +106,13 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
 function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
   if (!source.supports.includes("list")) return undefined;
   const names = source.fields.map(field => field.name);
-  // `useAsTitle` is not passed: it lives in the static config, and this reads
-  // the REGISTRY so that Builder-drawn collections are covered too. The shared
-  // rule falls back to the conventional names, which is the same answer the
-  // entry list reaches for a collection that nominates nothing.
-  const label = entryTitleField(undefined, names);
+  // The source's own answer, which already went through the shared rule with
+  // the author's `admin.useAsTitle` AND the full field list. Resolving it again
+  // here from `fields` alone would ignore the nomination and pick a
+  // conventional name instead, so a collection whose author chose `headline`
+  // would be labelled by something else -- two answers to one question, and the
+  // dashboard holding the worse one.
+  const label = source.titleField;
   if (label === undefined) return undefined;
   if (!names.includes("updatedAt")) return undefined;
   const id = widgetId(source, "recent");
@@ -192,4 +192,38 @@ export function generatedWidgets(): WidgetDefinition[] {
 export async function refreshCollectionWidgets(): Promise<void> {
   await refreshCollectionSources();
   setGeneratedWidgets(collectionWidgets(listSources()));
+}
+
+/**
+ * The generated cards a given reader may be told about.
+ *
+ * 🔴 FILTERED, and by the permission rather than by anything the client does.
+ * A generated card's id, title and query all name a COLLECTION, so publishing
+ * the whole set discloses the slug and the existence of every collection in the
+ * install to any authenticated reader — including the ones the layout endpoint
+ * and the query endpoint deliberately hide from them. That the admin would not
+ * draw the card is not a control: the payload is JSON, and reading it is the
+ * bypass.
+ *
+ * 🔴 And a card whose id a CONTRIBUTION already claims is dropped. The admin
+ * reads this array as the registration channel, and `mergeCollision` gives a
+ * registration authority over the title, archetype, query, size and permission
+ * of a colliding contribution — so publishing a generated card under an id a
+ * plugin declared would replace that plugin's card with core's guess in the
+ * grid, while the server's canonical set kept the plugin's. The two would draw
+ * and place different declarations. `canonicalWidgets` already resolves this
+ * collision in the contribution's favour; this is the same answer, not a second
+ * one.
+ *
+ * `allow` is asked once per distinct permission by the caller, which already
+ * batches those decisions — asking here per widget would fire two checks for
+ * every collection.
+ */
+export function readableGeneratedWidgets(
+  allow: (requiredPermission: string | undefined) => boolean,
+  contributedIds: ReadonlySet<string>
+): WidgetDefinition[] {
+  return generatedWidgets().filter(
+    widget => !contributedIds.has(widget.id) && allow(widget.requiredPermission)
+  );
 }

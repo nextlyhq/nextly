@@ -8,6 +8,8 @@
  * @module domains/widgets/built-in-sources
  */
 
+import { entryTitleField } from "../collections/entry-title";
+
 import {
   replaceSourcesOfKind,
   sourceKindFromId,
@@ -125,6 +127,14 @@ export interface WidgetSourceCollection {
   slug: string;
   fields: Array<{ name: string; type: string; label?: string }>;
   /**
+   * The field the collection's author nominated to name its entries
+   * (`admin.useAsTitle`), when they nominated one.
+   *
+   * Carried rather than resolved by the caller, because resolving it needs the
+   * full field list — system columns included — which only the source knows.
+   */
+  useAsTitle?: string;
+  /**
    * Whether the collection has `createdAt`/`updatedAt` columns. Absent means
    * ON, which is how `defineCollection` normalizes it and how the registry
    * stores it.
@@ -150,9 +160,21 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   if (collection.status === true) systemFields.push(STATUS_FIELD);
 
   const id = `collection:${collection.slug}`;
+  const fields = [
+    ...declared,
+    ...systemFields.filter(field => !seen.has(field.name)),
+  ];
+  // Through the shared rule, with BOTH halves: the author's nomination and the
+  // names it must exist in. Resolved once here so no consumer has to ask again
+  // with only one of them.
+  const titleField = entryTitleField(
+    collection.useAsTitle,
+    fields.map(field => field.name)
+  );
 
   return {
     id,
+    ...(titleField === undefined ? {} : { titleField }),
     label: collection.slug,
     // DERIVED from the id rather than restated beside it. The id's namespace is
     // the canonical identity -- `registerSource` refuses a source whose two
@@ -165,10 +187,7 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
     // for why nothing enforces it.
     requiredPermission: `read-${collection.slug}`,
     supports: ["count", "list"],
-    fields: [
-      ...declared,
-      ...systemFields.filter(field => !seen.has(field.name)),
-    ],
+    fields,
   };
 }
 

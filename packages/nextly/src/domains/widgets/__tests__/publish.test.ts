@@ -12,7 +12,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setNextlyLogger } from "../../../observability/logger";
 import type { WidgetDefinition } from "../definition";
 import { publishableWidgets } from "../publish";
-import { setGeneratedWidgets } from "../collection-widgets";
 import { clearWidgets, registerWidget } from "../registry";
 
 const def = (
@@ -88,34 +87,7 @@ describe("publishableWidgets", () => {
   });
 });
 
-describe("the generated cards reach the admin", () => {
-  const generated = def("collection/posts-count", {
-    archetype: "metric",
-    query: { source: "collection:posts", op: "count" },
-  });
-
-  afterEach(() => setGeneratedWidgets([]));
-
-  it("publishes a card nobody registered", () => {
-    // 🔴 This is the seam that makes a generated card real. The admin renders
-    // from this payload and from plugin contributions, and a generated widget
-    // is in neither unless it is put here -- so without this the layout
-    // endpoint would offer an id the grid has no declaration to draw.
-    setGeneratedWidgets([generated]);
-    expect(publishableWidgets().map(w => w.id)).toEqual([
-      "collection/posts-count",
-    ]);
-  });
-
-  it("lets an explicit registration REPLACE the generated card of that id", () => {
-    // A generated card is core's guess at something useful; a registration of
-    // the same id is an author saying what that card should be. The reader gets
-    // one card, and it is the author's.
-    setGeneratedWidgets([generated]);
-    registerWidget(def("collection/posts-count", { title: "Mine" }));
-
-    const published = publishableWidgets();
-    expect(published).toHaveLength(1);
-    expect(published[0].title).toBe("Mine");
-  });
-});
+// Generated cards are NOT published here. They are caller-dependent -- their id
+// and title name a collection -- so the workspace route resolves them per
+// reader and passes them in; `readableGeneratedWidgets` in
+// `collection-widgets.test.ts` covers that filtering.

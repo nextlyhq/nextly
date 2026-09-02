@@ -4,7 +4,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { canonicalWidgets, type CanonicalWidget } from "../canonical";
+import {
+  allWidgets,
+  canonicalWidgets,
+  declaredWidgets,
+  type CanonicalWidget,
+} from "../canonical";
 import { setGeneratedWidgets } from "../collection-widgets";
 import type { WidgetDefinition } from "../definition";
 import { clearWidgets, registerWidget } from "../registry";
@@ -186,6 +191,29 @@ describe("generated cards in the canonical set", () => {
     ]);
     expect(merged).toHaveLength(1);
     expect(merged[0].defaultOrder).toBe(3);
+  });
+
+  it("is NOT part of the set a default arrangement is built from", () => {
+    // 🔴 The whole "offered, never placed" claim rests on this. `defaultPlacements`
+    // is materialized from `declaredWidgets`, so a generated card appearing there
+    // would be auto-placed for every reader with no stored layout -- forty
+    // collections opening onto eighty cards nobody chose, and past the cap a
+    // dashboard they cannot add to. It still EXISTS, so it can be offered and a
+    // write naming it is accepted.
+    setGeneratedWidgets([generated]);
+    expect(allWidgets().map(w => w.id)).toEqual(["collection/posts-count"]);
+    expect(declaredWidgets()).toEqual([]);
+  });
+
+  it("IS placed once a declaration claims its id", () => {
+    // The control, and the reason the flag describes the surviving declaration
+    // rather than which ids core can generate: an author who declared this
+    // widget gets it placed like any other.
+    setGeneratedWidgets([generated]);
+    registerWidget(registered({ id: "collection/posts-count" }));
+    expect(declaredWidgets().map(w => w.id)).toEqual([
+      "collection/posts-count",
+    ]);
   });
 
   it("LOSES the id to an explicit registration too", () => {

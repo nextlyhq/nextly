@@ -36,6 +36,7 @@ import {
   updateApiKey,
   revokeApiKey,
 } from "./api/api-keys";
+import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import {
   getDashboardStats,
   getDashboardRecentEntries,
@@ -93,8 +94,18 @@ import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
-import { refreshCollectionWidgets } from "./domains/widgets/collection-widgets";
+import { contributedWidgets } from "./domains/widgets/canonical";
+import {
+  generatedWidgets,
+  readableGeneratedWidgets,
+  refreshCollectionWidgets,
+} from "./domains/widgets/collection-widgets";
+import type { WidgetDefinition } from "./domains/widgets/definition";
 import { publishableWidgets } from "./domains/widgets/publish";
+import {
+  holdsWidgetPermission,
+  permissionVerdicts,
+} from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -1401,7 +1412,16 @@ async function handleServiceRequest(
  * written and drift afterwards, and the drift is invisible because both halves
  * look correct alone.
  */
-async function buildAdminMeta(): Promise<{
+async function buildAdminMeta(
+  /**
+   * Cards core DERIVED for this reader's readable collections.
+   *
+   * A parameter rather than a call, because which of them a reader may be told
+   * about depends on the reader and this builder is shared with the PUBLIC
+   * branding route. Empty for that route, which discards `workspace` anyway.
+   */
+  generatedForCaller: WidgetDefinition[] = []
+): Promise<{
   branding: Record<string, unknown>;
   workspace: Record<string, unknown>;
 }> {
@@ -1505,15 +1525,9 @@ async function buildAdminMeta(): Promise<{
   // half already describes the RUNNING installation rather than the configured
   // one -- `showBuilder` from the live resolver, `customGroups` from the
   // database -- is the same property this relies on.
-  // Re-derived per request, not at boot. A collection drawn in the Schema
-  // Builder exists the moment it is saved, so a set frozen at boot describes an
-  // install that has since changed -- and in production "the next restart" means
-  // the next deploy. This is the same read `refreshCollectionSources` already
-  // performs once per dashboard batch.
-  await refreshCollectionWidgets();
-  const registered = publishableWidgets();
-  if (registered.length > 0) {
-    workspace.widgets = registered;
+  const widgets = [...publishableWidgets(), ...generatedForCaller];
+  if (widgets.length > 0) {
+    workspace.widgets = widgets;
   }
 
   // Override config branding with DB values when available
@@ -1641,7 +1655,40 @@ async function handleAdminMetaWorkspaceRequest(
   // of the running one.
   await ensureServicesInitialized();
 
-  const { workspace } = await buildAdminMeta();
+  // Re-derived per request, and HERE rather than inside `buildAdminMeta`. A
+  // collection drawn in the Schema Builder exists the moment it is saved, so a
+  // set frozen at boot describes an install that has since changed -- and in
+  // production "the next restart" means the next deploy.
+  //
+  // 🔴 Only on this route. `buildAdminMeta` is shared with the PUBLIC branding
+  // handler, which deliberately does not initialise services: refreshing there
+  // asked an empty container for the collection registry on every anonymous
+  // login-page request, logging a registry-unavailable error for a payload that
+  // discards `workspace.widgets` anyway -- and, once initialised, made a cheap
+  // branding read load every collection's schema from the database.
+  await refreshCollectionWidgets();
+
+  // 🔴 The generated cards are resolved HERE rather than inside `buildAdminMeta`,
+  // because which of them a reader may be told about depends on the reader.
+  // Their id, title and query all name a COLLECTION, so publishing the whole
+  // set would disclose the slug and the existence of every collection in the
+  // install to any authenticated caller — including the ones the layout and
+  // query endpoints deliberately hide from them. That the admin would not draw
+  // the card is not a control; the payload is JSON, and reading it is the
+  // bypass. The verdicts come from the same implementation the layout endpoint
+  // filters with, so the two cannot disagree about what this reader may see.
+  const caller = readAccessCaller(await readCaller(auth));
+  const generated = generatedWidgets();
+  const verdicts = await permissionVerdicts(
+    generated.map(widget => widget.requiredPermission),
+    caller
+  );
+  const readable = readableGeneratedWidgets(
+    requiredPermission => holdsWidgetPermission(requiredPermission, verdicts),
+    new Set(contributedWidgets().map(widget => widget.id))
+  );
+
+  const { workspace } = await buildAdminMeta(readable);
   return withSessionCacheHeaders(respondAdminMeta(workspace));
 }
 

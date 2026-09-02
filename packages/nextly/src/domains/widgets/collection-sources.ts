@@ -47,6 +47,13 @@ interface RegisteredCollection {
   slug?: unknown;
   fields?: unknown;
   /**
+   * The author's own answer to which field names an entry, under `admin`.
+   *
+   * Read defensively like the flags below: the row is stored JSON, so the shape
+   * is checked at the point of use rather than assumed from the record type.
+   */
+  admin?: unknown;
+  /**
    * The `timestamps` column pair. A required boolean on the stored record and
    * read defensively here, because the two values decide whether
    * `createdAt`/`updatedAt` exist as COLUMNS -- declaring them on a collection
@@ -164,6 +171,22 @@ async function readRegisteredCollections(): Promise<
  * listed. Clearing on a transient failure, by contrast, turns one bad database
  * read into a dashboard of broken cards.
  */
+/**
+ * The author's nominated title field, when the stored row carries a usable one.
+ *
+ * The row is JSON, so `admin` may be anything; a non-string nomination is read
+ * as no nomination rather than passed on, because the shared rule would then be
+ * comparing a number against a list of field names.
+ */
+function useAsTitleOf(collection: RegisteredCollection): string | undefined {
+  const admin = collection.admin;
+  if (typeof admin !== "object" || admin === null) return undefined;
+  const nominated = (admin as { useAsTitle?: unknown }).useAsTitle;
+  return typeof nominated === "string" && nominated !== ""
+    ? nominated
+    : undefined;
+}
+
 export async function refreshCollectionSources(): Promise<void> {
   const collections = await readRegisteredCollections();
   if (!collections) return;
@@ -179,6 +202,9 @@ export async function refreshCollectionSources(): Promise<void> {
         fields: readableFields(collection.fields),
         // Only an explicit `false` turns them off; absent means on, the way
         // `defineCollection` normalizes it and the registry stores it.
+        ...(useAsTitleOf(collection) === undefined
+          ? {}
+          : { useAsTitle: useAsTitleOf(collection) }),
         timestamps: collection.timestamps !== false,
         // The opposite default: only an explicit `true` turns Draft/Published
         // on, matching `DynamicCollectionRecord.status` (required, defaults to

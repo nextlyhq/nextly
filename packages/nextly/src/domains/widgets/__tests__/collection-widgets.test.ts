@@ -1,9 +1,13 @@
 /**
  * A card per collection: what is derived, and what is deliberately not.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { collectionWidgets } from "../collection-widgets";
+import {
+  collectionWidgets,
+  readableGeneratedWidgets,
+  setGeneratedWidgets,
+} from "../collection-widgets";
 import type { WidgetSource } from "../sources";
 
 function source(patch: Partial<WidgetSource>): WidgetSource {
@@ -12,6 +16,7 @@ function source(patch: Partial<WidgetSource>): WidgetSource {
     label: "posts",
     kind: "collection",
     requiredPermission: "read-posts",
+    titleField: "title",
     supports: ["count", "list"],
     fields: [
       { name: "id", type: "string" },
@@ -59,17 +64,23 @@ describe("what a collection gets", () => {
     expect(recent.query?.sort).toBe("-updatedAt");
   });
 
-  it("honours the conventional title order rather than field order", () => {
+  it("labels rows with the field the SOURCE resolved, not one of its own", () => {
+    // 🔴 The source already applied the shared rule to the author's
+    // `admin.useAsTitle` AND the full field list. Re-resolving here from
+    // `fields` alone would ignore the nomination: a collection whose author
+    // chose `headline` would be labelled by a conventional name instead, and
+    // the dashboard would hold the worse of two answers to one question.
     const [, recent] = collectionWidgets([
       source({
+        titleField: "headline",
         fields: [
-          { name: "heading", type: "string" },
+          { name: "headline", type: "string" },
           { name: "title", type: "string" },
           { name: "updatedAt", type: "date" },
         ],
       }),
     ]);
-    expect(recent.query?.select?.[0]).toBe("title");
+    expect(recent.query?.select?.[0]).toBe("headline");
   });
 });
 
@@ -81,6 +92,7 @@ describe("what a collection does NOT get", () => {
     // that by answering the question wrongly instead of declining it.
     const widgets = collectionWidgets([
       source({
+        titleField: undefined,
         fields: [
           { name: "id", type: "string" },
           { name: "amount", type: "number" },
@@ -136,5 +148,58 @@ describe("what a collection does NOT get", () => {
         source({ id: "collection:Weird_Slug", label: "Weird_Slug" }),
       ])
     ).toEqual([]);
+  });
+});
+
+describe("which generated cards a reader may be told about", () => {
+  const card = (id: string, permission?: string) =>
+    ({
+      id,
+      title: id,
+      archetype: "metric",
+      defaultSize: "sm",
+      ...(permission === undefined ? {} : { requiredPermission: permission }),
+      query: { source: `collection:${id}`, op: "count" },
+    }) as unknown as Parameters<typeof setGeneratedWidgets>[0][number];
+
+  afterEach(() => setGeneratedWidgets([]));
+
+  it("withholds a card for a collection this reader may not read", () => {
+    // 🔴 The disclosure. A generated card's id, title and query all name a
+    // COLLECTION, so publishing the whole set tells any authenticated reader
+    // the slug and the existence of every collection in the install --
+    // including the ones the layout and query endpoints hide from them. That
+    // the admin would not draw the card is not a control: the payload is JSON,
+    // and reading it is the bypass.
+    setGeneratedWidgets([card("secret", "read-secret"), card("open")]);
+
+    const readable = readableGeneratedWidgets(
+      permission => permission !== "read-secret",
+      new Set()
+    );
+
+    expect(readable.map(w => w.id)).toEqual(["open"]);
+  });
+
+  it("withholds a card whose id a CONTRIBUTION already claimed", () => {
+    // The admin reads this array as the registration channel, and its merge
+    // gives a registration authority over a colliding contribution's title,
+    // archetype, query and permission. Publishing here would replace a plugin's
+    // card with core's guess in the grid while the server's canonical set kept
+    // the plugin's -- drawing one declaration and placing another.
+    setGeneratedWidgets([card("posts"), card("pages")]);
+
+    const readable = readableGeneratedWidgets(() => true, new Set(["posts"]));
+
+    expect(readable.map(w => w.id)).toEqual(["pages"]);
+  });
+
+  it("passes everything a reader may see and nobody claimed", () => {
+    // The control. Without it both refusals above are satisfied by a filter
+    // that returns nothing at all.
+    setGeneratedWidgets([card("posts"), card("pages")]);
+    expect(
+      readableGeneratedWidgets(() => true, new Set()).map(w => w.id)
+    ).toEqual(["posts", "pages"]);
   });
 });

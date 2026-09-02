@@ -63,6 +63,21 @@ export interface WidgetSourceField {
 export interface WidgetSource {
   /** e.g. "collection:posts", "system:users", "plugin:stripe/revenue". */
   id: string;
+  /**
+   * Which of this source's fields NAMES a row, when one does.
+   *
+   * Resolved where the source is built, because that is the only place holding
+   * both halves of the answer: the author's `admin.useAsTitle` and the full
+   * field list it has to exist in. A consumer that resolved it again from
+   * `fields` alone would ignore the author's nomination and pick a conventional
+   * name instead -- so a collection whose author chose `headline` would have its
+   * dashboard card labelled by something else, or no card at all.
+   *
+   * Absent when nothing names the rows, which is a real answer: a source of pure
+   * data rows has no title field, and a caller that invents one shows the reader
+   * a column of identifiers.
+   */
+  titleField?: string;
   label: string;
   kind: WidgetSourceKind;
   /**
