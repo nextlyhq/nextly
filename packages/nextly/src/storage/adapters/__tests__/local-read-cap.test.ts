@@ -186,7 +186,19 @@ describe("LocalStorageAdapter.read bounds", () => {
        */
       const releasing = createWriteStream(stalled);
       releasing.on("error", () => undefined);
-      releasing.end();
+      /*
+       * AWAITED, because `end()` only schedules the open and the close. The
+       * teardown after this case removes the fifo, and doing that while the
+       * abandoned `open` is still pending races the very thing this release
+       * exists to unblock — leaving the threadpool slot held after all, on a
+       * run that reported the case as passing.
+       */
+      await new Promise<void>(resolve => {
+        releasing.on("close", () => {
+          resolve();
+        });
+        releasing.end();
+      });
     }
   );
 

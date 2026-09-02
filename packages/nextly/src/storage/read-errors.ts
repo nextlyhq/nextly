@@ -73,9 +73,11 @@ export function isStorageReadTooLarge(
  * name the runtime chose. `safeFetch` already aborts this way for the same
  * reason.
  *
- * Distinct from the over-cap refusal above because the two say opposite things
- * about the object: one was read and found too big, the other was never read at
- * all, so nothing here knows whether it exists.
+ * Distinct from the over-cap refusal above by what each one KNOWS. The over-cap
+ * refusal has measured the object and found it larger than the caller allowed.
+ * This one knows only that the read did not finish in time: it may never have
+ * opened the object, or may have taken some of it and been cut off part way, so
+ * neither the object's size nor its existence follows from this error.
  */
 export class StorageReadTimeoutError extends NextlyError {
   constructor(
