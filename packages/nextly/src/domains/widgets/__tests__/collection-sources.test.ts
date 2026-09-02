@@ -11,7 +11,10 @@ vi.mock("../../../di/container", () => ({ container: { get: vi.fn() } }));
 
 import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
-import { refreshCollectionSources } from "../collection-sources";
+import {
+  refreshCollectionSources,
+  resetVerifiedTables,
+} from "../collection-sources";
 import {
   clearSources,
   getSource,
@@ -27,6 +30,7 @@ type Row = {
   labels?: unknown;
   admin?: unknown;
   migrationStatus?: unknown;
+  tableName?: string;
 };
 
 const containerGet = container.get as ReturnType<typeof vi.fn>;
@@ -41,6 +45,28 @@ function registryHolds(rows: Row[]): void {
   });
 }
 
+/**
+ * Makes the registry answer with `rows` AND the database report `tables`.
+ *
+ * The plain `registryHolds` throws on `container.get("adapter")`, which is the
+ * unanswerable-introspection path -- so a test that wants the STRUCTURAL
+ * question asked has to supply a database that can answer it.
+ */
+function registryHoldsWithTables(
+  rows: Row[],
+  tables: string[]
+): { listTables: ReturnType<typeof vi.fn> } {
+  const listTables = vi.fn(async () => tables);
+  containerGet.mockImplementation((name: string) => {
+    if (name === "collectionRegistryService") {
+      return { getAllCollections: async () => rows };
+    }
+    if (name === "adapter") return { listTables };
+    throw new Error(`unexpected container.get("${name}") in this test`);
+  });
+  return { listTables };
+}
+
 /** Makes the registry unreachable, the way a failed read or a cold container is. */
 function registryUnreachable(): void {
   containerGet.mockImplementation(() => {
@@ -51,6 +77,9 @@ function registryUnreachable(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   clearSources();
+  // The observed-table memo is pinned on `globalThis`, so without this a
+  // verification from one test satisfies the next one's assertion.
+  resetVerifiedTables();
   setNextlyLogger({
     error: () => {},
     warn: () => {},
@@ -447,6 +476,107 @@ describe("a collection whose table is not there yet", () => {
 
     await refreshCollectionSources();
     expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("gives one to a PENDING collection whose table is actually there", async () => {
+    // 🔴 The status is a LABEL and several writers maintain it badly. A Builder
+    // collection deployed with `nextly migrate` keeps `pending` forever -- the
+    // only writer that records `applied`, `registerFromMigrations`, runs from
+    // the development boot path alone -- so its cards would never appear, on a
+    // table that has been queryable since the deploy. Asked structurally, the
+    // table is there and the source exists.
+    registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_drafts"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeDefined();
+  });
+
+  it("still refuses a PENDING collection whose table is genuinely absent", async () => {
+    // The control the case above needs: without it, "trust the structure" is
+    // satisfied by a filter that stopped refusing anything at all.
+    registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_something_else"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeUndefined();
+  });
+
+  it("asks the database NOTHING when every label already claims presence", async () => {
+    // The cost property, asserted rather than assumed. `refreshCollectionSources`
+    // runs on every workspace, layout and widget request, so introspecting per
+    // request would be a database round trip on the hot path. The label settles
+    // the common case and the structural question is asked only of the
+    // collections it declines -- which is the population it is wrong about.
+    const { listTables } = registryHoldsWithTables(
+      [
+        {
+          slug: "posts",
+          tableName: "dc_posts",
+          migrationStatus: "applied",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+        {
+          slug: "pages",
+          tableName: "dc_pages",
+          migrationStatus: "synced",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_posts", "dc_pages"]
+    );
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")).toBeDefined();
+    expect(listTables).not.toHaveBeenCalled();
+  });
+
+  it("does not re-introspect for a table it has already observed", async () => {
+    // A table that exists does not stop existing, so one observation settles it
+    // for the life of the process. Without this, a collection stuck on a wrong
+    // label would introspect on every request forever -- which is precisely the
+    // state this change exists to serve.
+    const { listTables } = registryHoldsWithTables(
+      [
+        {
+          slug: "drafts",
+          tableName: "dc_drafts",
+          migrationStatus: "pending",
+          fields: [{ name: "title", type: "text" }],
+          timestamps: true,
+        },
+      ],
+      ["dc_drafts"]
+    );
+
+    await refreshCollectionSources();
+    expect(listTables).toHaveBeenCalledTimes(1);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:drafts")).toBeDefined();
+    expect(listTables).toHaveBeenCalledTimes(1);
   });
 
   it("DOES give one to a collection whose migration ran", async () => {

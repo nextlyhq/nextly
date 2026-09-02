@@ -194,18 +194,32 @@ async function readRegisteredCollections(): Promise<
  * read into a dashboard of broken cards.
  */
 /**
- * Whether this collection's TABLE exists to be queried.
+ * Whether the STATUS LABEL claims this collection's table is present.
  *
- * 🔴 A collection created in the Schema Builder is recorded `pending` and its
- * migration does not run outside development — so in production the row exists,
- * permission seeding makes it visible, and its table does not arrive until the
- * next deploy. A source for it accepts queries that reach a table that is not
- * there, once per reader, for as long as the deploy is away.
+ * 🔴 A label, not the answer. `migration_status` is written by several code
+ * paths and they do not agree: the HMR reload marks an edited collection
+ * `pending` after successfully applying its DDL, and `nextly migrate` applies a
+ * Builder collection's SQL in production without marking anything at all --
+ * `registerFromMigrations`, the one writer that records `applied`, runs only
+ * from the development boot path. So a table that is present and queryable can
+ * carry a label saying it is not, permanently.
  *
- * An ALLOWLIST of statuses that mean the table is present: `synced` for a
- * code-first collection whose table migrations own, and `applied` for a Builder
- * one whose migration ran. `pending`, `generated` and `failed` all mean it is
- * not there yet, and the last of those will not arrive on its own.
+ * This is therefore kept as the FAST PATH only, and {@link usableCollections}
+ * asks the structural question when the label declines. The distinction is the
+ * repository's own rule about identifying by structure rather than by someone
+ * else's spelling: the label is a claim maintained by writers this module does
+ * not control, while the table's existence is the thing itself.
+ *
+ * The allowlist is what the label may be BELIEVED about, and it is deliberately
+ * one-directional. `synced` and `applied` are trusted outright: a writer that
+ * went to the trouble of recording one had the table in hand, so a false
+ * positive here would need a writer lying rather than merely falling behind,
+ * and no path does that. `pending`, `generated` and `failed` are trusted for
+ * NOTHING -- they mean only that no writer has said otherwise yet, which is a
+ * statement about the writers rather than about the database.
+ *
+ * That asymmetry is what makes the fast path safe to take. A label claiming
+ * presence ends the question; a label declining is referred to the database.
  *
  * An ABSENT status is treated as usable, which is the one place this reads
  * generously rather than closed. The field was added after rows existed, so a
@@ -218,10 +232,115 @@ const TABLE_PRESENT_STATUSES: ReadonlySet<string> = new Set([
   "applied",
 ]);
 
-function tableIsUsable(collection: RegisteredCollection): boolean {
+function statusClaimsPresent(collection: RegisteredCollection): boolean {
   const status = (collection as { migrationStatus?: unknown }).migrationStatus;
   if (status === undefined) return true;
   return typeof status === "string" && TABLE_PRESENT_STATUSES.has(status);
+}
+
+/** The physical table a registered row names, when it names one usably. */
+function tableNameOf(collection: RegisteredCollection): string | undefined {
+  const name = (collection as { tableName?: unknown }).tableName;
+  return typeof name === "string" && name !== "" ? name : undefined;
+}
+
+/**
+ * Slugs whose table has been OBSERVED to exist.
+ *
+ * Pinned on `globalThis` like every other boot-time widget store, so it
+ * survives the module re-evaluation Next.js and Turbopack perform.
+ *
+ * 🔴 POSITIVE observations only, and the asymmetry is the design rather than an
+ * omission. A table that exists does not stop existing under ordinary
+ * operation, so remembering that one is present is sound for the life of the
+ * process. An ABSENT table may arrive at any moment -- a migration running
+ * against a live database is precisely the case this exists to notice -- so
+ * caching absence would reinstate the staleness the status label already has,
+ * one layer down and harder to see.
+ */
+const globalForVerified = globalThis as unknown as {
+  __nextly_widgetVerifiedTables?: Set<string>;
+};
+
+function verifiedTables(): Set<string> {
+  globalForVerified.__nextly_widgetVerifiedTables ??= new Set<string>();
+  return globalForVerified.__nextly_widgetVerifiedTables;
+}
+
+/** Clear the observed-table memo. For tests, which build a fresh registry. */
+export function resetVerifiedTables(): void {
+  globalForVerified.__nextly_widgetVerifiedTables = new Set<string>();
+}
+
+/**
+ * The tables the database actually has, lowercased, or `undefined` when the
+ * question could not be asked.
+ *
+ * Lowercased because the dialects disagree about identifier case and the core
+ * drift check already compares this way; `undefined` is a THIRD answer rather
+ * than an empty set, because "there are no tables" and "I could not look" lead
+ * to opposite decisions and an empty set would silently mean the first.
+ */
+async function presentTableNames(): Promise<ReadonlySet<string> | undefined> {
+  try {
+    const adapter = container.get<{
+      listTables?: () => Promise<string[]>;
+    }>("adapter");
+    if (typeof adapter?.listTables !== "function") return undefined;
+    const tables = await adapter.listTables();
+    if (!Array.isArray(tables)) return undefined;
+    return new Set(
+      tables
+        .filter((name): name is string => typeof name === "string")
+        .map(name => name.toLowerCase())
+    );
+  } catch (error) {
+    getNextlyLogger().error({
+      kind: "widget-table-introspection-unavailable",
+      err: error instanceof Error ? error.stack : String(error),
+    });
+    return undefined;
+  }
+}
+
+/**
+ * The collections a widget source may be built from, asked STRUCTURALLY.
+ *
+ * The label is consulted first and settles the overwhelmingly common case at no
+ * cost: when every collection's status claims its table is present, this makes
+ * no database call at all. Introspection happens only for the collections whose
+ * label DECLINES -- which is exactly the population the label is wrong about --
+ * and then once for the whole batch rather than once per collection.
+ *
+ * On an unanswerable introspection this falls back to the label, which is the
+ * behaviour that shipped before and is the conservative direction: a card is
+ * withheld rather than pointed at a table that may not be there.
+ */
+async function usableCollections<T extends RegisteredCollection>(
+  collections: T[]
+): Promise<T[]> {
+  const verified = verifiedTables();
+  const settled = (collection: T): boolean =>
+    statusClaimsPresent(collection) ||
+    verified.has((tableNameOf(collection) ?? "").toLowerCase());
+
+  // A row naming no table cannot be verified by any amount of introspection, so
+  // it must not TRIGGER any: without this it is permanently unsettled, and a
+  // single malformed row would put a round trip on every request forever while
+  // never changing the outcome. It is still filtered by the label below.
+  if (!collections.some(c => !settled(c) && tableNameOf(c) !== undefined)) {
+    return collections.filter(settled);
+  }
+
+  const present = await presentTableNames();
+  if (present !== undefined) {
+    for (const collection of collections) {
+      if (statusClaimsPresent(collection)) continue;
+      const table = tableNameOf(collection)?.toLowerCase();
+      if (table !== undefined && present.has(table)) verified.add(table);
+    }
+  }
+  return collections.filter(settled);
 }
 
 /**
@@ -271,30 +390,29 @@ export async function refreshCollectionSources(): Promise<void> {
   const collections = await readRegisteredCollections();
   if (!collections) return;
 
+  const named = collections.filter(
+    (collection): collection is RegisteredCollection & { slug: string } =>
+      typeof collection.slug === "string" && collection.slug !== ""
+  );
+
   registerBuiltInSources(
-    collections
-      .filter(
-        (collection): collection is RegisteredCollection & { slug: string } =>
-          typeof collection.slug === "string" && collection.slug !== ""
-      )
-      .filter(tableIsUsable)
-      .map(collection => ({
-        slug: collection.slug,
-        fields: readableFields(collection.fields),
-        // Only an explicit `false` turns them off; absent means on, the way
-        // `defineCollection` normalizes it and the registry stores it.
-        ...(pluralLabelOf(collection) === undefined
-          ? {}
-          : { label: pluralLabelOf(collection) }),
-        ...(useAsTitleOf(collection) === undefined
-          ? {}
-          : { useAsTitle: useAsTitleOf(collection) }),
-        timestamps: collection.timestamps !== false,
-        // The opposite default: only an explicit `true` turns Draft/Published
-        // on, matching `DynamicCollectionRecord.status` (required, defaults to
-        // false) and the `config.status === true` reading every other consumer
-        // of this flag takes.
-        status: collection.status === true,
-      }))
+    (await usableCollections(named)).map(collection => ({
+      slug: collection.slug,
+      fields: readableFields(collection.fields),
+      // Only an explicit `false` turns them off; absent means on, the way
+      // `defineCollection` normalizes it and the registry stores it.
+      ...(pluralLabelOf(collection) === undefined
+        ? {}
+        : { label: pluralLabelOf(collection) }),
+      ...(useAsTitleOf(collection) === undefined
+        ? {}
+        : { useAsTitle: useAsTitleOf(collection) }),
+      timestamps: collection.timestamps !== false,
+      // The opposite default: only an explicit `true` turns Draft/Published
+      // on, matching `DynamicCollectionRecord.status` (required, defaults to
+      // false) and the `config.status === true` reading every other consumer
+      // of this flag takes.
+      status: collection.status === true,
+    }))
   );
 }
