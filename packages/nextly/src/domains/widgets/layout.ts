@@ -147,7 +147,37 @@ const PLACEMENT_RULES: ReadonlyArray<
     p.config === undefined || isPlainObject(p.config)
       ? undefined
       : '"config", when given, must be an object',
+  p =>
+    p.config !== undefined && exceedsDepth(p.config, MAX_CONFIG_DEPTH)
+      ? `"config" may nest at most ${MAX_CONFIG_DEPTH} levels`
+      : undefined,
 ];
+
+/**
+ * Whether a value nests deeper than `limit`.
+ *
+ * Iterative rather than recursive, deliberately: a recursive walk overflows the
+ * stack on exactly the input this exists to reject, so the guard would fail the
+ * same way the bug does. The traversal stops at the first violation, so a
+ * pathological payload costs `limit` levels of work rather than all of them.
+ */
+function exceedsDepth(value: unknown, limit: number): boolean {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 1 }];
+  while (stack.length > 0) {
+    const { value: current, depth } = stack.pop() as {
+      value: unknown;
+      depth: number;
+    };
+    if (current === null || typeof current !== "object") continue;
+    if (depth > limit) return true;
+    for (const child of Array.isArray(current)
+      ? current
+      : Object.values(current)) {
+      stack.push({ value: child, depth: depth + 1 });
+    }
+  }
+  return false;
+}
 
 /**
  * Why this value cannot be a placement, or `undefined`.
@@ -304,6 +334,17 @@ export function defaultPlacements(
     widgetId: widget.id,
     order: index * DEFAULT_ORDER_STEP,
     hidden: false,
+    // The declared geometry travels WITH the placement, rather than being left
+    // for a reader to look up. A placement is a persisted arrangement, and an
+    // arrangement that omits its own size is not one: the first save would
+    // store a row with no `size`, so a later change to the plugin's
+    // `defaultSize` would silently resize what the reader was told is their
+    // saved layout. Copied as strings, because a newer plugin's value is a
+    // shape this core has to survive rather than a vocabulary it can check.
+    size: widget.defaultSize,
+    ...(widget.defaultHeight === undefined
+      ? {}
+      : { height: widget.defaultHeight }),
   }));
 }
 
@@ -397,27 +438,35 @@ export const MAX_PLACEMENTS = 200;
 export const MAX_LAYOUT_BYTES = 32 * 1024;
 
 /**
- * The ceiling on the payload actually written, carried placements included.
+ * How deep a `config` object may nest.
  *
- * Higher than one caller's budget because a write legitimately stores more than
- * the caller sent, and lower than MySQL's 65535 so a multi-byte payload cannot
- * reach the dialect's own edge and truncate.
+ * `JSON.parse` accepts a structure thousands of levels deep and
+ * `JSON.stringify` throws `RangeError: Maximum call stack size exceeded` on the
+ * same value, so a syntactically valid body under every byte and count limit
+ * turned a write into an internal 500 on the way back out. Bounded here, where
+ * it becomes an ordinary validation refusal naming the field.
+ *
+ * 16 is far past anything a widget's settings need and far short of a stack.
  */
-export const MAX_STORED_BYTES = 56 * 1024;
+export const MAX_CONFIG_DEPTH = 16;
 
 /**
  * Why the caller's OWN submission cannot be stored, or `undefined`.
  *
  * 🔴 Measures only what the caller sent, and that scope is the point rather
- * than an omission. Measuring the merged payload — the submission plus the
- * placements carried back on the caller's behalf — and reporting its byte count
- * hands back a number that VARIES WITH HIDDEN DATA. A caller who has lost
- * access to a widget could then grow one visible placement until the refusal
- * appears and read the difference as the size of configuration they are not
- * allowed to see, which is exactly the observability this endpoint spends the
- * rest of its effort denying. Whether the merged total still fits the column is
- * a separate question, asked by {@link mergedLayoutExceedsColumn}, which
- * answers yes or no and never a quantity.
+ * than an omission. A budget that also weighed the placements carried back on
+ * the caller's behalf would make ACCEPTANCE ITSELF depend on data the caller
+ * cannot see — so a caller who had lost access to a widget could grow one
+ * visible placement until the refusal appeared and read the boundary as the
+ * size of configuration they are not allowed to see. Omitting the byte count
+ * from the message does not fix that: the pass/fail edge is the oracle, not the
+ * number.
+ *
+ * So there is no merged check at all. The stored column is `mediumtext` on the
+ * narrowest dialect, which no accumulation of 200 placements built from
+ * submissions this size can reach — the ceiling was removed rather than
+ * policed, which is a boundary the system cannot cross instead of a check that
+ * looks for crossings.
  */
 export function layoutSizeProblem(
   placements: readonly WidgetPlacement[]
@@ -432,28 +481,6 @@ export function layoutSizeProblem(
     return `a layout may be at most ${MAX_LAYOUT_BYTES} bytes; this one is ${bytes}`;
   }
   return undefined;
-}
-
-/**
- * Whether the payload that will actually be WRITTEN overruns the narrowest
- * dialect's column.
- *
- * A boolean, deliberately. Every caller-visible refusal above reports a
- * quantity; this one cannot, because the quantity it would report is partly
- * made of placements the caller may not know exist.
- *
- * Reachable only when carried-through placements push a submission that was
- * itself within budget past the ceiling — so the caller has done nothing wrong
- * and there is nothing for them to fix. Refusing is still right: a row that
- * cannot be re-read loses the whole dashboard, which is strictly worse than a
- * save that did not happen.
- */
-export function mergedLayoutExceedsColumn(
-  placements: readonly WidgetPlacement[]
-): boolean {
-  return (
-    Buffer.byteLength(serializeLayout(placements), "utf8") > MAX_STORED_BYTES
-  );
 }
 
 /**

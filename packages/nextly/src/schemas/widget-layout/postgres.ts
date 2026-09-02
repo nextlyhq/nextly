@@ -19,10 +19,10 @@
  *
  * ## Why the scope kind is in the key on day one
  *
- * Only `user` rows are written today; the role layer is designed in and not
- * built (founder, 2026-09-01). Keyed on the reader alone, adding role defaults
- * later would mean migrating every existing row to make room for a second kind
- * of owner. The column costs 32 bytes now and removes a migration later.
+ * Only `user` rows are written today. The kind is part of the key anyway,
+ * because it is half of what identifies an owner: keyed on the reader alone, a
+ * second kind of owner added after rows exist means migrating every row to make
+ * room for it. The column costs 32 bytes now and removes that migration.
  *
  * ## Why `layout` is `text` and not `jsonb`
  *
@@ -59,7 +59,14 @@ export const nextlyWidgetLayout = pgTable("nextly_widget_layout", {
   // only.
   id: varchar("id", { length: 191 }).primaryKey(),
   scopeKind: varchar("scope_kind", { length: 32 }).notNull(),
-  scopeId: varchar("scope_id", { length: 191 }).notNull(),
+  // `text`, not `varchar(191)`, and this dialect alone. The KEY is a digest so
+  // no scope can overrun it, but this column stores the caller's id verbatim —
+  // and PostgreSQL's own `users.id` is unbounded `text`, so an externally
+  // supplied id longer than 191 characters would authenticate, read the default
+  // layout, and fail on the first save with a length error. Each dialect
+  // matches the width its own `users.id` declares; MySQL's is `varchar(191)`,
+  // so 191 there is not a limit a real user can reach.
+  scopeId: text("scope_id").notNull(),
   // The whole snapshot, as JSON text. `notNull` because a row that exists means
   // somebody arranged something; "no arrangement" is the ABSENCE of a row, and
   // giving it a second spelling here would make two states that read the same.

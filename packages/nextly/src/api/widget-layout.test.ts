@@ -628,15 +628,27 @@ describe("PUT /api/dashboard/layout", () => {
    * its rejection never runs.
    */
 
-  it("does not report a size that depends on hidden placements", async () => {
-    // A refusal whose number varies with carried data lets a caller grow one
-    // visible placement until it appears and read the difference as the size of
-    // configuration they are not allowed to see.
+  it("accepts the same submission whether or not hidden data is carried", async () => {
+    // 🔴 The oracle is the pass/fail EDGE, not the number in the message.
+    // Omitting the byte count from a merged-size refusal leaves acceptance
+    // itself varying with data the caller cannot see, so a caller could
+    // binary-search a visible placement's size against it and read the boundary
+    // as the size of configuration they are not allowed to see. There is no
+    // merged check at all now: the stored column cannot be reached, so the
+    // answer to an identical submission is identical either way.
     registerWidget(widget({ id: "core/a" }));
     registerWidget(
       widget({ id: "core/gated", requiredPermission: "read-secrets" })
     );
     callerHoldsPermission.mockResolvedValue(false);
+
+    const submission = {
+      placements: onePlacement,
+      version: 1,
+      scope: scopeFor(["core/a"]),
+    };
+
+    // With a large hidden placement carried.
     stored = {
       version: 1,
       layout: serializeLayout([
@@ -649,21 +661,114 @@ describe("PUT /api/dashboard/layout", () => {
         },
       ]),
     };
+    const withHidden = await putWidgetLayout(putReq(submission));
 
-    const res = await putWidgetLayout(
-      putReq({
-        placements: onePlacement,
-        version: 1,
-        scope: scopeFor(["core/a"]),
+    // And with none.
+    saved = undefined;
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p9", widgetId: "core/gated", order: 0, hidden: false },
+      ]),
+    };
+    const withoutHidden = await putWidgetLayout(putReq(submission));
+
+    expect(withHidden.status).toBe(withoutHidden.status);
+    expect(withHidden.status).toBe(200);
+  });
+
+  it("keeps a carried default in its DECLARED position", async () => {
+    // 🔴 Positions come from a placement's index in the sorted set, so
+    // materializing over the FILTERED set and materializing over the full
+    // registry produce colliding numbers: visible A and B surrounding a gated G
+    // give A=0, B=10 from the filtered view and G=10 from the full one. The
+    // stored row then holds two placements at 10, and the moment the permission
+    // is granted the tie sorts A, B, G instead of the declared A, G, B — the
+    // reader's arrangement reordering itself because they gained access.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    registerWidget(
+      widget({
+        id: "core/gated",
+        defaultOrder: 10,
+        requiredPermission: "read-secrets",
       })
     );
-    const text = await res.text();
+    registerWidget(widget({ id: "core/b", defaultOrder: 20 }));
+    callerHoldsPermission.mockResolvedValue(false);
+
+    const shown = await bodyOf(await getWidgetLayout(getReq()));
+    expect(shown.placements?.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "core/b",
+    ]);
+
+    await putWidgetLayout(
+      putReq({
+        placements: shown.placements,
+        version: 0,
+        scope: scopeFor(["core/a", "core/b"]),
+      })
+    );
+
+    // Sorted the way a later read will sort it, with the gate lifted.
+    const order = [...(saved?.placements ?? [])]
+      .sort((x, y) => x.order - y.order)
+      .map(p => p.widgetId);
+    expect(order).toEqual(["core/a", "core/gated", "core/b"]);
+  });
+
+  it("refuses an oversized body without buffering it", async () => {
+    // `req.json()` reads the whole body before anything can look at it, so a
+    // quota checked on the parsed result has already paid for the memory and
+    // the parse it exists to prevent.
+    registerWidget(widget({ id: "core/a" }));
+    const huge = JSON.stringify({
+      placements: [
+        {
+          id: "p1",
+          widgetId: "core/a",
+          order: 0,
+          hidden: false,
+          config: { blob: "z".repeat(200_000) },
+        },
+      ],
+      version: 0,
+      scope: "x",
+    });
+
+    const res = await putWidgetLayout(
+      new Request("http://localhost/api/dashboard/layout", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: huge,
+      })
+    );
 
     expect(res.status).toBe(400);
-    // No quantity at all, so nothing in the message moves with the hidden
-    // placement's size.
-    expect(text).not.toMatch(/\d{3,}/);
-    expect(text).not.toContain("gated");
+    expect(await res.text()).toContain("too_large");
+    // Refused before any of the work it protects.
+    expect(saved).toBeUndefined();
+    expect(callerHoldsPermission).not.toHaveBeenCalled();
+  });
+
+  it("checks the caller's quota before resolving anything", async () => {
+    // The quota is a precondition and it is cheap, so nothing it protects
+    // should be paid for first. Under the body cap, over the placement count.
+    registerWidget(widget({ id: "core/a" }));
+    const many = Array.from({ length: 400 }, (_, i) => ({
+      id: `p${i}`,
+      widgetId: "core/a",
+      order: i,
+      hidden: false,
+    }));
+
+    const res = await putWidgetLayout(
+      putReq({ placements: many, version: 0, scope: "x" })
+    );
+
+    expect(res.status).toBe(400);
+    expect(callerHoldsPermission).not.toHaveBeenCalled();
+    expect(saved).toBeUndefined();
   });
 
   it("reports a version conflict as a conflict", async () => {

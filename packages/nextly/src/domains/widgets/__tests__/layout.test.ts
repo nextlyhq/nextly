@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import type { WidgetDefinition } from "../definition";
 import {
   LAYOUT_SCHEMA_VERSION,
+  MAX_CONFIG_DEPTH,
   MAX_PLACEMENTS,
   defaultPlacements,
   layoutSizeProblem,
@@ -349,5 +350,76 @@ describe("the visibility token", () => {
     const token = visibilityToken(["core/secret-project"]);
     expect(token).not.toContain("secret");
     expect(token.length).toBeLessThan(20);
+  });
+});
+
+describe("declared geometry on a default placement", () => {
+  it("carries the widget's size and height", () => {
+    // A placement that omits its own size is not a persisted arrangement: the
+    // first save would store a row with no `size`, so a later change to the
+    // plugin's `defaultSize` silently resizes what the reader was told is
+    // their saved layout.
+    const [placement] = defaultPlacements([
+      widget({ id: "core/a", defaultSize: "md", defaultHeight: "tall" }),
+    ]);
+    expect(placement.size).toBe("md");
+    expect(placement.height).toBe("tall");
+  });
+
+  it("omits height when the widget declares none", () => {
+    const [placement] = defaultPlacements([widget({ id: "core/a" })]);
+    expect(placement).not.toHaveProperty("height");
+  });
+
+  it("survives its own round trip", () => {
+    // The geometry it seeds must satisfy the shape rules it will be read back
+    // through, or the first save writes a row the next read refuses.
+    const placements = defaultPlacements([
+      widget({ id: "core/a", defaultSize: "lg", defaultHeight: "short" }),
+    ]);
+    expect(readStoredLayout(serializeLayout(placements)).placements).toEqual(
+      placements
+    );
+  });
+});
+
+describe("config nesting", () => {
+  /** An object nested `depth` levels deep. */
+  function nest(depth: number): Record<string, unknown> {
+    let node: Record<string, unknown> = {};
+    for (let i = 0; i < depth - 1; i += 1) node = { child: node };
+    return node;
+  }
+
+  it("accepts ordinary settings", () => {
+    expect(
+      placementProblem(placement({ config: nest(MAX_CONFIG_DEPTH) }))
+    ).toBeUndefined();
+  });
+
+  it("refuses a config deeper than the limit", () => {
+    expect(
+      placementProblem(placement({ config: nest(MAX_CONFIG_DEPTH + 2) }))
+    ).toMatch(/nest at most/);
+  });
+
+  it("refuses a depth that would crash the serializer", () => {
+    // The failure this exists for: `JSON.parse` accepts a structure thousands
+    // of levels deep and `JSON.stringify` throws `RangeError` on the same
+    // value, so a body under every byte and count limit became an internal 500
+    // on the way back out.
+    const deep = nest(20_000);
+    expect(() => JSON.stringify(deep)).toThrow(RangeError);
+    expect(placementProblem(placement({ config: deep }))).toMatch(
+      /nest at most/
+    );
+  });
+
+  it("counts depth through arrays as well as objects", () => {
+    let node: unknown = "leaf";
+    for (let i = 0; i < MAX_CONFIG_DEPTH + 4; i += 1) node = [node];
+    expect(placementProblem(placement({ config: { a: node } }))).toMatch(
+      /nest at most/
+    );
   });
 });

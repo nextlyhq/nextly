@@ -41,10 +41,10 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
+  MAX_LAYOUT_BYTES,
   defaultPlacements,
   layoutSizeProblem,
   mergePreservingHidden,
-  mergedLayoutExceedsColumn,
   partitionPlacements,
   readPlacements,
   visibilityToken,
@@ -63,7 +63,7 @@ import {
   readAccessCaller,
   readCaller,
 } from "./authenticated-read";
-import { readJsonBody } from "./read-json-body";
+import { readBoundedJsonBody } from "./read-json-body";
 import {
   respondData,
   respondMutation,
@@ -122,9 +122,32 @@ function carriedPlacements(
   if (storedPlacements) {
     return partitionPlacements(storedPlacements, visibleIds).invisible;
   }
-  return defaultPlacements(listWidgets()).filter(
-    placement => !visibleIds.has(placement.widgetId)
-  );
+  return partitionPlacements(defaultPlacements(listWidgets()), visibleIds)
+    .invisible;
+}
+
+/**
+ * The default arrangement as this caller sees it: materialized over the WHOLE
+ * registry, then filtered.
+ *
+ * 🔴 Materializing over the filtered set instead produces positions that
+ * COLLIDE with the carried half. Positions come from a placement's index in the
+ * sorted set, so with visible defaults A and B surrounding a gated G, filtering
+ * first gives A=0 and B=10, while the carried half — materialized over the full
+ * registry — gives G=10. The stored row then holds two placements at 10, and
+ * once the permission is granted the tie sorts A, B, G instead of the declared
+ * A, G, B: the reader's arrangement silently reorders itself the moment they
+ * gain access to something.
+ *
+ * So there is ONE materialization and two views of it, rather than two
+ * materializations that agree only while nothing is hidden.
+ */
+function visibleDefaults(
+  widgets: readonly WidgetDefinition[]
+): WidgetPlacement[] {
+  const visibleIds = new Set(widgets.map(widget => widget.id));
+  return partitionPlacements(defaultPlacements(listWidgets()), visibleIds)
+    .visible;
 }
 
 /**
@@ -240,7 +263,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
         stored.layout.placements,
         new Set(widgets.map(widget => widget.id))
       ).visible
-    : defaultPlacements(widgets);
+    : visibleDefaults(widgets);
 
   return respondData(
     {
@@ -327,7 +350,12 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     });
   }
 
-  const body = await readJsonBody(req);
+  // Bounded BEFORE it is buffered. `req.json()` reads the whole body first, so
+  // a quota checked on the parsed result has already paid for the memory and
+  // the parse it exists to prevent. The cap is the caller's own payload budget
+  // plus a small allowance for the envelope's other fields, so a body this
+  // reader accepts is one `layoutSizeProblem` can still refuse on its merits.
+  const body = await readBoundedJsonBody(req, MAX_LAYOUT_BYTES + 1024);
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw NextlyError.validation({
       errors: [
@@ -344,6 +372,18 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   );
   const expectedVersion = readVersion(body as Record<string, unknown>);
   const submittedScope = readScope(body as Record<string, unknown>);
+
+  // The caller's own quota, asked HERE — before the service, the role-slug
+  // resolution, the permission decisions and the stored row. It is a
+  // precondition and it is cheap, so nothing it protects should be paid for
+  // first. It measures only what the caller sent, so the answer depends on
+  // nothing hidden from them.
+  const tooLarge = layoutSizeProblem(submitted);
+  if (tooLarge !== undefined) {
+    throw NextlyError.validation({
+      errors: [{ path: "placements", code: "TOO_LARGE", message: tooLarge }],
+    });
+  }
 
   const service = await getLayoutService();
   const caller = readAccessCaller(await readCaller(auth));
@@ -407,37 +447,7 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   const stored = await service.getLayout(SCOPE_KIND, caller.userId);
   const carried = carriedPlacements(stored.layout?.placements, visibleIds);
 
-  // The caller's OWN submission, measured and reported with its real size --
-  // every number in this refusal describes data they sent.
-  const tooLarge = layoutSizeProblem(submitted);
-  if (tooLarge !== undefined) {
-    throw NextlyError.validation({
-      errors: [{ path: "placements", code: "TOO_LARGE", message: tooLarge }],
-    });
-  }
-
   const toStore = mergePreservingHidden(submitted, carried);
-  // And the payload actually written, measured WITHOUT reporting a quantity.
-  // The number here is partly made of placements this caller may not know
-  // exist, so a caller could otherwise grow one visible placement until the
-  // refusal appeared and read the difference as the size of configuration they
-  // are not allowed to see.
-  if (mergedLayoutExceedsColumn(toStore)) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "placements",
-          code: "TOO_LARGE",
-          message: "This dashboard layout is too large to store.",
-        },
-      ],
-      logContext: {
-        submitted: submitted.length,
-        carried: carried.length,
-      },
-    });
-  }
-
   const version = await service.saveLayout(
     SCOPE_KIND,
     caller.userId,
