@@ -20,6 +20,8 @@
  * @module keyboard-actions
  */
 
+import { findNode, registryNestingSource } from "@nextlyhq/blocks-engine";
+import type { NestingSource } from "@nextlyhq/blocks-engine";
 import { useShortcuts } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -32,6 +34,7 @@ import {
 } from "./keyboard-move";
 import { layerLabel, pathTo } from "./layers";
 import { lockBlockingMove } from "./locking";
+import { nestingRefusalForMove, refusalAnnouncement } from "./move-refusal";
 import {
   isRefusal,
   selectionDeletion,
@@ -194,6 +197,15 @@ export interface BlockKeyboardActionsOptions {
    */
   editor: EditorState;
   /**
+   * The nesting rule source, for explaining a refused move.
+   *
+   * Optional, defaulting to the registry — which is what the canvas asks, so a
+   * refusal reads the same whether the author dragged the block or moved it
+   * with the keyboard. Present as an option only so a test can supply a rule
+   * set without registering blocks globally.
+   */
+  nesting?: NestingSource;
+  /**
    * Whether the bindings are live. Defaults to true.
    *
    * A host that mounts the canvas inside something modal turns them off rather
@@ -241,7 +253,19 @@ export function useBlockKeyboardActions({
   editor,
   enabled = true,
   onEditText,
+  nesting,
 }: BlockKeyboardActionsOptions): BlockKeyboardActionsResult {
+  /*
+   * The same rule source the pointer route asks, defaulted the way the insert
+   * panel defaults it. Taken as an option rather than resolved here only so a
+   * test can supply one; a host passing nothing gets the registry, which is
+   * what the canvas passes too — two surfaces asking one source, so a refusal
+   * cannot be explained one way on a drag and another on a keypress.
+   */
+  const nestingSource = React.useMemo(
+    () => nesting ?? registryNestingSource(),
+    [nesting]
+  );
   // The message a live region reads out. Held as state rather than written to
   // the DOM directly so React owns the node — a region mutated behind React's
   // back is reverted by the next render, silently and only sometimes.
@@ -404,6 +428,27 @@ export function useBlockKeyboardActions({
       // be an error message for pressing a key that did nothing.
       if (move === null) return;
 
+      /*
+       * Asked BEFORE the move, because the op store does not consult the
+       * nesting rule — `ops.ts` holds no reference to it — so a placement the
+       * rule forbids is applied rather than refused.
+       *
+       * This is the keyboard route's half of the decision `drop-targets` makes
+       * for the pointer, of the same function, so the two surfaces cannot
+       * disagree about where a block may go. A keyboard author who could not
+       * be refused here would build documents a pointer author cannot.
+       */
+      const refusal = nestingRefusalForMove(
+        editorNow.document,
+        selectedId,
+        move.to,
+        nestingSource
+      );
+      if (refusal !== null) {
+        announce(refusalAnnouncement(refusal));
+        return;
+      }
+
       const applied = editorNow.apply({
         kind: "move",
         id: selectedId,
@@ -411,19 +456,31 @@ export function useBlockKeyboardActions({
         dropSlotIfEmpty: move.dropSlotIfEmpty,
       });
       // Announced only once the store has accepted it. A keyboard author
-      // cannot see the result, and the store may refuse — announcing before
-      // it answered would report a move that did not happen, which is worse
-      // than silence because it cannot be told from one that did.
-      //
-      // Refusals stay silent, deliberately. "This block is already first"
-      // on every press at the end of a list is noise an author cannot act
-      // on, and the block not moving is itself the answer.
-      if (applied !== null) announce(EFFECT_ANNOUNCEMENT[move.effect]);
+      // cannot see the result, and announcing before it answered would report
+      // a move that did not happen, which is worse than silence because it
+      // cannot be told from one that did.
+      if (applied !== null) {
+        announce(EFFECT_ANNOUNCEMENT[move.effect]);
+        return;
+      }
+      /*
+       * The store refused something the nesting rule permits — a byte cap, a
+       * depth limit, an op the forest rejects. The sentence names no cause,
+       * because none was established: naming a nesting one here would send an
+       * author to change a container that was never the problem.
+       *
+       * Still spoken rather than silent. `move === null` above is a boundary
+       * with nowhere to go and is correctly quiet; reaching HERE means a move
+       * was attempted and did not happen, which a keyboard author cannot see.
+       */
+      const moved = findNode(editorNow.document.nodes, selectedId);
+      const subject = moved === undefined ? "The block" : layerLabel(moved);
+      announce(`${subject} could not be moved.`);
       // The selection deliberately does NOT change. The block that moved is
       // the block still selected, so a second press continues moving the
       // same block — which is what makes a run of presses walk it across the
     },
-    [announce, moveSet]
+    [announce, moveSet, nestingSource]
   );
 
   /**
@@ -678,6 +735,7 @@ export function BlockKeyboardActions({
   editor,
   enabled,
   onEditText,
+  nesting,
   children,
 }: BlockKeyboardActionsOptions & {
   readonly children?: React.ReactNode;
@@ -686,6 +744,7 @@ export function BlockKeyboardActions({
     editor,
     enabled,
     ...(onEditText === undefined ? {} : { onEditText }),
+    ...(nesting === undefined ? {} : { nesting }),
   });
 
   // `polite`, not `assertive`: a move is the author's own action and its result
