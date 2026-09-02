@@ -1027,6 +1027,29 @@ describe("the panel explains itself", () => {
     expect(screen.getByText(/floor, not a measurement/i)).toBeTruthy();
   });
 
+  it("teaches when the library is EMPTY, rather than blaming a filter", () => {
+    /*
+     * With `all` active nothing is narrowing anything, so "No classes match
+     * this filter." names a control that did not empty the list and then stops
+     * at the absence — the dead end this panel was reported for.
+     *
+     * The second half is the must-differ control: under `on this page` a filter
+     * genuinely DID narrow, so the filter wording is the honest one there and
+     * has to survive. Without it this test would pass on a panel that had
+     * simply lost the filter sentence altogether.
+     */
+    draw({ library: [], usage: undefined, documentClassIds: [] });
+    expect(screen.getByText("No classes yet.")).toBeTruthy();
+    expect(
+      screen.getByText(/other blocks can wear the same one/i)
+    ).toBeTruthy();
+    expect(screen.queryByText("No classes match this filter.")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "On this page" }));
+    expect(screen.getByText("No classes match this filter.")).toBeTruthy();
+    expect(screen.queryByText("No classes yet.")).toBeNull();
+  });
+
   it("keeps the filters, because they answer questions that OVERLAP", () => {
     /*
      * Not converted to groups, and this test is why. `filterClassRows` tests

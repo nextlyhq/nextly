@@ -522,6 +522,29 @@ function ClassList({
         </div>
       );
     }
+    /*
+     * An empty library is not a filter miss. With `all` active nothing is
+     * narrowing anything, so blaming "this filter" points an author at a
+     * control that is not doing what the sentence says it did — and stops at
+     * the absence, which is the dead end this panel was reported for.
+     *
+     * It teaches instead, and names where the next step happens. Classes are
+     * not created here (applying belongs beside the style controls, auditing
+     * belongs on a reading surface), so the action this state can honestly
+     * offer is where to go, not a button.
+     */
+    if (filter === "all") {
+      return (
+        <div className="nx-classman__empty">
+          <p className="nx-classman__empty-head">No classes yet.</p>
+          <p className="nx-inspector__note">
+            A class saves a set of styles under a name so other blocks can wear
+            the same one. You make the first beside the style controls, and it
+            appears here to rename or clear out.
+          </p>
+        </div>
+      );
+    }
     return <p className="nx-inspector__note">No classes match this filter.</p>;
   }
   const shown = rows.slice(0, limit);
