@@ -29,6 +29,7 @@ import { useJobs } from "@admin/hooks/queries/useJobs";
 import { useCan } from "@admin/hooks/useCan";
 import {
   ATTENTION_STATES,
+  JOB_DISPLAY_STATUSES,
   DEFAULT_JOB_RETENTION_DAYS,
   jobNeedsAttention,
   type JobListItem,
@@ -56,21 +57,27 @@ export interface JobFailureSummaryProps {
 /**
  * The jobs a person has to do something about.
  *
- * Asked of the core's {@link jobNeedsAttention} rather than compared against
- * `"failed"` here. The core exports that question precisely so a caller does
- * not enumerate the vocabulary: if a second actionable terminal state is added,
- * the exhaustive presentation map forces an update while a literal comparison
- * goes on compiling and silently drops those jobs out of this notice — the one
- * failure mode a notice must not have.
+ * Two rules, and the second is the one that is easy to leave out. A status the
+ * core calls actionable is kept, obviously. A status THIS BUILD DOES NOT KNOW
+ * is also kept — because during a rolling deploy a newer server can send one,
+ * and `jobNeedsAttention` answers false for it. Dropping those would make the
+ * notice go quiet about the new kind of failure nobody has seen yet, which is
+ * the one failure mode a notice must not have.
+ *
+ * What is dropped is only what this build knows to be QUIET: a retry in flight,
+ * a job waiting, one that succeeded. That keeps the component honest about a
+ * server sending rows it did not ask for, rather than reporting them as
+ * failures because they arrived.
  */
 export function jobsNeedingAttention(
   items: readonly JobListItem[],
   slug?: string
 ): JobListItem[] {
-  return items.filter(
-    job =>
-      jobNeedsAttention(job.status) && (slug === undefined || job.slug === slug)
-  );
+  const known = new Set<string>(JOB_DISPLAY_STATUSES);
+  return items.filter(job => {
+    if (slug !== undefined && job.slug !== slug) return false;
+    return jobNeedsAttention(job.status) || !known.has(job.status);
+  });
 }
 
 /** The distinct task names among a set of failures, in first-seen order. */
@@ -154,7 +161,7 @@ export const JobFailureSummary: React.FC<JobFailureSummaryProps> = ({
         {/* Named rather than counted: "2 failed" tells an operator to go
             looking, "releases:drain failed" tells them what did not happen. */}
         <span>
-          {tasks.join(", ")} stopped after using every attempt, so the work will
+          {tasks.join(", ")} stopped and will not be retried, so the work will
           not happen without someone.{" "}
           {truncated
             ? "Counted among the most recent jobs loaded; older failures may exist."

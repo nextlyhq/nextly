@@ -98,6 +98,30 @@ sets a timezone and a date format; a local `toLocaleString` reads the browser's
 instead, so the same instant appeared two different ways on one page and nothing
 said so.
 
+The table narrows on the SERVER too. Once the summary started asking the
+database for failures, a locally-filtered table could show nothing under a
+notice reporting one — the two halves of one screen disagreeing, because only
+one of them had asked. Choosing a status now sends the stored states that can
+produce it, and the client separates only the statuses that share a state.
+
+"Needs attention" is total over wire strings. A newer server can send a status
+this build has never heard of, which `jobStatusPresentation` already degrades
+for; the predicate indexed its table directly and threw on that key, taking down
+the page whose job is to report that something is wrong. It answers false for an
+unfamiliar status, so the summary keeps two rules rather than one: a status the
+core calls actionable is kept, and so is one this build does not recognise —
+because the rows a stale client would otherwise drop are exactly the new kind of
+failure nobody has seen yet. What it drops is only what it knows to be quiet.
+
+A failed job is described as terminal, not as having spent its attempts. The
+runner returns terminal immediately when the identity it would run as is gone,
+so a job can reach that state on its first attempt, and telling an operator the
+retries were exhausted sends them looking for a backoff that never happened.
+
+An expanded error keeps an operable label. Hiding every child of the disclosure
+on open left an empty control — nothing to click to collapse it and nothing for
+a screen reader to announce.
+
 It also asks for FAILURES rather than sifting recent rows. A window is the most
 recent N jobs, so N healthy ones running after a failure push it out — and a
 summary that looked inside that window would report nothing wrong with the

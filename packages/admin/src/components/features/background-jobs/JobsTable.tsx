@@ -80,13 +80,22 @@ const JobErrorCell: React.FC<{ error: string | null }> = ({ error }) => {
     );
   }
   return (
-    <details className="max-w-80 group">
+    <details className="group max-w-80">
+      {/*
+        The summary must stay operable in BOTH states. Hiding every child on
+        open left an empty control: nothing to click to collapse it, and nothing
+        for a screen reader to announce it as. So the preview collapses and the
+        label SWAPS rather than disappearing.
+      */}
       <summary className="cursor-pointer list-none font-mono text-xs text-muted-foreground marker:content-none">
         <span className="line-clamp-2 break-words group-open:hidden">
           {error}
         </span>
         <span className="underline underline-offset-2 group-open:hidden">
           Show full error
+        </span>
+        <span className="hidden underline underline-offset-2 group-open:inline">
+          Hide full error
         </span>
       </summary>
       <span className="mt-1 block font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">

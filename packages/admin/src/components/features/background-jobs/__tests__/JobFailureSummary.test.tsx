@@ -86,6 +86,30 @@ describe("jobsNeedingAttention", () => {
     ).toEqual(["a"]);
   });
 
+  it("KEEPS a status this build does not know", () => {
+    /*
+     * The direction that matters during a rolling deploy. `jobNeedsAttention`
+     * answers false for an unfamiliar status, so filtering on it alone would
+     * drop exactly the rows carrying a new kind of failure — the notice goes
+     * quiet about the one thing nobody has seen before.
+     */
+    const rows = [job({ id: "a", status: "quarantined" })];
+    expect(
+      jobsNeedingAttention(rows).map((row: JobListItem) => row.id)
+    ).toEqual(["a"]);
+  });
+
+  it("still drops a status it knows to be QUIET", () => {
+    // The control. Without it the case above passes against a filter that keeps
+    // everything, which would report a healthy queue as failing.
+    const rows = [
+      job({ id: "a", status: "retrying" }),
+      job({ id: "b", status: "succeeded" }),
+      job({ id: "c", status: "waiting" }),
+    ];
+    expect(jobsNeedingAttention(rows)).toEqual([]);
+  });
+
   it("restricts to one task when asked, and admits it otherwise", () => {
     const rows = [
       job({ id: "a", slug: "releases:drain" }),

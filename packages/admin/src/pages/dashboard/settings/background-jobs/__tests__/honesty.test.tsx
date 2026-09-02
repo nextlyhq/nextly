@@ -13,7 +13,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 import type { JobListItem } from "@admin/types/jobs";
 
-import { BackgroundJobsContent } from "../index";
+import { BackgroundJobsContent, jobsQueryFor } from "../index";
 
 const { useJobs, canFor } = vi.hoisted(() => ({
   useJobs: vi.fn(),
@@ -146,5 +146,34 @@ describe("what the background jobs screen admits to", () => {
     expect(disclosures.length).toBeGreaterThan(0);
     // The whole message is present, not a prefix of it.
     expect(screen.getAllByText(long).length).toBeGreaterThan(0);
+  });
+  it("asks the SERVER for the states a chosen status can hold", () => {
+    /*
+     * A window is the most recent N rows. Narrowing it only after it arrives
+     * showed an empty table under a notice reporting a failure — the summary
+     * asked the database and the table did not, so one screen contradicted
+     * itself.
+     */
+    expect(jobsQueryFor(50, "failed")).toEqual({
+      limit: 50,
+      states: ["failed"],
+    });
+  });
+
+  it("asks for a status's WHOLE stored set, not the one that shares its name", () => {
+    // `running` is produced by a live lease on a row in any state, so narrowing
+    // to the column value `running` would hide every job actually executing.
+    expect(jobsQueryFor(50, "running").states).toEqual([
+      "pending",
+      "running",
+      "done",
+      "failed",
+    ]);
+  });
+
+  it("sends no state filter when no status is chosen", () => {
+    // The control: without it the cases above pass against a query that always
+    // narrows, which would hide every job the moment the screen opened.
+    expect(jobsQueryFor(25, undefined)).toEqual({ limit: 25 });
   });
 });

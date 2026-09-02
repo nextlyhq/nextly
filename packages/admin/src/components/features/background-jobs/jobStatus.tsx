@@ -59,7 +59,11 @@ const STATUS_PRESENTATION: Record<JobDisplayStatus, StatusPresentation> = {
   failed: {
     variant: "destructive",
     label: "Failed",
-    hint: "Attempts are spent. This will not happen without a person.",
+    // NOT "attempts are spent": a job can reach this state on its first
+    // attempt. The runner returns terminal immediately when the identity it
+    // would run as is gone, so telling an operator the retries were exhausted
+    // sends them looking for a backoff that never happened.
+    hint: "Terminal — it will not be retried. This needs a person.",
   },
 };
 

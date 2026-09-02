@@ -36,8 +36,10 @@ import { JOBS_POLL_INTERVAL_MS, useJobs } from "@admin/hooks/queries/useJobs";
 import { useCan } from "@admin/hooks/useCan";
 import {
   DEFAULT_JOB_RETENTION_DAYS,
+  storedStatesFor,
   type JobDisplayStatus,
   type JobWindowSize,
+  type ListJobsParams,
 } from "@admin/types/jobs";
 
 const BACKGROUND_JOBS_PAGE = {
@@ -49,13 +51,45 @@ const BACKGROUND_JOBS_PAGE = {
 
 const DEFAULT_WINDOW: JobWindowSize = 50;
 
+/**
+ * What the table asks the server for.
+ *
+ * A window is the most recent N rows, so narrowing it only after it arrives
+ * showed an empty table under a notice reporting a failure — the summary asked
+ * the database and the table did not, and one screen contradicted itself.
+ *
+ * The display vocabulary does not map onto the stored column one-for-one, so
+ * this narrows to the states that CAN produce the chosen status and the caller
+ * separates the ones that share a state. Exported because it is the decision
+ * worth asserting, and driving it through the select control would test the
+ * control rather than the query.
+ */
+export function jobsQueryFor(
+  windowSize: JobWindowSize,
+  status: JobDisplayStatus | undefined
+): ListJobsParams {
+  if (status === undefined) return { limit: windowSize };
+  return { limit: windowSize, states: storedStatesFor(status) };
+}
+
 export const BackgroundJobsContent: React.FC = () => {
   const canRead = useCan("manage-background-jobs");
   const [windowSize, setWindowSize] = useState<JobWindowSize>(DEFAULT_WINDOW);
   const [status, setStatus] = useState<JobDisplayStatus | undefined>();
 
+  /*
+   * The status filter is sent to the SERVER, not only applied to what came
+   * back.
+   *
+   * A window is the most recent N rows, so filtering it locally showed an empty
+   * table under a notice reporting a failure — the summary asks the database
+   * and the table did not, and the two disagreed on one screen. The display
+   * vocabulary does not map onto the column one-for-one, so the query narrows
+   * by the stored states that CAN produce the chosen status and the refinement
+   * below separates the ones sharing a state.
+   */
   const { data, isLoading, isError, error, isPlaceholderData } = useJobs(
-    { limit: windowSize },
+    jobsQueryFor(windowSize, status),
     { enabled: canRead }
   );
 
@@ -94,11 +128,12 @@ export const BackgroundJobsContent: React.FC = () => {
   }
 
   const items = data?.items ?? [];
-  // Filtered here rather than by the server, and that is a property of the
-  // vocabulary rather than a shortcut: `waiting` and `retrying` are the SAME
-  // stored state, so a server-side status filter could not tell them apart.
-  // The window is what was fetched, so the filter narrows what is on screen and
-  // the count below says so.
+  // The remaining refinement, and it is a property of the vocabulary rather
+  // than a shortcut: `waiting` and `retrying` are the SAME stored state, and a
+  // live lease makes any state display as `running`, so the column cannot
+  // separate them. The query above has already narrowed to the states that can
+  // produce this status, so what is dropped here is only the rows that share a
+  // state with it.
   const visible =
     status === undefined ? items : items.filter(job => job.status === status);
 

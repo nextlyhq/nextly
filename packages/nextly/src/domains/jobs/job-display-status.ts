@@ -153,8 +153,21 @@ export function jobDisplayStatus(
  * so the answer stays in one place when a status is added. A caller asking "is
  * anything wrong" must not have to enumerate the vocabulary to find out.
  */
-export function jobNeedsAttention(status: JobDisplayStatus): boolean {
-  return STATUS_FACTS[status].needsAttention;
+export function jobNeedsAttention(status: string): boolean {
+  // TOTAL over strings, not only over the union. A status arrives from the
+  // wire, and during a rolling deploy a newer server can send one this build
+  // has never heard of — the same case `jobStatusPresentation` degrades for.
+  // Indexing the table directly would throw on that key and take the page down.
+  //
+  // An unfamiliar status answers FALSE rather than true, because this predicate
+  // decides whether to RAISE an alarm and a client cannot know what a word it
+  // does not have means. That makes it unsafe as the only filter: a caller
+  // asking "did anything fail" must narrow by ATTENTION_STATES in the query,
+  // where the server's own vocabulary decides, and use this to describe what
+  // came back rather than to find it.
+  return Object.prototype.hasOwnProperty.call(STATUS_FACTS, status)
+    ? STATUS_FACTS[status as JobDisplayStatus].needsAttention
+    : false;
 }
 
 /**

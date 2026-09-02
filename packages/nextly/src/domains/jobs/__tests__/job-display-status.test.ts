@@ -148,6 +148,28 @@ describe("the status facts table, checked against the function it describes", ()
     expect(ATTENTION_STATES.length).toBeGreaterThan(0);
   });
 
+  it("answers a status this build has never heard of, rather than throwing", () => {
+    /*
+     * A status arrives from the wire. During a rolling deploy a newer server
+     * can send one this build does not know, and indexing the facts table on
+     * that key throws — taking down the page whose whole job is to report that
+     * something is wrong.
+     *
+     * It answers FALSE, which makes the predicate unsafe as the only filter: a
+     * caller asking "did anything fail" narrows by ATTENTION_STATES in the
+     * query, where the server's own vocabulary decides, and uses this to
+     * describe what came back rather than to find it.
+     */
+    expect(() => jobNeedsAttention("quarantined")).not.toThrow();
+    expect(jobNeedsAttention("quarantined")).toBe(false);
+    // Prototype keys are the sharp edge of a plain object lookup.
+    expect(jobNeedsAttention("toString")).toBe(false);
+    expect(jobNeedsAttention("constructor")).toBe(false);
+    // The premise: it still answers TRUE for a status it does know, so this is
+    // not a predicate that has simply stopped working.
+    expect(jobNeedsAttention("failed")).toBe(true);
+  });
+
   it("does not select a state that only quiet statuses can hold", () => {
     // The control. `done` is reachable only as `succeeded`, which needs nobody,
     // so a filter that included it would be selecting healthy rows.
