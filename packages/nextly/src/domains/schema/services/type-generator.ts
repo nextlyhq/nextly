@@ -774,6 +774,10 @@ export class TypeGenerator {
     const fieldName = field.name;
 
     let tsType: string;
+    // Whether `tsType` came from a plugin rather than from this file. It is
+    // what decides bracketing when null is unioned on — see
+    // `nullableTypeExpression`.
+    let fromPlugin = false;
 
     // Text fields (supports hasMany for array of strings)
     if (isTextField(field)) {
@@ -861,6 +865,7 @@ export class TypeGenerator {
           imported: pluginDeclaredImportNames(field, "tsImports"),
         });
         tsType = contributed;
+        fromPlugin = true;
       } else {
         // No rendering of its own, but the registry still knows what it stores.
         // Re-entered as the storage primitive's built-in type so the branch
@@ -880,7 +885,9 @@ export class TypeGenerator {
       }
     }
 
-    return renderFieldMember(fieldName, tsType, field);
+    return renderFieldMember(fieldName, tsType, field, {
+      contributed: fromPlugin,
+    });
   }
 
   // ============================================================
@@ -903,6 +910,10 @@ export class TypeGenerator {
     const isCodeSourced = field.source === "code";
 
     let tsType: string;
+    // Whether `tsType` came from a plugin rather than from this file. It is
+    // what decides bracketing when null is unioned on — see
+    // `nullableTypeExpression`.
+    let fromPlugin = false;
 
     switch (field.type) {
       case "text":
@@ -955,6 +966,7 @@ export class TypeGenerator {
             imported: pluginDeclaredImportNames(field, "tsImports"),
           });
           tsType = contributed;
+          fromPlugin = true;
           break;
         }
         const storageType = pluginStorageFieldType(field);
@@ -970,7 +982,9 @@ export class TypeGenerator {
       }
     }
 
-    return renderFieldMember(field.name, tsType, field);
+    return renderFieldMember(field.name, tsType, field, {
+      contributed: fromPlugin,
+    });
   }
 
   /**

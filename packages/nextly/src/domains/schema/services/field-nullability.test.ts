@@ -37,20 +37,35 @@ describe("nullableTypeExpression", () => {
     expect(nullableTypeExpression("unknown")).toBe("unknown");
   });
 
-  it("parenthesizes a conditional type, whose false branch would capture the union", () => {
-    // `A extends B ? X : Y | null` parses as `A extends B ? X : (Y | null)`,
-    // so the TRUE branch still rejects null while the column can return it.
-    // Confirmed against the compiler: assigning null to the true branch of an
-    // unparenthesized form is rejected with TS2322.
-    expect(nullableTypeExpression("A extends B ? X : Y")).toBe(
-      "(A extends B ? X : Y) | null"
+  it("brackets a contributed expression, whatever its shape", () => {
+    // Provenance, not syntax. `A extends B ? X : Y | null` attaches null to the
+    // FALSE branch, so the true branch still rejects it; `() => X | null` makes
+    // the RETURN nullable. Both are only reachable through a plugin, so the
+    // bracket is applied because the expression came from outside rather than
+    // because it matched a pattern — which is what a formatting change evades.
+    expect(
+      nullableTypeExpression("A extends B ? X : Y", { contributed: true })
+    ).toBe("(A extends B ? X : Y) | null");
+    expect(nullableTypeExpression("() => X", { contributed: true })).toBe(
+      "(() => X) | null"
     );
   });
 
-  it("parenthesizes a function type, whose RETURN would otherwise take the union", () => {
-    // `() => X | null` makes the return nullable and leaves the field itself
-    // non-null, which is the opposite of what is meant.
-    expect(nullableTypeExpression("() => X")).toBe("(() => X) | null");
+  it("brackets a contributed expression a syntax scan would have missed", () => {
+    // The case that retired the previous implementation: it tested for the
+    // literal `" extends "`, so a conditional formatted across lines went
+    // through unbracketed. Nothing about the formatting reaches the decision
+    // now.
+    expect(
+      nullableTypeExpression("T extends\n  U ? X : Y", { contributed: true })
+    ).toBe("(T extends\n  U ? X : Y) | null");
+  });
+
+  it("leaves a type this module built itself unbracketed", () => {
+    // Built-in types are atomic by construction, so brackets would be noise.
+    expect(nullableTypeExpression("Rating<5>", { contributed: false })).toBe(
+      "Rating<5> | null"
+    );
   });
 });
 

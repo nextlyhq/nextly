@@ -78,7 +78,7 @@ describe("plugin field types in the TypeScript generator", () => {
       ]),
     ]);
 
-    expect(file.code).toContain("score?: Rating<5> | null;");
+    expect(file.code).toContain("score?: (Rating<5>) | null;");
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
   });
 
@@ -216,7 +216,7 @@ describe("plugin field types in the TypeScript generator", () => {
 
     // An ordinary save relocates unmodelled options, so a callback reading the
     // raw field would silently start emitting the un-narrowed type.
-    expect(file.code).toContain("score?: Rating<7> | null;");
+    expect(file.code).toContain("score?: (Rating<7>) | null;");
   });
 
   it("imports nothing for a registered type no field uses", () => {
