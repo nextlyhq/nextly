@@ -88,11 +88,25 @@ const NEVER_EXPOSED_FIELD_TYPES: ReadonlySet<string> = new Set(["password"]);
  * product is broken. `relationship` and `upload` are excluded for a third
  * reason -- their value may well be a printable id, and an id is not a name.
  */
+/**
+ * 🔴 The INVARIANT this list has to hold: every type in it must produce a value
+ * the shared naming rule will actually print. That rule accepts a non-empty
+ * string or a finite number and refuses everything else, in both places it is
+ * implemented -- `readableText` for the entry surfaces and the candidate walk in
+ * `entryHeading` for the activity feed.
+ *
+ * `checkbox` is absent for that reason, and its absence is the point rather than
+ * an oversight: a boolean is a legal `useAsTitle` nomination and a conventional
+ * field can itself be a checkbox, so nominating one here made the field-level
+ * answer disagree with every value-level answer -- the generated card selecting
+ * a column whose value each of those rules then declines, while the same entry
+ * is named by a conventional fallback everywhere else. A type this list admits
+ * but the value rule refuses is a card that names nothing.
+ */
 const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
   "text",
   "textarea",
   "number",
-  "checkbox",
   "date",
   "select",
   "email",

@@ -348,6 +348,41 @@ describe("what a source calls itself, and which field names its rows", () => {
     expect(getSource("collection:posts")?.titleField).toBe("title");
   });
 
+  it("REFUSES a boolean field as the title, nominated or conventional", () => {
+    // 🔴 One question, two answers is the defect. The shared naming rule accepts
+    // a non-empty string or a finite number and refuses a boolean -- in both
+    // implementations, `readableText` for the entry surfaces and the candidate
+    // walk for the activity feed. A field-level allowlist that admitted
+    // `checkbox` therefore nominated a column every value-level rule then
+    // declines: the card names nothing while the same entry is named by a
+    // conventional fallback everywhere else.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "active",
+        fields: [
+          { name: "active", type: "checkbox" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("REFUSES a conventional field that is itself a checkbox", () => {
+    // The half a nomination-only guard misses: `title` is a conventional name,
+    // so it is reached by the fallback walk without anyone nominating it.
+    registerBuiltInSources([
+      {
+        slug: "flags",
+        fields: [{ name: "title", type: "checkbox" }],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:flags")?.titleField).toBeUndefined();
+  });
+
   it("judges a DUPLICATE name by the declaration the source carries", () => {
     // 🔴 Two questions about one name have to be asked of ONE declaration. A
     // collection may declare `tags` twice and the two need not agree; the

@@ -13,7 +13,6 @@ import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
 import {
   refreshCollectionSources,
-  resetVerifiedTables,
   setDeferredCollections,
 } from "../collection-sources";
 import {
@@ -78,9 +77,8 @@ function registryUnreachable(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   clearSources();
-  // The observed-table memo is pinned on `globalThis`, so without this a
-  // verification from one test satisfies the next one's assertion.
-  resetVerifiedTables();
+  // The refusal set is pinned on `globalThis`, so without this one test's
+  // deferral outlives it and satisfies the next test's assertion.
   setDeferredCollections([]);
   setNextlyLogger({
     error: () => {},
@@ -480,33 +478,13 @@ describe("a collection whose table is not there yet", () => {
     expect(getSource("collection:drafts")).toBeUndefined();
   });
 
-  it("gives one to a PENDING collection whose table is actually there", async () => {
-    // 🔴 The status is a LABEL and several writers maintain it badly. A Builder
-    // collection deployed with `nextly migrate` keeps `pending` forever -- the
-    // only writer that records `applied`, `registerFromMigrations`, runs from
-    // the development boot path alone -- so its cards would never appear, on a
-    // table that has been queryable since the deploy. Asked structurally, the
-    // table is there and the source exists.
-    registryHoldsWithTables(
-      [
-        {
-          slug: "drafts",
-          tableName: "dc_drafts",
-          migrationStatus: "pending",
-          fields: [{ name: "title", type: "text" }],
-          timestamps: true,
-        },
-      ],
-      ["dc_drafts"]
-    );
-
-    await refreshCollectionSources();
-    expect(getSource("collection:drafts")).toBeDefined();
-  });
-
-  it("still refuses a PENDING collection whose table is genuinely absent", async () => {
-    // The control the case above needs: without it, "trust the structure" is
-    // satisfied by a filter that stopped refusing anything at all.
+  it("refuses a PENDING collection even when its table is present", async () => {
+    // 🔴 The refusal is deliberate and is the conservative half of a known
+    // trade. `pending` is also what a Builder collection carries after its
+    // migration HAS run, because nothing marks the row -- so this hides cards
+    // that would work. It hides them rather than publishing a source whose
+    // columns may not exist, which is the failure that cannot be undone by
+    // looking again.
     registryHoldsWithTables(
       [
         {
@@ -572,108 +550,30 @@ describe("a collection whose table is not there yet", () => {
     expect(getSource("collection:posts")).toBeUndefined();
   });
 
-  it("publishes a collection again once the reload stops deferring it", async () => {
-    // The control: without it the two refusals above are satisfied by a guard
-    // that withholds permanently. A later successful reload REPLACES the set,
-    // so the refusal lifts with nobody having to clear it.
-    setDeferredCollections(["drafts"]);
-    registryHoldsWithTables(
-      [
-        {
-          slug: "drafts",
-          tableName: "dc_drafts",
-          migrationStatus: "pending",
-          fields: [{ name: "title", type: "text" }],
-          timestamps: true,
-        },
-      ],
-      ["dc_drafts"]
-    );
-    await refreshCollectionSources();
-    expect(getSource("collection:drafts")).toBeUndefined();
+  it("publishes a collection again once the reload stops deferring it", () => {
+    // The control the two refusals need: without it they are satisfied by a
+    // guard that withholds permanently. The label CLAIMS presence throughout,
+    // so the refusal is the only thing withholding this collection, and a later
+    // reload replaces the published set rather than adding to it -- which is
+    // what lifts a refusal with nobody having to clear it.
+    const row = {
+      slug: "posts",
+      tableName: "dc_posts",
+      migrationStatus: "applied",
+      fields: [{ name: "title", type: "text" }],
+      timestamps: true,
+    };
 
-    setDeferredCollections([]);
-    await refreshCollectionSources();
-    expect(getSource("collection:drafts")).toBeDefined();
-  });
+    return (async () => {
+      setDeferredCollections(["posts"]);
+      registryHolds([row]);
+      await refreshCollectionSources();
+      expect(getSource("collection:posts")).toBeUndefined();
 
-  it("asks the database NOTHING for a deferred collection", async () => {
-    // A deferred collection is excluded whatever the database answers, so a
-    // lookup for it is a round trip whose result is discarded -- on every
-    // request, for as long as the refusal stands.
-    setDeferredCollections(["drafts"]);
-    const { listTables } = registryHoldsWithTables(
-      [
-        {
-          slug: "drafts",
-          tableName: "dc_drafts",
-          migrationStatus: "pending",
-          fields: [{ name: "title", type: "text" }],
-          timestamps: true,
-        },
-      ],
-      ["dc_drafts"]
-    );
-
-    await refreshCollectionSources();
-    expect(listTables).not.toHaveBeenCalled();
-  });
-
-  it("asks the database NOTHING when every label already claims presence", async () => {
-    // The cost property, asserted rather than assumed. `refreshCollectionSources`
-    // runs on every workspace, layout and widget request, so introspecting per
-    // request would be a database round trip on the hot path. The label settles
-    // the common case and the structural question is asked only of the
-    // collections it declines -- which is the population it is wrong about.
-    const { listTables } = registryHoldsWithTables(
-      [
-        {
-          slug: "posts",
-          tableName: "dc_posts",
-          migrationStatus: "applied",
-          fields: [{ name: "title", type: "text" }],
-          timestamps: true,
-        },
-        {
-          slug: "pages",
-          tableName: "dc_pages",
-          migrationStatus: "synced",
-          fields: [{ name: "title", type: "text" }],
-          timestamps: true,
-        },
-      ],
-      ["dc_posts", "dc_pages"]
-    );
-
-    await refreshCollectionSources();
-    expect(getSource("collection:posts")).toBeDefined();
-    expect(listTables).not.toHaveBeenCalled();
-  });
-
-  it("does not re-introspect for a table it has already observed", async () => {
-    // A table that exists does not stop existing, so one observation settles it
-    // for the life of the process. Without this, a collection stuck on a wrong
-    // label would introspect on every request forever -- which is precisely the
-    // state this change exists to serve.
-    const { listTables } = registryHoldsWithTables(
-      [
-        {
-          slug: "drafts",
-          tableName: "dc_drafts",
-          migrationStatus: "pending",
-          fields: [{ name: "title", type: "text" }],
-          timestamps: true,
-        },
-      ],
-      ["dc_drafts"]
-    );
-
-    await refreshCollectionSources();
-    expect(listTables).toHaveBeenCalledTimes(1);
-
-    await refreshCollectionSources();
-    expect(getSource("collection:drafts")).toBeDefined();
-    expect(listTables).toHaveBeenCalledTimes(1);
+      setDeferredCollections([]);
+      await refreshCollectionSources();
+      expect(getSource("collection:posts")).toBeDefined();
+    })();
   });
 
   it("DOES give one to a collection whose migration ran", async () => {

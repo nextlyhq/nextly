@@ -242,40 +242,6 @@ function statusClaimsPresent(collection: RegisteredCollection): boolean {
   return typeof status === "string" && TABLE_PRESENT_STATUSES.has(status);
 }
 
-/** The physical table a registered row names, when it names one usably. */
-function tableNameOf(collection: RegisteredCollection): string | undefined {
-  const name = (collection as { tableName?: unknown }).tableName;
-  return typeof name === "string" && name !== "" ? name : undefined;
-}
-
-/**
- * Slugs whose table has been OBSERVED to exist.
- *
- * Pinned on `globalThis` like every other boot-time widget store, so it
- * survives the module re-evaluation Next.js and Turbopack perform.
- *
- * 🔴 POSITIVE observations only, and the asymmetry is the design rather than an
- * omission. A table that exists does not stop existing under ordinary
- * operation, so remembering that one is present is sound for the life of the
- * process. An ABSENT table may arrive at any moment -- a migration running
- * against a live database is precisely the case this exists to notice -- so
- * caching absence would reinstate the staleness the status label already has,
- * one layer down and harder to see.
- */
-const globalForVerified = globalThis as unknown as {
-  __nextly_widgetVerifiedTables?: Set<string>;
-};
-
-function verifiedTables(): Set<string> {
-  globalForVerified.__nextly_widgetVerifiedTables ??= new Set<string>();
-  return globalForVerified.__nextly_widgetVerifiedTables;
-}
-
-/** Clear the observed-table memo. For tests, which build a fresh registry. */
-export function resetVerifiedTables(): void {
-  globalForVerified.__nextly_widgetVerifiedTables = new Set<string>();
-}
-
 /**
  * Collections whose stored metadata is known to be AHEAD of their table.
  *
@@ -317,90 +283,47 @@ export function setDeferredCollections(slugs: readonly string[]): void {
 }
 
 /**
- * The tables the database actually has, lowercased, or `undefined` when the
- * question could not be asked.
+ * The collections a widget source may be built from.
  *
- * Lowercased because the dialects disagree about identifier case and the core
- * drift check already compares this way; `undefined` is a THIRD answer rather
- * than an empty set, because "there are no tables" and "I could not look" lead
- * to opposite decisions and an empty set would silently mean the first.
+ * 🔴 NEITHER refusal probes the database, and the omission is deliberate.
+ * Whether a collection's stored shape is LIVE is a schema question, and
+ * answering it here means re-deriving something this module does not own. Three
+ * properties make that unattractive:
+ *
+ * - Table EXISTENCE is the wrong question. A reload that refuses a collection's
+ *   DDL writes its new field list anyway, so the OLD table stands beside NEW
+ *   metadata, and a source published on existence alone names columns that were
+ *   never created.
+ * - A probe is dialect-sensitive. `listTables` resolves against `public`, while
+ *   unqualified DML follows the whole search path -- which is why `tableExists`
+ *   reaches for `to_regclass` instead.
+ * - The property that WOULD decide -- whether the physical columns cover the
+ *   fields this source declares -- needs a field-to-column mapping that already
+ *   has several implementations in this repository awaiting convergence. A
+ *   fourth, partial one, owned by the widget domain, answers none of that.
+ *
+ * So this asks only what it can answer from what it holds:
+ *
+ * - `statusClaimsPresent` believes a label that CLAIMS presence and believes
+ *   nothing from one that declines. Its weakness is a false NEGATIVE: a
+ *   deployed Builder collection whose migration ran but whose row nobody marked
+ *   keeps its cards hidden. A hidden card is quiet and recoverable; a card
+ *   querying a column the table lacks is neither.
+ * - {@link setDeferredCollections} covers what the label cannot -- a reload that
+ *   refused a collection's DDL while its metadata was written regardless.
+ *
+ * That false negative is a defect in the WRITERS of `migration_status`, and it
+ * is closed by making them correct rather than by second-guessing them here.
  */
-async function presentTableNames(): Promise<ReadonlySet<string> | undefined> {
-  try {
-    const adapter = container.get<{
-      listTables?: () => Promise<string[]>;
-    }>("adapter");
-    if (typeof adapter?.listTables !== "function") return undefined;
-    const tables = await adapter.listTables();
-    if (!Array.isArray(tables)) return undefined;
-    return new Set(
-      tables
-        .filter((name): name is string => typeof name === "string")
-        .map(name => name.toLowerCase())
-    );
-  } catch (error) {
-    getNextlyLogger().error({
-      kind: "widget-table-introspection-unavailable",
-      err: error instanceof Error ? error.stack : String(error),
-    });
-    return undefined;
-  }
-}
-
-/**
- * The collections a widget source may be built from, asked STRUCTURALLY.
- *
- * The label is consulted first and settles the overwhelmingly common case at no
- * cost: when every collection's status claims its table is present, this makes
- * no database call at all. Introspection happens only for the collections whose
- * label DECLINES -- which is exactly the population the label is wrong about --
- * and then once for the whole batch rather than once per collection.
- *
- * On an unanswerable introspection this falls back to the label, which is the
- * behaviour that shipped before and is the conservative direction: a card is
- * withheld rather than pointed at a table that may not be there.
- */
-async function usableCollections<T extends RegisteredCollection>(
+function usableCollections<T extends RegisteredCollection>(
   collections: T[]
-): Promise<T[]> {
-  const verified = verifiedTables();
+): T[] {
   const deferred = deferredCollections();
-  // Checked BEFORE anything else, and it overrides both the label and the memo.
-  // A collection can be verified while its label is healthy and then be edited
-  // and refused: the table it was verified against is still there, and is no
-  // longer the shape the stored metadata describes. Consulting the memo first
-  // would publish exactly the source this guard exists to withhold.
-  const isDeferred = (collection: T): boolean =>
-    typeof collection.slug === "string" && deferred.has(collection.slug);
-  const settled = (collection: T): boolean =>
-    !isDeferred(collection) &&
-    (statusClaimsPresent(collection) ||
-      verified.has((tableNameOf(collection) ?? "").toLowerCase()));
-
-  // A row naming no table cannot be verified by any amount of introspection, so
-  // it must not TRIGGER any: without this it is permanently unsettled, and a
-  // single malformed row would put a round trip on every request forever while
-  // never changing the outcome. It is still filtered by the label below.
-  // A deferred collection is excluded whatever the database says, so it must not
-  // trigger a lookup either -- it would be a round trip whose answer is ignored,
-  // on every request, for as long as the refusal stands.
-  if (
-    !collections.some(
-      c => !settled(c) && !isDeferred(c) && tableNameOf(c) !== undefined
-    )
-  ) {
-    return collections.filter(settled);
-  }
-
-  const present = await presentTableNames();
-  if (present !== undefined) {
-    for (const collection of collections) {
-      if (statusClaimsPresent(collection) || isDeferred(collection)) continue;
-      const table = tableNameOf(collection)?.toLowerCase();
-      if (table !== undefined && present.has(table)) verified.add(table);
-    }
-  }
-  return collections.filter(settled);
+  return collections.filter(
+    collection =>
+      !(typeof collection.slug === "string" && deferred.has(collection.slug)) &&
+      statusClaimsPresent(collection)
+  );
 }
 
 /**
@@ -456,7 +379,7 @@ export async function refreshCollectionSources(): Promise<void> {
   );
 
   registerBuiltInSources(
-    (await usableCollections(named)).map(collection => ({
+    usableCollections(named).map(collection => ({
       slug: collection.slug,
       fields: readableFields(collection.fields),
       // Only an explicit `false` turns them off; absent means on, the way
