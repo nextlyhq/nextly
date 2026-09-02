@@ -629,7 +629,16 @@
   min-width: 0;
 }
 
-.nx-inspector__field > :first-child {
+/*
+ * The label, addressed as a LABEL rather than as the first child.
+ *
+ * Position is not a property a field has: a checkbox row puts its control
+ * first so the box sits beside the words it names, and a positional rule sends
+ * that checkbox to the label column and the words to the control column. The
+ * element answers what the position only usually implies, and it keeps
+ * answering for a field whose children arrive in another order.
+ */
+.nx-inspector__field > label {
   grid-column: 1;
   grid-row: 1;
 }
@@ -638,14 +647,26 @@
  * Below the width where a label and a control can share a row, the field goes
  * back to stacking. Asked of the CONTAINER: the rail can be dragged narrow
  * while the window stays wide, and a media query would answer for the window.
+ *
+ * The threshold is the row's own arithmetic rather than a round number: the
+ * label column is 6.5rem and the gap 0.5rem, so a control keeps less than 11rem
+ * below 18rem — under what the widest segmented control needs to show its whole
+ * vocabulary. The inspector's supported minimum is 280px, which is 16rem of
+ * container once its 0.75rem padding is taken, so this fires there rather than
+ * leaving a control to overflow the rail it is drawn in.
+ *
+ * It decides ONLY whether the label sits beside the control or above it. What
+ * keeps a control inside the rail is the control's own layout — see the
+ * segmented control, whose buttons may shrink — so this number and the
+ * eligibility rules are not two answers to the same question.
  */
-@container nx-inspector-fields (max-width: 15rem) {
+@container nx-inspector-fields (max-width: 18rem) {
   .nx-inspector__field {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .nx-inspector__field > *,
-  .nx-inspector__field > :first-child {
+  .nx-inspector__field > label {
     grid-column: 1;
   }
 }
@@ -654,8 +675,17 @@
  * A checkbox reads as one line with its label beside it rather than stacked
  * above it: the control is small enough that a label on its own line separates
  * the two further than they belong.
+ *
+ * `display` is restated rather than inherited, and that is the whole rule: an
+ * ordinary field is a grid with a fixed label column, and a checkbox row wants
+ * neither the column nor the order it implies. Setting only the flex properties
+ * leaves the grid in force — they describe a layout the field is not using —
+ * and the checkbox is then sized to a 6.5rem label column with its words in the
+ * column beside it. Declared on both classes so the layout does not depend on
+ * which rule appears later in this file.
  */
-.nx-inspector__field--inline {
+.nx-inspector__field.nx-inspector__field--inline {
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
@@ -834,12 +864,32 @@
 
 .nx-style-inspector__toggle > button {
   flex: 1 1 0;
+  /*
+   * A flex item will not shrink below its own text by default, so without this
+   * the control keeps its content width and overflows the rail rather than
+   * fitting in it. Overriding that makes the control answer for its own width
+   * at any rail size, which is what leaves the field's stacking threshold free
+   * to be about where the label reads best rather than about what fits.
+   */
+  min-width: 0;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--nx-border);
   background: var(--nx-background);
   color: var(--nx-foreground);
   font: inherit;
   cursor: pointer;
+}
+
+/*
+ * The shared edge is drawn ONCE, by the button on its leading side.
+ *
+ * Addressed as "every button after the first" rather than as the last one: with
+ * two buttons those are the same button and with three they are not, so the
+ * narrower rule leaves the middle seam two borders wide while the one beside it
+ * is one, and the segments stop reading as a single control.
+ */
+.nx-style-inspector__toggle > button + button {
+  border-inline-start-width: 0;
 }
 
 .nx-style-inspector__toggle > button:first-child {
@@ -850,8 +900,6 @@
 .nx-style-inspector__toggle > button:last-child {
   border-start-end-radius: var(--radius-md);
   border-end-end-radius: var(--radius-md);
-  /* The shared edge is drawn once, by the first button. */
-  border-inline-start-width: 0;
 }
 
 /*
