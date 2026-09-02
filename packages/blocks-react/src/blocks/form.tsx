@@ -115,25 +115,21 @@ const MAX_FIELDS = 100;
  * this block shipped with.** It first read `{ $token: "space.4" }`, on the
  * argument that `container.tsx` wants spacing from a token and that `space.4`
  * is in `defaultSiteTokens()`. Both halves are true and the conclusion was
- * still wrong: a token reference compiles to `var(--site-space-4)`, and
- * **nothing in this repository ever emits that variable.**
- *
- * Measured, three ways that agree: `compileSiteSheet` — the only thing that
- * writes token CSS — has ZERO consumers outside `blocks-engine`;
- * `emitTokenBlocks` is called only by that function, its own tests and a
- * benchmark; and the string `--site-` appears in no source file outside the
- * engine at all (positive control: `--nx-` appears in four). So
- * `defaultSiteTokens()` guarantees nothing today — it is a default nobody
- * applies.
+ * still wrong AT THE TIME: a token reference compiles to `var(--site-space-4)`,
+ * and nothing in the repository then emitted that variable.
  *
  * An undefined custom property makes the declaration invalid at computed-value
  * time, so `gap` fell back to `normal`, which for a grid is zero. The form
  * rendered with its fields touching, and every check passed: the property is in
  * `STYLE_CATALOG`, the declaration reached the compiled stylesheet, and the
  * test asserted exactly that. **Whether the `var()` RESOLVES is a third
- * question, and nothing asks it.**
+ * question, and nothing asked it.**
  *
- * A length is correct until the site stylesheet is wired into the render path.
+ * **That emptiness is over, and this line still does not go back.**
+ * `PageRenderer` compiles a site sheet by default, so a rendered page defines
+ * `--site-space-4` and a reference would now resolve. The reason this stays a
+ * length is therefore no longer the plumbing — it is the one below, and it
+ * would hold even if it had never been the plumbing.
  *
  * The VALUE is no longer `space.4`, and that is a change of meaning rather than
  * of taste: this gap once carried the whole of the form's spacing, and now

@@ -8,12 +8,17 @@
  * whole layout is one grid on the root, so a control nested inside its label
  * would stop being a grid item and the form would lose its rows.
  */
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
+import { blockPartClassName } from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { BlockRenderArgs, PageContext } from "../context";
+import type { BlockResolver } from "../resolver";
+import { resolvePageStyles } from "../styles";
+
+import { coreBlocks } from "./index";
 
 import { BUTTON_BASE_STYLES } from "./button";
 import { form, renderForm, FORM_FIELD_TYPES, type FormProps } from "./form";
@@ -244,21 +249,115 @@ describe("a control an author can SEE", () => {
    * ships — taking away the border and background a user agent draws on an
    * input. The `control` part already existed and stated only spacing.
    *
-   * These assert the DECLARATION rather than the rendered appearance, which is
-   * the honest limit of a jsdom test: it cannot see a border. The rendered
-   * evidence is a browser check on a published page, recorded in the PR. What
-   * this pins is that the three properties which make a control visible under
-   * a reset cannot be removed without a test saying so.
+   * jsdom cannot see a border, so the rendered evidence is a browser check on a
+   * published page, recorded in the PR. What a test CAN pin is the compiled
+   * stylesheet, and that is what these read — not the declaration object, which
+   * is a weaker claim than it looks. `expect(control.border).toBeDefined()`
+   * holds for `{ style, color }` with the WIDTH deleted, and a border of no
+   * width is exactly as invisible under Preflight as no border at all.
    */
   const control = form.parts?.control?.baseStyles?.base?.base as
     | Record<string, unknown>
     | undefined;
 
-  it("draws a border, a background and padding", () => {
-    expect(control).toBeDefined();
-    expect(control?.border).toBeDefined();
-    expect(control?.backgroundColor).toBeDefined();
-    expect(control?.padding).toBeDefined();
+  /** The compiled rule for the control part, which is what reaches a page. */
+  function controlCss(): string {
+    const document: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [{ id: "f", type: form.name, version: 1, props: {} }],
+    };
+    const resolver: BlockResolver = {
+      get: (name: string) =>
+        coreBlocks.find(candidate => candidate.name === name) as never,
+    };
+    // A style context is REQUIRED: `resolvePageStyles` compiles only under
+    // `if (styleContext)` and returns empty css otherwise, which would report
+    // every one of these properties as missing and read as a real failure.
+    const css =
+      resolvePageStyles(
+        document,
+        undefined,
+        {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        resolver
+      ).css ?? "";
+    const selector = blockPartClassName(form.name, "control");
+    return css
+      .split("}")
+      .filter(rule => rule.includes(`.${selector}`))
+      .join("}");
+  }
+
+  /**
+   * The VALUE of one declaration inside the control's rule.
+   *
+   * Read out and asserted separately rather than folded into one regex with a
+   * negative lookahead. `property:\s*(?!0[;\s}])` looks like it rejects a zero
+   * and does not: `\s*` backtracks to zero width, which moves the lookahead onto
+   * the SPACE, where it trivially succeeds. Verified — a control compiling to
+   * `border-block-start-width: 0` passed that form.
+   */
+  function declaredValue(css: string, property: string): string | undefined {
+    return css
+      .match(new RegExp(`(?:^|[;{\\s])${property}:\\s*([^;}]+)`))?.[1]
+      .trim();
+  }
+
+  /** A length that actually draws something — not `0`, `0px`, `0rem`. */
+  function expectNonZero(css: string, property: string): void {
+    const value = declaredValue(css, property);
+    expect(value, `${property} never reached the stylesheet`).toBeDefined();
+    expect(value, `${property} compiled to the zero ${value}`).not.toMatch(
+      /^0[a-z%]*$/
+    );
+  }
+
+  it("draws a border with a NONZERO width on every side", () => {
+    /*
+     * The width is the whole mechanism. Preflight sets `border-width: 0` and
+     * leaves `border-style: solid` in place, so a control declaring style and
+     * colour and no width inherits the zero and stays invisible — while
+     * `border` is still "defined" and every leaf it does declare still reaches
+     * the stylesheet. Asserting the sides by name and by VALUE is what
+     * separates a visible border from that.
+     */
+    const css = controlCss();
+
+    // Must-be-found: the part compiled at all, so the assertions below are
+    // reading a real rule rather than an empty string.
+    expect(css).not.toBe("");
+    for (const side of [
+      "border-block-start-width",
+      "border-block-end-width",
+      "border-inline-start-width",
+      "border-inline-end-width",
+    ]) {
+      expectNonZero(css, side);
+    }
+    expect(css).toContain("border-style: solid");
+  });
+
+  it("draws a background and padding an author can see", () => {
+    const css = controlCss();
+
+    // A background is what separates the control from the page behind it once
+    // the reset has taken the user agent's away.
+    expect(css).toMatch(/background-color:\s*var\(--site-/);
+    // Padding on all four sides, by value: a zero would compile and read as
+    // present while leaving the text against the border.
+    for (const side of [
+      "padding-block-start",
+      "padding-block-end",
+      "padding-inline-start",
+      "padding-inline-end",
+    ]) {
+      expectNonZero(css, side);
+    }
   });
 
   it("takes its COLOURS from tokens and its spacing from literals", () => {
