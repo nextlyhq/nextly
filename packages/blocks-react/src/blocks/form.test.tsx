@@ -9,7 +9,12 @@
  * would stop being a grid item and the form would lose its rows.
  */
 import type { BlockDocument, BlockNode } from "@nextlyhq/blocks-engine";
-import { blockPartClassName } from "@nextlyhq/blocks-engine";
+import {
+  blockPartClassName,
+  contrastRatio,
+  defaultSiteTokens,
+  parseColor,
+} from "@nextlyhq/blocks-engine";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -340,6 +345,53 @@ describe("a control an author can SEE", () => {
       expectNonZero(css, side);
     }
     expect(css).toContain("border-style: solid");
+  });
+
+  it("outlines the control in a colour a person can actually SEE it by", () => {
+    /*
+     * The border is this control's only boundary — it takes the page's own
+     * background on purpose — so WCAG 2.2 SC 1.4.11 (Non-text Contrast) wants
+     * 3:1 against what sits behind it.
+     *
+     * The hairline `color.border` does NOT clear that: `#e5e7eb` on `#ffffff` is
+     * 1.24:1 and `#1f2937` on `#0b0f19` is 1.30:1. Outlining a field in it is
+     * the invisible control this part exists to fix, one property in — and it
+     * passes every check that only asks whether a border is "defined" or
+     * whether its width is nonzero.
+     *
+     * Computed from the token set rather than compared to a spelling, so a
+     * palette retune that keeps the token name and loses the contrast fails
+     * here. The ratio is the thing anybody depends on.
+     */
+    const named = (
+      control?.border as { color?: { $token?: string } } | undefined
+    )?.color?.$token;
+    expect(named, "the control names no border colour token").toBeDefined();
+
+    const token = defaultSiteTokens().find(entry => entry.name === named);
+    expect(
+      token,
+      `${String(named)} is not in the guaranteed set`
+    ).toBeDefined();
+
+    const background = defaultSiteTokens().find(
+      entry => entry.name === "color.background"
+    );
+
+    for (const mode of ["light", "dark"] as const) {
+      const edge = parseColor(token?.values[mode] ?? "");
+      const behind = parseColor(background?.values[mode] ?? "");
+      expect(edge, `${String(named)} has no ${mode} value`).toBeDefined();
+      expect(behind, `color.background has no ${mode} value`).toBeDefined();
+
+      const ratio = contrastRatio(edge!, behind!);
+
+      expect(
+        ratio,
+        `${String(named)} is ${ratio.toFixed(2)}:1 against the page in ${mode}, ` +
+          `below the 3:1 a control boundary needs to be findable.`
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("draws a background and padding an author can see", () => {

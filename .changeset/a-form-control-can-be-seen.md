@@ -41,3 +41,18 @@ form's submit and a button are one control to the person filling it in.
 The colours come from tokens and the spacing does not, which is the split the
 card block already states: a literal colour is wrong in whichever of light and
 dark it was not chosen for, while a literal length is safe in both.
+
+The control is outlined in a new guaranteed token, `color.border-strong`, and not in
+the existing `color.border`. The hairline is decorative — `#e5e7eb` on `#ffffff` is
+1.24:1 — and a control's border is the only thing telling a person where the field is,
+which WCAG 2.2 SC 1.4.11 requires to clear 3:1. Outlining a field in a divider colour
+is the same invisible control this change exists to fix. `color.border` keeps its
+value and its job; sites inherit the new token automatically and can retune either
+without moving the other, which is the split Material 3 draws between `outline` and
+`outline-variant`.
+
+The playground now selects its dark tokens with `darkMode: "media"`. The engine
+defaults to writing them under `[data-nx-theme="dark"]`, which a host with a theme
+toggle sets; this app has no toggle and switches theme through
+`prefers-color-scheme`, so the whole dark half of the token set was never applying —
+a control kept `#ffffff` on a `#0a0a0a` page.

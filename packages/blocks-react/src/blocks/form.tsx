@@ -206,7 +206,19 @@ const FORM_PARTS = {
               inlineEnd: "1px",
             },
             style: "solid",
-            color: { $token: "color.border" },
+            /*
+             * `color.border-strong`, NOT the hairline `color.border`.
+             *
+             * This control takes the page's own background above, so the border
+             * is the ONLY thing telling a person where the field is — which
+             * WCAG 2.2 SC 1.4.11 requires to clear 3:1. The hairline is
+             * decorative and does not: measured `#e5e7eb` on `#ffffff` is
+             * 1.24:1, and `#1f2937` on `#0b0f19` is 1.30:1. A control outlined
+             * in it is the same invisible field this part exists to fix, one
+             * property in and passing every test that checked the border was
+             * "defined".
+             */
+            color: { $token: "color.border-strong" },
           },
         },
       },
