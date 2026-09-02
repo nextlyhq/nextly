@@ -252,4 +252,13 @@ export {
   WEB_FONT_MIME_TYPES,
   webFontMimeFromFilename,
 } from "./services/upload-validation/web-fonts";
+// The formats an upload may carry, with the suffixes they wear on disk. The
+// admin's dropzone decides in the BROWSER what may be dragged, and a list of
+// its own drifts from this one — which is how a picker comes to advertise a
+// format the server refuses and refuse one the server accepts.
+export {
+  DEFAULT_ACCEPTED_FORMATS,
+  DEFAULT_ALLOWED_MIME_TYPES,
+} from "./services/upload-validation/mime";
+export type { AcceptedFormat } from "./services/upload-validation/mime";
 export type { WebFontFormat } from "./services/upload-validation/web-fonts";

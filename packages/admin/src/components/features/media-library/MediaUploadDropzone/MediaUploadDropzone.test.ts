@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { WEB_FONT_FORMATS } from "nextly/config";
+import { DEFAULT_ACCEPTED_FORMATS, WEB_FONT_FORMATS } from "nextly/config";
 
 import {
   describeFileError,
@@ -269,6 +269,34 @@ describe("the default accept map", () => {
 });
 
 describe("the browser boundary", () => {
+  it("offers exactly the formats the server accepts, in BOTH directions", () => {
+    /*
+     * The two lists disagreed each way and neither side could see it. The map
+     * offered AVI and MOV, which the allowlist refuses — so an author read that
+     * AVI was supported, dragged one, and the upload was rejected. It withheld
+     * AVIF, SVG, WebM and every audio format, which the allowlist accepts — so
+     * files the server wanted could not be dragged at all.
+     *
+     * Enumerated both ways because each direction fails differently and a test
+     * of one is satisfied by the other going wrong.
+     */
+    expect(DEFAULT_ACCEPTED_FORMATS.length).toBeGreaterThan(0);
+
+    for (const format of DEFAULT_ACCEPTED_FORMATS) {
+      expect(DEFAULT_ACCEPTED_FILE_TYPES).toHaveProperty(format.mimeType);
+      for (const extension of format.extensions) {
+        expect(DEFAULT_ACCEPTED_FILE_TYPES[format.mimeType]).toContain(
+          extension
+        );
+      }
+    }
+
+    const served = new Set(DEFAULT_ACCEPTED_FORMATS.map(f => f.mimeType));
+    for (const offered of Object.keys(DEFAULT_ACCEPTED_FILE_TYPES)) {
+      expect(served.has(offered)).toBe(true);
+    }
+  });
+
   it("lets a person drag every format the server accepts", () => {
     /*
      * The map decides in the BROWSER, before any request exists, so a format

@@ -42,7 +42,7 @@
 
 import { Progress, Button } from "@nextlyhq/ui";
 import { useQueryClient } from "@tanstack/react-query";
-import { WEB_FONT_FORMATS } from "nextly/config";
+import { DEFAULT_ACCEPTED_FORMATS, WEB_FONT_FORMATS } from "nextly/config";
 import * as React from "react";
 import {
   useDropzone,
@@ -133,25 +133,12 @@ export interface MediaUploadDropzoneProps {
  * - Documents: PDF
  * - Fonts: WOFF2, WOFF
  */
-export const DEFAULT_ACCEPTED_FILE_TYPES: Accept = {
-  "image/*": [".png", ".jpg", ".jpeg", ".gif", ".webp"],
-  "video/*": [".mp4", ".mov", ".avi"],
-  "application/pdf": [".pdf"],
-  /*
-   * Web fonts, DERIVED from the server's own table rather than restated here.
-   * React Dropzone refuses a file whose type is absent from this map as
-   * `file-invalid-type` in the browser, before any request exists — so this map
-   * and the server allowlist have to agree, and two hand-kept lists agree only
-   * until one of them is edited.
-   *
-   * Both halves of each entry are needed. Some browsers report no type at all
-   * for a `.woff2` chosen from disk, and Dropzone then matches the extension;
-   * the server fills the type back in from the same table.
-   */
-  ...Object.fromEntries(
-    WEB_FONT_FORMATS.map(format => [format.mimeType, [format.extension]])
-  ),
-};
+export const DEFAULT_ACCEPTED_FILE_TYPES: Accept = Object.fromEntries(
+  DEFAULT_ACCEPTED_FORMATS.map(format => [
+    format.mimeType,
+    [...format.extensions],
+  ])
+);
 
 /**
  * Default maximum file size. Matches the server's default `limits.fileSize`
@@ -185,23 +172,31 @@ const WEB_FONT_MIME_BY_TYPE = new Map(
 );
 
 /**
- * The extensions a family filter stands for.
+ * The extensions a family filter stands for, DERIVED from what the server
+ * actually accepts.
  *
- * A table rather than a branch per family: React Dropzone matches a file by
- * type OR by suffix, and a browser reporting no type at all — which it does for
- * any format its platform does not register — has only the suffix left. So an
- * entry without extensions refuses exactly the files its own filter names.
+ * React Dropzone matches a file by type OR by suffix, and a browser reporting
+ * no type — which it does for any format its platform does not register — has
+ * only the suffix left. So this list decides what can be dragged at all.
  *
- * Fonts come from the shared table, so a format added there reaches the
- * wildcard filter without anyone editing this.
+ * Written by hand it disagreed with the server in both directions: it offered
+ * AVI and MOV, which the allowlist refuses, and withheld AVIF, SVG, WebM and
+ * every audio format, which the allowlist accepts. Reading the same list the
+ * server validates against is what stops the two drifting again.
+ *
+ * The wildcard itself stays permissive on purpose: an install that widens
+ * `additionalMimeTypes` accepts types this build cannot know, and matching the
+ * family lets those through to the server that configured them.
  */
-const EXTENSIONS_BY_FAMILY: Record<string, readonly string[]> = {
-  "image/*": [".png", ".jpg", ".jpeg", ".gif", ".webp"],
-  "video/*": [".mp4", ".mov", ".avi"],
-  "audio/*": [".mp3", ".wav", ".ogg"],
-  "application/pdf": [".pdf"],
-  "font/*": WEB_FONT_FORMATS.map(format => format.extension),
-};
+const EXTENSIONS_BY_FAMILY: Record<string, readonly string[]> =
+  Object.fromEntries(
+    ["image/", "video/", "audio/", "font/"].map(family => [
+      `${family}*`,
+      DEFAULT_ACCEPTED_FORMATS.filter(format =>
+        format.mimeType.startsWith(family)
+      ).flatMap(format => format.extensions),
+    ])
+  );
 
 /**
  * The extensions one accepted type admits, or none for a type nothing here
@@ -210,6 +205,13 @@ const EXTENSIONS_BY_FAMILY: Record<string, readonly string[]> = {
 function extensionsForAcceptedType(type: string): string[] {
   const family = EXTENSIONS_BY_FAMILY[type];
   if (family !== undefined) return [...family];
+
+  // An exact type the server names, such as `application/pdf`, which belongs to
+  // no family wildcard and would otherwise arrive here with no suffix at all.
+  const exact = DEFAULT_ACCEPTED_FORMATS.find(
+    format => format.mimeType === type
+  );
+  if (exact !== undefined) return [...exact.extensions];
 
   const webFont = WEB_FONT_MIME_BY_TYPE.get(type);
   if (webFont !== undefined) return [webFont];

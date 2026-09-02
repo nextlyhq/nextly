@@ -8,7 +8,7 @@
  * @module services/upload-validation/mime
  */
 
-import { WEB_FONT_MIME_TYPES } from "./web-fonts";
+import { WEB_FONT_FORMATS } from "./web-fonts";
 
 export const BLOCKED_MIME_TYPES: ReadonlySet<string> = new Set([
   "text/html",
@@ -20,29 +20,55 @@ export const BLOCKED_MIME_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Default allowlist when the caller doesn't specify `allowedMimeTypes`
- * or `additionalMimeTypes`. SVG is included — allowed but sanitized
- * downstream.
+ * One accepted format: what it is called, and what it is called on disk.
+ *
+ * The extensions are here because a CLIENT needs them and only this list knows
+ * which types are accepted. A browser reports no type for formats its platform
+ * does not register, so a picker matching on the suffix is the difference
+ * between a file being draggable and not — and a picker keeping its own list
+ * drifts from this one, which is how a dropzone comes to advertise a format the
+ * server refuses and refuse one the server accepts.
  */
-export const DEFAULT_ALLOWED_MIME_TYPES: readonly string[] = [
-  "image/jpeg",
-  "image/png",
-  "image/gif",
-  "image/webp",
-  "image/avif",
-  "image/svg+xml",
-  "application/pdf",
-  "video/mp4",
-  "video/webm",
-  "audio/mpeg",
-  "audio/wav",
-  "audio/ogg",
-  // DERIVED, not restated. The serving gate and the admin dropzone need the
-  // same answer, and three lists that agree today drift silently — a format
-  // added to only one of them either serves what nobody can upload or exposes
-  // what nobody meant to publish.
-  ...WEB_FONT_MIME_TYPES,
+export interface AcceptedFormat {
+  readonly mimeType: string;
+  readonly extensions: readonly string[];
+}
+
+/**
+ * The formats an upload may carry when the caller names none.
+ *
+ * SVG is included — allowed but sanitized downstream.
+ */
+export const DEFAULT_ACCEPTED_FORMATS: readonly AcceptedFormat[] = [
+  { mimeType: "image/jpeg", extensions: [".jpg", ".jpeg"] },
+  { mimeType: "image/png", extensions: [".png"] },
+  { mimeType: "image/gif", extensions: [".gif"] },
+  { mimeType: "image/webp", extensions: [".webp"] },
+  { mimeType: "image/avif", extensions: [".avif"] },
+  { mimeType: "image/svg+xml", extensions: [".svg"] },
+  { mimeType: "application/pdf", extensions: [".pdf"] },
+  { mimeType: "video/mp4", extensions: [".mp4"] },
+  { mimeType: "video/webm", extensions: [".webm"] },
+  { mimeType: "audio/mpeg", extensions: [".mp3"] },
+  { mimeType: "audio/wav", extensions: [".wav"] },
+  { mimeType: "audio/ogg", extensions: [".ogg"] },
+  // Web fonts, from the table that declares them, so a format added there is
+  // accepted here without this list being edited.
+  ...WEB_FONT_FORMATS.map(format => ({
+    mimeType: format.mimeType,
+    extensions: [format.extension],
+  })),
 ];
+
+/**
+ * Default allowlist when the caller doesn't specify `allowedMimeTypes`
+ * or `additionalMimeTypes`.
+ *
+ * DERIVED from the formats above so the types a server accepts and the suffixes
+ * a client offers cannot disagree — they are two views of one list.
+ */
+export const DEFAULT_ALLOWED_MIME_TYPES: readonly string[] =
+  DEFAULT_ACCEPTED_FORMATS.map(format => format.mimeType);
 
 export type MimeValidationResult =
   | { ok: true }

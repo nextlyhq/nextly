@@ -107,16 +107,42 @@ describe("reading a stored object", () => {
     expect(isStorageReadTooLarge(outcome)).toBe(true);
   });
 
+  it("reports a FALLBACK deadline as the same timeout a native read gives", async () => {
+    /*
+     * A deadline is a deadline whichever route hit it. Left as a
+     * `SafeFetchError`, the fallback's timeout reached the route as
+     * `EXTERNAL_REQUEST_FAILED`/502 while the native read's became
+     * `STORAGE_READ_TIMEOUT`/504 — so whether a caller retried depended on
+     * whether the adapter happened to implement `read`, which describes the
+     * deployment rather than what went wrong.
+     */
+    safeFetch.mockRejectedValue(
+      new SafeFetchError("slow", "https://cdn.test/f.woff2", "timeout")
+    );
+
+    const outcome = await readStoredMediaBytes(urlOnly, "f.woff2", 1000).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTimeout(outcome)).toBe(true);
+    expect((outcome as { timeoutMs?: number }).timeoutMs).toBe(
+      DEFAULT_READ_TIMEOUT_MS
+    );
+  });
+
   it("passes a fetch failure that is NOT about size straight through", async () => {
     /*
      * The control for the case above: a translation that answered
      * `StorageReadTooLargeError` for every fetch failure would satisfy it while
      * telling the caller an unreachable host was an oversized file.
      */
+    // `decode-failed`, deliberately: `timeout` is translated now, and `too
+    // large` is the case above — this needs a reason that is neither, or it
+    // stops being a pass-through control at all.
     const refused = new SafeFetchError(
-      "timed out",
+      "could not decode",
       "https://cdn.test/f.woff2",
-      "timeout"
+      "decode-failed"
     );
     safeFetch.mockRejectedValue(refused);
 
@@ -126,6 +152,30 @@ describe("reading a stored object", () => {
     );
     expect(outcome).toBe(refused);
     expect(isStorageReadTooLarge(outcome)).toBe(false);
+  });
+
+  it("keeps a 404 whose error page was itself over the cap as absence", async () => {
+    /*
+     * `safeFetch` caps while buffering, so a verbose 404 page raises before a
+     * `Response` exists and the status check never runs — the object is still
+     * gone, and reporting that as a fault tells a caller to retry what will
+     * never come back.
+     *
+     * Uncovered until now, and a refactor turned it back into an error without
+     * a single case going red.
+     */
+    safeFetch.mockRejectedValue(
+      new SafeFetchError(
+        "too big",
+        "https://cdn.test/f.woff2",
+        "response-too-large",
+        404
+      )
+    );
+
+    await expect(
+      readStoredMediaBytes(urlOnly, "f.woff2", 10)
+    ).resolves.toBeNull();
   });
 
   it("does NOT call an over-cap ERROR PAGE an oversized file", async () => {

@@ -19,7 +19,7 @@
  * @module storage/read-stored-media
  */
 import { NextlyError } from "../errors/nextly-error";
-import { safeFetch } from "../utils/validate-external-url";
+import { SafeFetchError, safeFetch } from "../utils/validate-external-url";
 
 import {
   classifyFetchFailure,
@@ -124,45 +124,75 @@ export async function readStoredMediaBytes(
   storagePath: string,
   maxBytes: number
 ): Promise<Buffer | null> {
+  /*
+   * An adapter that implements `read` is AUTHORITATIVE about absence: `null`
+   * from it means the object is not there, and asking its public URL next
+   * answers a different question badly. The local adapter's URL is a relative
+   * `/uploads/...` path, which `safeFetch` refuses as invalid — so a missing
+   * file came back as a blocked external URL rather than as missing.
+   *
+   * The URL route is for adapters that cannot read at all.
+   */
   if (typeof storage.read === "function") {
-    /*
-     * The cap travels INTO the adapter rather than being checked on what comes
-     * back: a size checked afterwards has already spent the memory it exists to
-     * save. Adapters that find the object oversized refuse it themselves.
-     */
-    /*
-     * An adapter that implements `read` is AUTHORITATIVE about absence: `null`
-     * from it means the object is not there, and asking its public URL next
-     * answers a different question badly. The local adapter's URL is a relative
-     * `/uploads/...` path, which `safeFetch` refuses as invalid — so a missing
-     * file came back as a blocked external URL rather than as missing.
-     *
-     * The URL route below is for adapters that cannot read at all.
-     */
-    try {
-      return await storage.read(storagePath, { maxBytes });
-    } catch (error) {
-      /*
-       * An adapter outside this package bounds its own read with
-       * `AbortSignal.timeout`, which rejects with a platform `DOMException`
-       * named `TimeoutError`. Passed through, the route's error handler sees no
-       * `NextlyError` and answers 500 — an internal fault — for a backend that
-       * simply did not reply in time, which a caller and a gateway would both
-       * treat as retryable if they could read it.
-       */
-      if (isNativeTimeout(error)) {
-        /*
-         * The DEADLINE, not the cap. This reader passes only `maxBytes` to the
-         * adapter, so the adapter resolved its own deadline from the shared
-         * default — which is therefore the true figure, and the one an operator
-         * needs when they come to the 504 asking what was waited for.
-         */
-        throw new StorageReadTimeoutError(storagePath, DEFAULT_READ_TIMEOUT_MS);
-      }
-      throw error;
-    }
+    return await readThroughAdapter(storage.read, storagePath, maxBytes);
   }
+  return await readThroughPublicUrl(storage, storagePath, maxBytes);
+}
 
+/**
+ * Ask the backend for its own bytes.
+ *
+ * @param read - The adapter's reader, already known to exist
+ * @param storagePath - The stored path
+ * @param maxBytes - The cap, which travels INTO the adapter rather than being
+ *   checked on the way back: a size checked afterwards has already spent the
+ *   memory the cap exists to save
+ */
+async function readThroughAdapter(
+  read: NonNullable<StoredMediaSource["read"]>,
+  storagePath: string,
+  maxBytes: number
+): Promise<Buffer | null> {
+  try {
+    return await read(storagePath, { maxBytes });
+  } catch (error) {
+    /*
+     * An adapter outside this package bounds its own read with
+     * `AbortSignal.timeout`, which rejects with a platform `DOMException` named
+     * `TimeoutError`. Passed through, the route's error handler sees no
+     * `NextlyError` and answers 500 — an internal fault — for a backend that
+     * simply did not reply in time, which a caller and a gateway would both
+     * treat as retryable if they could read it.
+     *
+     * The DEADLINE is reported, not the cap: this reader passes only `maxBytes`
+     * to the adapter, so the adapter resolved its own deadline from the shared
+     * default, which is the figure an operator needs when they reach the 504.
+     */
+    if (isNativeTimeout(error)) {
+      throw new StorageReadTimeoutError(storagePath, DEFAULT_READ_TIMEOUT_MS);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Fetch the object from the address the backend serves it at.
+ *
+ * For adapters that cannot hand back their own bytes. Goes through `safeFetch`,
+ * which refuses hosts resolving to private, loopback, link-local and
+ * cloud-metadata addresses — it has to, since the path can come from a stored
+ * field and an attacker who can write one would otherwise be choosing what this
+ * server connects to.
+ *
+ * @param storage - The backend, for its public URL
+ * @param storagePath - The stored path, which some backends record as a URL
+ * @param maxBytes - The cap this read runs under
+ */
+async function readThroughPublicUrl(
+  storage: StoredMediaSource,
+  storagePath: string,
+  maxBytes: number
+): Promise<Buffer | null> {
   /*
    * Some backends — Vercel Blob among them — record the full public URL as the
    * stored path, so asking for a public URL for one would build an address out
@@ -176,28 +206,11 @@ export async function readStoredMediaBytes(
   try {
     response = await safeFetch(url, { maxResponseBytes: maxBytes });
   } catch (error) {
-    /*
-     * Translated rather than rethrown, so the two routes refuse identically.
-     * Left as a `SafeFetchError`, an over-cap fetch would be a different error
-     * from an over-cap read of the same object, and every caller would have to
-     * know which backend it happened to be talking to.
-     *
-     * Classified by the SAME function the URL-backed adapters use, because the
-     * distinction it draws is not one a second implementation would keep: an
-     * over-cap body on a FAILED response — a 500 page, a verbose error document
-     * — is a backend outage, and reading the reason alone reports it as the
-     * author's file being too big.
-     */
-    const verdict = classifyFetchFailure(error);
-    if (verdict === "oversized") {
-      throw new StorageReadTooLargeError(storagePath, maxBytes);
-    }
-    if (verdict === "absent") {
-      // A 404 whose error page was itself over the cap, so `safeFetch` refused
-      // before a `Response` existed. Still an absence, and reported as one.
-      return null;
-    }
-    throw error;
+    const translated = translateFetchFailure(error, storagePath, maxBytes);
+    // `null` is an ABSENCE the fetch never got to report as a status: a 404
+    // whose error page was itself over the cap, refused while buffering.
+    if (translated === null) return null;
+    throw translated;
   }
 
   /*
@@ -212,4 +225,50 @@ export async function readStoredMediaBytes(
     throw new StoredMediaUnreachableError(url, response.status);
   }
   return Buffer.from(await response.arrayBuffer());
+}
+
+/**
+ * Say what a failed fetch means, in the vocabulary both routes share.
+ *
+ * A caller that has to ask which backend answered before it can read the
+ * failure is a caller that will eventually read it wrongly, so every refusal
+ * here is one the adapter route can also produce.
+ *
+ * @returns The error to throw, or `null` when the object is simply absent
+ */
+function translateFetchFailure(
+  error: unknown,
+  storagePath: string,
+  maxBytes: number
+): Error | null {
+  /*
+   * A deadline is a deadline whichever route hit it. Left as a
+   * `SafeFetchError`, the fallback's timeout reached the route as
+   * `EXTERNAL_REQUEST_FAILED`/502 while the native read's became
+   * `STORAGE_READ_TIMEOUT`/504 — so whether a caller retried depended on
+   * whether the adapter happened to implement `read`, which describes the
+   * deployment rather than what went wrong.
+   */
+  if (error instanceof SafeFetchError && error.reason === "timeout") {
+    return new StorageReadTimeoutError(storagePath, DEFAULT_READ_TIMEOUT_MS);
+  }
+
+  /*
+   * Classified by the SAME function the URL-backed adapters use, because the
+   * distinction it draws is not one a second implementation would keep: an
+   * over-cap body on a FAILED response — a 500 page, a verbose error document —
+   * is a backend outage, and reading the reason alone reports it as the
+   * author's file being too big.
+   */
+  const verdict = classifyFetchFailure(error);
+  if (verdict === "oversized") {
+    return new StorageReadTooLargeError(storagePath, maxBytes);
+  }
+  if (verdict === "absent") {
+    // A 404 whose error page was itself over the cap, so `safeFetch` refused
+    // before a `Response` existed. The object is gone, and an absence reported
+    // as a fault tells a caller to retry what will never return.
+    return null;
+  }
+  return error instanceof Error ? error : new Error(String(error));
 }
