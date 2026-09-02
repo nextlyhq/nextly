@@ -650,6 +650,38 @@ describe("cancelling after a write failed", () => {
   });
 });
 
+describe("when the schema changes underneath an open dashboard", () => {
+  it("re-reads the arrangement, so the picker knows what exists now", () => {
+    // 🔴 The layout endpoint answers which cards are PLACED and which are
+    // OFFERED, and a schema change moves both: a collection created a moment ago
+    // has cards to add, one just deleted no longer does. Nothing else
+    // invalidates this key -- `refetchOnWindowFocus` is the only other route --
+    // so a dashboard left open kept a picker that could not add the new card and
+    // still offered the removed one, whose save is then refused.
+    renderGrid();
+
+    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+      act(() => {
+        window.dispatchEvent(new Event("nextly:schema-updated"));
+      });
+      return waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
+    });
+  });
+
+  it("does not re-read on an unrelated event", () => {
+    // The control: without it the assertion above is satisfied by a query that
+    // refetches on anything at all, including its own render.
+    renderGrid();
+
+    return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
+      act(() => {
+        window.dispatchEvent(new Event("nextly:something-else"));
+      });
+      expect(api.get).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
 describe("an arrangement that already holds as many cards as a write may carry", () => {
   /** `MAX_PLACEMENTS` placed cards, with one more offered by the picker. */
   function atCapacity() {

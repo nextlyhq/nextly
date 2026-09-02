@@ -134,6 +134,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "useSingleDocument (value)",
   "useSuppressAdminChrome (value)",
   "useUpdateSingleDocument (value)",
+  "useUploadMedia (value)",
   "validationIssues (value)",
   "withOptionIds (value)",
 ]

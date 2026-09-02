@@ -46,6 +46,7 @@ import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
+import { renderFieldMember } from "./field-nullability";
 import {
   asScalarStorageField,
   pluginDeclaredImportNames,
@@ -771,8 +772,6 @@ export class TypeGenerator {
     }
 
     const fieldName = field.name;
-    const isRequired = "required" in field && field.required;
-    const optional = isRequired ? "" : "?";
 
     let tsType: string;
 
@@ -881,7 +880,7 @@ export class TypeGenerator {
       }
     }
 
-    return `  ${fieldName}${optional}: ${tsType};`;
+    return renderFieldMember(fieldName, tsType, field);
   }
 
   // ============================================================
@@ -902,8 +901,6 @@ export class TypeGenerator {
     }
 
     const isCodeSourced = field.source === "code";
-    const isRequired = field.required;
-    const optional = isRequired ? "" : "?";
 
     let tsType: string;
 
@@ -973,7 +970,7 @@ export class TypeGenerator {
       }
     }
 
-    return `  ${field.name}${optional}: ${tsType};`;
+    return renderFieldMember(field.name, tsType, field);
   }
 
   /**

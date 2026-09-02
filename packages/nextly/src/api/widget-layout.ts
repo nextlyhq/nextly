@@ -32,15 +32,19 @@
  */
 
 import {
-  authorizationGroups,
-  callerHoldsPermission,
+  readableEntities,
   type ReadAccessCaller,
 } from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
+import {
+  allWidgets,
+  declaredWidgets,
+  type CanonicalWidget,
+} from "../domains/widgets/canonical";
+import { refreshCollectionWidgets } from "../domains/widgets/collection-widgets";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
@@ -52,6 +56,10 @@ import {
   visibilityToken,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
+import {
+  holdsWidgetPermission,
+  permissionVerdicts,
+} from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
@@ -99,6 +107,27 @@ const OPAQUE_CONFIG_HEADERS = {
 type LayoutSource = "own" | "default";
 
 /**
+ * The default arrangement, split by what this caller may see.
+ *
+ * ONE materialization, asked in one place. Both halves come from the same
+ * sorted set, because positions are indices into it: two calls that filtered
+ * differently would give the carried half positions that collide with the
+ * visible one, and a reader gaining a permission would find their arrangement
+ * silently reordered.
+ *
+ * Materialized from {@link declaredWidgets} rather than from every widget that
+ * exists. A card core GENERATED for a collection is offered through
+ * `available`, never placed -- so it must not take a default position, and must
+ * not spend one of the placements a caller may submit.
+ */
+function defaultRow(visibleIds: ReadonlySet<string>): {
+  visible: WidgetPlacement[];
+  invisible: WidgetPlacement[];
+} {
+  return partitionPlacements(defaultPlacements(declaredWidgets()), visibleIds);
+}
+
+/**
  * The placements a write must carry through untouched.
  *
  * Two cases, and the second is the one that is easy to miss. With a stored row,
@@ -124,8 +153,7 @@ function carriedPlacements(
   if (storedPlacements) {
     return partitionPlacements(storedPlacements, visibleIds).invisible;
   }
-  return partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
-    .invisible;
+  return defaultRow(visibleIds).invisible;
 }
 
 /**
@@ -149,7 +177,7 @@ function visibleDefaults(
 ): WidgetPlacement[] {
   const visibleIds = new Set(widgets.map(widget => widget.id));
   return (
-    partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
+    defaultRow(visibleIds)
       .visible // 🔴 The submission cap applies HERE, to what this caller can actually
       // send, rather than to the materialization above. `layoutSizeProblem`
       // refuses a submission over `MAX_PLACEMENTS`, so an install declaring
@@ -195,60 +223,41 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * name the same permission, and asking twice is two database reads for one
  * answer.
  */
+
 async function visibleWidgets(
   caller: ReadAccessCaller
 ): Promise<CanonicalWidget[]> {
+  // Same freshness the admin's own payload gets. Without this the endpoint
+  // would place and offer a set derived on some earlier request -- a collection
+  // created since would have no card to add, and one deleted since would still
+  // be offered and then refused on save.
+  await refreshCollectionWidgets();
   const all = allWidgets();
 
-  const slugs = [
-    ...new Set(
-      all
-        .map(widget => widget.requiredPermission)
-        .filter(
-          (slug): slug is string => typeof slug === "string" && slug !== ""
-        )
-    ),
-  ];
+  const verdicts = await permissionVerdicts(
+    all.map(widget => widget.requiredPermission),
+    caller
+  );
 
-  const verdicts = new Map<string, boolean>();
-  for (const group of authorizationGroups(slugs)) {
-    const settled = await Promise.allSettled(
-      group.map(slug => callerHoldsPermission(slug, caller))
-    );
-    group.forEach((slug, index) => {
-      const outcome = settled[index];
-      // A rejected decision denies. A permission check that threw has told us
-      // nothing, and "nothing" must not read as "allowed" -- the same
-      // fail-closed direction `canReadEntity` takes when RBAC is unreachable.
-      verdicts.set(slug, outcome.status === "fulfilled" && outcome.value);
-    });
-  }
+  // 🔴 A GENERATED card is gated on its collection, not on a declared
+  // permission — it carries none. `callerHoldsPermission` judges an API key on
+  // its stamped grant alone, while `canReadEntity` also evaluates the
+  // collection's code-defined rules, and the widget query endpoint asks the
+  // second. A key those rules reject had the card offered here and every query
+  // for it refused. The same question, asked once per collection.
+  const readable = await readableEntities(
+    all
+      .map(widget => widget.collection)
+      .filter((slug): slug is string => slug !== undefined),
+    caller
+  );
 
-  return all.filter(widget => isVisibleTo(widget, verdicts));
-}
-
-/**
- * Whether one widget may be mentioned to this caller.
- *
- * 🔴 Only `undefined` means ungated. Every other non-string is DENIED, which is
- * the opposite of what "not a string, so no permission was declared" gives
- * you: `requiredPermission: 42` or `{ read: true }` would then be treated as an
- * open widget and returned to every authenticated caller — a declaration whose
- * author plainly meant to restrict it, failing open because it was malformed.
- *
- * `widgetValueProblem` now refuses such a declaration, so this is the second of
- * two locks rather than the only one. It stays because the registry is also
- * writable from code that never passes through that validator, and because a
- * `typeof` on a value already in hand costs nothing.
- */
-function isVisibleTo(
-  widget: CanonicalWidget,
-  verdicts: ReadonlyMap<string, boolean>
-): boolean {
-  const slug: unknown = widget.requiredPermission;
-  if (slug === undefined) return true;
-  if (typeof slug !== "string" || slug === "") return false;
-  return verdicts.get(slug) === true;
+  return all.filter(widget => {
+    if (widget.generated === true) {
+      return widget.collection !== undefined && readable.has(widget.collection);
+    }
+    return holdsWidgetPermission(widget.requiredPermission, verdicts);
+  });
 }
 
 /**

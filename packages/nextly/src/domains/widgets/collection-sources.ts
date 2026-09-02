@@ -47,6 +47,24 @@ interface RegisteredCollection {
   slug?: unknown;
   fields?: unknown;
   /**
+   * The author's own answer to which field names an entry, under `admin`.
+   *
+   * Read defensively like the flags below: the row is stored JSON, so the shape
+   * is checked at the point of use rather than assumed from the record type.
+   */
+  admin?: unknown;
+  /**
+   * How far this collection's table has got, as a LABEL rather than as the
+   * answer. See {@link statusClaimsPresent} for what it may be believed about,
+   * and {@link usableCollections} for the question that actually decides.
+   */
+  migrationStatus?: unknown;
+  /**
+   * The singular/plural display names. Read defensively for the same reason as
+   * `admin`: the row is stored JSON.
+   */
+  labels?: unknown;
+  /**
    * The `timestamps` column pair. A required boolean on the stored record and
    * read defensively here, because the two values decide whether
    * `createdAt`/`updatedAt` exist as COLUMNS -- declaring them on a collection
@@ -101,12 +119,22 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
  */
 function readableFields(
   fields: unknown
-): Array<{ name: string; type: string; label?: string }> {
-  const usable: Array<{ name: string; type: string; label?: string }> = [];
+): Array<{ name: string; type: string; label?: string; hasMany?: boolean }> {
+  const usable: Array<{
+    name: string;
+    type: string;
+    label?: string;
+    hasMany?: boolean;
+  }> = [];
   for (const raw of addressableFields(fields, {
     descendInto: storedAtThisLevel,
   })) {
-    const field = raw as { name?: unknown; type?: unknown; label?: unknown };
+    const field = raw as {
+      name?: unknown;
+      type?: unknown;
+      label?: unknown;
+      hasMany?: unknown;
+    };
     if (typeof field.name === "string" && typeof field.type === "string") {
       // The label is carried when the field has a usable one, and omitted
       // otherwise -- a blank or whitespace label is not a heading, and passing
@@ -120,6 +148,11 @@ function readableFields(
       usable.push({
         name: field.name,
         type: field.type,
+        // 🔴 CARDINALITY, carried rather than dropped. A `text` or `select`
+        // field with `hasMany` stores an ARRAY, and a scalar type is not the
+        // same claim as a scalar value -- so a title chosen on type alone can
+        // still resolve to an array, which the row renderer declines to print.
+        ...(field.hasMany === true && { hasMany: true }),
         ...(label && { label }),
       });
     }
@@ -164,27 +197,205 @@ async function readRegisteredCollections(): Promise<
  * listed. Clearing on a transient failure, by contrast, turns one bad database
  * read into a dashboard of broken cards.
  */
+/**
+ * Whether the STATUS LABEL claims this collection's table is present.
+ *
+ * 🔴 A label, not the answer. `migration_status` is written by several code
+ * paths and they do not agree: the HMR reload marks an edited collection
+ * `pending` after successfully applying its DDL, and `nextly migrate` applies a
+ * Builder collection's SQL in production without marking anything at all --
+ * `registerFromMigrations`, the one writer that records `applied`, runs only
+ * from the development boot path. So a table that is present and queryable can
+ * carry a label saying it is not, permanently.
+ *
+ * This is therefore kept as the FAST PATH only, and {@link usableCollections}
+ * asks the structural question when the label declines. The distinction is the
+ * repository's own rule about identifying by structure rather than by someone
+ * else's spelling: the label is a claim maintained by writers this module does
+ * not control, while the table's existence is the thing itself.
+ *
+ * The allowlist is what the label may be BELIEVED about, and it is deliberately
+ * one-directional. `synced` and `applied` are trusted outright: a writer that
+ * went to the trouble of recording one had the table in hand, so a false
+ * positive here would need a writer lying rather than merely falling behind,
+ * and no path does that. `pending`, `generated` and `failed` are trusted for
+ * NOTHING -- they mean only that no writer has said otherwise yet, which is a
+ * statement about the writers rather than about the database.
+ *
+ * That asymmetry is what makes the fast path safe to take. A label claiming
+ * presence ends the question; a label declining is referred to the database.
+ *
+ * An ABSENT status is treated as usable, which is the one place this reads
+ * generously rather than closed. The field was added after rows existed, so a
+ * row predating it says nothing about its table — and those tables do exist.
+ * Refusing them would take widgets away from every collection an older install
+ * already had, to protect against a state they are not in.
+ */
+const TABLE_PRESENT_STATUSES: ReadonlySet<string> = new Set([
+  "synced",
+  "applied",
+]);
+
+function statusClaimsPresent(collection: RegisteredCollection): boolean {
+  const status = (collection as { migrationStatus?: unknown }).migrationStatus;
+  if (status === undefined) return true;
+  return typeof status === "string" && TABLE_PRESENT_STATUSES.has(status);
+}
+
+/**
+ * Collections whose stored metadata is known to be AHEAD of their table.
+ *
+ * 🔴 The one thing table existence cannot tell you, and the reason existence
+ * alone is not enough. A reload writes the new field list to
+ * `dynamic_collections` for EVERY configured collection -- the sync payload is
+ * built from the whole config and knows nothing about what applied -- while
+ * refusing the DDL for a collection whose change it classified unsafe. That
+ * collection then keeps its OLD table, which exists, alongside a NEW field list
+ * that the table never received.
+ *
+ * Verified structurally, such a collection publishes a source naming columns
+ * the database does not have, and a widget query validates against the source
+ * and then fails against the table. Withholding it is the older, duller outcome
+ * and the right one: a card that is missing is better than a card that errors.
+ *
+ * This is the "applied-schema signal" that `migration_status` is trying and
+ * failing to be. It is deliberately NOT read from that column: the label is
+ * also set by writers that never deferred anything, which is what made it
+ * unusable in the first place. The reload knows which collections it refused,
+ * so it says so directly.
+ */
+const globalForDeferred = globalThis as unknown as {
+  __nextly_widgetDeferredCollections?: Set<string>;
+};
+
+function deferredCollections(): ReadonlySet<string> {
+  return globalForDeferred.__nextly_widgetDeferredCollections ?? new Set();
+}
+
+/**
+ * Record which collections a reload declined to apply DDL for.
+ *
+ * Replaces the set rather than adding to it, so a collection whose later reload
+ * succeeds stops being deferred without anyone having to remember to clear it.
+ */
+export function setDeferredCollections(slugs: readonly string[]): void {
+  globalForDeferred.__nextly_widgetDeferredCollections = new Set(slugs);
+}
+
+/**
+ * The collections a widget source may be built from.
+ *
+ * 🔴 NEITHER refusal probes the database, and the omission is deliberate.
+ * Whether a collection's stored shape is LIVE is a schema question, and
+ * answering it here means re-deriving something this module does not own. Three
+ * properties make that unattractive:
+ *
+ * - Table EXISTENCE is the wrong question. A reload that refuses a collection's
+ *   DDL writes its new field list anyway, so the OLD table stands beside NEW
+ *   metadata, and a source published on existence alone names columns that were
+ *   never created.
+ * - A probe is dialect-sensitive. `listTables` resolves against `public`, while
+ *   unqualified DML follows the whole search path -- which is why `tableExists`
+ *   reaches for `to_regclass` instead.
+ * - The property that WOULD decide -- whether the physical columns cover the
+ *   fields this source declares -- needs a field-to-column mapping that already
+ *   has several implementations in this repository awaiting convergence. A
+ *   fourth, partial one, owned by the widget domain, answers none of that.
+ *
+ * So this asks only what it can answer from what it holds:
+ *
+ * - `statusClaimsPresent` believes a label that CLAIMS presence and believes
+ *   nothing from one that declines. Its weakness is a false NEGATIVE: a
+ *   deployed Builder collection whose migration ran but whose row nobody marked
+ *   keeps its cards hidden. A hidden card is quiet and recoverable; a card
+ *   querying a column the table lacks is neither.
+ * - {@link setDeferredCollections} covers what the label cannot -- a reload that
+ *   refused a collection's DDL while its metadata was written regardless.
+ *
+ * That false negative is a defect in the WRITERS of `migration_status`, and it
+ * is closed by making them correct rather than by second-guessing them here.
+ */
+function usableCollections<T extends RegisteredCollection>(
+  collections: T[]
+): T[] {
+  const deferred = deferredCollections();
+  return collections.filter(
+    collection =>
+      !(typeof collection.slug === "string" && deferred.has(collection.slug)) &&
+      statusClaimsPresent(collection)
+  );
+}
+
+/**
+ * What a human calls this collection, when the stored row carries a usable
+ * plural label. PLURAL because a source and its cards name a set of entries.
+ */
+function pluralLabelOf(collection: RegisteredCollection): string | undefined {
+  const labels = collection.labels;
+  if (typeof labels !== "object" || labels === null) return undefined;
+  const plural = (labels as { plural?: unknown }).plural;
+  if (typeof plural !== "string") return undefined;
+  // 🔴 TRIMMED, and the trim is what keeps a bad label from taking the install
+  // down. `validateSource` refuses a label that is empty AFTER trimming, and
+  // `defineCollection` preserves `labels.plural: "   "` as written -- so a
+  // check for `!== ""` accepts it, `registerSource` throws, and
+  // `refreshCollectionSources` runs on every workspace, layout and widget-query
+  // request. One whitespace label would fail all three for everybody.
+  //
+  // Falling back to the slug rather than passing the trimmed value on: a label
+  // of spaces names nothing, and the slug is the answer a collection with no
+  // label already gets.
+  const trimmed = plural.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/**
+ * The author's nominated title field, when the stored row carries a usable one.
+ *
+ * The row is JSON, so `admin` may be anything; a non-string nomination is read
+ * as no nomination rather than passed on, because the shared rule would then be
+ * comparing a number against a list of field names.
+ */
+function useAsTitleOf(collection: RegisteredCollection): string | undefined {
+  const admin = collection.admin;
+  if (typeof admin !== "object" || admin === null) return undefined;
+  const nominated = (admin as { useAsTitle?: unknown }).useAsTitle;
+  if (typeof nominated !== "string") return undefined;
+  // Trimmed for the same reason, though this one fails softly: a nomination of
+  // spaces matches no field name, so the shared rule falls back rather than
+  // refusing. Normalised anyway, so the two readings of "the author stated
+  // nothing" agree.
+  const trimmed = nominated.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
 export async function refreshCollectionSources(): Promise<void> {
   const collections = await readRegisteredCollections();
   if (!collections) return;
 
+  const named = collections.filter(
+    (collection): collection is RegisteredCollection & { slug: string } =>
+      typeof collection.slug === "string" && collection.slug !== ""
+  );
+
   registerBuiltInSources(
-    collections
-      .filter(
-        (collection): collection is RegisteredCollection & { slug: string } =>
-          typeof collection.slug === "string" && collection.slug !== ""
-      )
-      .map(collection => ({
-        slug: collection.slug,
-        fields: readableFields(collection.fields),
-        // Only an explicit `false` turns them off; absent means on, the way
-        // `defineCollection` normalizes it and the registry stores it.
-        timestamps: collection.timestamps !== false,
-        // The opposite default: only an explicit `true` turns Draft/Published
-        // on, matching `DynamicCollectionRecord.status` (required, defaults to
-        // false) and the `config.status === true` reading every other consumer
-        // of this flag takes.
-        status: collection.status === true,
-      }))
+    usableCollections(named).map(collection => ({
+      slug: collection.slug,
+      fields: readableFields(collection.fields),
+      // Only an explicit `false` turns them off; absent means on, the way
+      // `defineCollection` normalizes it and the registry stores it.
+      ...(pluralLabelOf(collection) === undefined
+        ? {}
+        : { label: pluralLabelOf(collection) }),
+      ...(useAsTitleOf(collection) === undefined
+        ? {}
+        : { useAsTitle: useAsTitleOf(collection) }),
+      timestamps: collection.timestamps !== false,
+      // The opposite default: only an explicit `true` turns Draft/Published
+      // on, matching `DynamicCollectionRecord.status` (required, defaults to
+      // false) and the `config.status === true` reading every other consumer
+      // of this flag takes.
+      status: collection.status === true,
+    }))
   );
 }
