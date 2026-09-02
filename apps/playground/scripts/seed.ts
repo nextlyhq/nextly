@@ -21,6 +21,11 @@ import { seedPermissions, seedSuperAdmin } from "nextly/database/seeders";
 
 import { isCliEntry } from "../../../scripts/cli-entry.mjs";
 import config from "../nextly.config";
+import {
+  KITCHEN_SINK_DOCUMENT,
+  KITCHEN_SINK_SLUG,
+  KITCHEN_SINK_TITLE,
+} from "../seed/kitchen-sink";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PLAYGROUND_DIR = path.resolve(HERE, "..");
@@ -58,6 +63,7 @@ export interface SeedResult {
   tagsCreated: number;
   postsCreated: number;
   mediaUploaded: number;
+  blockPagesCreated: number;
 }
 
 const EMPTY_RESULT: SeedResult = {
@@ -67,6 +73,7 @@ const EMPTY_RESULT: SeedResult = {
   tagsCreated: 0,
   postsCreated: 0,
   mediaUploaded: 0,
+  blockPagesCreated: 0,
 };
 
 async function loadSeedData(): Promise<SeedData> {
@@ -224,6 +231,39 @@ async function seedPosts(
 /**
  * Run the seed unconditionally. Used by reset.ts after a wipe.
  */
+/**
+ * The kitchen-sink page, which is the only content in this repo that renders a
+ * block at all.
+ *
+ * Published rather than draft: the `/blocks/<slug>` route reads with the default
+ * `published` scope, so a draft row 404s from a page that looks entirely correct.
+ *
+ * Idempotent on the SLUG, like every seeder beside it. The document is expected
+ * to change as blocks gain defaults, and an existing row is left alone rather
+ * than overwritten — a re-seed must not discard whatever a developer was in the
+ * middle of trying on the page.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- Nextly instance has dynamic shape
+async function seedBlockPages(nextly: any) {
+  const existing = await nextly.find({
+    collection: "block-pages",
+    where: { slug: { equals: KITCHEN_SINK_SLUG } },
+    limit: 1,
+  });
+  if (existing.meta.total > 0) return { created: 0 };
+
+  await nextly.create({
+    collection: "block-pages",
+    data: {
+      title: KITCHEN_SINK_TITLE,
+      slug: KITCHEN_SINK_SLUG,
+      content: KITCHEN_SINK_DOCUMENT,
+      status: "published",
+    },
+  });
+  return { created: 1 };
+}
+
 export async function seedForce(): Promise<SeedResult> {
   const nextly = await getNextly({ config });
   const data = await loadSeedData();
@@ -258,6 +298,12 @@ export async function seedForce(): Promise<SeedResult> {
   );
   result.postsCreated = posts.created;
 
+  // AFTER the posts, because the page's `core/collection-loop` draws them. Seeded
+  // in the other order the loop renders an empty container on a fresh database,
+  // which reads as a broken block rather than as an empty collection.
+  const blockPages = await seedBlockPages(nextly);
+  result.blockPagesCreated = blockPages.created;
+
   return result;
 }
 
@@ -286,7 +332,8 @@ if (isCliEntry(import.meta.url)) {
         console.log(
           `[nextly] seed complete: ${result.usersCreated} user, ` +
             `${result.postsCreated} posts, ${result.categoriesCreated} categories, ` +
-            `${result.tagsCreated} tags, ${result.mediaUploaded} media`
+            `${result.tagsCreated} tags, ${result.mediaUploaded} media, ` +
+            `${result.blockPagesCreated} block pages`
         );
       }
       process.exit(0);
