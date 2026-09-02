@@ -100,22 +100,26 @@ describe("a checkbox row opts out of the label column", () => {
 describe("the segmented control", () => {
   it("draws each shared edge once, for three buttons as well as two", () => {
     /*
-     * With two buttons "the last one" and "every one after the first" select
-     * the same button, so the narrower rule looked correct for as long as two
-     * was the only width offered. At three it leaves the first seam two borders
-     * wide and the second one, and the segments stop reading as one control.
+     * Every button gives its leading border up and the first takes it back, so
+     * the number of buttons cannot enter into it. The alternative — removing
+     * the border from the LAST button — is right only while there are exactly
+     * two, because at two "the last one" and "every one after the first" select
+     * the same element. At three it leaves the first seam two borders wide and
+     * the second one, and the segments stop reading as one control.
      */
+    expect(ruleBody(CHROME, ".nx-style-inspector__toggle > button")).toContain(
+      "border-inline-start-width: 0"
+    );
     expect(
-      ruleBody(CHROME, ".nx-style-inspector__toggle > button + button")
-    ).toContain("border-inline-start-width: 0");
+      ruleBody(CHROME, ".nx-style-inspector__toggle > button:first-child")
+    ).toContain("border-inline-start-width: 1px");
   });
 
   it("no longer takes the shared edge off the last button alone", () => {
     /*
-     * The other half of the same decision. Left in place it would remove the
-     * border a second time on the final button, which is harmless, and leave
-     * the reason for the seam split between two rules that disagree about what
-     * decides it.
+     * The other half of the same decision, and the reason this is stated from
+     * the first button rather than the last: a rule keyed on the final button
+     * is a rule about the count, and it agrees with this one only at two.
      */
     expect(
       ruleBody(CHROME, ".nx-style-inspector__toggle > button:last-child")

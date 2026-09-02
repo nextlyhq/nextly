@@ -874,6 +874,8 @@
   min-width: 0;
   padding: 0.25rem 0.5rem;
   border: 1px solid var(--nx-border);
+  /* Given up here and taken back by the first button, so a seam is one border. */
+  border-inline-start-width: 0;
   background: var(--nx-background);
   color: var(--nx-foreground);
   font: inherit;
@@ -881,18 +883,18 @@
 }
 
 /*
- * The shared edge is drawn ONCE, by the button on its leading side.
+ * The group's leading edge belongs to the group, not to each button in it.
  *
- * Addressed as "every button after the first" rather than as the last one: with
- * two buttons those are the same button and with three they are not, so the
- * narrower rule leaves the middle seam two borders wide while the one beside it
- * is one, and the segments stop reading as a single control.
+ * Every button gives its leading border up and the first one takes it back, so
+ * a seam between two buttons is drawn once however many there are. Stated this
+ * way round because the alternative — removing the border from the LAST button
+ * — is right only while there are exactly two: with three it leaves the first
+ * seam two borders wide and the second one, and the segments stop reading as a
+ * single control. This way the count cannot enter into it, and the rule needs
+ * no selector beyond the two the radii already use.
  */
-.nx-style-inspector__toggle > button + button {
-  border-inline-start-width: 0;
-}
-
 .nx-style-inspector__toggle > button:first-child {
+  border-inline-start-width: 1px;
   border-start-start-radius: var(--radius-md);
   border-end-start-radius: var(--radius-md);
 }
