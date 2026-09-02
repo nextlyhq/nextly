@@ -219,6 +219,28 @@ export class WidgetLayoutService extends BaseService {
     }
     return nextVersion;
   }
+
+  /**
+   * Removes one scope's arrangement, so reads fall back to the registry's own
+   * order again.
+   *
+   * Idempotent, and that is the contract rather than an accident: resetting a
+   * dashboard that is already at its default is a request that has already been
+   * satisfied, so it answers the same way as one that removed a row. Reporting
+   * "nothing to delete" would make a client handle a state that is
+   * indistinguishable from success from the reader's side.
+   *
+   * No version guard. Every other write on this table is a read-modify-write
+   * that a concurrent editor could silently overwrite, which is what `version`
+   * exists to catch — but this one carries no content to lose. A reset racing a
+   * save means one of them happened last, and both outcomes are states the
+   * reader asked for.
+   */
+  async deleteLayout(kind: LayoutScopeKind, scopeId: string): Promise<void> {
+    await this.db
+      .delete(this.table)
+      .where(eq(this.table.id, layoutRowId(kind, scopeId)));
+  }
 }
 
 /**

@@ -20,58 +20,30 @@
  * @module components/features/widgets/WidgetGrid
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { DndContext, closestCenter } from "@dnd-kit/core";
+import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
+import { useCallback, useMemo, useRef } from "react";
 
 import {
   useBranding,
   useBrandingStatus,
 } from "@admin/context/providers/BrandingProvider";
-import {
-  useWidgetQueries,
-  type WidgetQueryRequest,
-} from "@admin/hooks/queries/useWidgetQueries";
+import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import { cn } from "@admin/lib/utils";
 
 import { registerCoreWidgetComponents } from "./core-components";
-import { coreDraws, resolveWidgetOutcome } from "./outcome";
+import { AddWidgetPicker } from "./edit/AddWidgetPicker";
+import { ArrangedCell } from "./edit/ArrangedCell";
+import { DashboardEditChrome } from "./edit/DashboardEditChrome";
+import { useDashboardArrangement } from "./edit/useDashboardArrangement";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { widgetSpanClass } from "./sizes";
-import { WidgetRenderer } from "./WidgetRenderer";
+import { useGridAnnouncer } from "./useGridAnnouncer";
+import { useWidgetBatch } from "./useWidgetBatch";
 
 // At module scope, before any render. `PluginSlot` resolves a path DURING
 // render, so registering from an effect would land after the first paint and
 // every core card would show its unresolved fallback once on the way in.
 registerCoreWidgetComponents();
-
-/**
- * What the grid says once a batch settles, or `null` for a state not worth
- * interrupting a reader for.
- *
- * Mid-flight says nothing, for the same reason `DocumentStatusLive` stays quiet
- * during a save: this grid refetches on every window focus, and announcing the
- * start of each refresh would speak over the reader every time they came back
- * to the tab. What matters is where it came to rest.
- *
- * `failed` counts CARDS THAT SHOW AN ERROR, not slots the server marked bad,
- * and the two are different numbers. There is no separate "the whole request
- * failed" sentence either: a rejected request gives every widget in it a failed
- * slot, so the counts already say so -- and with the requests partitioned, one
- * batch failing does not mean the dashboard did.
- */
-function settledAnnouncement(
-  isLoading: boolean,
-  total: number,
-  failed: number
-): string | null {
-  if (total === 0) return null;
-  if (isLoading) return null;
-  const loaded = total - failed;
-  const noun = total === 1 ? "widget" : "widgets";
-  return failed > 0
-    ? `${loaded} of ${total} ${noun} updated, ${failed} failed.`
-    : `${loaded} of ${total} ${noun} updated.`;
-}
 
 /**
  * What the grid shows when it holds no widget, which is three different facts.
@@ -133,6 +105,38 @@ function NothingToDraw({
   return null;
 }
 
+/**
+ * What the grid shows when the arrangement has emptied it out.
+ *
+ * A different question from {@link NothingToDraw}, which is about a dashboard
+ * that has no widgets to offer at all. This one is about a reader who HAS
+ * widgets and has put every one of them away -- so it says which way is back
+ * rather than what went wrong.
+ *
+ * Its own component, and it decides for itself whether to draw, so the grid
+ * body carries neither branch. Rendered inside the widgets section, so the
+ * landmark and the live region stay where a reader left them.
+ */
+function EmptyArrangement({
+  count,
+  isEditing,
+}: {
+  count: number;
+  isEditing: boolean;
+}) {
+  if (count > 0) return null;
+  return (
+    <p
+      data-testid="widget-grid-empty"
+      className="col-span-12 rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
+    >
+      {isEditing
+        ? "Every card is put away. Add one back below, or reset to the default arrangement."
+        : "Your dashboard has no cards on it. Edit it to bring one back, or reset to the default arrangement."}
+    </p>
+  );
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -141,7 +145,7 @@ export function WidgetGrid() {
   // Both channels a widget can reach the dashboard by: `contributes.admin.widgets`
   // and the registry `registerWidget` writes to. Reading only the first made the
   // registry invisible to the renderer built around it.
-  const widgets = useMemo(
+  const declared = useMemo(
     () =>
       resolveDashboardWidgets(
         branding?.plugins,
@@ -151,84 +155,49 @@ export function WidgetGrid() {
     [branding, hasPermission]
   );
 
-  // Every widget that DECLARED a query, archetype notwithstanding. `custom` is
-  // included on purpose: core's widget validator puts it in neither the data
-  // set nor the query-less set, because a widget that draws its own body may
-  // still want the host to run its request -- and `WidgetRenderer` hands the
-  // resulting slot to the plugin component. A widget that declares no query
-  // contributes nothing here, which is what keeps a dashboard of plugin
-  // components from issuing a request at all.
-  const requests = useMemo<WidgetQueryRequest[]>(
-    () =>
-      widgets.flatMap(widget =>
-        // A query is only worth running if SOMETHING can draw its result. A
-        // widget naming an archetype core cannot draw yet, and shipping no
-        // component to draw it instead, resolves to a card that reads "not
-        // rendered yet" -- so asking for the data spends an access-checked
-        // read, and one of the batch's limited slots, on a result thrown away
-        // on arrival. `custom` always draws, because the plugin's component
-        // decides what to do with the slot.
-        //
-        // Asked of `coreDraws` rather than listed here, so the read starts
-        // happening on its own the day core learns to draw one -- and asked of
-        // the whole DECLARATION, not just the archetype, because a renderer
-        // that will refuse this particular widget makes the read just as
-        // wasted as no renderer at all.
-        widget.query && (widget.archetype === "custom" || coreDraws(widget))
-          ? [{ widgetId: widget.id, query: widget.query }]
-          : []
-      ),
-    [widgets]
+  // 🔴 A stable indirection, because these three hooks form a cycle: the
+  // announcer needs the batch's outcome, the batch needs the widgets the
+  // arrangement resolved, and the arrangement needs somewhere to announce a
+  // move. The ref is the one link that can be filled in after the fact — the
+  // wrapper's identity never changes, so nothing downstream re-renders on it,
+  // and by the time a reader can move a card the announcer is long since
+  // assigned.
+  const announcer = useRef<(t: string, p: number, c: number) => void>(() => {});
+  const announceMove = useCallback(
+    (title: string, position: number, count: number) =>
+      announcer.current(title, position, count),
+    []
   );
 
-  const { slots, isFetching, updatedAt } = useWidgetQueries(requests);
+  const layout = useDashboardLayout();
+  const {
+    visible,
+    editor,
+    moveBy,
+    hasArrangement,
+    sortableItems,
+    sensors,
+    handleDragEnd,
+  } = useDashboardArrangement(declared, layout, announceMove);
 
-  // Which widgets are actually IN the batch, taken from the requests that were
-  // sent rather than re-derived from `widget.query`.
-  //
-  // Those two disagree, and the disagreement is the whole point of this set: a
-  // widget declaring a query whose archetype nothing can draw is deliberately
-  // left out of the batch above, but it still HAS a `widget.query`. Testing
-  // that field again below gave such a card a freshness line for a request that
-  // never ran, and marked it `aria-busy` during someone else's refetch.
-  const requested = useMemo(
-    () => new Set(requests.map(request => request.widgetId)),
-    [requests]
+  const byId = useMemo(
+    () => new Map(declared.map(widget => [widget.id, widget])),
+    [declared]
   );
 
-  // The same answer the cards are drawn from, so the announcement cannot
-  // describe a dashboard other than the one on screen. Counting slots instead
-  // said "3 of 3 widgets updated" while a card read "the list archetype is not
-  // rendered yet": the response was fine and the card was not.
-  //
-  // Only widgets that ASKED are counted, and self-drawn ones are dropped even
-  // when they did. A plugin component decides what it shows from the slot it
-  // was handed, so core cannot say whether it worked, and guessing either way
-  // would put a number in the reader's ear that nothing on screen supports.
-  const counted = useMemo(
-    () =>
-      widgets
-        .filter(widget => widget.query)
-        .map(widget => resolveWidgetOutcome(widget, slots[widget.id]))
-        .filter(outcome => outcome.state !== "self-drawn"),
-    [widgets, slots]
+  const widgets = useMemo(() => visible.map(row => row.widget), [visible]);
+
+  const { slots, isFetching, updatedAt, requested, counted, failed, settling } =
+    useWidgetBatch(widgets);
+
+  const { announcement, announceMove: announceSettledMove } = useGridAnnouncer(
+    settling,
+    counted,
+    failed
   );
-  const failed = counted.filter(outcome => outcome.state === "failed").length;
-  const settling = counted.some(outcome => outcome.state === "loading");
+  announcer.current = announceSettledMove;
 
-  const [announcement, setAnnouncement] = useState("");
-  // What was last spoken, so an unchanged outcome does not re-fire. A ref
-  // rather than state because it must not itself cause a render.
-  const spoken = useRef("");
-  const next = settledAnnouncement(settling, counted.length, failed);
-
-  useEffect(() => {
-    if (!next || next === spoken.current) return;
-    spoken.current = next;
-    setAnnouncement(next);
-  }, [next]);
-
-  // Nothing to draw. Returned after the hooks above so the hook order is the
+  // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
   // THREE outcomes, not two. Every card on the dashboard now arrives through
   // the workspace query, so an empty list is no longer proof that there is
@@ -236,71 +205,106 @@ export function WidgetGrid() {
   // of one that never answered. Collapsing all three into `return null` blanked
   // the entire page on first paint and on any transient failure, where the
   // sections used to mount immediately and draw their own states.
-  if (widgets.length === 0) {
+  //
+  // 🔴 Asked of the DECLARATIONS, not of the arranged rows. `visible` is empty
+  // in a fourth case that is none of these three: a reader who has put every
+  // card away, or removed every card and saved. Returning here for that unmounted
+  // the edit bar, the Reset control and the add picker along with the grid --
+  // the whole page blank, with no way back to the one control that could undo
+  // it. An arrangement must never be able to reach a state it cannot leave, so
+  // the recovery chrome outlives the rows and the empty grid says so in place.
+  if (declared.length === 0) {
     return (
       <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
     );
   }
 
   return (
-    <section aria-label="Dashboard widgets" className="grid grid-cols-12 gap-6">
-      <span
-        role="status"
-        aria-live="polite"
-        className="sr-only"
-        data-testid="widget-grid-live"
+    <div className="space-y-4">
+      <DashboardEditChrome
+        editor={editor}
+        writeError={layout.writeError}
+        hasArrangement={hasArrangement}
+        // 🔴 A stored row exists whenever the VERSION is non-zero, which is not
+        // the same as `source === "own"`. A row the service could not decode is
+        // reported as `source: "default"` — the dashboard falls back to the
+        // registry's order — while keeping its real, non-zero version. Gating
+        // Reset on the source therefore hid the one control that could clear
+        // the bad row, and with an untouched draft Save is disabled too, so the
+        // reader had no way out and every read went on logging the same decode
+        // failure. The version is what says a row is there.
+        canReset={(layout.layout?.version ?? 0) > 0}
+      />
+
+      <DndContext
+        sensors={sensors}
+        // `closestCenter` rather than pointer-within: the cells are different
+        // widths, so a small card dragged over a full-width one never contains
+        // the pointer and the drop target reads as nothing.
+        collisionDetection={closestCenter}
+        onDragEnd={handleDragEnd}
       >
-        {announcement}
-      </span>
-      {widgets.map(widget => (
-        <div
-          key={widget.id}
-          data-testid={`widget-cell-${widget.id}`}
-          // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
-          // widget always renders its card, so this can never hide one; it
-          // reaches only an unframed widget whose component returned null --
-          // which core's conditional sections do, and did before they were
-          // widgets. Without it each becomes a blank cell with a `gap-6` on
-          // either side, which is the empty-slot bug rather than the hiding
-          // those components have always performed.
-          //
-          // CSS rather than asking the component to declare its own emptiness:
-          // a declaration is a second statement of what the render already
-          // decided, and the two drift.
-          className={cn(
-            widgetSpanClass(widget.size),
-            "empty:hidden",
-            // An unframed widget is a SECTION, and sections on this page have
-            // always been 48px apart -- the `space-y-12` the dashboard used
-            // before these became widgets. The grid's own `gap-6` is a card
-            // rhythm and right for cards, so the difference belongs to the
-            // widgets that are not cards: 24px of trailing margin plus the
-            // 24px row gap puts two adjacent sections back at 48px.
-            //
-            // BOTTOM only. A symmetric `my-3` also pushed the FIRST row down,
-            // and the page's outer `space-y-12` already places the grid 48px
-            // below the welcome header -- so every dashboard gained 12px there
-            // while the inter-section gaps looked correct. Measuring the gaps
-            // alone could not see it; only the header-to-first-section distance
-            // could.
-            //
-            // Margins, not padding: a hidden cell contributes neither, but
-            // padding would also inset a body that draws its own background.
-            widget.chrome === "none" && "mb-6"
-          )}
+        <SortableContext
+          items={sortableItems}
+          // The grid wraps, so cards move in two dimensions. The list strategy
+          // assumes a single column and animates neighbours the wrong way.
+          strategy={rectSortingStrategy}
         >
-          <WidgetRenderer
-            definition={widget}
-            slot={slots[widget.id]}
-            updatedAt={requested.has(widget.id) ? updatedAt : null}
-            // Only a widget that actually ASKED can be waiting on an answer. A
-            // card drawn entirely by a plugin component took no part in the
-            // batch, and neither did one whose archetype nothing can draw, so a
-            // refetch says nothing about either.
-            isFetching={requested.has(widget.id) ? isFetching : false}
-          />
-        </div>
-      ))}
-    </section>
+          <section
+            aria-label="Dashboard widgets"
+            className="grid grid-cols-12 gap-6"
+          >
+            <span
+              role="status"
+              aria-live="polite"
+              className="sr-only"
+              data-testid="widget-grid-live"
+            >
+              {announcement}
+            </span>
+            <EmptyArrangement
+              count={visible.length}
+              isEditing={editor.isEditing}
+            />
+            {visible.map((row, index) => (
+              <ArrangedCell
+                key={row.placementId}
+                row={row}
+                index={index}
+                count={visible.length}
+                isEditing={editor.isEditing}
+                slot={slots[row.widget.id]}
+                // Only a widget that actually ASKED can be waiting on an answer. A
+                // card drawn entirely by a plugin component took no part in the
+                // batch, and neither did one whose archetype nothing can draw, so a
+                // refetch says nothing about either.
+                updatedAt={requested.has(row.widget.id) ? updatedAt : null}
+                isFetching={requested.has(row.widget.id) ? isFetching : false}
+                // The arrangement hook announces, because it is the one that
+                // resolves the destination -- announcing here would name a
+                // position computed a second time, and the two would drift.
+                onMove={moveBy}
+                onToggleHidden={editor.toggleHidden}
+                onRemove={editor.remove}
+              />
+            ))}
+          </section>
+        </SortableContext>
+      </DndContext>
+
+      {editor.isEditing ? (
+        <AddWidgetPicker
+          options={editor.available.map(widgetId => ({
+            widgetId,
+            // The declaration's own title where the admin can resolve it. The
+            // id is a poor label and it is TRUE, which an invented one would
+            // not be — a widget whose client bundle is absent still has to be
+            // addable by name.
+            title: byId.get(widgetId)?.title ?? widgetId,
+          }))}
+          onAdd={editor.add}
+        />
+      ) : null}
+    </div>
   );
 }

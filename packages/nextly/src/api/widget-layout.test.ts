@@ -51,8 +51,13 @@ import {
   listWidgets,
   registerWidget,
 } from "../domains/widgets/registry";
+import { setContributedWidgets } from "../domains/widgets/canonical";
 
-import { getWidgetLayout, putWidgetLayout } from "./widget-layout";
+import {
+  deleteWidgetLayout,
+  getWidgetLayout,
+  putWidgetLayout,
+} from "./widget-layout";
 
 const reqAuth = vi.mocked(requireAuthentication);
 
@@ -60,6 +65,7 @@ const reqAuth = vi.mocked(requireAuthentication);
 let stored: { layout: string; version: number } | undefined;
 let saved: { placements: WidgetPlacement[]; expected: number } | undefined;
 let saveThrows: Error | undefined;
+let deleted: { kind: string; scope: string } | undefined;
 const logged: object[] = [];
 
 const fakeService = {
@@ -78,6 +84,10 @@ const fakeService = {
       logged.push({ unreadable: true });
       return { layout: undefined, version: stored.version, unreadable: true };
     }
+  },
+  deleteLayout: async (kind: string, scope: string) => {
+    deleted = { kind, scope };
+    stored = undefined;
   },
   saveLayout: async (
     _kind: string,
@@ -159,8 +169,10 @@ beforeEach(() => {
   stored = undefined;
   saved = undefined;
   saveThrows = undefined;
+  deleted = undefined;
   logged.length = 0;
   clearWidgets();
+  setContributedWidgets([]);
   reqAuth.mockResolvedValue({
     userId: "user-1",
     permissions: [],
@@ -269,6 +281,83 @@ describe("GET /api/dashboard/layout", () => {
     // that is still there -- turning a recoverable bad row into a dashboard
     // that can never be saved.
     expect(body.version).toBe(7);
+  });
+});
+
+describe("a widget that only CONTRIBUTED", () => {
+  it("appears in the default arrangement", async () => {
+    // 🔴 The defect. Layout resolution read the imperative registry alone, so a
+    // plugin using the documented `contributes.admin.widgets` surface rendered
+    // a card on the grid that was absent from every arrangement.
+    registerWidget(widget({ id: "core/a" }));
+    setContributedWidgets([{ id: "forms/latest", defaultOrder: 5 }]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      "forms/latest",
+      "core/a",
+    ]);
+  });
+
+  it("can be saved into an arrangement", async () => {
+    // Every PUT naming a contributed widget was refused as unavailable, so the
+    // card could not be arranged, hidden or added even by a client that knew
+    // about it.
+    setContributedWidgets([{ id: "forms/latest" }]);
+
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "forms/latest", order: 0, hidden: false },
+        ],
+        version: 0,
+        scope: scopeFor(["forms/latest"]),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(saved?.placements.map(p => p.widgetId)).toEqual(["forms/latest"]);
+  });
+
+  it("is offered in `available` when it is not placed", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    setContributedWidgets([{ id: "forms/latest" }]);
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", order: 0, hidden: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.available).toEqual(["forms/latest"]);
+  });
+
+  it("is gated by its declared permission like any other", async () => {
+    setContributedWidgets([
+      { id: "forms/latest", requiredPermission: "read-forms" },
+    ]);
+    callerHoldsPermission.mockResolvedValue(false);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements).toEqual([]);
+    expect(callerHoldsPermission).toHaveBeenCalledWith(
+      "read-forms",
+      expect.anything()
+    );
+  });
+
+  it("takes the geometry it declared, unknown values included", async () => {
+    // A contribution may come from a plugin built against a newer core, so an
+    // unrecognised size must reach the placement rather than being refused.
+    setContributedWidgets([{ id: "forms/latest", defaultSize: "xxl" }]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.[0]).toMatchObject({ size: "xxl" });
   });
 });
 
@@ -855,5 +944,70 @@ describe("PUT /api/dashboard/layout", () => {
     );
 
     expect(res.status).toBe(409);
+  });
+});
+
+describe("DELETE /api/dashboard/layout", () => {
+  it("removes the row and reports the reset", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    stored = {
+      version: 4,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+      ]),
+    };
+
+    const res = await deleteWidgetLayout(
+      new Request("http://localhost/api/dashboard/layout", { method: "DELETE" })
+    );
+
+    expect(res.status).toBe(200);
+    expect(deleted).toEqual({ kind: "user", scope: "user-1" });
+  });
+
+  it("leaves the reader tracking the live registry, not a frozen copy", async () => {
+    // 🔴 The reason this is a DELETE and not a PUT of the current defaults.
+    // Writing a snapshot would freeze today's defaults into the row, so a
+    // widget registered later — or a `defaultOrder` a plugin changes later —
+    // would never reach this reader again. They would be "reset" onto a layout
+    // that no longer tracks the thing they reset to.
+    registerWidget(widget({ id: "core/a" }));
+    stored = {
+      version: 4,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", order: 0, hidden: true },
+      ]),
+    };
+
+    await deleteWidgetLayout(
+      new Request("http://localhost/api/dashboard/layout", { method: "DELETE" })
+    );
+
+    // A widget that did not exist when the row was written.
+    registerWidget(widget({ id: "core/added-later" }));
+    const after = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(after.source).toBe("default");
+    expect(after.version).toBe(0);
+    expect(after.placements?.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "core/added-later",
+    ]);
+  });
+
+  it("refuses an API key", async () => {
+    reqAuth.mockResolvedValue({
+      userId: "user-1",
+      permissions: [],
+      roles: [],
+      authMethod: "api-key",
+    });
+
+    const res = await deleteWidgetLayout(
+      new Request("http://localhost/api/dashboard/layout", { method: "DELETE" })
+    );
+
+    expect(res.status).toBe(403);
+    expect(deleted).toBeUndefined();
   });
 });

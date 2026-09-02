@@ -114,3 +114,47 @@ export interface DashboardWidget {
    */
   chrome?: WidgetChrome;
 }
+
+/**
+ * One card's place in a reader's arrangement.
+ *
+ * 🔴 `size` and `height` are `string`, not the size/height unions, and that is
+ * load-bearing rather than sloppy. A placement's geometry is seeded from a
+ * widget's declaration, and that widget may come from a plugin built against a
+ * NEWER core — so a stored arrangement can legitimately name a size this admin
+ * has never heard of. `widgetSpanClass` already survives one by falling back;
+ * a narrower type here would be a promise this client cannot keep, and would
+ * push the lie into every consumer.
+ */
+export interface WidgetPlacement {
+  /** Opaque, and unique within a layout. Not a widget id, except by default. */
+  id: string;
+  widgetId: string;
+  order: number;
+  hidden: boolean;
+  size?: string;
+  height?: string;
+  config?: Record<string, unknown>;
+}
+
+/** What `GET /api/dashboard/layout` answers. */
+export interface DashboardLayoutResponse {
+  placements: WidgetPlacement[];
+  /**
+   * Widget ids this reader may see and has not placed.
+   *
+   * The server's answer, not something to re-derive here: it is the only party
+   * that filters by permission authoritatively. A newly installed widget is
+   * never inserted into an arrangement behind the reader's back, so this is
+   * what makes it reachable at all.
+   */
+  available: string[];
+  version: number;
+  /** Which layer the arrangement came from: their own row, or the registry. */
+  source: "own" | "default";
+  /**
+   * An opaque token for the set of widgets this reader could see when the
+   * arrangement was read. Echoed back on write; a mismatch is a 409.
+   */
+  scope: string;
+}
