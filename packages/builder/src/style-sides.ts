@@ -34,6 +34,7 @@
  */
 import type { LogicalSidesShape } from "@nextlyhq/blocks-engine";
 
+import type { SideOrientation } from "./side-orientation";
 import type { StyleControl } from "./style-controls";
 
 /** One of the four sides, as the engine's catalog names them. */
@@ -93,4 +94,66 @@ export function logicalSideGroup(
   const ordered = LOGICAL_SIDES.map(side => bySide.get(side));
   if (ordered.some(control => control === undefined)) return undefined;
   return ordered as readonly StyleControl[];
+}
+
+/** How a property's controls should be drawn, once the box question is settled. */
+export interface SideBox {
+  /** The controls in the order to draw them: box order when boxed. */
+  readonly controls: readonly StyleControl[];
+  /** Whether to draw a box at all. */
+  readonly boxed: boolean;
+  /**
+   * The axes to put on the box, or `undefined` when it is not one.
+   *
+   * The EDITED ELEMENT's, so the grid's own placement resolves in them: columns
+   * run along the inline axis, so column one is the inline start in either
+   * direction and a vertical mode transposes the pair.
+   */
+  readonly axes: SideOrientation | undefined;
+}
+
+/**
+ * Settle whether a property is drawn as a box, and in what order.
+ *
+ * A pure question, lifted out of the panel so the component reads as markup:
+ * the four branches it replaces — is this per-side, is the orientation known,
+ * which order do the controls go in, which side is this one — are one decision
+ * with one answer, and each of them was a place the component could disagree
+ * with itself.
+ *
+ * A box is drawn ONLY when its arrangement can be justified. The picture makes
+ * a positional claim — this control is the leading edge — and the mapping from
+ * a logical side to a physical one belongs to the element being edited. Unknown
+ * orientation therefore keeps the rows, which name their side in words and are
+ * true whichever way the element runs.
+ *
+ * @param controls - every control the property expanded into
+ * @param orientation - the edited element's axes, or `undefined` if unreadable
+ * @returns what to draw, and what to put on it
+ */
+export function sideBoxFor(
+  controls: readonly StyleControl[],
+  orientation: SideOrientation | undefined
+): SideBox {
+  const sides = logicalSideGroup(controls);
+  if (sides === undefined || orientation === undefined) {
+    return { controls, boxed: false, axes: undefined };
+  }
+  return { controls: sides, boxed: true, axes: orientation };
+}
+
+/**
+ * The side one control draws in a box, or `undefined` outside one.
+ *
+ * @param box - the settled drawing decision
+ * @param control - one of its controls
+ * @returns the side name, for the stylesheet to place by
+ */
+export function sideOf(
+  box: SideBox,
+  control: StyleControl
+): LogicalSide | undefined {
+  if (!box.boxed) return undefined;
+  const side = control.path[0];
+  return side === undefined ? undefined : (side as LogicalSide);
 }

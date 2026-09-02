@@ -121,7 +121,7 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
-import { logicalSideGroup } from "./style-sides";
+import { sideBoxFor, sideOf } from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -625,6 +625,26 @@ export function StyleInspectorPanel({
   // know the vocabulary rather than reading it off the sections in hand.
   const available = new Set<string>(groups);
   const open = openSection(openGroup, available, groups[0] ?? "");
+  /*
+   * What every section and field below needs from this panel, assembled once.
+   *
+   * One object rather than ten props repeated at the call site: the section
+   * forwards the identical set to each property, so a value spelled here and
+   * again there is a value that can go missing from one of them silently.
+   */
+  const surroundings: StyleFieldSurroundings = {
+    orientation: sideOrientation,
+    nodeId: inspected.nodeId,
+    state: inspected.state,
+    breakpoint: inspected.breakpoint,
+    editor,
+    policy,
+    tokens,
+    prefersDark,
+    provenanceOf,
+    editing,
+    onChooseForm: chooseForm,
+  };
 
   return (
     <div className="nx-style-inspector">
@@ -640,11 +660,7 @@ export function StyleInspectorPanel({
         libraryAbsence={classLibraryAbsence}
         onCreateClass={onCreateClass}
       />
-      {inspected.sections.length === 0 ? (
-        <p className="nx-inspector__note" data-empty="no-style-support">
-          This block does not offer style properties.
-        </p>
-      ) : null}
+      <NoStyleProperties count={inspected.sections.length} />
       <Accordion
         type="single"
         collapsible
@@ -658,17 +674,7 @@ export function StyleInspectorPanel({
             // would keep the previous block's uncommitted text.
             key={`${inspected.nodeId}:${section.group}`}
             section={section}
-            orientation={sideOrientation}
-            nodeId={inspected.nodeId}
-            state={inspected.state}
-            breakpoint={inspected.breakpoint}
-            editor={editor}
-            policy={policy}
-            tokens={tokens}
-            prefersDark={prefersDark}
-            provenanceOf={provenanceOf}
-            editing={editing}
-            onChooseForm={chooseForm}
+            {...surroundings}
           />
         ))}
       </Accordion>
@@ -800,6 +806,58 @@ function useLiveBreakpoints(
   return preview === undefined ? matches : stated;
 }
 
+/**
+ * The note shown when a block offers no style properties at all.
+ *
+ * A component rather than a conditional in the panel's own body: the panel
+ * decides what to draw, and "there is nothing to draw" is this element's own
+ * business. It returns nothing when there is something.
+ *
+ * @param props - how many sections the block offers
+ * @returns the note, or nothing
+ */
+function NoStyleProperties({
+  count,
+}: {
+  count: number;
+}): React.JSX.Element | null {
+  if (count > 0) return null;
+  return (
+    <p className="nx-inspector__note" data-empty="no-style-support">
+      This block does not offer style properties.
+    </p>
+  );
+}
+
+/**
+ * Everything a style field needs from the panel around it.
+ *
+ * Named once because the section and the property list pass the identical set
+ * down, and two copies of ten props drift the moment one gains an eleventh —
+ * silently, since the section would simply stop forwarding what it no longer
+ * declares.
+ */
+interface StyleFieldSurroundings {
+  /**
+   * How the edited element runs, or `undefined` when the canvas could not say.
+   *
+   * Only the per-side box reads it, and `undefined` means NOT KNOWN rather than
+   * left-to-right: a box drawn on an unknown orientation is a positional claim
+   * with nothing behind it.
+   */
+  orientation: SideOrientation | undefined;
+  nodeId: string;
+  state: StyleState;
+  breakpoint: BreakpointId;
+  editor: EditorState;
+  policy: StylePolicy | undefined;
+  tokens: SiteTokenSet | undefined;
+  prefersDark: boolean;
+  provenanceOf: ProvenanceOf;
+  editing: EditedAddress;
+  onChooseForm: ChooseForm;
+}
+
 /** One catalog group, as a section that opens onto its properties. */
 function StyleSectionItem({
   section,
@@ -816,19 +874,7 @@ function StyleSectionItem({
   onChooseForm,
 }: {
   section: StyleSection;
-  /** Passed through to the per-side box, which is the only thing that reads it. */
-  orientation: SideOrientation | undefined;
-  nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
-  editor: EditorState;
-  policy: StylePolicy | undefined;
-  tokens: SiteTokenSet | undefined;
-  prefersDark: boolean;
-  provenanceOf: ProvenanceOf;
-  editing: EditedAddress;
-  onChooseForm: ChooseForm;
-}): React.JSX.Element {
+} & StyleFieldSurroundings): React.JSX.Element {
   // How many of this section's properties this node sets HERE, so an author can
   // see which sections they have touched without opening each one.
   const setCount = section.properties.filter(property => property.set).length;
@@ -895,43 +941,21 @@ function StylePropertyFields({
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
-  /** How the edited element runs, or `undefined` when the canvas could not answer. */
-  orientation: SideOrientation | undefined;
-  nodeId: string;
-  state: StyleState;
-  breakpoint: BreakpointId;
-  editor: EditorState;
-  policy: StylePolicy | undefined;
-  tokens: SiteTokenSet | undefined;
-  prefersDark: boolean;
-  provenanceOf: ProvenanceOf;
-  editing: EditedAddress;
-  onChooseForm: ChooseForm;
-}): React.JSX.Element {
+} & StyleFieldSurroundings): React.JSX.Element {
   const many = property.controls.length > 1;
   /*
-   * The four sides of a per-side property, grouped for the DRAWING only. Each
-   * side keeps its own control, so it commits on its own and undo stays per
-   * side; `undefined` for everything else, including a per-side property that
-   * does not offer all four — three edges positioned as edges with one missing
-   * and unexplained is worse than four honest rows.
+   * Whether this property is drawn as a box, and in what order — one decision,
+   * settled outside the component. Each side still keeps its own control, so it
+   * commits on its own and undo stays per side; the grouping is for the DRAWING
+   * only.
    */
-  const sides = logicalSideGroup(property.controls);
-  /*
-   * A box is drawn only when its arrangement can be JUSTIFIED. The picture
-   * makes a positional claim — this control is the leading edge — and the
-   * mapping from a logical side to a physical edge is a property of the element
-   * being edited, not of this panel. Unknown orientation therefore keeps the
-   * rows, which name their side in words and are true either way.
-   */
-  const asBox = sides !== undefined && orientation !== undefined;
-  const ordered = asBox && sides !== undefined ? sides : property.controls;
+  const box = sideBoxFor(property.controls, orientation);
   return (
     <div
       className="nx-style-inspector__property"
       data-property={property.property}
       // Read by the stylesheet, which owns the box arrangement.
-      data-sides={asBox ? "logical" : undefined}
+      data-sides={box.boxed ? "logical" : undefined}
       /*
        * The EDITED ELEMENT's axes, put on the grid so its own placement
        * resolves in them: grid columns run along the inline axis and rows along
@@ -941,14 +965,13 @@ function StylePropertyFields({
        * panel's own so their text still reads normally.
        */
       style={
-        asBox && orientation !== undefined
-          ? {
-              writingMode:
-                orientation.writingMode as React.CSSProperties["writingMode"],
-              direction:
-                orientation.direction as React.CSSProperties["direction"],
+        box.axes === undefined
+          ? undefined
+          : {
+              writingMode: box.axes
+                .writingMode as React.CSSProperties["writingMode"],
+              direction: box.axes.direction as React.CSSProperties["direction"],
             }
-          : undefined
       }
     >
       {many ? (
@@ -996,7 +1019,7 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      {ordered.map(control => (
+      {box.controls.map(control => (
         <StyleControlField
           // The ADDRESS, not just the position: a host switching state or
           // breakpoint leaves this field mounted, and where the old and new
@@ -1007,9 +1030,7 @@ function StylePropertyFields({
             "."
           )}
           control={control}
-          {...(asBox && control.path[0] !== undefined
-            ? { side: control.path[0] }
-            : {})}
+          side={sideOf(box, control)}
           label={
             many
               ? fieldLabel(control.path[control.path.length - 1] ?? "")
@@ -1166,6 +1187,57 @@ function FormChoice({
 type CommitOutcome = "applied" | "refused" | "unchanged";
 
 /** One editable position, drawn as the control its leaf kind resolves to. */
+/**
+ * A style field's label: its words, and the dot saying where the value came from.
+ *
+ * Its own component because the two parts are hidden INDEPENDENTLY. Inside a
+ * box of logical sides the words are noise — position is saying which edge this
+ * is — while the provenance dot says whether the side is authored or inherited,
+ * which position cannot tell anyone. So the words are wrapped in an element the
+ * stylesheet can clip on its own; clipping the label would take the dot and its
+ * focus-revealed explanation with it.
+ *
+ * @param props - the label's identity, its words, and the provenance to show
+ * @returns the label element
+ */
+function StyleFieldLabel({
+  id,
+  htmlFor,
+  readOnly,
+  title,
+  label,
+  answer,
+  editing,
+  descendant,
+}: {
+  id: string;
+  htmlFor: string;
+  /**
+   * Whether the control cannot be edited, in which case the label names NOTHING.
+   *
+   * A label pointing at a read-only field would move focus into a control an
+   * author cannot use. Decided here rather than by the caller so the field is
+   * left saying what it wants drawn rather than how to draw it.
+   */
+  readOnly: boolean;
+  title: string | undefined;
+  label: string;
+  answer: ProvenanceAnswer | undefined;
+  editing: EditedAddress;
+  descendant: string | undefined;
+}): React.JSX.Element {
+  return (
+    <Label id={id} htmlFor={readOnly ? undefined : htmlFor} title={title}>
+      <span className="nx-style-inspector__field-label-text">{label}</span>
+      <ProvenanceDot
+        answer={answer}
+        editing={editing}
+        descendant={descendant}
+      />
+    </Label>
+  );
+}
+
 function StyleControlField({
   control,
   side,
@@ -1297,24 +1369,20 @@ function StyleControlField({
     <div
       className="nx-inspector__field"
       data-control={control.kind}
-      {...(side === undefined ? {} : { "data-side": side })}
+      // Absent when this is not a side: React omits an `undefined` attribute, so
+      // the value says whether the field is in a box without a branch here.
+      data-side={side}
     >
-      <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
-        {/*
-          The words are wrapped so the BOX can hide them without hiding the
-          label. Inside a box the side is told by position and the words are
-          noise to a sighted author — but the label also carries the provenance
-          dot, which says whether this side is authored or inherited, and that
-          is not something position tells anyone. Clipping the whole label takes
-          the dot and its focus-revealed explanation with it.
-        */}
-        <span className="nx-style-inspector__field-label-text">{label}</span>
-        <ProvenanceDot
-          answer={answer}
-          editing={editing}
-          descendant={control.leaf.descendant}
-        />
-      </Label>
+      <StyleFieldLabel
+        id={labelId}
+        htmlFor={id}
+        readOnly={readOnly}
+        title={summary}
+        label={label}
+        answer={answer}
+        editing={editing}
+        descendant={control.leaf.descendant}
+      />
       <ControlValue
         id={id}
         labelledBy={labelId}

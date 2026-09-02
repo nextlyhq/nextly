@@ -69,8 +69,7 @@ import {
   type StyleInspectorPanelProps,
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
-import { useRenderedTag } from "./use-rendered-tag";
-import { useSideOrientation } from "./use-side-orientation";
+import { useCanvasReading } from "./use-canvas-reading";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -300,15 +299,7 @@ export function InspectorPanel({
   // Owned here rather than in the style tab: reading it needs a subscription to
   // the canvas, and the panel that decides which control shows a value should
   // not also hold one. Passed down as an answer, exactly as `cascade` is.
-  const renderedTag = useRenderedTag(
-    canvasRoot,
-    editor.selectedId,
-    editor.document
-  );
-  // Owned here for the same reason, and read from the same canvas: a box of
-  // logical sides is a claim about which physical edge each one is, and only
-  // the edited element can settle that.
-  const sideOrientation = useSideOrientation(
+  const canvas = useCanvasReading(
     canvasRoot,
     editor.selectedId,
     editor.document
@@ -484,8 +475,8 @@ export function InspectorPanel({
           />
           <StyleInspectorPanel
             editor={editor}
-            renderedTag={renderedTag}
-            sideOrientation={sideOrientation}
+            renderedTag={canvas.tag}
+            sideOrientation={canvas.orientation}
             policy={policy}
             state={editedStyleState(styleState)}
             breakpoint={breakpoint}

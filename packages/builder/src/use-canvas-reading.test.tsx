@@ -11,14 +11,14 @@
  * size as unset for the rest of the session, which is the state this whole tier
  * exists to fix.
  *
- * @module __tests__/use-rendered-tag
+ * @module use-canvas-reading.test
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import * as React from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorState } from "./editor-state";
-import { useRenderedTag } from "./use-rendered-tag";
+import { useCanvasReading } from "./use-canvas-reading";
 
 afterEach(cleanup);
 
@@ -26,8 +26,17 @@ afterEach(cleanup);
 const DOCUMENT = {} as EditorState["document"];
 
 function Reader({ root }: { root: HTMLElement | null }) {
-  const tag = useRenderedTag(root, "n1", DOCUMENT);
-  return <span data-testid="tag">{tag ?? "unknown"}</span>;
+  const { tag, orientation } = useCanvasReading(root, "n1", DOCUMENT);
+  return (
+    <>
+      <span data-testid="tag">{tag ?? "unknown"}</span>
+      <span data-testid="axes">
+        {orientation === undefined
+          ? "unknown"
+          : `${orientation.writingMode}/${orientation.direction}`}
+      </span>
+    </>
+  );
 }
 
 describe("reading the tag from a canvas", () => {
@@ -100,5 +109,67 @@ describe("reading the tag from a canvas", () => {
 
     view.rerender(<Reader root={null} />);
     expect(screen.getByTestId("tag").textContent).toBe("unknown");
+  });
+});
+
+describe("reading the axes from the same element", () => {
+  /**
+   * jsdom's own implementation, captured ONCE at module load — re-reading it
+   * inside the stub would capture the stub itself and recurse.
+   */
+  const REAL = window.getComputedStyle.bind(window);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("answers with the axes once the canvas arrives, in the same pass as the tag", () => {
+    /*
+     * The reason both live in one hook: they are two properties of ONE element,
+     * and asked separately they would be two observers, two walks to find it,
+     * and two answers that can be a render apart.
+     *
+     * jsdom computes neither property, so they are stubbed the way
+     * `spacing-overlay.test` stubs them — which is also why the panel treats an
+     * unreadable orientation as a reason to draw rows instead of a box.
+     */
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<h1 data-nx-node="n1">A title</h1>';
+    const drawn = canvas.firstElementChild as HTMLElement;
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === drawn
+        ? ({
+            writingMode: "vertical-rl",
+            direction: "rtl",
+          } as unknown as CSSStyleDeclaration)
+        : REAL(element, pseudo)) as typeof window.getComputedStyle);
+
+    const view = render(<Reader root={null} />);
+    expect(screen.getByTestId("axes").textContent).toBe("unknown");
+
+    view.rerender(<Reader root={canvas} />);
+
+    expect(screen.getByTestId("axes").textContent).toBe("vertical-rl/rtl");
+    // The tag came from the same read, so the two cannot disagree about which
+    // element they describe.
+    expect(screen.getByTestId("tag").textContent).toBe("h1");
+  });
+
+  it("says the axes are UNKNOWN when the element computes none", () => {
+    /*
+     * jsdom's real behaviour, and a detached element's in a browser. Empty
+     * strings arrive from a call that succeeded, which is what makes them the
+     * shape most likely to be mistaken for "horizontal, left to right".
+     */
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<h1 data-nx-node="n1">A title</h1>';
+
+    render(<Reader root={canvas} />);
+
+    expect(screen.getByTestId("tag").textContent).toBe("h1");
+    expect(screen.getByTestId("axes").textContent).toBe("unknown");
   });
 });

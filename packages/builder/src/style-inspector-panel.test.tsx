@@ -2983,7 +2983,7 @@ describe("a per-side property is drawn as a box", () => {
 
     expect(box?.getAttribute("data-sides")).toBe("logical");
     expect(
-      [...(box?.querySelectorAll("[data-side]") ?? [])].map(field =>
+      Array.from(box?.querySelectorAll("[data-side]") ?? [], field =>
         field.getAttribute("data-side")
       )
     ).toEqual(["blockStart", "inlineStart", "inlineEnd", "blockEnd"]);
