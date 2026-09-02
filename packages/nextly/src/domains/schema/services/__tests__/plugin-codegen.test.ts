@@ -78,7 +78,7 @@ describe("plugin field types in the TypeScript generator", () => {
       ]),
     ]);
 
-    expect(file.code).toContain("score?: Rating<5>;");
+    expect(file.code).toContain("score?: Rating<5> | null;");
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
   });
 
@@ -149,7 +149,7 @@ describe("plugin field types in the TypeScript generator", () => {
 
     // The registry knows a `number`-backed type stores a number, with or
     // without a `tsType`, so degrading it to `unknown` would discard that.
-    expect(file.code).toContain("hits?: number;");
+    expect(file.code).toContain("hits?: number | null;");
   });
 
   it("uses the json storage shape for a json-backed silent type", () => {
@@ -176,7 +176,7 @@ describe("plugin field types in the TypeScript generator", () => {
 
     // An ordinary save relocates unmodelled options, so a callback reading the
     // raw field would silently start emitting the un-narrowed type.
-    expect(file.code).toContain("score?: Rating<7>;");
+    expect(file.code).toContain("score?: Rating<7> | null;");
   });
 
   it("imports nothing for a registered type no field uses", () => {
@@ -590,7 +590,7 @@ describe("plugin field types on user fields", () => {
       [userField({ type: "tally" })]
     );
 
-    expect(file.code).toContain("score?: number;");
+    expect(file.code).toContain("score?: number | null;");
   });
 });
 
@@ -875,7 +875,7 @@ describe("disabled plugins", () => {
 
     // Its callbacks are the plugin's code; a disabled plugin contributes none,
     // so generation falls back to what the type stores.
-    expect(file.code).toContain("score?: number;");
+    expect(file.code).toContain("score?: number | null;");
     expect(file.code).not.toContain("@acme/ratings");
   });
 });

@@ -772,7 +772,26 @@ export class TypeGenerator {
 
     const fieldName = field.name;
     const isRequired = "required" in field && field.required;
+    // A non-required field is a NULLABLE COLUMN, so a read hands back `null`
+    // rather than omitting the key: `field.required !== true` is what decides
+    // nullability in field-column-descriptor.ts, and nothing on the read path
+    // turns that null back into undefined. `?` alone claims only that the key
+    // may be absent, which is a different statement and the one the database
+    // never makes.
+    //
+    // `?` is KEPT alongside `| null` rather than replaced by it. The input
+    // types are derived from this interface (`CreateInput = Omit<...>`), and
+    // these same lines are emitted for field-group interfaces that nest inside
+    // entity fields, so dropping `?` would demand an explicit `null` for every
+    // optional key at every depth on create. A wrapper could relax the top
+    // level, not the nested ones. Prisma and Drizzle drop `?` because their row
+    // types are flat and their inputs are generated separately rather than
+    // derived; the shape here is Payload's, for the same nesting reason.
     const optional = isRequired ? "" : "?";
+    const nullSuffix = (t: string): string =>
+      // `unknown` already admits null, so the union would be noise in a file a
+      // user reads. Every other type needs it stated.
+      isRequired || t === "unknown" ? "" : " | null";
 
     let tsType: string;
 
@@ -881,7 +900,7 @@ export class TypeGenerator {
       }
     }
 
-    return `  ${fieldName}${optional}: ${tsType};`;
+    return `  ${fieldName}${optional}: ${tsType}${nullSuffix(tsType)};`;
   }
 
   // ============================================================
@@ -903,7 +922,26 @@ export class TypeGenerator {
 
     const isCodeSourced = field.source === "code";
     const isRequired = field.required;
+    // A non-required field is a NULLABLE COLUMN, so a read hands back `null`
+    // rather than omitting the key: `field.required !== true` is what decides
+    // nullability in field-column-descriptor.ts, and nothing on the read path
+    // turns that null back into undefined. `?` alone claims only that the key
+    // may be absent, which is a different statement and the one the database
+    // never makes.
+    //
+    // `?` is KEPT alongside `| null` rather than replaced by it. The input
+    // types are derived from this interface (`CreateInput = Omit<...>`), and
+    // these same lines are emitted for field-group interfaces that nest inside
+    // entity fields, so dropping `?` would demand an explicit `null` for every
+    // optional key at every depth on create. A wrapper could relax the top
+    // level, not the nested ones. Prisma and Drizzle drop `?` because their row
+    // types are flat and their inputs are generated separately rather than
+    // derived; the shape here is Payload's, for the same nesting reason.
     const optional = isRequired ? "" : "?";
+    const nullSuffix = (t: string): string =>
+      // `unknown` already admits null, so the union would be noise in a file a
+      // user reads. Every other type needs it stated.
+      isRequired || t === "unknown" ? "" : " | null";
 
     let tsType: string;
 
@@ -973,7 +1011,7 @@ export class TypeGenerator {
       }
     }
 
-    return `  ${field.name}${optional}: ${tsType};`;
+    return `  ${field.name}${optional}: ${tsType}${nullSuffix(tsType)};`;
   }
 
   /**
