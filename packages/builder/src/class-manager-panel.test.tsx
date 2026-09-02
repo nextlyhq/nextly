@@ -1190,6 +1190,46 @@ describe("the panel explains itself", () => {
     expect(screen.queryByText(/none can be made/i)).toBeNull();
   });
 
+  it("closes an armed deletion when the class becomes supplied", () => {
+    /*
+     * `confirming` is local state and survives a prop change. The Delete button
+     * is gated on `canDelete`, but the confirmation it opens was gated only on
+     * the callback — so a class that became supplied mid-confirmation left an
+     * armed, irreversible control behind after the row had stopped offering
+     * one. An author who walked away mid-decision could return and confirm a
+     * removal the panel no longer believes it can perform.
+     */
+    const library = [cls("id-hero", "hero", 0)];
+    const view = render(
+      <ClassManagerPanel
+        library={library}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete hero" }));
+    // The control, resolved to the confirmation itself rather than to any text
+    // that happens to contain "delete": it really IS armed before the change.
+    expect(document.querySelector(".nx-classman__confirm")).not.toBeNull();
+
+    view.rerender(
+      <ClassManagerPanel
+        library={library}
+        usage={undefined}
+        documentClassIds={[]}
+        suppliedClassIds={["id-hero"]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    // The row now says Default, and nothing armed survives beside it.
+    expect(screen.getByText("Default")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Delete hero$/ })).toBeNull();
+    expect(document.querySelector(".nx-classman__confirm")).toBeNull();
+  });
+
   it("keeps the filters, because they answer questions that OVERLAP", () => {
     /*
      * Not converted to groups, and this test is why. `filterClassRows` tests

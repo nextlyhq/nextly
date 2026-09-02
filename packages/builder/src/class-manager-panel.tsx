@@ -787,7 +787,14 @@ function ClassRowView({
           </Button>
         )}
       </div>
-      {confirming && onDelete !== undefined ? (
+      {/*
+       * Gated on the SAME predicate as the button that opens it. `confirming`
+       * is local state and survives a prop change, so a row whose class became
+       * supplied while its confirmation was open kept an armed, irreversible
+       * control after the row itself had stopped offering one — the capability
+       * was withdrawn and the dialog did not hear.
+       */}
+      {confirming && canDelete && onDelete !== undefined ? (
         <DeleteConfirm
           row={row}
           usageKnown={usageKnown}

@@ -309,23 +309,37 @@ describe("adding a token", () => {
      * inert and a second press writes `shadow.2`, also hidden. The tabs could
      * not produce this — they had nothing to narrow with.
      */
-    render(
-      <Panel
-        tokens={{
-          tokens: [
-            { name: "color.ink", kind: "color", values: { light: "#111111" } },
-          ],
-        }}
-        onChange={vi.fn()}
-      />
-    );
+    /*
+     * HELD IN STATE, so the created token actually renders. With a mock
+     * `onChange` this asserted that the PRE-EXISTING row came back — true, and
+     * not the claim. The point is that the row just written is reachable, and
+     * only a host that stores what it is given can show it.
+     */
+    function Host(): React.JSX.Element {
+      const [tokens, setTokens] = React.useState<SiteTokenSet>({
+        tokens: [
+          { name: "color.ink", kind: "color", values: { light: "#111111" } },
+        ],
+      });
+      return <Panel tokens={tokens} onChange={setTokens} />;
+    }
+    render(<Host />);
     const search = screen.getByPlaceholderText(/Search tokens/i);
     fireEvent.change(search, { target: { value: "brand" } });
     expect(screen.queryByDisplayValue("color.ink")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
     expect((search as HTMLInputElement).value).toBe("");
+    // The pre-existing row is back...
     expect(screen.getByDisplayValue("color.ink")).toBeTruthy();
+    // ...and so is the one just created, which is the actual claim.
+    const names = Array.from(
+      document.querySelectorAll<HTMLInputElement>(".nx-tokens__name"),
+      node => node.value
+    );
+    expect(names).toContain("color.ink");
+    expect(names.length).toBe(2);
+    expect(names.some(value => value !== "color.ink")).toBe(true);
   });
 
   it("adds into a site that has no table at all", () => {
