@@ -2709,3 +2709,126 @@ describe("the action a control's breakpoint provenance earns", () => {
     expect(jumped).toEqual(["tablet"]);
   });
 });
+
+/**
+ * The segmented control, exercised as a control rather than as a rendering.
+ *
+ * These four assertions could not be written until a catalog property reached
+ * the toggle: it draws only where the whole keyword vocabulary fits, and until
+ * that admitted three options no supported property produced one. `fontStyle`
+ * does now, so the behaviours below are reachable — and each of them has been
+ * wrong once already, found by reading rather than by any test, because there
+ * was nothing that could render the control to ask.
+ */
+describe("a segmented keyword control behaves as a toggle", () => {
+  /** The buttons of the `fontStyle` toggle, by their option name. */
+  const optionButton = (name: string) =>
+    fieldsOf("fontStyle").getByRole("button", { name });
+
+  /** The styles one `applyAll` call would leave on the node. */
+  const committedStyles = (
+    editor: ReturnType<typeof editorFor>
+  ): NodeStyles | undefined => {
+    const ops = editor.applyAll.mock.calls[0]?.[0] as
+      | readonly { kind: string; patch?: unknown }[]
+      | undefined;
+    const op = ops?.[0];
+    if (op === undefined || op.kind !== "update") return undefined;
+    return (op.patch as { styles?: NodeStyles }).styles;
+  };
+
+  it("shows the stored value as the pressed option, and only that one", () => {
+    /*
+     * `aria-pressed` is the whole state model here — the group is buttons
+     * rather than a radio set precisely because "neither" is reachable — so a
+     * toggle that drew every option unpressed would still render three buttons
+     * with the right names and satisfy any assertion about their presence.
+     */
+    mount({ typography: true }, {
+      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
+    } as NodeStyles);
+
+    expect(optionButton("italic").getAttribute("aria-pressed")).toBe("true");
+    expect(optionButton("normal").getAttribute("aria-pressed")).toBe("false");
+    expect(optionButton("oblique").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("CLEARS when the pressed option is pressed again", () => {
+    /*
+     * The only route to unset that does not spend a button on "neither". A
+     * toggle that re-wrote the value instead would leave an author who wants
+     * the block's inherited style with no way to ask for it from this control.
+     *
+     * BOTH halves are load-bearing, and the second was added after the first
+     * alone failed to catch a toggle that re-wrote the value. Re-writing
+     * `italic` onto a node that already holds `italic` produces NO ops — the
+     * write path treats "the document already says this" as nothing to do — so
+     * `applyAll` is never reached and the styles it would have left read as
+     * absent. Absent is also what a clear leaves behind, so the value assertion
+     * on its own passes for the very implementation it exists to reject.
+     */
+    const editor = mount({ typography: true }, {
+      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
+    } as NodeStyles);
+
+    fireEvent.click(optionButton("italic"));
+
+    expect(editor.applyAll).toHaveBeenCalled();
+    expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
+      undefined
+    );
+  });
+
+  it("writes the option when a DIFFERENT one is pressed", () => {
+    /*
+     * The positive control for the case above. Without it "cleared" and "did
+     * nothing at all" produce the same absent value, and a toggle whose click
+     * handler was removed entirely would pass that assertion.
+     */
+    const editor = mount({ typography: true }, {
+      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
+    } as NodeStyles);
+
+    fireEvent.click(optionButton("oblique"));
+
+    expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
+      "oblique"
+    );
+  });
+
+  it("marks the buttons invalid when the store refuses the edit", () => {
+    /*
+     * A control described by a refusal and not marked invalid announces the
+     * message as a HINT rather than as a failure. `aria-invalid` sits on the
+     * buttons rather than on the group because `role="group"` does not support
+     * the state, so setting it there is an attribute a reader may ignore.
+     */
+    const editor = mount({ typography: true });
+    editor.applyAll.mockReturnValue(null);
+
+    fireEvent.click(optionButton("italic"));
+
+    expect(optionButton("italic").getAttribute("aria-invalid")).toBe("true");
+    const message = screen.getByRole("alert");
+    expect(
+      fieldsOf("fontStyle").getByRole("group").getAttribute("aria-describedby")
+    ).toBe(message.getAttribute("id"));
+  });
+
+  it("does not write anything when the field's LABEL is clicked", () => {
+    /*
+     * The defect this guards is a click that edits the document without the
+     * author touching a control: a `<label>` with `htmlFor` forwards its click
+     * to the named element, so naming a button there would press it — or clear
+     * it, when already pressed. The group's id sits on a `div`, which is not
+     * labelable, so the association is inert by construction.
+     */
+    const editor = mount({ typography: true }, {
+      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
+    } as NodeStyles);
+
+    fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
+
+    expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
