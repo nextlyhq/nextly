@@ -68,7 +68,7 @@ describe("media writes bust their cache tags (integration)", () => {
         data: pdfDocument("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
     });
 
@@ -90,7 +90,7 @@ describe("media writes bust their cache tags (integration)", () => {
         data: pdfDocument("x"),
         name: "gone.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
     });
     expect(uploaded.id).toBeTruthy();
@@ -119,7 +119,7 @@ describe("media writes bust their cache tags (integration)", () => {
         data: pdfDocument("x"),
         name: "resilient.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
     });
 
@@ -144,7 +144,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
       file: pdfDocument("x"),
       filename: "via-action.pdf",
       mimeType: "application/pdf",
-      size: 1,
+      size: pdfDocument("x").length,
       uploadedBy: null,
     });
 
@@ -180,7 +180,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
         data: pdfDocument("x"),
         name: "inside.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
       folder: folder.id,
     });
@@ -200,7 +200,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
         data: pdfDocument("y"),
         name: "also-inside.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("y").length,
       },
       folder: folder.id,
     });
@@ -246,7 +246,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
         data: pdfDocument("x"),
         name: "original.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
       folder: folder.id,
     });
@@ -312,7 +312,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
         data: pdfDocument("x"),
         name: "wanderer.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
     });
     // The control: it starts OUTSIDE the folder, so the move is a real change.
@@ -338,7 +338,7 @@ describe("the write surfaces that do NOT go through the unified service", () => 
         data: pdfDocument("x"),
         name: "ordered.pdf",
         mimetype: "application/pdf",
-        size: 1,
+        size: pdfDocument("x").length,
       },
     });
     expect(uploaded.id).toBeTruthy();
@@ -373,7 +373,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
           data: pdfDocument(`bulk-${i}`),
           name: `bulk-${i}.pdf`,
           mimetype: "application/pdf",
-          size: 1,
+          size: pdfDocument(`bulk-${i}`).length,
         },
       });
       ids.push(file.id);
@@ -478,7 +478,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
         buffer: pdfDocument(`u${i}`),
         filename: `unified-${i}.pdf`,
         mimeType: "application/pdf",
-        size: 1,
+        size: pdfDocument(`u${i}`).length,
       })),
       ctx
     );
@@ -509,7 +509,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
         file: pdfDocument(`l${i}`),
         filename: `legacy-${i}.pdf`,
         mimeType: "application/pdf",
-        size: 1,
+        size: pdfDocument(`l${i}`).length,
         uploadedBy: null,
       }))
     );
@@ -533,7 +533,7 @@ describe("a bulk fan-out pays the shared tag once and stays prompt", () => {
         file: pdfDocument(`d${i}`),
         filename: `doomed-${i}.pdf`,
         mimeType: "application/pdf",
-        size: 1,
+        size: pdfDocument(`d${i}`).length,
         uploadedBy: null,
       }))
     );
