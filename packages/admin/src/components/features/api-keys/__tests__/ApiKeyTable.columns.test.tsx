@@ -51,7 +51,15 @@ beforeEach(() => localStorage.clear());
 describe("ApiKeyTable columns", () => {
   it("omits the header and cells of a column the stored choice hides", () => {
     seedStoredChoice(TOGGLEABLE.filter(name => name !== "id"));
-    render(<ApiKeyTable data={[KEY]} onEdit={vi.fn()} onRevoke={vi.fn()} />);
+    render(
+      <ApiKeyTable
+        data={[KEY]}
+        onEdit={vi.fn()}
+        onRevoke={vi.fn()}
+        canEdit
+        canRevoke
+      />
+    );
     const table = screen.getByRole("table");
     // The Type header is the positive control: a header this query CAN find
     // inside the table, so the ID absence below is the hidden column and not
