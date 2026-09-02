@@ -1,19 +1,32 @@
 /**
- * The kitchen-sink document names real blocks, all of them, arranged legally.
+ * The kitchen-sink document is one the engine would accept, and shows every block.
  *
  * `BlockDocument` checks the shape of a node and not its meaning: `type` is
  * `string` and `props` is `Record<string, unknown>`, so a misspelled block name
  * and a prop no block declares both compile cleanly. They then render a
- * placeholder or nothing, on a page whose whole purpose is to be looked at — the
- * one failure mode a fixture like this cannot afford, because a hole in it reads
- * as a defect in the block library.
+ * placeholder or nothing, on a page whose whole purpose is to be looked at —
+ * where a hole reads as a defect in the block library rather than in the page.
  *
- * These are the checks the type cannot make.
+ * ## Asked of the engine, not restated here
+ *
+ * Unknown types, both halves of the nesting rule, ids, depth and structure all
+ * go to `validateDocument` with the real registry and the real declarations.
+ * That matters beyond saving code: a hand-written slot check using exact
+ * `includes` rejects the two forms the canonical predicate supports — an empty
+ * allow-list, which means unrestricted, and a namespace entry like `core/*` —
+ * so it would fail a placement the renderer and the validator both accept.
+ *
+ * ## What the engine does not answer
+ *
+ * `invalid-props` reports only that `props` is not an object; nothing compares a
+ * prop NAME against the block that declares it. So `src` written as `scr` passes
+ * validation and renders nothing, and that check lives here.
  */
 import { describe, expect, it } from "vitest";
 
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import type { BlockNode } from "@nextlyhq/blocks-engine";
+import type { BlockNode, NestingSource } from "@nextlyhq/blocks-engine";
+import { validateDocument } from "@nextlyhq/blocks-engine";
 
 import {
   KITCHEN_SINK_DOCUMENT,
@@ -24,21 +37,39 @@ interface Definition {
   name: string;
   version: number;
   parent?: readonly string[];
+  props?: Record<string, unknown>;
   slots?: Record<string, { allow?: readonly string[] } | undefined>;
 }
 
 const DEFINITIONS = coreBlocks as unknown as Definition[];
 const BY_NAME = new Map(DEFINITIONS.map(block => [block.name, block]));
 
-/** Every node in the document, with the node that holds it. */
-function walk(
-  nodes: readonly BlockNode[],
-  parent: BlockNode | undefined = undefined
-): { node: BlockNode; parent: BlockNode | undefined }[] {
+/**
+ * The declarations the engine's predicates read, supplied rather than restated.
+ *
+ * This is the same shape `tree.ts` builds internally for seed expansion, so a
+ * placement here is judged by exactly the rule that judges an author's drag.
+ * The RULE stays in the engine; only the lookup lives here, because the engine
+ * keeps its own builder private.
+ */
+const NESTING: NestingSource = {
+  parentsOf: type => BY_NAME.get(type)?.parent,
+  slotAllowOf: (parentType, slot) =>
+    (BY_NAME.get(parentType)?.slots?.[slot] as { allow?: readonly string[] })
+      ?.allow,
+};
+
+const BREAKPOINTS = {
+  viewport: [{ id: "base", label: "Base" }],
+  container: [],
+};
+
+/** Every node in the document, flattened. */
+function walk(nodes: readonly BlockNode[]): BlockNode[] {
   return nodes.flatMap(node => [
-    { node, parent },
+    node,
     ...Object.values(node.slots ?? {}).flatMap(children =>
-      walk((children ?? []) as BlockNode[], node)
+      walk((children ?? []) as BlockNode[])
     ),
   ]);
 }
@@ -56,30 +87,62 @@ describe("the kitchen-sink document", () => {
     expect(DEFINITIONS.length).toBeGreaterThan(15);
   });
 
-  it("names only blocks the library defines", () => {
+  it("is a document the ENGINE accepts, in strict mode", () => {
     /*
-     * The check `BlockDocument` cannot make. A misspelled type is a string like
-     * any other, and the renderer answers it with a placeholder rather than an
-     * error.
+     * Unknown types, nesting from both sides, duplicate ids, depth and
+     * structure, all from the implementation that judges a real document —
+     * rather than a second set of rules maintained here that would agree today
+     * and drift.
      */
-    const unknown = NODES.map(({ node }) => node.type).filter(
-      type => !BY_NAME.has(type)
+    const result = validateDocument(KITCHEN_SINK_DOCUMENT, {
+      mode: "strict",
+      breakpoints: BREAKPOINTS,
+      registry: { has: type => BY_NAME.has(type) },
+      nesting: NESTING,
+    });
+    const errors = result.issues
+      .filter(issue => issue.severity === "error")
+      .map(issue => `${issue.path}: ${issue.code} — ${issue.message}`);
+
+    expect(errors).toEqual([]);
+  });
+
+  it("REPORTS a document the engine would refuse", () => {
+    /*
+     * The positive control for the case above, which passes by finding nothing
+     * and would go on passing if the registry, the nesting source or the mode
+     * stopped reaching the validator.
+     *
+     * A column at the page root violates the child half of the nesting rule:
+     * `core/column` names `core/columns` as its only parent.
+     */
+    const result = validateDocument(
+      {
+        formatVersion: 1,
+        kind: "page",
+        nodes: [{ id: "loose", type: "core/column", version: 1, props: {} }],
+      },
+      {
+        mode: "strict",
+        breakpoints: BREAKPOINTS,
+        registry: { has: type => BY_NAME.has(type) },
+        nesting: NESTING,
+      }
     );
 
     expect(
-      [...new Set(unknown)],
-      `the document names blocks the library does not define, which render as ` +
-        `placeholders`
-    ).toEqual([]);
+      result.issues.filter(issue => issue.severity === "error")
+    ).not.toEqual([]);
   });
 
   it("carries every block the library defines", () => {
     /*
-     * The completeness half, and the reason this file exists rather than a note
-     * asking someone to remember. A block added to `coreBlocks` is missing from
-     * the page until it is added here, and nothing else would say so.
+     * The completeness half, and the one the engine cannot answer: a document
+     * showing three blocks is perfectly valid, and this page is only useful if
+     * it shows all of them. A block added to `coreBlocks` is missing from the
+     * page until it is added here, and nothing else would say so.
      */
-    const present = new Set(NODES.map(({ node }) => node.type));
+    const present = new Set(NODES.map(node => node.type));
     const missing = DEFINITIONS.map(block => block.name).filter(
       name => !present.has(name)
     );
@@ -91,71 +154,47 @@ describe("the kitchen-sink document", () => {
     ).toEqual([]);
   });
 
+  it("writes only props the block declares", () => {
+    /*
+     * The other question the engine leaves open. `invalid-props` reports that
+     * `props` is not an object and never compares a NAME against the block, so
+     * `src` written as `scr` validates cleanly and renders nothing.
+     *
+     * Names only, deliberately: the declared `type` of a prop — `url`, `select`,
+     * `array` — is a grammar the engine owns, and re-deciding here what
+     * satisfies each would be the second implementation this file avoids
+     * elsewhere. A misspelling is what silently empties a node, and it is a
+     * name.
+     */
+    const undeclared = NODES.flatMap(node => {
+      const declared = BY_NAME.get(node.type)?.props;
+      if (declared === undefined) return [];
+      return Object.keys(node.props).filter(
+        prop => !Object.hasOwn(declared, prop)
+      );
+    });
+
+    expect(
+      [...new Set(undeclared)],
+      `the page writes props no block declares, which are dropped on read`
+    ).toEqual([]);
+  });
+
   it("stamps each node with the version its block declares", () => {
     // A node written against a version the block does not have is migrated on
     // read, silently changing what this page renders.
     const wrong = NODES.filter(
-      ({ node }) => BY_NAME.get(node.type)?.version !== node.version
-    ).map(({ node }) => `${node.type}#${node.id}`);
+      node => BY_NAME.get(node.type)?.version !== node.version
+    ).map(node => `${node.type}#${node.id}`);
 
     expect(wrong).toEqual([]);
-  });
-
-  it("gives every node an id of its own", () => {
-    // The engine refuses a document with a repeated id, so a duplicate here
-    // fails at seed time rather than on the page.
-    const ids = NODES.map(({ node }) => node.id);
-    const seen = new Set<string>();
-    const repeated = ids.filter(id =>
-      seen.has(id) ? true : (seen.add(id), false)
-    );
-
-    expect(repeated).toEqual([]);
-  });
-
-  it("respects the nesting rule from BOTH sides", () => {
-    /*
-     * Two halves, and the engine states them separately because neither implies
-     * the other: a block may name the parents it is allowed in, and a slot may
-     * name the children it admits.
-     */
-    const misplaced = NODES.flatMap(({ node, parent }) => {
-      const definition = BY_NAME.get(node.type);
-      if (definition === undefined) return [];
-      const problems: string[] = [];
-
-      // The CHILD half: `core/column` outside `core/columns` is a node the
-      // editor refuses and the renderer has no arrangement for.
-      const parents = definition.parent;
-      if (parents !== undefined && parents.length > 0) {
-        if (parent === undefined || !parents.includes(parent.type)) {
-          problems.push(
-            `${node.type} must sit inside ${parents.join(" or ")}, not ${parent?.type ?? "the page root"}`
-          );
-        }
-      }
-
-      // The PARENT half: a gallery admits images only, and a block it refuses
-      // renders outside the arrangement the slot exists to create.
-      const allow = parent && BY_NAME.get(parent.type)?.slots?.children?.allow;
-      if (allow !== undefined && !allow.includes(node.type)) {
-        problems.push(
-          `${parent?.type ?? "?"} admits ${allow.join(" or ")}, not ${node.type}`
-        );
-      }
-      return problems;
-    });
-
-    expect(misplaced).toEqual([]);
   });
 
   it("titles the page once", () => {
     // The route derives metadata from the first heading in preference to the
     // stored title, so two spellings disagree across the admin, the browser tab
     // and the document with nothing reporting it.
-    const firstHeading = NODES.map(({ node }) => node).find(
-      node => node.type === "core/heading"
-    );
+    const firstHeading = NODES.find(node => node.type === "core/heading");
 
     expect(firstHeading?.props.text).toBe(KITCHEN_SINK_TITLE);
   });

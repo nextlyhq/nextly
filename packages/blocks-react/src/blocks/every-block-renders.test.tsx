@@ -6,8 +6,8 @@
  * `base-styles.test.tsx` walks every block's DECLARATIONS and asserts what
  * reaches the compiled stylesheet. Nothing walked every block's MARKUP. A block
  * whose renderer returned nothing, or threw on the props its own palette entry
- * shows, would put a hole in a page and no suite would say so — which is why the
- * U-5 sweep was a manual browser pass over twenty blocks.
+ * shows, would put a hole in a page and no suite would say so — the whole
+ * library had to be opened in a browser to find out.
  *
  * `primitives.test.tsx` renders nine of them individually and asserts exact
  * markup, which is the stronger claim where it is made. This is the WEAKER claim
@@ -38,10 +38,11 @@
  *
  * ## What it does NOT claim
  *
- * That a block looks right. Every U-5 defect rendered perfectly and looked
- * broken, and jsdom cannot see a border or a gap. This asserts the thing no
- * suite asserted at all: that the block produces its own element. The looking is
- * what the playground's `seed/kitchen-sink.ts` page is for.
+ * That a block looks right. A block can render perfectly and still look broken
+ * — a grid whose gutter is zero, a control whose border has no width — and jsdom
+ * sees none of that. This asserts the weaker thing nothing asserted at all: that
+ * the block produces its own element. The looking is what the playground's
+ * `seed/kitchen-sink.ts` page is for.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
