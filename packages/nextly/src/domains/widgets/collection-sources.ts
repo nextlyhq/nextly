@@ -53,7 +53,11 @@ interface RegisteredCollection {
    * is checked at the point of use rather than assumed from the record type.
    */
   admin?: unknown;
-  /** How far this collection's table has got. See {@link tableIsUsable}. */
+  /**
+   * How far this collection's table has got, as a LABEL rather than as the
+   * answer. See {@link statusClaimsPresent} for what it may be believed about,
+   * and {@link usableCollections} for the question that actually decides.
+   */
   migrationStatus?: unknown;
   /**
    * The singular/plural display names. Read defensively for the same reason as
