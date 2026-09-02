@@ -8,9 +8,12 @@
  * identity the template gives each column, so those are what is asserted.
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { PageRenderer } from "../page-renderer";
 import type { BlockResolver } from "../resolver";
+import { createBlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
 
 import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
@@ -71,24 +74,26 @@ describe("the columns pair", () => {
     // to nothing while the object assertion stays green — which is exactly
     // how an unsupported `flex` shipped here and had to be withdrawn. These
     // assert the emitted CSS.
-    function compiledCss(): string {
-      const doc: BlockDocument = {
-        formatVersion: 1,
-        kind: "page",
-        nodes: [
-          {
-            id: "row",
-            type: COLUMNS_BLOCK,
-            version: 1,
-            props: {},
-            slots: {
-              children: [
-                { id: "c1", type: COLUMN_BLOCK, version: 1, props: {} },
-              ],
-            },
+    // ONE document for both the compile-tier and the whole-page assertions, so
+    // the two cannot drift into describing different trees.
+    const DOC: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: COLUMNS_BLOCK,
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "c1", type: COLUMN_BLOCK, version: 1, props: {} }],
           },
-        ],
-      };
+        },
+      ],
+    };
+
+    function compiledCss(): string {
+      const doc = DOC;
       const resolver: BlockResolver = {
         get: (name: string) =>
           coreBlocks.find(block => block.name === name) as never,
@@ -123,6 +128,70 @@ describe("the columns pair", () => {
       // `display:grid` passes on a grid with one implicit column, which looks
       // identical to the stacked <div>s this block exists to replace.
       expect(css).toContain("minmax(min(240px, 100%), 1fr)");
+    });
+
+    it("emits a GAP, so the columns do not touch", () => {
+      /*
+       * `gap` on a grid defaults to `normal`, which computes to zero — so the
+       * one block whose whole purpose is side-by-side content rendered its
+       * columns flush against each other. Measured on a published page before
+       * this: three tracks of 427px with nothing between them.
+       *
+       * Asserted on the compiled CSS rather than on the declaration, because a
+       * declaration the catalog does not carry is dropped silently and would
+       * leave a property that reads correct in the source and never reaches a
+       * page.
+       */
+      const css = compiledCss();
+
+      expect(css).toContain("gap: 1rem");
+      // Must-differ: the row is still a grid, so this is about the gutter and
+      // not about the layout having been replaced by something simpler.
+      expect(css).toContain("display: grid");
+    });
+
+    it("keeps the gutter on a STORED stylesheet handed back with no context", () => {
+      /*
+       * The path a token reference does not survive, and the reason this gutter
+       * is a length.
+       *
+       * A consumer with no write path compiles once and stores the artifact,
+       * then hands it back as `styles`. `PageRenderer` withholds the site sheet
+       * when no breakpoints are stated, so nothing defines `--site-*` — while
+       * the stored page CSS still carries whatever it referenced. A `{ $token }`
+       * gutter therefore arrives as a `var()` with nothing behind it, which is
+       * invalid at computed-value time, and `gap` falls back to `normal`: zero
+       * for a grid, which is the exact defect this block was fixed for.
+       *
+       * Measured, not assumed: `core/card` is live in that state today, its
+       * `background-color: var(--site-color-surface)` reaching this path with
+       * the property undefined.
+       *
+       * So this asserts the gutter as a VALUE on the rendered page. It fails the
+       * moment the gutter becomes a token again, which is the point — the
+       * migration is waiting on the definition reaching every path a reference
+       * does, and this is what says so.
+       */
+      const resolver = createBlockResolver([...coreBlocks]);
+      const stored = resolvePageStyles(
+        DOC,
+        undefined,
+        {
+          breakpoints: {
+            viewport: [{ id: "base", label: "Desktop" }],
+            container: [],
+          },
+        },
+        resolver
+      );
+      const markup = renderToStaticMarkup(
+        <PageRenderer document={DOC} blocks={resolver} styles={stored} />
+      );
+
+      expect(markup).toContain("gap: 1rem");
+      // Must-differ: no unresolved custom property is carrying the gutter, which
+      // is the failure this case exists to refuse rather than merely to describe.
+      expect(markup).not.toMatch(/gap:\s*var\(/);
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {
