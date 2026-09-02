@@ -374,9 +374,15 @@ function specimenWeight(weight: string | undefined): string | undefined {
  *
  * A range is ORDERED, which per-part checking cannot see. `900 100` is two
  * individually valid weights and not a range: the descriptor requires the
- * lower endpoint first, so a browser drops the whole thing and matches the
- * face at a weight nobody chose — the same silent outcome as `70O`, reached
- * from the other direction.
+ * lower endpoint first.
+ *
+ * Refused rather than passed on, and the reason is NOT that a browser rejects
+ * it. Measured: Chrome PARSES `font-weight: 900 100` and keeps it verbatim, so
+ * the face is stored carrying a range no specification defines a meaning for,
+ * and what it then matches is up to the engine. An author gets a face that
+ * behaves differently in different browsers with nothing reporting why, which
+ * is a worse outcome than the refusal — and the one form of it this panel can
+ * see before it is stored.
  */
 function isUsableWeight(weight: string): boolean {
   const parts = weight.trim().split(/\s+/);
@@ -409,6 +415,12 @@ function weightValue(part: string): number | undefined {
  * A CSS `<number>`: an optional sign, digits with an optional fraction, and an
  * optional exponent.
  *
+ * A decimal point must be FOLLOWED BY A DIGIT. The tokenizer consumes `.` only
+ * when a digit comes next, so `400.` ends the number at `400` and leaves the
+ * point as a separate token — which the descriptor grammar does not admit.
+ * Measured in a browser: `font-weight: 400.` inside `@font-face` is dropped,
+ * while `400.0` and `400.5` are kept.
+ *
  * `Number` was doing this job and reads a LARGER language than CSS does, which
  * fails in the silent direction: `0x190` converts to 400 and passes any bound
  * checked afterwards, while the string stored in the descriptor is still
@@ -422,7 +434,7 @@ function weightValue(part: string): number | undefined {
  * `+400` are all valid `<number>` tokens and all reach here through the free
  * text field.
  */
-const CSS_NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+const CSS_NUMBER = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/;
 
 /**
  * A key that separates the faces a family is really split into.

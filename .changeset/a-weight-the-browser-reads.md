@@ -31,7 +31,9 @@ A font weight is checked as CSS reads it rather than as JavaScript converts it.
 bound applied afterwards, while the string kept in the descriptor is still
 `0x190` — which CSS cannot parse, so the browser drops the declaration and
 matches the face at a weight nobody chose. The exponent and fraction forms CSS
-does accept, such as `1e3` and `.5e3`, still work.
+does accept, such as `1e3`, `.5e3` and `400.0`, still work. A decimal point
+with no digit after it is refused too: the tokenizer takes `400.` as `400`
+followed by a stray point, and the descriptor is dropped.
 
 Choosing the same font file twice in a row works. A file input is uncontrolled,
 so clearing the panel's own state left the element still holding the previous

@@ -568,8 +568,12 @@ describe("adding a font file", () => {
      * The control. A check written as a list of JavaScript's extras, or one
      * demanding plain digits, refuses `1e3` and `.5e3` — both valid `<number>`
      * tokens that reach this field, and both of which a browser reads.
+     *
+     * Each spelling here was measured against a real `@font-face` parser
+     * rather than read off the grammar: `1e3` → 1000, `.5e3` → 500,
+     * `400.0` → 400, `+400` → 400, all kept.
      */
-    for (const spelling of ["1e3", ".5e3", "400.", "+400"]) {
+    for (const spelling of ["1e3", ".5e3", "400.0", "+400"]) {
       cleanup();
       const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
       render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
@@ -584,6 +588,32 @@ describe("adding a font file", () => {
 
       expect(onAddFace, `${spelling} is a CSS number`).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it("REFUSES a decimal point with no digit after it", async () => {
+    /*
+     * Its own case rather than another radix spelling, because it fails at a
+     * different point: `0x190` is a number JavaScript reads and CSS does not,
+     * while `400.` is one BOTH read — as `400` followed by a stray `.`, since
+     * the tokenizer consumes a point only when a digit comes next. The stored
+     * descriptor is still `400.`, and the whole thing is dropped.
+     *
+     * Measured in a browser: `font-weight: 400.` in `@font-face` is dropped,
+     * `400.0` is kept as `400`. Not reasoned from the grammar — an earlier
+     * version of this suite required `400.` to be ACCEPTED.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "400." },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).not.toHaveBeenCalled();
   });
 
   it("clears the PICKER on success, so the same file can be chosen again", async () => {
