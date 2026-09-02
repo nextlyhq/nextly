@@ -330,8 +330,9 @@ export function ClassManagerPanel({
        * split someone chose.
        */}
       <p className="nx-classman__lede">
-        <b>A class is a saved set of styles you can reuse.</b> Rename and clear
-        them out here; you apply one beside the style controls.
+        <b>A class is a saved set of styles you can reuse.</b>{" "}
+        {onDelete === undefined ? "Rename them" : "Rename and clear them out"}{" "}
+        here; you apply one beside the style controls.
       </p>
       <FilterChips active={active} filters={offerable} onChange={setFilter} />
       <ClassSearch query={query} onChange={setQuery} />
@@ -406,6 +407,89 @@ function FilterChips({
       ))}
     </div>
   );
+}
+
+/**
+ * Why the list is empty, in the terms of whatever actually emptied it.
+ *
+ * Extracted from `ClassList` because four narrowings with four different
+ * honest answers is its own question, and inlining them pushed that component
+ * past the cognitive-complexity gate. Mirrors `EmptyTokens` in tokens-panel.
+ */
+function EmptyClasses({
+  searching,
+  filter,
+  canDelete,
+}: {
+  searching: boolean;
+  filter: ClassFilter;
+  /**
+   * Whether the host wired a delete callback. The production `BlocksField`
+   * mount does not, so a row shows no delete control there and copy offering
+   * to clear classes out would name an action this panel cannot perform.
+   */
+  canDelete: boolean;
+}): React.JSX.Element {
+  /*
+   * Which narrowing produced the empty list. Blaming the search when the box
+   * is blank sends an author to clear something that is not set, and hides
+   * the filter that actually did it.
+   */
+  if (searching) {
+    return <p className="nx-inspector__note">No classes match this search.</p>;
+  }
+  /*
+   * An empty "not in index" is the one absence here that is a RESULT rather
+   * than a lack: nothing is known to be stranded. Wording it like the others
+   * reports the outcome an author was hoping for as a failure to find
+   * anything.
+   *
+   * The sentence still refuses to claim more than the index can support. It
+   * says what is not KNOWN, never what is not USED — the same care the
+   * filter's own name takes, and for the same reason: the index errs in both
+   * directions, so an empty list is a floor rather than a measurement.
+   */
+  if (filter === "not-in-index") {
+    return (
+      <div className="nx-classman__empty">
+        <p className="nx-classman__empty-head">
+          Nothing here &mdash; and that is good news.
+        </p>
+        <p className="nx-inspector__note">
+          Every class has an index entry, so none is listed as stranded. That is
+          the whole claim: the index errs in BOTH directions — it can miss a
+          class that is still applied, and it keeps rows a failed removal left
+          behind — so an empty list here is evidence about the index rather than
+          a measurement of what is used.
+        </p>
+      </div>
+    );
+  }
+  /*
+   * An empty library is not a filter miss. With `all` active nothing is
+   * narrowing anything, so blaming "this filter" points an author at a
+   * control that is not doing what the sentence says it did — and stops at
+   * the absence, which is the dead end this panel was reported for.
+   *
+   * It teaches instead, and names where the next step happens. Classes are
+   * not created here (applying belongs beside the style controls, auditing
+   * belongs on a reading surface), so the action this state can honestly
+   * offer is where to go, not a button.
+   */
+  if (filter === "all") {
+    return (
+      <div className="nx-classman__empty">
+        <p className="nx-classman__empty-head">No classes yet.</p>
+        <p className="nx-inspector__note">
+          A class saves a set of styles under a name so other blocks can wear
+          the same one. You make the first beside the style controls, and it
+          appears here to rename
+          {canDelete ? " or clear out" : ""}.
+        </p>
+      </div>
+    );
+  }
+  return <p className="nx-inspector__note">No classes match this filter.</p>;
 }
 
 /**
@@ -487,65 +571,13 @@ function ClassList({
   const [pagesOpen, setPagesOpen] = React.useState(1);
   const limit = pagesOpen * page;
   if (rows.length === 0) {
-    /*
-     * Which narrowing produced the empty list. Blaming the search when the box
-     * is blank sends an author to clear something that is not set, and hides
-     * the filter that actually did it.
-     */
-    if (searching) {
-      return (
-        <p className="nx-inspector__note">No classes match this search.</p>
-      );
-    }
-    /*
-     * An empty "not in index" is the one absence here that is a RESULT rather
-     * than a lack: nothing is known to be stranded. Wording it like the others
-     * reports the outcome an author was hoping for as a failure to find
-     * anything.
-     *
-     * The sentence still refuses to claim more than the index can support. It
-     * says what is not KNOWN, never what is not USED — the same care the
-     * filter's own name takes, and for the same reason: the index errs in both
-     * directions, so an empty list is a floor rather than a measurement.
-     */
-    if (filter === "not-in-index") {
-      return (
-        <div className="nx-classman__empty">
-          <p className="nx-classman__empty-head">
-            Nothing here &mdash; and that is good news.
-          </p>
-          <p className="nx-inspector__note">
-            No class is known to be unused, so none is waiting to be cleared
-            out. It is a floor, not a measurement: the index can miss a class
-            that is still applied.
-          </p>
-        </div>
-      );
-    }
-    /*
-     * An empty library is not a filter miss. With `all` active nothing is
-     * narrowing anything, so blaming "this filter" points an author at a
-     * control that is not doing what the sentence says it did — and stops at
-     * the absence, which is the dead end this panel was reported for.
-     *
-     * It teaches instead, and names where the next step happens. Classes are
-     * not created here (applying belongs beside the style controls, auditing
-     * belongs on a reading surface), so the action this state can honestly
-     * offer is where to go, not a button.
-     */
-    if (filter === "all") {
-      return (
-        <div className="nx-classman__empty">
-          <p className="nx-classman__empty-head">No classes yet.</p>
-          <p className="nx-inspector__note">
-            A class saves a set of styles under a name so other blocks can wear
-            the same one. You make the first beside the style controls, and it
-            appears here to rename or clear out.
-          </p>
-        </div>
-      );
-    }
-    return <p className="nx-inspector__note">No classes match this filter.</p>;
+    return (
+      <EmptyClasses
+        searching={searching}
+        filter={filter}
+        canDelete={onDelete !== undefined}
+      />
+    );
   }
   const shown = rows.slice(0, limit);
   const hidden = rows.length - shown.length;

@@ -214,7 +214,7 @@ export function TokensPanel({
       )}
       <TokenSearch value={query} onValue={setQuery} />
       {groups.length === 0 ? (
-        <EmptyTokens searching={query !== ""} />
+        <EmptyTokens searching={needle !== ""} />
       ) : (
         groups.map(group => (
           <section key={group.kind} className="nx-tokens__group">
@@ -240,7 +240,11 @@ export function TokensPanel({
           </section>
         ))
       )}
-      <AddToken tokens={tokens} onChange={onChange} />
+      <AddToken
+        tokens={tokens}
+        onChange={onChange}
+        onAdded={() => setQuery("")}
+      />
       {/*
        * The transfer control, BELOW the tokens rather than above them.
        *
@@ -773,9 +777,19 @@ function TokenList({
 function AddToken({
   tokens,
   onChange,
+  onAdded,
 }: {
   tokens: SiteTokenSet;
   onChange: (tokens: SiteTokenSet) => void;
+  /**
+   * Clears whatever is narrowing the list, because the row just created has to
+   * be reachable. A new token is named after its kind (`shadow.1`), so any
+   * search that does not happen to match that name hides it the instant it is
+   * written — the control looks inert, and pressing it again writes
+   * `shadow.2`, `shadow.3`, each one also hidden. The tabs could not produce
+   * this: they had nothing to narrow with.
+   */
+  onAdded: () => void;
 }): React.JSX.Element {
   const [kind, setKind] = React.useState<TokenKind>("color");
   const id = React.useId();
@@ -800,7 +814,10 @@ function AddToken({
         type="button"
         variant="outline"
         size="sm"
-        onClick={() => onChange(addToken(tokens, kind).tokens)}
+        onClick={() => {
+          onChange(addToken(tokens, kind).tokens);
+          onAdded();
+        }}
       >
         Add {TOKEN_KIND_LABELS[kind].toLowerCase()} token
       </Button>

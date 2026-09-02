@@ -93,8 +93,6 @@ describe("what each tab shows", () => {
       expect(label).not.toBe("");
     }
   });
-
-  it("counts each kind for the tab", () => {});
 });
 
 describe("renaming a token keeps every reference resolving", () => {

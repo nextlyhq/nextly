@@ -280,6 +280,54 @@ describe("adding a token", () => {
     expect(next.tokens.at(-1)?.kind).toBe("color");
   });
 
+  it("shows the TEACHING empty state for a search that is only whitespace", () => {
+    /*
+     * `needle` is `query.trim().toLowerCase()`, so a query of spaces narrows
+     * nothing. Reading the raw query to decide the message made the two
+     * disagree: the list was unfiltered while the copy blamed a search, which
+     * suppressed the teaching state on an empty library.
+     */
+    render(<Panel tokens={{ tokens: [] }} onChange={vi.fn()} />);
+    fireEvent.change(screen.getByPlaceholderText(/Search tokens/i), {
+      target: { value: "   " },
+    });
+    expect(screen.getByText("No tokens yet.")).toBeTruthy();
+    expect(screen.queryByText(/No tokens match this search/i)).toBeNull();
+
+    // Must-differ: a query that really does narrow still blames the search.
+    fireEvent.change(screen.getByPlaceholderText(/Search tokens/i), {
+      target: { value: "zzzz" },
+    });
+    expect(screen.getByText(/No tokens match this search/i)).toBeTruthy();
+    expect(screen.queryByText("No tokens yet.")).toBeNull();
+  });
+
+  it("clears a search that would HIDE the token just created", () => {
+    /*
+     * A new token is named after its kind, so any search not matching that
+     * name hides the row the moment it is written. The control then looks
+     * inert and a second press writes `shadow.2`, also hidden. The tabs could
+     * not produce this — they had nothing to narrow with.
+     */
+    render(
+      <Panel
+        tokens={{
+          tokens: [
+            { name: "color.ink", kind: "color", values: { light: "#111111" } },
+          ],
+        }}
+        onChange={vi.fn()}
+      />
+    );
+    const search = screen.getByPlaceholderText(/Search tokens/i);
+    fireEvent.change(search, { target: { value: "brand" } });
+    expect(screen.queryByDisplayValue("color.ink")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+    expect((search as HTMLInputElement).value).toBe("");
+    expect(screen.getByDisplayValue("color.ink")).toBeTruthy();
+  });
+
   it("adds into a site that has no table at all", () => {
     const onChange = vi.fn();
     render(<Panel tokens={{ tokens: [] }} onChange={onChange} />);

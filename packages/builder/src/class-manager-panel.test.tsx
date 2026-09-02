@@ -1024,7 +1024,15 @@ describe("the panel explains itself", () => {
     draw({ library: [], usage: {}, documentClassIds: [] });
     fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
     expect(screen.getByText(/nothing here/i)).toBeTruthy();
-    expect(screen.getByText(/floor, not a measurement/i)).toBeTruthy();
+    /*
+     * BOTH error directions, because the index errs both ways: it can miss a
+     * class that is still applied, AND it keeps rows a failed removal left
+     * behind. Naming only the first let the copy claim nothing was waiting to
+     * be cleared, which a stale positive row can make false.
+     */
+    expect(screen.getByText(/errs in BOTH directions/i)).toBeTruthy();
+    expect(screen.getByText(/failed\s+removal left behind/i)).toBeTruthy();
+    expect(screen.queryByText(/none is waiting to be cleared/i)).toBeNull();
   });
 
   it("teaches when the library is EMPTY, rather than blaming a filter", () => {
@@ -1048,6 +1056,40 @@ describe("the panel explains itself", () => {
     fireEvent.click(screen.getByRole("button", { name: "On this page" }));
     expect(screen.getByText("No classes match this filter.")).toBeTruthy();
     expect(screen.queryByText("No classes yet.")).toBeNull();
+  });
+
+  it("does not promise deletion when the host wired no onDelete", () => {
+    /*
+     * The production `BlocksField` mount passes no `onDelete` — its own
+     * comment says so — and the rows then render no delete control. Telling
+     * that author to "clear them out here" points at something the panel
+     * cannot do, which is the exact complaint this work was filed against.
+     *
+     * Both halves are asserted: with the callback the promise must come back,
+     * or this test would also pass on copy that had simply lost the word.
+     */
+    const view = render(
+      <ClassManagerPanel
+        library={[]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/clear them out here/i)).toBeNull();
+    expect(screen.queryByText(/or clear out/i)).toBeNull();
+    expect(screen.getByText(/Rename them\s+here/i)).toBeTruthy();
+
+    view.rerender(
+      <ClassManagerPanel
+        library={[]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/clear them out\s+here/i)).toBeTruthy();
   });
 
   it("keeps the filters, because they answer questions that OVERLAP", () => {
