@@ -8,14 +8,19 @@ import {
 import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
-import { fieldProducesColumn, getColumnDescriptor } from "../field-column-descriptor";
+import {
+  fieldProducesColumn,
+  getColumnDescriptor,
+} from "../field-column-descriptor";
 
 describe("Field Group Dual Vocabulary — type recognition & guards", () => {
   it("recognizes all standard field-group type tokens", () => {
     expect(isFieldGroupType("component")).toBe(true);
     expect(isFieldGroupType("fieldGroup")).toBe(true);
-    expect(isFieldGroupType("field-group")).toBe(true);
     expect(isFieldGroupType("text")).toBe(false);
+    // No release ever wrote the kebab spelling, so accepting it would widen
+    // the vocabulary beyond what storage declares.
+    expect(isFieldGroupType("field-group")).toBe(false);
     expect(isFieldGroupType(null)).toBe(false);
     expect(isFieldGroupType(undefined)).toBe(false);
   });
@@ -23,7 +28,7 @@ describe("Field Group Dual Vocabulary — type recognition & guards", () => {
   it("isFieldGroupField guard narrows both component and fieldGroup definitions", () => {
     expect(isFieldGroupField({ type: "component" })).toBe(true);
     expect(isFieldGroupField({ type: "fieldGroup" })).toBe(true);
-    expect(isFieldGroupField({ type: "field-group" })).toBe(true);
+    expect(isFieldGroupField({ type: "field-group" })).toBe(false);
     expect(isFieldGroupField({ type: "text" })).toBe(false);
   });
 
@@ -36,11 +41,15 @@ describe("Field Group Dual Vocabulary — type recognition & guards", () => {
       single: "seo",
       many: undefined,
     });
-    expect(extractFieldGroupReferences({ components: ["hero", "cta"] })).toEqual({
+    expect(
+      extractFieldGroupReferences({ components: ["hero", "cta"] })
+    ).toEqual({
       single: undefined,
       many: ["hero", "cta"],
     });
-    expect(extractFieldGroupReferences({ fieldGroups: ["hero", "cta"] })).toEqual({
+    expect(
+      extractFieldGroupReferences({ fieldGroups: ["hero", "cta"] })
+    ).toEqual({
       single: undefined,
       many: ["hero", "cta"],
     });

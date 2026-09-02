@@ -25,17 +25,16 @@
  * @module shared/lib/field-defaults
  */
 
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import { fieldGroupFieldTypes } from "../../domains/field-groups/storage/field-group-field-type";
 
 import type { ValidatableField } from "./entry-validation";
 
 /**
  * A field whose value is stored somewhere other than its own column, so a
- * default written here would target a column that does not exist.
+ * default written here would target a column that does not exist. Field groups
+ * qualify in either spelling their stored definition may use.
  */
-const NON_COLUMN_TYPES: ReadonlySet<string> = new Set([
-  STORAGE_FORMAT.fieldType,
-]);
+const NON_COLUMN_TYPES: ReadonlySet<string> = new Set(fieldGroupFieldTypes);
 
 /**
  * Fill in declared defaults for fields the caller did not supply.

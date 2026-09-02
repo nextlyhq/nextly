@@ -4,6 +4,7 @@
 "@nextlyhq/admin": patch
 "@nextlyhq/admin-css": patch
 "@nextlyhq/blocks-engine": patch
+"@nextlyhq/blocks-react": patch
 "@nextlyhq/ui": patch
 "@nextlyhq/adapter-drizzle": patch
 "@nextlyhq/adapter-postgres": patch
@@ -17,9 +18,12 @@
 "@nextlyhq/plugin-seo": patch
 "@nextlyhq/plugin-sdk": patch
 "@nextlyhq/eslint-config": patch
+"@nextlyhq/eslint-plugin": patch
 "@nextlyhq/prettier-config": patch
 "@nextlyhq/telemetry": patch
 "@nextlyhq/tsconfig": patch
+"@nextlyhq/builder": patch
+"@nextlyhq/module-specifiers": patch
 ---
 
-Support both `"fieldGroup"` and `"component"` field type definitions across schema diffing, column descriptors, and query pipelines. This ensures collections containing field groups do not generate spurious column alterations or interactive rename prompts during application startup and schema sync.
+Accept both the `"component"` and `"fieldGroup"` field type spellings in stored definitions — across the schema pipeline, query filters, entry defaults, sanitization, and field-group registry lookups — so collections containing field groups no longer grow ghost parent-table columns that trigger interactive rename prompts on startup.

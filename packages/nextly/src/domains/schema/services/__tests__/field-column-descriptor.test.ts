@@ -460,14 +460,14 @@ describe("getColumnDescriptor — the code-first readings are preserved", () => 
 });
 
 describe("getColumnDescriptor & fieldProducesColumn — field groups and components", () => {
-  it.each(["component", "fieldGroup", "field-group"] as const)(
+  it.each(["component", "fieldGroup"] as const)(
     "fieldProducesColumn returns false for type %s",
     fieldType => {
       expect(fieldProducesColumn({ type: fieldType })).toBe(false);
     }
   );
 
-  it.each(["component", "fieldGroup", "field-group"] as const)(
+  it.each(["component", "fieldGroup"] as const)(
     "getColumnDescriptor returns null for type %s across dialects",
     fieldType => {
       const f = { name: "seo", type: fieldType } as unknown as FieldDefinition;

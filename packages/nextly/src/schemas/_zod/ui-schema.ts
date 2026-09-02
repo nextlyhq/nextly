@@ -15,6 +15,7 @@
 
 import { z } from "zod";
 
+import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
 import { reservedSystemFieldNames } from "../../lib/system-columns";
 import {
   isPluginOptionContainer,
@@ -342,11 +343,7 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // for a polymorphic slot. Exactly one form must be present, and every referenced slug
       // must be a real slug — a blank or malformed reference points at no loadable
       // definition, so runtime writes to it would be silently dropped.
-      if (
-        f.type === STORAGE_FORMAT.fieldType ||
-        f.type === "fieldGroup" ||
-        f.type === "field-group"
-      ) {
+      if (isFieldGroupType(f.type)) {
         const candidate = f as {
           component?: unknown;
           fieldGroup?: unknown;

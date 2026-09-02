@@ -34,7 +34,10 @@ import type {
   WhereOperator,
 } from "@nextlyhq/adapter-drizzle/types";
 
-import { isFieldGroupType } from "../../field-groups/storage/field-group-field-type";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupType,
+} from "../../field-groups/storage/field-group-field-type";
 import { isFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
 import type { GeoFilter } from "./geo-utils";
@@ -701,10 +704,11 @@ export function extractComponentFieldConditions(
       const componentField = componentFieldMap.get(fieldName);
 
       if (componentField) {
-        // This is a component field condition — extract it
-        const componentSlugs = componentField.component
-          ? [componentField.component]
-          : componentField.components || [];
+        // This is a component field condition — extract it. The slugs come from
+        // the shared reader so a definition referencing its field group through
+        // either key spelling resolves to the same filter targets.
+        const { single, many } = extractFieldGroupReferences(componentField);
+        const componentSlugs = single ? [single] : (many ?? []);
 
         // Check if it's a field condition with operators
         if (isFieldCondition(value)) {

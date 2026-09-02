@@ -6,9 +6,9 @@
  * here — they are handled at output time or are intentionally raw.
  */
 
+import { isFieldGroupType } from "../../domains/field-groups/storage/field-group-field-type";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { SanitizationConfigInput } from "../../schemas/security-config";
-import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
 const TEXT_LIKE_FIELDS = new Set(["text", "string", "textarea", "email"]);
 
@@ -167,7 +167,10 @@ export function sanitizeEntryData(
       continue;
     }
 
-    if (field.type === STORAGE_FORMAT.fieldType) {
+    // A field group's values are nested documents carrying the group's own
+    // fields, so the descent must follow either type spelling — skipping the
+    // migrated one would leave its text values unsanitized.
+    if (isFieldGroupType(field.type)) {
       if (field.fields && Array.isArray(field.fields)) {
         const repeatable = (field as { repeatable?: boolean }).repeatable;
         if (repeatable && Array.isArray(value)) {
