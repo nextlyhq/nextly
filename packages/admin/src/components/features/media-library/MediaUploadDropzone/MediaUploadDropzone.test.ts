@@ -302,6 +302,19 @@ describe("an explicit accept filter", () => {
     }
   });
 
+  it("carries every font extension for a WILDCARD font filter", () => {
+    /*
+     * `accept="font/*"` names every format this product serves, and the
+     * exact-type lookup cannot match it — so it fell to the generic branch with
+     * an empty list, and a browser reporting no type matched neither the type
+     * nor a suffix.
+     */
+    const parsed = parseAcceptString("font/*");
+    for (const format of WEB_FONT_FORMATS) {
+      expect(parsed?.["font/*"]).toContain(format.extension);
+    }
+  });
+
   it("still leaves an unknown type without invented extensions", () => {
     // The control: a parser attaching a suffix to everything would satisfy the
     // case above while telling Dropzone to accept files nothing asked for.

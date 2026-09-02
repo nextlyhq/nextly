@@ -21,7 +21,10 @@
 import { NextlyError } from "../errors/nextly-error";
 import { safeFetch } from "../utils/validate-external-url";
 
-import { classifyFetchFailure } from "./fetch-stored-bytes";
+import {
+  classifyFetchFailure,
+  DEFAULT_READ_TIMEOUT_MS,
+} from "./fetch-stored-bytes";
 import {
   StorageReadTimeoutError,
   StorageReadTooLargeError,
@@ -148,7 +151,13 @@ export async function readStoredMediaBytes(
        * treat as retryable if they could read it.
        */
       if (isNativeTimeout(error)) {
-        throw new StorageReadTimeoutError(storagePath, maxBytes);
+        /*
+         * The DEADLINE, not the cap. This reader passes only `maxBytes` to the
+         * adapter, so the adapter resolved its own deadline from the shared
+         * default — which is therefore the true figure, and the one an operator
+         * needs when they come to the 504 asking what was waited for.
+         */
+        throw new StorageReadTimeoutError(storagePath, DEFAULT_READ_TIMEOUT_MS);
       }
       throw error;
     }

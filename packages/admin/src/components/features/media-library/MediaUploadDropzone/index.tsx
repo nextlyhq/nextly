@@ -185,6 +185,46 @@ const WEB_FONT_MIME_BY_TYPE = new Map(
 );
 
 /**
+ * The extensions a family filter stands for.
+ *
+ * A table rather than a branch per family: React Dropzone matches a file by
+ * type OR by suffix, and a browser reporting no type at all — which it does for
+ * any format its platform does not register — has only the suffix left. So an
+ * entry without extensions refuses exactly the files its own filter names.
+ *
+ * Fonts come from the shared table, so a format added there reaches the
+ * wildcard filter without anyone editing this.
+ */
+const EXTENSIONS_BY_FAMILY: Record<string, readonly string[]> = {
+  "image/*": [".png", ".jpg", ".jpeg", ".gif", ".webp"],
+  "video/*": [".mp4", ".mov", ".avi"],
+  "audio/*": [".mp3", ".wav", ".ogg"],
+  "application/pdf": [".pdf"],
+  "font/*": WEB_FONT_FORMATS.map(format => format.extension),
+};
+
+/**
+ * The extensions one accepted type admits, or none for a type nothing here
+ * knows — which leaves Dropzone matching on the MIME type alone, as before.
+ */
+function extensionsForAcceptedType(type: string): string[] {
+  const family = EXTENSIONS_BY_FAMILY[type];
+  if (family !== undefined) return [...family];
+
+  const webFont = WEB_FONT_MIME_BY_TYPE.get(type);
+  if (webFont !== undefined) return [webFont];
+
+  if (type.startsWith("image/")) {
+    const subtype = type.split("/")[1] ?? "";
+    // `image/jpeg` is written both ways on disk, and a picker naming the type
+    // should accept the file however the author's camera spelled it.
+    return subtype === "jpeg" ? [".jpeg", ".jpg"] : [`.${subtype}`];
+  }
+
+  return [];
+}
+
+/**
  * Convert MIME type string to react-dropzone Accept format
  *
  * Supports formats like:
@@ -196,43 +236,8 @@ export function parseAcceptString(acceptString?: string): Accept | undefined {
   if (!acceptString) return undefined;
 
   const accept: Accept = {};
-  const types = acceptString.split(",").map(t => t.trim());
-
-  for (const type of types) {
-    // Looked up once so the branch below narrows on the value rather than
-    // asserting it back out of the map.
-    const webFontExtension = WEB_FONT_MIME_BY_TYPE.get(type);
-
-    if (type === "image/*") {
-      accept["image/*"] = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
-    } else if (type === "video/*") {
-      accept["video/*"] = [".mp4", ".mov", ".avi"];
-    } else if (type === "audio/*") {
-      accept["audio/*"] = [".mp3", ".wav", ".ogg"];
-    } else if (type === "application/pdf") {
-      accept["application/pdf"] = [".pdf"];
-    } else if (webFontExtension !== undefined) {
-      /*
-       * Fonts carry their extension for the same reason the default map does:
-       * a browser reports an empty `type` for a `.woff2` chosen from disk, and
-       * Dropzone then matches on the extension instead. Falling through to the
-       * generic branch below produces an empty list, so an explicit
-       * `accept="font/woff2"` refuses the very file it names.
-       */
-      accept[type] = [webFontExtension];
-    } else if (type.startsWith("image/")) {
-      // Specific image types
-      const subtype = type.split("/")[1];
-      // Handle common aliases
-      if (subtype === "jpeg") {
-        accept[type] = [`.${subtype}`, ".jpg"];
-      } else {
-        accept[type] = [`.${subtype}`];
-      }
-    } else {
-      // Generic MIME type
-      accept[type] = [];
-    }
+  for (const type of acceptString.split(",").map(t => t.trim())) {
+    accept[type] = extensionsForAcceptedType(type);
   }
 
   return Object.keys(accept).length > 0 ? accept : undefined;

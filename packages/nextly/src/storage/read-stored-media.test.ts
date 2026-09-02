@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SafeFetchError } from "../utils/validate-external-url";
 
+import { DEFAULT_READ_TIMEOUT_MS } from "./fetch-stored-bytes";
 import { isStorageReadTimeout, isStorageReadTooLarge } from "./read-errors";
 import {
   readStoredMediaBytes,
@@ -202,6 +203,16 @@ describe("reading a stored object", () => {
     expect(isStorageReadTimeout(outcome)).toBe(true);
     // NOT the raw platform error, which is what carried the 500.
     expect(outcome).not.toBe(platformTimeout);
+    /*
+     * The DEADLINE, not the cap. Two numbers behind one positional signature:
+     * passing the byte cap here logged a timeout of 10,485,760 ms for a read
+     * that waited 30,000 — a figure an operator reading the 504 would take at
+     * face value while investigating something that never happened.
+     */
+    expect((outcome as { timeoutMs?: number }).timeoutMs).toBe(
+      DEFAULT_READ_TIMEOUT_MS
+    );
+    expect((outcome as { timeoutMs?: number }).timeoutMs).not.toBe(1000);
   });
 
   it("passes a NON-timeout adapter failure through unchanged", async () => {
