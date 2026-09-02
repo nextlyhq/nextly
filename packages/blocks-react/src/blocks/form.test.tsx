@@ -254,8 +254,8 @@ describe("a control an author can SEE", () => {
    * ships — taking away the border and background a user agent draws on an
    * input. The `control` part already existed and stated only spacing.
    *
-   * jsdom cannot see a border, so the rendered evidence is a browser check on a
-   * published page, recorded in the PR. What a test CAN pin is the compiled
+   * jsdom cannot see a border, so appearance itself is verified in a browser on
+   * a published page rather than here. What a test CAN pin is the compiled
    * stylesheet, and that is what these read — not the declaration object, which
    * is a weaker claim than it looks. `expect(control.border).toBeDefined()`
    * holds for `{ style, color }` with the WIDTH deleted, and a border of no
@@ -456,25 +456,36 @@ describe("a control an author can SEE", () => {
      * different-looking primary actions — which is what it did while the
      * submit was a bare element the reset stripped to plain text.
      */
-    const submit = form.parts?.submit?.baseStyles?.base?.base as
-      | Record<string, unknown>
-      | undefined;
-    expect(submit).toBeDefined();
-    for (const key of Object.keys(BUTTON_BASE_STYLES.base.base)) {
-      expect(submit).toHaveProperty(key);
-    }
     /*
-     * And the WHOLE envelope, not only its base leaf. Comparing leaves alone
-     * would stay green as `core/button` grew a hover or a breakpoint the
-     * submit never received — the exact drift this part exists to prevent,
-     * invisible to the test written to prevent it.
+     * Compared BY VALUE, and as one whole envelope.
+     *
+     * This checked that every key existed, at both levels. Key existence cannot
+     * see the drift it was written to catch: a submit that overrode `padding`,
+     * or copied a hover state and changed a declaration inside it, has every
+     * expected key and a different appearance. It also cannot see an addition,
+     * so a declaration the button never had would pass silently.
+     *
+     * The expectation is DERIVED from `BUTTON_BASE_STYLES` rather than written
+     * out, so the two cannot drift by this file being updated to match a change
+     * nobody meant — which is the failure a literal envelope invites.
      */
-    const whole = form.parts?.submit?.baseStyles as Record<string, unknown>;
-    for (const state of Object.keys(BUTTON_BASE_STYLES)) {
-      expect(whole).toHaveProperty(state);
-    }
-    // The one deliberate difference: the form is a grid, so a stretched item
-    // would run the full column width and stop reading as a button.
-    expect(submit?.width).toBe("fit-content");
+    const expected = {
+      ...BUTTON_BASE_STYLES,
+      base: {
+        ...BUTTON_BASE_STYLES.base,
+        base: {
+          ...BUTTON_BASE_STYLES.base.base,
+          // The one deliberate difference: the form is a grid, so a stretched
+          // item would run the full column width and stop reading as a button.
+          width: "fit-content",
+        },
+      },
+    };
+
+    expect(form.parts?.submit?.baseStyles).toEqual(expected);
+
+    // Must-be-found control: the envelope really carries declarations, so the
+    // equality above is not two empty shapes agreeing.
+    expect(Object.keys(BUTTON_BASE_STYLES.base.base).length).toBeGreaterThan(3);
   });
 });

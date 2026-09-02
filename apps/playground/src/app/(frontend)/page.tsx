@@ -19,7 +19,12 @@ import { createBlockResolver } from "@nextlyhq/blocks-react";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
 import { createSinglePage } from "@nextlyhq/blocks-react/next";
 
-import { siteReader, SITE_STYLE_CONTEXT } from "../../lib/site-content";
+import {
+  siteReader,
+  SITE_STYLE_CONTEXT,
+  SITE_STYLES,
+  singleMetadata,
+} from "../../lib/site-content";
 
 /**
  * Access-enforced, matching the collection route beside it.
@@ -46,13 +51,8 @@ const { SinglePage, generateMetadata } = createSinglePage({
   // unknown-block placeholder whenever a visitor arrives before an admin does.
   blocks: createBlockResolver(coreBlocks),
   styleContext: SITE_STYLE_CONTEXT,
-  metadata: (document, _context, derived) => ({
-    title: derived.title ?? (document.title as string | undefined),
-    description: derived.description,
-    ...(derived.image
-      ? { openGraph: { images: [{ url: derived.image }] } }
-      : {}),
-  }),
+  siteStyles: SITE_STYLES,
+  metadata: singleMetadata,
 });
 
 export { generateMetadata };

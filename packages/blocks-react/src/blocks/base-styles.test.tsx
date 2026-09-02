@@ -27,6 +27,7 @@ import {
   blockPartClassName,
   blockTypeClassName,
   defaultSiteTokens,
+  tokenKindsForProperty,
   getStyleProperty,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -458,6 +459,37 @@ function tokenNamesIn(value: unknown): string[] {
   return Object.values(record).flatMap(tokenNamesIn);
 }
 
+/**
+ * Every token reference a `NodeStyles` makes, WITH the property it is made for.
+ *
+ * The property is what {@link tokenNamesIn} throws away, and it is the half that
+ * decides whether a reference is usable: a name can exist in the guaranteed set
+ * and still be the wrong KIND for where it is written.
+ *
+ * The property is the key at the state/breakpoint level — the third level down —
+ * so the walk carries it once it is past `styles[state][breakpoint]` and then
+ * descends without changing it. A token inside an object-shaped declaration
+ * belongs to the property that declaration names.
+ */
+function tokenReferencesIn(
+  styles: NodeStyles
+): { property: string; token: string }[] {
+  const found: { property: string; token: string }[] = [];
+  for (const byBreakpoint of Object.values(styles)) {
+    if (byBreakpoint === undefined) continue;
+    for (const values of Object.values(byBreakpoint)) {
+      if (values === undefined) continue;
+      for (const [property, value] of Object.entries(
+        values as Record<string, unknown>
+      )) {
+        for (const token of tokenNamesIn(value))
+          found.push({ property, token });
+      }
+    }
+  }
+  return found;
+}
+
 describe("a token a default depends on must be one the site set defines", () => {
   /**
    * **This REPLACES a ratchet that forbade tokens outright**, and the swap is the
@@ -538,6 +570,88 @@ describe("a token a default depends on must be one the site set defines", () => 
     ).map(([block, part]) => `${block}#${part}`);
 
     expect(withTokens).toContain("core/form#control");
+  });
+
+  it.each(DECLARING.map(block => [block.name, block] as const))(
+    "%s uses each token where its KIND is accepted",
+    (name, block) => {
+      /*
+       * A name that exists is not a name that works. `backgroundColor` accepts
+       * a `color`; pointing it at the guaranteed DIMENSION `space.4` emits
+       * `background-color: var(--site-space-4)`, which the browser drops — and
+       * every check beside this one stays green, because the property is in the
+       * catalog, the declaration reaches the stylesheet, and the token is in the
+       * guaranteed set.
+       *
+       * Production cannot catch it either. `validateStyleValues` DOES refuse a
+       * kind mismatch, but only when it is given the site's token table, and a
+       * block default is compiled without one — so the check that exists never
+       * runs on the values in this file.
+       *
+       * Asked of `tokenKindsForProperty`, which is the engine's own answer, and
+       * a UNION across a composite property's leaves. That is looser than
+       * per-leaf: a token accepted at one leaf of a property passes here when
+       * written at another. It is the exported answer, and it catches the case
+       * that matters — a kind the property does not accept anywhere.
+       */
+      const guaranteed = new Map(
+        defaultSiteTokens().map(token => [token.name, token.kind])
+      );
+      const wrong = tokenReferencesIn(block.baseStyles as NodeStyles)
+        .filter(({ token }) => guaranteed.has(token))
+        .filter(({ property, token }) => {
+          const accepted = tokenKindsForProperty(property);
+          return !accepted.includes(guaranteed.get(token)!);
+        })
+        .map(
+          ({ property, token }) =>
+            `${property} takes ${tokenKindsForProperty(property).join(" or ") || "no token"} ` +
+            `but names ${token}, which is a ${guaranteed.get(token)!}`
+        );
+
+      expect(
+        wrong,
+        `${name} writes a token where its kind is refused, so the declaration ` +
+          `compiles to a var() the browser drops.`
+      ).toEqual([]);
+    }
+  );
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s uses each token where its KIND is accepted",
+    (name, part, styles) => {
+      const guaranteed = new Map(
+        defaultSiteTokens().map(token => [token.name, token.kind])
+      );
+      const wrong = tokenReferencesIn(styles)
+        .filter(({ token }) => guaranteed.has(token))
+        .filter(({ property, token }) => {
+          const accepted = tokenKindsForProperty(property);
+          return !accepted.includes(guaranteed.get(token)!);
+        })
+        .map(
+          ({ property, token }) =>
+            `${property} names ${token}, a ${guaranteed.get(token)!}`
+        );
+
+      expect(
+        wrong,
+        `${name} part ${part} writes a token where its kind is refused — and a ` +
+          `part is markup an author cannot reach with a style control, so ` +
+          `nobody can put the dropped declaration back.`
+      ).toEqual([]);
+    }
+  );
+
+  it("inspects a property that actually CONSTRAINS the kind", () => {
+    /*
+     * The control for the two cases above, which pass by finding nothing. If
+     * every property accepted every kind — or `tokenKindsForProperty` returned
+     * an empty union for the ones under test — they would be green having
+     * refused nothing.
+     */
+    expect(tokenKindsForProperty("backgroundColor")).toContain("color");
+    expect(tokenKindsForProperty("backgroundColor")).not.toContain("dimension");
   });
 
   it("inspects at least one block that DOES depend on a token", () => {
