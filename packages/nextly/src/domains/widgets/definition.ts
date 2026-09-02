@@ -188,6 +188,26 @@ function validateId(d: Partial<WidgetDefinition>): void {
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
+  // A title is a STRING in every version, so this is not a vocabulary rule.
+  // Blank is permitted deliberately -- `resolveTitle` trims it and falls back
+  // to the widget id -- but a non-string is a different case: that helper calls
+  // `.trim()` on the value, so a number or object throws and takes widget
+  // resolution down rather than rendering a differently-named card.
+  if (widget.title !== undefined && typeof widget.title !== "string") {
+    return "title, when given, must be a string";
+  }
+
+  // A query is an OBJECT in every version, so it belongs here rather than
+  // beside the body checks. There it was reachable only when the query had to
+  // establish a body, so a widget shipping a component skipped it -- and the
+  // admin put the malformed value in the batched request regardless.
+  if (
+    widget.query !== undefined &&
+    (typeof widget.query !== "object" || widget.query === null)
+  ) {
+    return "query must be an object";
+  }
+
   const rangeProblem = sizeRangeProblem(widget);
   if (rangeProblem !== undefined) return rangeProblem;
 
@@ -211,28 +231,30 @@ export function widgetValueProblem(
 
 /** The ordering rules between the three sizes, once each is known to be valid. */
 /**
- * The three sizes as ranks, or `undefined` when any present one is unorderable.
+ * The three sizes as ranks, with an unrankable one reported as absent.
  *
  * A size this core does not know has no rank, and ordering it would be the
  * vocabulary check by another route -- which must not cross the contributions
- * boundary. Absent is fine and simply has nothing to compare.
+ * boundary. Reporting it as `undefined` rather than poisoning the whole set
+ * means each comparison skips only the operand it cannot rank: a widget whose
+ * `maxSize` came from a newer core is still checked for a `defaultSize` below
+ * its `minSize`, which are values this core reads perfectly well.
  */
-function orderableRanks(
-  widget: Record<string, unknown>
-): { min?: number; max?: number; dflt?: number } | undefined {
-  const rank = (value: unknown): number | undefined | null => {
-    if (value === undefined) return undefined;
-    return typeof value === "string" &&
-      WIDGET_SIZES.includes(value as WidgetSize)
+function orderableRanks(widget: Record<string, unknown>): {
+  min?: number;
+  max?: number;
+  dflt?: number;
+} {
+  const rank = (value: unknown): number | undefined =>
+    typeof value === "string" && WIDGET_SIZES.includes(value as WidgetSize)
       ? sizeRank(value as WidgetSize)
-      : null;
-  };
+      : undefined;
 
-  const min = rank(widget.minSize);
-  const max = rank(widget.maxSize);
-  const dflt = rank(widget.defaultSize);
-  if (min === null || max === null || dflt === null) return undefined;
-  return { min, max, dflt };
+  return {
+    min: rank(widget.minSize),
+    max: rank(widget.maxSize),
+    dflt: rank(widget.defaultSize),
+  };
 }
 
 /** One ordering rule between the sizes, given their ranks. */
@@ -265,7 +287,6 @@ const SIZE_ORDER_RULES: readonly SizeOrderRule[] = [
 
 function sizeRangeProblem(widget: Record<string, unknown>): string | undefined {
   const ranks = orderableRanks(widget);
-  if (!ranks) return undefined;
 
   for (const rule of SIZE_ORDER_RULES) {
     const problem = rule(ranks, widget);
@@ -280,7 +301,13 @@ function validateTitle(d: Partial<WidgetDefinition>): void {
   // declaration: `resolveTitle` trims it and falls back to the id, so the same
   // value renders a correctly named card there and refusing it would turn a
   // working card into a failed plugin install.
-  if (typeof d.title !== "string" || d.title.trim() === "") {
+  // REQUIRED and non-blank here, because this is the RESOLVED widget and a
+  // blank title is a card labelled with whitespace. That a supplied value is a
+  // string is the shared rule's, since it holds on both sides.
+  if (
+    d.title === undefined ||
+    (typeof d.title === "string" && d.title.trim() === "")
+  ) {
     fail(`${d.id}: title is required`);
   }
 }
@@ -622,17 +649,6 @@ function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
   if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
-  }
-  // A query is an OBJECT in any version of this contract, so this is not a
-  // vocabulary rule and belongs on both sides. Truthiness alone let `query:
-  // "bogus"` through here while the contributions gate refused it -- a
-  // divergence pointing the other way from all the others, and the registry was
-  // the loose one.
-  if (
-    d.query !== undefined &&
-    (typeof d.query !== "object" || d.query === null)
-  ) {
-    fail(`${d.id}: query must be an object`);
   }
   const problem = querylessQueryProblem(archetype, d.query);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);

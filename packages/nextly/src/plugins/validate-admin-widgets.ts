@@ -306,11 +306,15 @@ const FIELD_RULES: ReadonlyArray<
   // so the documented refusal was true of one channel only.
   widget => chromeProblem(widget.chrome, widget.archetype),
 
-  // Every rule neither channel reads differently -- the size vocabulary and its
-  // ordering, the height vocabulary, a blank title, actions on an archetype
-  // that is not `actions`. Asked as ONE rule so the next field added to the
-  // registry's value checks arrives here too, which is what the four that
-  // drifted before it did not.
+  // The rules that hold whatever core version a plugin was built against: a
+  // title that is a string, a query that is an object, orderings between sizes
+  // this core can rank, and `actions` on an archetype it recognises.
+  //
+  // Vocabulary checks are deliberately NOT among them. A contribution crosses a
+  // version boundary, so refusing a size, height or chrome value this core has
+  // not learned yet would abort a whole plugin install over a card the admin
+  // renders anyway -- those belong to `validateWidgetDefinition`, which judges
+  // the resolved widget rather than a declaration from an unknown vintage.
   widget => widgetValueProblem(widget),
 
   // A QUERYLESS archetype is drawn from its declaration ALONE, so a component

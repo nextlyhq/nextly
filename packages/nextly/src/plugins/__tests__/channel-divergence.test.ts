@@ -8,11 +8,10 @@
  * definition is the resolved widget -- so a handful of differences are correct
  * and are listed below by name.
  *
- * Everything else must agree. Four fields have already drifted one at a time,
- * each added to one validator and missed by the other, and each found only when
- * a reviewer happened to look: the shortcut rule, the queryless no-query rule,
- * `defaultOrder` and `chrome`. Every one was the contributed side being the more
- * permissive, which is the direction that ships.
+ * Everything else must agree. The two rule sets are written separately, so a
+ * rule added to one and not the other is invisible at the point it is written:
+ * both validators still look correct, and the contributed side is the more
+ * permissive, which is the direction that reaches a running dashboard.
  *
  * This is the control that makes the next one fail here instead. Adding a rule
  * to one validator and not the other turns a row red with the case that
@@ -167,6 +166,42 @@ const DECLARED_DIFFERENCES: Array<{
       component: "p#X",
     },
   },
+  {
+    case: "a minSize this core does not know",
+    why: "its own branch in the registry's vocabulary check; one row per branch, so re-sharing any single one cannot hide behind another's coverage",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      minSize: "enormous",
+      component: "p#X",
+    },
+  },
+  {
+    case: "a maxSize this core does not know",
+    why: "same branch-per-row reason as minSize",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      maxSize: "enormous",
+      component: "p#X",
+    },
+  },
+  {
+    case: "a chrome value this core does not know",
+    why: 'a newer core may add one, and anything that is not "none" frames anyway, so this admin renders the card regardless',
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      chrome: "borderless",
+    },
+  },
 ];
 
 /** Rules that must hold identically on both sides. */
@@ -251,6 +286,39 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
       archetype: "metric",
       defaultSize: "sm",
       query: "bogus",
+    },
+  },
+  {
+    case: "a title that is not a string",
+    widget: {
+      id: "acme/thing",
+      title: 42,
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+    },
+  },
+  {
+    case: "a non-object query behind a component",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      query: "bogus",
+    },
+  },
+  {
+    case: "a defaultSize below minSize when only maxSize is unknown",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      minSize: "xl",
+      maxSize: "enormous",
+      component: "p#X",
     },
   },
 ];
