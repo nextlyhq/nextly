@@ -166,10 +166,9 @@ describe("the public byte route", () => {
 
   it("serves a font whose stored type is spelled in another case", async () => {
     /*
-     * `validateMimeType` lowercases what it compares and the record keeps what
-     * the client sent, so `Font/WOFF2` is accepted on upload and stored with
-     * that spelling. An exact lookup here would refuse to serve a font this
-     * same product had just approved.
+     * Rows written before uploads stored the canonical type keep whatever the
+     * client sent, and `Font/WOFF2` differs from the table only in case. An
+     * exact lookup would refuse to serve a font this same product approved.
      */
     storedAs("Font/WOFF2");
     expect((await getRaw("m1")).status).toBe(200);
