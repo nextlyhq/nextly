@@ -2737,11 +2737,18 @@ describe("a segmented keyword control behaves as a toggle", () => {
   const optionButton = (name: string) =>
     fieldsOf("fontStyle").getByRole("button", { name });
 
-  /** Every option button, so an assertion can cover the control rather than one. */
+  /**
+   * Every option button, found through the group BY ITS ACCESSIBLE NAME.
+   *
+   * Named rather than merely located, because the name is what makes the group
+   * mean anything to a screen reader: without `aria-labelledby` the buttons are
+   * three unattached options with no property attached to them, and a query
+   * asking only for a group cannot tell those two states apart.
+   */
   const allOptions = () =>
-    within(fieldsOf("fontStyle").getByRole("group")).getAllByRole(
-      "button"
-    ) as HTMLButtonElement[];
+    within(
+      fieldsOf("fontStyle").getByRole("group", { name: "Font style" })
+    ).getAllByRole("button") as HTMLButtonElement[];
 
   /**
    * The node's styles AFTER the recorded ops are applied to the document.
@@ -2891,6 +2898,34 @@ describe("a segmented keyword control behaves as a toggle", () => {
     expect(messageId).toBeTruthy();
     expect(describedBy).toBeTruthy();
     expect(describedBy).toBe(messageId);
+  });
+
+  it("does not submit the entry it is mounted inside", () => {
+    /*
+     * The builder mounts inside the entry's `<form>` — `inspector-panel.test`
+     * states it, and guards the same hazard for Enter in a text field. A button
+     * with no explicit `type` defaults to `submit` there, so clicking a style
+     * option would SAVE THE WHOLE ENTRY as well as applying the style.
+     *
+     * Rendered under a form deliberately: every other case here mounts at the
+     * document root, where a missing `type` costs nothing and the defect is
+     * invisible. The host context is part of the behaviour.
+     */
+    const submitted = vi.fn((event: React.FormEvent) => event.preventDefault());
+    register({ typography: true });
+    const editor = editorFor(documentOf());
+    render(
+      <form onSubmit={submitted}>
+        <StyleInspectorPanel editor={editor} />
+      </form>
+    );
+
+    fireEvent.click(optionButton("italic"));
+
+    expect(submitted).not.toHaveBeenCalled();
+    // The positive control: the click still did its own job, so this does not
+    // pass merely because nothing happened at all.
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
   });
 
   it("does not write anything when the field's LABEL is clicked", () => {
