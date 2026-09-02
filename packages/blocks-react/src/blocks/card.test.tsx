@@ -10,9 +10,12 @@
  * declares them rather than repeating one here.
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { PageRenderer } from "../page-renderer";
 import type { BlockResolver } from "../resolver";
+import { createBlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
 
 import { box } from "./box";
@@ -144,5 +147,81 @@ describe("the surface and border it carries", () => {
 
     expect(css).toContain("overflow: hidden");
     expect(css).toContain("border-radius: 12px");
+  });
+});
+
+/**
+ * The declarations a card's colours resolve against, on the path that has no
+ * write access to compile them.
+ *
+ * A consumer with no write path compiles a page once, stores the CSS and hands
+ * it back as `styles`. That artifact still carries every `var(--site-*)` it was
+ * compiled with, so the question is whether anything on the rendered page
+ * DECLARES them — and a custom property nothing declares makes its whole
+ * declaration invalid at computed-value time, dropping the property to its
+ * INITIAL value rather than to the site's.
+ *
+ * Which is why both colours are asserted rather than the background alone. The
+ * two initial values differ in kind: `background-color` is `transparent`, so a
+ * missing surface reads as no fill, while `border-color` is `currentColor`, so a
+ * missing border colour reads as a hairline in the TEXT colour. A card in that
+ * state is not an unstyled card, it is a hard box nobody asked for — and a test
+ * asserting only the surface passes on it.
+ */
+describe("the tokens a stored artifact resolves against", () => {
+  const DOC: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "c", type: CARD_BLOCK, version: 1, props: { as: "div" } }],
+  };
+
+  /** The page as a consumer stores it: compiled once, with no context kept. */
+  function renderFromStoredArtifact(): string {
+    const resolver = createBlockResolver([...coreBlocks]);
+    const stored = resolvePageStyles(
+      DOC,
+      undefined,
+      {
+        breakpoints: {
+          viewport: [{ id: "base", label: "Desktop" }],
+          container: [],
+        },
+      },
+      resolver
+    );
+    return renderToStaticMarkup(
+      <PageRenderer document={DOC} blocks={resolver} styles={stored} />
+    );
+  }
+
+  it("REFERENCES both colours, which is what makes the next case meaningful", () => {
+    // The precondition, asserted rather than assumed: if the card stopped
+    // emitting these references the declarations below would be pointless, and
+    // a test that only checked for the declarations would still pass.
+    const markup = renderFromStoredArtifact();
+
+    expect(markup).toContain("var(--site-color-surface)");
+    expect(markup).toContain("var(--site-color-border)");
+  });
+
+  it("DECLARES both colours, so neither falls back to its initial value", () => {
+    const markup = renderFromStoredArtifact();
+
+    expect(markup).toContain("--site-color-surface:");
+    expect(markup).toContain("--site-color-border:");
+  });
+
+  it("declares nothing on a page that emits no css of its own", () => {
+    // Must-differ. The token tier accompanies the CSS it exists to resolve, so a
+    // render with no stylesheet must stay silent rather than push `--site-*`
+    // onto a host that asked this renderer for markup alone. Without this the
+    // case above is satisfied by emitting the tier unconditionally, which is a
+    // different behaviour that passes the same assertion.
+    const markup = renderToStaticMarkup(
+      <PageRenderer document={DOC} blocks={createBlockResolver([])} />
+    );
+
+    expect(markup).not.toContain("--site-color-surface:");
+    expect(markup).not.toContain("<style");
   });
 });

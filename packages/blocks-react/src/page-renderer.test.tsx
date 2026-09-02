@@ -4762,17 +4762,31 @@ describe("PageRenderer", () => {
         />
       );
 
-      // The invariant is that the element closes exactly once, where this
+      // The invariant is that every element closes exactly once, where this
       // renderer put it. `<script>` remaining in the text is harmless while the
       // parser is still inside `<style>`, and asserting its absence would be
       // asserting the wrong thing; what must never happen is a second closing
       // tag letting the rest of the payload become markup.
-      expect(html.match(/<\/style>/g)).toHaveLength(1);
+      //
+      // Counted against the OPENS rather than against a fixed number: this page
+      // carries a token tier beside its own sheet, and a literal `1` here would
+      // be asserting how many tiers are emitted — so it would fail on a page
+      // that grew one and, worse, pass on a payload that smuggled a close into a
+      // page that lost one.
+      const opens = html.match(/<style[\s>]/g) ?? [];
+      const closes = html.match(/<\/style>/g) ?? [];
+      expect(opens.length).toBeGreaterThan(0);
+      expect(closes).toHaveLength(opens.length);
       expect(html).toContain("<\\/style");
-      // And the escape must not be reachable as a real close.
-      expect(
-        /<\/style[\s/>]/.test(html.slice(0, html.lastIndexOf("</style>")))
-      ).toBe(false);
+      // And no element's own body carries a close that is reachable as markup.
+      for (const element of html.match(/<style[^>]*>[\s\S]*?<\/style>/g) ??
+        []) {
+        const body = element.slice(
+          element.indexOf(">") + 1,
+          element.lastIndexOf("</style>")
+        );
+        expect(/<\/style[\s/>]/.test(body)).toBe(false);
+      }
     });
 
     it("takes the root scope from the artifact that carries it", async () => {
