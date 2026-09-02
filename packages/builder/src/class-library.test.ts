@@ -56,6 +56,7 @@ import {
   withClassApplied,
   withClassRemoved,
   classDeclarations,
+  usableSiteClasses,
 } from "./class-library";
 
 /** A library entry, with the styles envelope left empty where it is not read. */
@@ -710,12 +711,13 @@ describe("what a class writes", () => {
      * describe a different stylesheet the first time the catalog changed.
      */
     const values = { color: "#112233", paddingBlockStart: "1rem" };
-    const summary = classDeclarations(
-      { base: { [BASE_BREAKPOINT]: values } },
-      "hero"
-    );
+    const summary = classDeclarations({ base: { [BASE_BREAKPOINT]: values } });
     expect(summary.shown.map(d => d.property)).toEqual(
-      compileStyleValues(values, "class:hero").declarations.map(d => d.property)
+      // The same path the summary compiles under. It is incidental to WHICH
+      // declarations a valid map produces, and not incidental in general: the
+      // path is charged against the style-issue budget, which is why the summary
+      // uses one short constant rather than the class's own identity.
+      compileStyleValues(values, "class").declarations.map(d => d.property)
     );
     // The must-be-found control: the compiler really did produce something, so
     // the equality above is not two empty lists agreeing.
@@ -736,7 +738,7 @@ describe("what a class writes", () => {
       },
       hover: { [BASE_BREAKPOINT]: { color: "#778899" } },
     };
-    const summary = classDeclarations(styles, "hero", WITH_MD);
+    const summary = classDeclarations(styles, WITH_MD);
     expect(summary.shown.map(d => d.property)).toEqual(["color"]);
     // Two places this class also behaves differently: one other breakpoint the
     // site DEFINES, and one other state.
@@ -747,7 +749,7 @@ describe("what a class writes", () => {
      * does NOT define `md`, the compiler emits no rule for it, so the class
      * behaves no differently there and the count must not claim it does.
      */
-    const withoutMd = classDeclarations(styles, "hero", undefined);
+    const withoutMd = classDeclarations(styles, undefined);
     expect(withoutMd.elsewhere).toBe(1);
   });
 
@@ -756,15 +758,136 @@ describe("what a class writes", () => {
     // class behaves differently, so counting it would inflate the caveat.
     const summary = classDeclarations(
       { base: { [BASE_BREAKPOINT]: { color: "#112233" }, md: {} } },
-      "hero",
       WITH_MD
     );
     expect(summary.elsewhere).toBe(0);
   });
 
   it("says nothing at all for a class that writes nothing", () => {
-    const summary = classDeclarations({}, "hero");
+    const summary = classDeclarations({});
     expect(summary.shown).toEqual([]);
     expect(summary.elsewhere).toBe(0);
+  });
+
+  it("counts a context whose values COMPILE to nothing as nothing", () => {
+    /*
+     * A stored key is not a declaration. A property the catalog does not define
+     * is dropped by the compiler rather than passed through, so counting keys
+     * claimed "1 more elsewhere" for styling no visitor can see — the same class
+     * of lie as counting a breakpoint the site has since deleted, which the case
+     * above already refuses.
+     *
+     * `md` here holds a key of the right SHAPE and no meaning, so a count of
+     * stored keys says 1 and the compiled answer says 0.
+     */
+    const summary = classDeclarations(
+      {
+        base: {
+          [BASE_BREAKPOINT]: { color: "#112233" },
+          md: { notARealProperty: "1rem" },
+        },
+      } as never,
+      WITH_MD
+    );
+
+    expect(summary.elsewhere).toBe(0);
+    // Must-be-found control: the base still compiled, so the zero above is a
+    // judgement about `md` and not a walk that found nothing anywhere.
+    expect(summary.shown.map(d => d.property)).toEqual(["color"]);
+  });
+});
+
+describe("persisted class styles that are not the shape the type promises", () => {
+  /*
+   * The type says states map to breakpoints map to values. The stored document
+   * only promises to be JSON, and `usableSiteClasses` admits a class whose
+   * `styles` is a plain record without walking into it — so a malformed nested
+   * value reached the projection and threw, taking down the WHOLE class manager
+   * rather than hiding one row.
+   *
+   * Each shape below is a separate throw site, which is why they are separate
+   * cases rather than one loop: two threw inside this module's own walk and one
+   * got as far as `compileStyleValues` and threw inside the engine.
+   */
+  const cases: [string, unknown][] = [
+    ["a null base, which reached the compiler", { base: { base: null } }],
+    ["a null state map", { base: null }],
+    ["a null values map under a non-base state", { hover: { base: null } }],
+    ["a state map that is an array", { base: [] }],
+    ["values that are a string", { base: { base: "red" } }],
+  ];
+
+  it.each(cases)("survives %s", (_label, styles) => {
+    expect(() => classDeclarations(styles as never)).not.toThrow();
+  });
+
+  it("treats a malformed context as styling NOTHING, not as behaviour", () => {
+    /*
+     * Not throwing is half the answer. The other half is what it then says: a
+     * context the compiler writes no rule for is not a place the class behaves
+     * differently, so it must not be counted — otherwise the row trades a crash
+     * for a caveat that misdescribes the page.
+     */
+    const summary = classDeclarations(
+      {
+        base: { [BASE_BREAKPOINT]: { color: "#112233" }, md: null },
+        hover: null,
+      } as never,
+      WITH_MD
+    );
+
+    expect(summary.elsewhere).toBe(0);
+    // Must-be-found: the well-formed base still came through, so this is a
+    // judgement about the malformed contexts beside it.
+    expect(summary.shown.map(d => d.property)).toEqual(["color"]);
+  });
+
+  it("does not let the DIAGNOSTIC path decide what it reports", () => {
+    /*
+     * `basePath` is repeated into every diagnostic and charged against the
+     * style-issue budget, and an exhausted budget refuses the WHOLE map rather
+     * than the property that exhausted it. So a longer path compiles to fewer
+     * declarations from identical values — measured:
+     *
+     *     compileStyleValues(values, `class:${128-char slug}/hover/md`) -> 0
+     *     compileStyleValues(values, "class")                           -> 1
+     *
+     * `compilePageCss` compiles the same class under `/classes/<position>/...`.
+     * A summary keyed on the class's own identity could therefore report "no
+     * behaviour elsewhere" for a context the page does emit — a disagreement
+     * produced by a diagnostic string rather than by the styles.
+     *
+     * The map below is malformed enough to exhaust a budget under a long path
+     * and carries one perfectly good declaration.
+     */
+    const values: Record<string, string> = { color: "#112233" };
+    for (let index = 0; index < 150; index += 1) {
+      values[`k${"x".repeat(200)}${index}`] = "1px";
+    }
+
+    const summary = classDeclarations(
+      {
+        base: { [BASE_BREAKPOINT]: { color: "#445566" } },
+        hover: { [BASE_BREAKPOINT]: values },
+      } as never,
+      WITH_MD
+    );
+
+    // The valid declaration inside the noisy map is still behaviour elsewhere.
+    expect(summary.elsewhere).toBe(1);
+    // Must-be-found: the base compiled too, so the count above is a judgement
+    // about the hover map rather than a walk that found nothing.
+    expect(summary.shown.map(d => d.property)).toEqual(["color"]);
+  });
+
+  it("still admits the class, because repair is not this module's job", () => {
+    // The guard makes the projection survive the shape; it does not make the
+    // class disappear. Hiding it would lose the author the only row from which
+    // they could delete or rename it.
+    expect(
+      usableSiteClasses([
+        { id: "c1", slug: "hero", styles: { base: { base: null } } },
+      ] as never)
+    ).toHaveLength(1);
   });
 });
