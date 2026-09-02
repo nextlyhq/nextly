@@ -35,12 +35,13 @@
  *
  * @module class-manager-panel
  */
-import type { NamedClass } from "@nextlyhq/blocks-engine";
+import type { NamedClass, NodeStyles } from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { useSurvivingReport } from "./builder-notices";
 import {
+  classDeclarations,
   classLibraryHasRoom,
   classRows,
   deletionWarning,
@@ -262,6 +263,17 @@ export function ClassManagerPanel({
     () => new Set(suppliedClassIds ?? []),
     [suppliedClassIds]
   );
+  /*
+   * Each class's styles, keyed once. A row describing what its class DOES has
+   * to reach the stored styles, and `siteClasses` deliberately narrows to id,
+   * slug and class name — so the row would otherwise scan the library for its
+   * own entry, once per row, which is the shape that made the token projection
+   * quadratic.
+   */
+  const stylesById = React.useMemo(
+    () => new Map((library ?? []).map(entry => [entry.id, entry.styles])),
+    [library]
+  );
 
   /*
    * The name search, which is what makes every class REACHABLE.
@@ -378,6 +390,7 @@ export function ClassManagerPanel({
         supplied={supplied}
         usageKnown={usageKnown}
         anyDeletable={anyDeletable}
+        stylesById={stylesById}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -652,6 +665,7 @@ function ClassList({
   supplied,
   usageKnown,
   anyDeletable,
+  stylesById,
   onRename,
   onDelete,
 }: {
@@ -678,6 +692,8 @@ function ClassList({
    * anything be deleted" would drift the moment either changed.
    */
   anyDeletable: boolean;
+  /** Each class's styles by id, built once by the panel. */
+  stylesById: ReadonlyMap<string, NodeStyles>;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
@@ -725,6 +741,7 @@ function ClassList({
               row={row}
               pendingSlug={pendingSlugs?.[row.id]}
               library={library}
+              styles={stylesById.get(row.id)}
               isSupplied={supplied.has(row.id)}
               canDelete={rowIsDeletable(row, supplied, onDelete)}
               usageKnown={usageKnown}
@@ -753,6 +770,7 @@ function ClassRowView({
   row,
   pendingSlug,
   library,
+  styles,
   isSupplied,
   canDelete,
   usageKnown,
@@ -763,6 +781,11 @@ function ClassRowView({
   /** The name this class is being renamed to, when a write is in flight. */
   pendingSlug?: string;
   library: readonly NamedClass[];
+  /**
+   * The class's own styles, handed down rather than found here — see
+   * `stylesById`.
+   */
+  styles: NodeStyles | undefined;
   isSupplied: boolean;
   /**
    * Whether this row may be deleted, decided by `rowIsDeletable` rather than
@@ -798,6 +821,7 @@ function ClassRowView({
           pendingSlug={pendingSlug}
           row={row}
         />
+        <DeclarationSummary styles={styles} slug={row.slug} />
         <UsageNote row={row} usageKnown={usageKnown} />
         {isSupplied ? (
           // Named rather than shown disabled. A greyed button invites an
@@ -1103,5 +1127,50 @@ function DeleteConfirm({
         Delete
       </Button>
     </div>
+  );
+}
+
+/**
+ * What this class does, in the properties it writes.
+ *
+ * A row named the class and counted its documents and never said what it was
+ * FOR, which is the half of the complaint no amount of reorganising answers.
+ *
+ * Derived by the engine's compiler rather than described here, and limited to
+ * the base state at the base breakpoint with a count of everywhere else — the
+ * reasoning is on `classDeclarations`. A class with nothing anywhere says
+ * nothing, rather than printing "no styles" against a row whose emptiness the
+ * author can already see.
+ */
+function DeclarationSummary({
+  styles,
+  slug,
+}: {
+  styles: NodeStyles | undefined;
+  slug: string;
+}): React.ReactElement | null {
+  const summary = React.useMemo(
+    () => (styles === undefined ? undefined : classDeclarations(styles, slug)),
+    [styles, slug]
+  );
+  if (summary === undefined) return null;
+  if (summary.shown.length === 0 && summary.elsewhere === 0) return null;
+  const more =
+    summary.elsewhere === 1
+      ? "1 more elsewhere"
+      : `${String(summary.elsewhere)} more elsewhere`;
+  return (
+    <p className="nx-classman__declares">
+      {summary.shown.length === 0 ? null : (
+        <span className="nx-classman__properties">
+          {summary.shown.map(declaration => declaration.property).join(", ")}
+        </span>
+      )}
+      {summary.elsewhere === 0 ? null : (
+        <span className="nx-classman__elsewhere">
+          {summary.shown.length === 0 ? `Nothing here, ${more}` : more}
+        </span>
+      )}
+    </p>
   );
 }

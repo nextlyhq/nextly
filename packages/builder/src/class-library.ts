@@ -49,13 +49,18 @@
  * @module class-library
  */
 import {
+  BASE_BREAKPOINT,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
   NAMED_CLASS_SLUG_RE,
+  STYLE_STATES,
+  compileStyleValues,
   namedClassName,
   usableNamedClasses,
+  type Declaration,
   type NamedClass,
+  type NodeStyles,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -166,6 +171,55 @@ function indexedUsage(usage: ClassUsageCounts, classId: string): number {
   // number on screen that cannot describe anything the index counted.
   if (!Number.isInteger(count) || count < 0) return 0;
   return count;
+}
+
+/**
+ * What a class DOES, as the declarations it writes.
+ *
+ * A row named the class and counted its documents and never said what it was
+ * for, which is the half of the complaint a list cannot answer by being better
+ * organised.
+ *
+ * COMPILED, never formatted here. `compileStyleValues` is the one
+ * implementation of "stored style values become CSS declarations" — it knows
+ * which properties the engine writes, how a token reference becomes a `var()`,
+ * and which values it refuses. A second formatter in this panel would agree
+ * with it on the day it was written and describe a different stylesheet
+ * afterwards.
+ *
+ * ONE state at ONE breakpoint, and a count of the rest. `NodeStyles` is states
+ * by breakpoints, both sparse, and a row has space for neither the product nor
+ * a fair sample of it. Showing the base silently would misdescribe a class
+ * whose real behaviour is responsive; saying how much is not shown is the
+ * honest half of the same sentence.
+ */
+export function classDeclarations(
+  styles: NodeStyles,
+  slug: string
+): { shown: readonly Declaration[]; elsewhere: number } {
+  const base = styles.base?.[BASE_BREAKPOINT];
+  const shown =
+    base === undefined
+      ? []
+      : compileStyleValues(base, `class:${slug}`).declarations;
+  /*
+   * Counted as (state, breakpoint) PAIRS that hold anything, because that is
+   * what "more elsewhere" means to an author: each pair is a place this class
+   * behaves differently. Iterating `STYLE_STATES` rather than the object's own
+   * keys keeps the walk to states the engine defines.
+   */
+  let elsewhere = 0;
+  for (const state of STYLE_STATES) {
+    const byBreakpoint = styles[state];
+    if (byBreakpoint === undefined) continue;
+    for (const breakpoint of Object.keys(byBreakpoint)) {
+      if (state === "base" && breakpoint === BASE_BREAKPOINT) continue;
+      const values = byBreakpoint[breakpoint];
+      if (values !== undefined && Object.keys(values).length > 0)
+        elsewhere += 1;
+    }
+  }
+  return { shown, elsewhere };
 }
 
 /**

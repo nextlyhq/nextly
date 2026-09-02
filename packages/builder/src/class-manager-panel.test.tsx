@@ -19,7 +19,11 @@ import {
   render,
   screen,
 } from "@testing-library/react";
-import { MAX_NAMED_CLASSES } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  MAX_NAMED_CLASSES,
+  compileStyleValues,
+} from "@nextlyhq/blocks-engine";
 import { newClassName } from "./class-library";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1287,6 +1291,61 @@ describe("the panel explains itself", () => {
       />
     );
     expect(screen.getByText(/Rename and clear them out/i)).toBeTruthy();
+  });
+
+  it("says what a class DOES, under its name", () => {
+    /*
+     * The row named the class and counted its documents and never said what it
+     * was for. The properties come from the engine's compiler, so this asserts
+     * against `compileStyleValues` rather than against a literal list — the
+     * panel's claim is about what the stylesheet will carry.
+     */
+    const styled: NamedClass = {
+      id: "id-hero",
+      slug: "hero",
+      orderIndex: 0,
+      styles: {
+        base: {
+          [BASE_BREAKPOINT]: { color: "#112233", paddingBlockStart: "1rem" },
+          md: { color: "#445566" },
+        },
+      },
+    };
+    render(
+      <ClassManagerPanel
+        library={[styled]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+      />
+    );
+    const drawn = document.querySelector(".nx-classman__properties");
+    expect(drawn).not.toBeNull();
+    const compiled = compileStyleValues(
+      { color: "#112233", paddingBlockStart: "1rem" },
+      "class:hero"
+    ).declarations.map(d => d.property);
+    // The must-be-found control: the compiler produced something to draw.
+    expect(compiled.length).toBeGreaterThan(0);
+    for (const property of compiled) {
+      expect(drawn?.textContent).toContain(property);
+    }
+    // And the caveat, because one breakpoint is not being shown.
+    expect(screen.getByText(/1 more elsewhere/i)).toBeTruthy();
+  });
+
+  it("says nothing where a class writes nothing", () => {
+    // Must-differ for the test above: an empty class draws no summary at all,
+    // rather than an empty line or the words "no styles".
+    render(
+      <ClassManagerPanel
+        library={[cls("id-bare", "bare", 0)]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+      />
+    );
+    expect(document.querySelector(".nx-classman__declares")).toBeNull();
   });
 
   it("keeps the filters, because they answer questions that OVERLAP", () => {

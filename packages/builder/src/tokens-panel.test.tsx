@@ -1219,6 +1219,69 @@ describe("the panel explains itself and shows the whole set", () => {
     expect(screen.queryByText(/loses that style/i)).toBeNull();
   });
 
+  it("draws a preview for every kind that HAS a visual form", () => {
+    /*
+     * Only colour was previewed, so a shadow was an opaque CSS string and a
+     * size was a number with nothing to compare it to. Each kind is now shown
+     * as the thing it is, in the same slot so the column stays a column.
+     */
+    mount({
+      tokens: [
+        { name: "color.ink", kind: "color", values: { light: "#112233" } },
+        { name: "size.gap", kind: "dimension", values: { light: "8px" } },
+        {
+          name: "shadow.card",
+          kind: "shadow",
+          values: { light: "0 1px 2px #000" },
+        },
+        { name: "weight.bold", kind: "fontWeight", values: { light: "700" } },
+        { name: "font.body", kind: "fontFamily", values: { light: "serif" } },
+        { name: "speed.fast", kind: "duration", values: { light: "150ms" } },
+      ],
+    });
+    // Each preview drawn AS the value: the style attribute is what makes it a
+    // preview rather than a label, so that is what is asserted.
+    const shadow = document.querySelector<HTMLElement>(".nx-tokens__shadow");
+    expect(shadow?.style.boxShadow).toBe("0 1px 2px #000");
+    const bar = document.querySelector<HTMLElement>(".nx-tokens__bar");
+    expect(bar?.style.width).toContain("8px");
+    const tick = document.querySelector<HTMLElement>(".nx-tokens__tick");
+    expect(tick?.style.animationDuration).toBe("150ms");
+    const previews = Array.from(
+      document.querySelectorAll<HTMLElement>(".nx-tokens__preview")
+    );
+    expect(previews.some(node => node.style.fontWeight === "700")).toBe(true);
+    expect(previews.some(node => node.style.fontFamily === "serif")).toBe(true);
+    // Colour keeps its own swatch, under the rule it already had.
+    expect(document.querySelector(".nx-tokens__swatch")).not.toBeNull();
+  });
+
+  it("draws NOTHING for a value it cannot resolve on its own", () => {
+    /*
+     * The guard rail colour already had, applied to every kind: a `var()`
+     * resolves against the PANEL's custom properties rather than the canvas's,
+     * so drawing it would show something the page does not have. And `number`
+     * and `custom` have no visual form to draw at all.
+     */
+    mount({
+      tokens: [
+        {
+          name: "size.ref",
+          kind: "dimension",
+          values: { light: "var(--site-size-gap)" },
+        },
+        { name: "count.cols", kind: "number", values: { light: "3" } },
+        { name: "custom.thing", kind: "custom", values: { light: "whatever" } },
+      ],
+    });
+    expect(document.querySelector(".nx-tokens__preview")).toBeNull();
+    expect(document.querySelector(".nx-tokens__bar")).toBeNull();
+    // Every row still carries the empty slot, so the column does not collapse.
+    expect(
+      document.querySelectorAll(".nx-tokens__swatch[data-empty]").length
+    ).toBe(3);
+  });
+
   it("groups every kind that HAS tokens into one list", () => {
     // The must-be-found half. Three kinds are present, so three headings are.
     mount(MIXED);

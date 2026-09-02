@@ -997,7 +997,7 @@ function TokenEntry({
 
   return (
     <div className="nx-tokens__row">
-      <Swatch kind={row.kind} value={row.value} />
+      <TokenPreview kind={row.kind} value={row.value} />
       <div className="nx-tokens__fields">
         <label className="sr-only" htmlFor={`${id}-name`}>
           Name of {row.name}
@@ -1206,24 +1206,124 @@ function suppliedTokenFor(
  * and show a colour the page does not have. Every other kind gets nothing
  * rather than an approximation of itself.
  */
-function Swatch({
+/**
+ * Whether a value can be drawn as itself, and the string to draw it with.
+ *
+ * The colour rule is unchanged and is the reason the others exist: a value is
+ * previewed only where THIS package can resolve it without the site's token
+ * table, because a `var()` resolves against the panel's own custom properties
+ * rather than the canvas's and would show something the page does not have.
+ * That applies to every kind, not only colour, so the same refusal covers all
+ * of them.
+ *
+ * `number` and `custom` are absent deliberately. A number has no visual form,
+ * and `custom` holds whatever a site put there; drawing either would be an
+ * illustration rather than a preview.
+ */
+function drawableValue(kind: TokenKind, value: string): string | undefined {
+  if (kind === "color") return colourHexOf(value, undefined);
+  if (!PREVIEWED_KINDS.has(kind)) return undefined;
+  const own = value.trim();
+  if (own === "" || /var\s*\(/i.test(own)) return undefined;
+  return own;
+}
+
+/** The kinds that have a visual form this panel can draw from the value alone. */
+const PREVIEWED_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
+  "dimension",
+  "duration",
+  "fontFamily",
+  "fontWeight",
+  "shadow",
+]);
+
+/**
+ * A preview of what the value is, where one can be drawn honestly.
+ *
+ * Every kind that can be shown is shown in the SAME slot, so the column stays
+ * a column: a ragged left edge would make the list harder to scan than the
+ * previews make it easier.
+ *
+ * Values reach CSS as individual properties rather than as custom properties.
+ * A custom property stores whatever string it is given and hands it to
+ * `var()` substitution later, so a stored value carrying a semicolon could
+ * open a declaration of its own; assigning `box-shadow` or `width` directly
+ * makes the browser parse the value as that property and discard it if it is
+ * not one. The panel shows unsaved and invalid values on purpose, so it cannot
+ * assume the emitter's guards have already run.
+ */
+function TokenPreview({
   kind,
   value,
 }: {
   kind: TokenKind;
   value: string;
 }): React.JSX.Element {
-  const hex = kind === "color" ? colourHexOf(value, undefined) : undefined;
+  const drawable = drawableValue(kind, value);
+  if (drawable === undefined) {
+    return (
+      <span className="nx-tokens__swatch" aria-hidden="true" data-empty="" />
+    );
+  }
+  if (kind === "color") {
+    return (
+      <span
+        className="nx-tokens__swatch"
+        aria-hidden="true"
+        style={{ "--nx-swatch": drawable } as React.CSSProperties}
+      />
+    );
+  }
+  if (kind === "shadow") {
+    return (
+      <span className="nx-tokens__preview" aria-hidden="true">
+        <span className="nx-tokens__shadow" style={{ boxShadow: drawable }} />
+      </span>
+    );
+  }
+  if (kind === "dimension") {
+    return (
+      <span className="nx-tokens__preview" aria-hidden="true">
+        {/*
+          Capped at the track rather than scaled to it. There is no maximum a
+          token is measured against, so any scale would be invented; a bar that
+          runs to the end says "at least this wide" and claims nothing more.
+
+          The cap is `max-width` in the stylesheet rather than `min()` here, so
+          the width reaching CSS is the stored value itself — a function around
+          it is one more thing that has to parse before anything is drawn.
+        */}
+        <span className="nx-tokens__bar" style={{ width: drawable }} />
+      </span>
+    );
+  }
+  if (kind === "duration") {
+    return (
+      <span className="nx-tokens__preview" aria-hidden="true">
+        {/*
+          Shown by TAKING that long. A duration has no length to draw, and a bar
+          scaled to some assumed maximum would be a picture of an assumption.
+          Under `prefers-reduced-motion` the stylesheet stops the animation and
+          leaves the dot at rest.
+        */}
+        <span
+          className="nx-tokens__tick"
+          style={{ animationDuration: drawable }}
+        />
+      </span>
+    );
+  }
   return (
     <span
-      className="nx-tokens__swatch"
+      className="nx-tokens__preview"
       aria-hidden="true"
-      data-empty={hex === undefined ? "" : undefined}
       style={
-        hex === undefined
-          ? undefined
-          : ({ "--nx-swatch": hex } as React.CSSProperties)
+        kind === "fontWeight"
+          ? { fontWeight: drawable }
+          : { fontFamily: drawable }
       }
-    />
+    >
+      Aa
+    </span>
   );
 }

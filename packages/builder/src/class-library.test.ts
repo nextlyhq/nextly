@@ -14,6 +14,7 @@
  *
  * @module class-library.test
  */
+import { BASE_BREAKPOINT, compileStyleValues } from "@nextlyhq/blocks-engine";
 import {
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
@@ -39,6 +40,7 @@ import {
   siteClasses,
   withClassApplied,
   withClassRemoved,
+  classDeclarations,
 } from "./class-library";
 
 /** A library entry, with the styles envelope left empty where it is not read. */
@@ -681,5 +683,66 @@ describe("the listed set is the set the stylesheet carries", () => {
 
     expect(siteClasses(library).map(choice => choice.slug)).toEqual(["good"]);
     expect(emittedSlugs(library)).toEqual(["good"]);
+  });
+});
+
+describe("what a class writes", () => {
+  it("reports the properties the ENGINE compiles, not a second formatter", () => {
+    /*
+     * Asserted against `compileStyleValues` itself rather than a hand-written
+     * list. The panel's job is to show what the stylesheet will carry, so the
+     * compiler is the oracle; a literal expectation here would agree today and
+     * describe a different stylesheet the first time the catalog changed.
+     */
+    const values = { color: "#112233", paddingBlockStart: "1rem" };
+    const summary = classDeclarations(
+      { base: { [BASE_BREAKPOINT]: values } },
+      "hero"
+    );
+    expect(summary.shown.map(d => d.property)).toEqual(
+      compileStyleValues(values, "class:hero").declarations.map(d => d.property)
+    );
+    // The must-be-found control: the compiler really did produce something, so
+    // the equality above is not two empty lists agreeing.
+    expect(summary.shown.length).toBeGreaterThan(0);
+    expect(summary.elsewhere).toBe(0);
+  });
+
+  it("COUNTS what it is not showing, rather than showing the base silently", () => {
+    /*
+     * `NodeStyles` is states by breakpoints and a row has space for neither the
+     * product nor a fair sample. Showing only the base without saying so would
+     * misdescribe a class whose real behaviour is responsive.
+     */
+    const summary = classDeclarations(
+      {
+        base: {
+          [BASE_BREAKPOINT]: { color: "#112233" },
+          md: { color: "#445566" },
+        },
+        hover: { [BASE_BREAKPOINT]: { color: "#778899" } },
+      },
+      "hero"
+    );
+    expect(summary.shown.map(d => d.property)).toEqual(["color"]);
+    // Two places this class also behaves differently: one other breakpoint and
+    // one other state.
+    expect(summary.elsewhere).toBe(2);
+  });
+
+  it("counts a state that sets nothing as nothing", () => {
+    // An empty map is a shape the document can hold and is not a place the
+    // class behaves differently, so counting it would inflate the caveat.
+    const summary = classDeclarations(
+      { base: { [BASE_BREAKPOINT]: { color: "#112233" }, md: {} } },
+      "hero"
+    );
+    expect(summary.elsewhere).toBe(0);
+  });
+
+  it("says nothing at all for a class that writes nothing", () => {
+    const summary = classDeclarations({}, "hero");
+    expect(summary.shown).toEqual([]);
+    expect(summary.elsewhere).toBe(0);
   });
 });
