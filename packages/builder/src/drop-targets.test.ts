@@ -498,7 +498,12 @@ describe("resolveDrop", () => {
       { x: 100, y: 100 }
     );
 
-    expect(resolution).toEqual({
+    // `toStrictEqual`, not `toEqual`. The looser matcher IGNORES properties
+    // whose value is undefined, so it passes whether the key is absent or
+    // present-and-empty — which is the exact distinction being asserted, and
+    // the one the docblock promises. A test that cannot see the difference is
+    // not coverage of it.
+    expect(resolution).toStrictEqual({
       kind: "refused",
       refusal: {
         regionId: ROOT_REGION,

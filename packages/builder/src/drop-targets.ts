@@ -529,7 +529,15 @@ export function resolveDrop(query: DropQuery, pointer: Point): DropResolution {
         regionId: region.id,
         // Taken from the region rather than parsed back out of its id: the
         // region is the richer value and it is already in hand here.
-        parentId: region.parentId,
+        //
+        // SPREAD rather than assigned, so the root case has no `parentId` key
+        // at all. Writing `parentId: undefined` creates an own property whose
+        // value is undefined, which reads the same through `?.` and differently
+        // through `in`, `Object.keys` and a strict comparison — and the type
+        // documents the field as absent at the root rather than as present and
+        // empty. A shape that only matches its documentation under the loosest
+        // reading is one nobody can rely on.
+        ...(region.parentId === undefined ? {} : { parentId: region.parentId }),
         reason: verdict.reason,
         permitted: verdict.permitted,
       },
