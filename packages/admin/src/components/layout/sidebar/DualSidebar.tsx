@@ -32,6 +32,7 @@ import { hasPluginsSection } from "./lib/has-plugins-section";
 import { isSubSidebarCategory } from "./lib/has-sub-sidebar";
 import { resolveItemHref as resolveItemHrefHelper } from "./lib/resolve-item-href";
 import { resolveActiveSection } from "./lib/resolve-section";
+import { resolveSettingsLanding } from "./lib/resolve-settings-landing";
 import type { MainMenuCategory, MainMenuItem } from "./sidebar-types";
 import { getFilteredMenuItems } from "./sidebar-types";
 import { SubSidebarPanel } from "./SubSidebarPanel";
@@ -363,28 +364,18 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const hasSubSidebarCategory = (id: string) =>
     isSubSidebarCategory(id, isFolderTreeVisible);
 
-  // The Settings icon lands on the first subpage the user can actually OPEN —
-  // gated on each route's own guard, not the broader "can see the link" flag, so
-  // it never resolves to a page that would redirect. General needs
-  // manage-settings; the API Keys route needs update-api-keys; Webhooks accepts
-  // any webhook grant (its route's any-of). User Management now lives here too,
-  // so a role whose only access is read-users / read-roles lands on Users (or
-  // Roles) instead of bouncing off the manage-settings-guarded General page.
-  const settingsHref = hasPermission("manage-settings")
-    ? ROUTES.SETTINGS
-    : hasPermission("update-api-keys")
-      ? ROUTES.SETTINGS_API_KEYS
-      : canAccessWebhooks
-        ? ROUTES.SETTINGS_WEBHOOKS
-        : hasPermission("manage-email-providers")
-          ? ROUTES.SETTINGS_EMAIL_PROVIDERS
-          : hasPermission("manage-email-templates")
-            ? ROUTES.SETTINGS_EMAIL_TEMPLATES
-            : hasPermission("read-users")
-              ? ROUTES.USERS
-              : hasPermission("read-roles")
-                ? ROUTES.SECURITY_ROLES
-                : ROUTES.SETTINGS;
+  // The Settings icon lands on the first subpage the user can actually OPEN.
+  // Read off the panel's own table rather than listed here: this chain named
+  // seven destinations in an order of its own, and a destination added to the
+  // table and not to the chain became unreachable from the rail. Background
+  // Jobs was exactly that — the entry appeared, the link fell through every
+  // arm, and a jobs-only operator landed on General Settings, which answers to
+  // manage-settings and returns 403.
+  const settingsHref = resolveSettingsLanding({
+    hasPermission,
+    canAccessApiKeys,
+    canAccessWebhooks,
+  });
 
   const resolveItemHref = (item: MainMenuItem): string =>
     resolveItemHrefHelper(

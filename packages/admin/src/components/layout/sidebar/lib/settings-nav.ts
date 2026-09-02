@@ -42,6 +42,17 @@ export interface SettingsNavItem {
   href: string;
   gate: SettingsNavGate;
   /**
+   * The grant the destination's own ROUTE demands, when that is narrower than
+   * the gate above.
+   *
+   * `gate` answers "may this reader see the link"; this answers "may they open
+   * it". They are usually the same fact and this is then omitted. Where they
+   * differ, a landing decision that consults only `gate` sends someone to a
+   * page the route guard refuses, which reads to them as the panel being
+   * broken. Any-of when a list, matching `PermissionGuard`.
+   */
+  routePermission?: string | readonly string[];
+  /**
    * Match the route exactly instead of by prefix, for a destination whose path
    * is a prefix of its siblings'.
    */
@@ -92,6 +103,11 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Key,
         href: ROUTES.SETTINGS_API_KEYS,
         gate: { kind: "capability", capability: "apiKeys" },
+        // The list screen is guarded on `update-api-keys` alone, while the link
+        // is shown to any api-key grant. A reader holding only `read-api-keys`
+        // may therefore see this entry and not be able to open it, so it must
+        // never be chosen as their landing destination.
+        routePermission: "update-api-keys",
       },
       {
         id: "webhooks",
