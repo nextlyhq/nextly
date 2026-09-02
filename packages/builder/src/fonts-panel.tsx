@@ -39,7 +39,7 @@
 import { cssString } from "@nextlyhq/blocks-engine";
 import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   emittableFaces,
@@ -398,12 +398,31 @@ function isUsableWeight(weight: string): boolean {
 function weightValue(part: string): number | undefined {
   if (part === "normal") return 400;
   if (part === "bold") return 700;
+  // The spelling is checked BEFORE the conversion, because the conversion is
+  // what loses the difference: `Number` and CSS read different languages.
+  if (!CSS_NUMBER.test(part)) return undefined;
   const value = Number(part);
-  // `Number("")` is 0 and `Number(" ")` is 0, both outside the range below.
-  return Number.isFinite(value) && value >= 1 && value <= 1000
-    ? value
-    : undefined;
+  return value >= 1 && value <= 1000 ? value : undefined;
 }
+
+/**
+ * A CSS `<number>`: an optional sign, digits with an optional fraction, and an
+ * optional exponent.
+ *
+ * `Number` was doing this job and reads a LARGER language than CSS does, which
+ * fails in the silent direction: `0x190` converts to 400 and passes any bound
+ * checked afterwards, while the string stored in the descriptor is still
+ * `0x190` — which CSS cannot parse, so the browser drops the declaration and
+ * matches the face at a weight nobody chose. Measured, the three radix
+ * prefixes `0x`, `0b` and `0o` all reach that outcome.
+ *
+ * Written to the CSS grammar rather than as a list of JavaScript's extras, so
+ * a spelling nobody enumerated is refused rather than admitted. The forms CSS
+ * does allow are kept, and they are not exotic: `1e3`, `.5e3`, `400.` and
+ * `+400` are all valid `<number>` tokens and all reach here through the free
+ * text field.
+ */
+const CSS_NUMBER = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 
 /**
  * A key that separates the faces a family is really split into.
@@ -674,6 +693,21 @@ function AddFaceForm({
    * under it — silently, which is the failure this form exists to avoid.
    */
   const [familyAuthored, setFamilyAuthored] = useState(false);
+  /*
+   * The picker element itself, because clearing it is not a state change.
+   *
+   * A file input is uncontrolled: `setFile(null)` forgets the choice on this
+   * side and leaves the element still holding it, filename displayed. A
+   * browser raises `change` only when the SELECTION changes, so choosing the
+   * same file again after a successful add raises nothing, this component
+   * never learns of it, and the button stays disabled — with the author
+   * looking at a picker that shows the file they just chose.
+   *
+   * That is the ordinary path rather than an edge: one variable font is added
+   * once per style, so re-picking the same file is how a family gets its
+   * italic.
+   */
+  const picker = useRef<HTMLInputElement | null>(null);
 
   const chooseFile = (chosen: File | null): void => {
     setFile(chosen);
@@ -715,6 +749,8 @@ function AddFaceForm({
        * nobody chose, which loads and matches nothing.
        */
       setFile(null);
+      // The element, not just this component's memory of it — see `picker`.
+      if (picker.current !== null) picker.current.value = "";
       setFamily("");
       setFamilyAuthored(false);
       setWeight("400");
@@ -765,6 +801,7 @@ function AddFaceForm({
         className="nx-fonts__add-file"
         id="nx-fonts-file"
         onChange={event => chooseFile(event.target.files?.[0] ?? null)}
+        ref={picker}
         type="file"
       />
 

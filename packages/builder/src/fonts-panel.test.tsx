@@ -314,6 +314,18 @@ describe("adding a font file", () => {
       value: [file],
       configurable: true,
     });
+    /*
+     * The element's own `value`, which jsdom does not set and a browser does —
+     * as `C:\\fakepath\\<name>`. It is what the browser compares a later
+     * choice against when deciding whether to raise `change`, so a harness
+     * leaving it empty cannot tell a picker that was cleared from one that was
+     * never filled.
+     */
+    Object.defineProperty(input, "value", {
+      value: `C:\\fakepath\\${file.name}`,
+      writable: true,
+      configurable: true,
+    });
     await act(async () => {
       fireEvent.change(input);
     });
@@ -529,6 +541,76 @@ describe("adding a font file", () => {
     expect(onAddFace.mock.calls[0]?.[0].weight).toBe("100 900");
   });
 
+  it("REFUSES a weight JavaScript reads as a number and CSS does not", async () => {
+    /*
+     * `Number("0x190")` is 400, so a bounds check applied after the conversion
+     * passes — while the string kept in the descriptor is still `0x190`, which
+     * CSS cannot parse. The browser drops the declaration and matches the face
+     * at a weight nobody chose, which is the same silent outcome as `70O` with
+     * nothing visibly wrong with the input.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "0x190" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).not.toHaveBeenCalled();
+  });
+
+  it("KEEPS the exponent and fraction forms, which CSS does allow", async () => {
+    /*
+     * The control. A check written as a list of JavaScript's extras, or one
+     * demanding plain digits, refuses `1e3` and `.5e3` — both valid `<number>`
+     * tokens that reach this field, and both of which a browser reads.
+     */
+    for (const spelling of ["1e3", ".5e3", "400.", "+400"]) {
+      cleanup();
+      const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+      render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+      await chooseFile(woff2("Inter-Regular.woff2"));
+      fireEvent.change(screen.getByLabelText("Weight"), {
+        target: { value: spelling },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+      });
+
+      expect(onAddFace, `${spelling} is a CSS number`).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("clears the PICKER on success, so the same file can be chosen again", async () => {
+    /*
+     * Adding one variable font's italic after its upright means choosing the
+     * same file twice. A browser raises `change` only when the selection
+     * CHANGES, so leaving the element holding the previous file means the
+     * second choice raises nothing, the component never learns of it, and the
+     * button stays disabled while the picker displays the very file the author
+     * just picked.
+     *
+     * Asserted on the element's own `value`, because that is the state the
+     * browser compares against — this component's `file` is not what decides
+     * whether the event is raised.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    const input = screen.getByLabelText("Font file") as HTMLInputElement;
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(input.value).toBe("");
+  });
+
   it("offers the file types the HOST accepts, not a list of its own", () => {
     /*
      * The panel cannot know which formats this site stores and serves, and a
@@ -604,6 +686,18 @@ describe("the add controls inside the entry editor's own form", () => {
     const input = screen.getByLabelText("Font file") as HTMLInputElement;
     Object.defineProperty(input, "files", {
       value: [file],
+      configurable: true,
+    });
+    /*
+     * The element's own `value`, which jsdom does not set and a browser does —
+     * as `C:\\fakepath\\<name>`. It is what the browser compares a later
+     * choice against when deciding whether to raise `change`, so a harness
+     * leaving it empty cannot tell a picker that was cleared from one that was
+     * never filled.
+     */
+    Object.defineProperty(input, "value", {
+      value: `C:\\fakepath\\${file.name}`,
+      writable: true,
       configurable: true,
     });
     await act(async () => {
