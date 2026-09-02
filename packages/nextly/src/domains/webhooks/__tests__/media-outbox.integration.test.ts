@@ -8,6 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { pdfBytes } from "../../media/__tests__/media-test-helpers";
+
 // Storage + image processing are stubbed so the DB write path (and its outbox
 // event) runs without a real backend. Mirrors services/__tests__/media.test.ts.
 vi.mock("@nextly/storage", () => ({
@@ -97,7 +99,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const result = await media.uploadMedia(
       {
-        file: Buffer.from("not-really-an-image"),
+        file: pdfBytes("not-really-an-image"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 19,
@@ -124,7 +126,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfBytes("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -154,7 +156,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfBytes("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -184,7 +186,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfBytes("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -218,7 +220,7 @@ describe("webhook outbox capture — media (integration)", () => {
     const media = service(current!);
     const uploaded = await media.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfBytes("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -252,7 +254,7 @@ describe("webhook outbox capture — media (integration)", () => {
     await seedUser(current!, "editor-7");
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfBytes("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -287,7 +289,7 @@ describe("webhook outbox capture — media (integration)", () => {
     await seedUser(current!, "editor-7");
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfBytes("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -321,7 +323,7 @@ describe("webhook outbox capture — media (integration)", () => {
     });
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfBytes("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -356,7 +358,7 @@ describe("webhook outbox capture — media (integration)", () => {
     });
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfBytes("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -403,7 +405,7 @@ describe("webhook outbox capture — media (integration)", () => {
 
     await legacy.uploadMedia(
       {
-        file: Buffer.from("x"),
+        file: pdfBytes("x"),
         filename: "doc.pdf",
         mimeType: "application/pdf",
         size: 1,
@@ -427,7 +429,7 @@ describe("webhook outbox capture — media (integration)", () => {
 
     await current!.nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfBytes("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
@@ -452,7 +454,7 @@ describe("webhook outbox capture — media (integration)", () => {
 
     const uploaded = await nextly.media.upload({
       file: {
-        data: Buffer.from("x"),
+        data: pdfBytes("x"),
         name: "doc.pdf",
         mimetype: "application/pdf",
         size: 1,
