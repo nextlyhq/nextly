@@ -19,6 +19,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { ADMIN_META_KEY } from "@admin/hooks/useSchemaUpdateInvalidation";
+
 import { fieldGroupKeys } from "../hooks/queries";
 
 interface RestartContextValue {
@@ -95,6 +97,10 @@ export function RestartProvider({ children }: { children: ReactNode }) {
         void queryClient.invalidateQueries({ queryKey: ["singles"] });
         void queryClient.invalidateQueries({ queryKey: ["single-documents"] });
         void queryClient.invalidateQueries({ queryKey: fieldGroupKeys.all() });
+        // The workspace payload carries the widget declarations, including the
+        // cards core derives per collection. Without it the picker offers a new
+        // collection's card under its raw id and the grid cannot draw it.
+        void queryClient.invalidateQueries({ queryKey: ADMIN_META_KEY });
       } else {
         toast.error(message ?? "Failed to apply schema changes");
       }

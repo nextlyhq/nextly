@@ -64,6 +64,36 @@ const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
  */
 const NEVER_EXPOSED_FIELD_TYPES: ReadonlySet<string> = new Set(["password"]);
 
+/**
+ * Field types whose stored value a row-drawing card can PRINT.
+ *
+ * 🔴 An allowlist, and read against the field's ORIGINAL type rather than the
+ * coarse one below: `toSourceType` maps everything it does not recognise to
+ * `"string"`, so a `json`, `group`, `repeater`, `component` or `chips` field is
+ * indistinguishable from a text field by the time a source is built. Schema
+ * validation permits any of those as `admin.useAsTitle`, and the card that
+ * results asks for an object per row -- which `asText` correctly declines to
+ * stringify, so every row draws an em dash and the card says nothing at all.
+ *
+ * FAILS CLOSED on a type it does not know, including one a plugin registered.
+ * The two outcomes are not symmetric: an unrecognised scalar costs that
+ * collection its recent card, which is a missing card; an unrecognised
+ * structured type costs the reader a card of em dashes, which looks like the
+ * product is broken. `relationship` and `upload` are excluded for a third
+ * reason -- their value may well be a printable id, and an id is not a name.
+ */
+const PRINTABLE_FIELD_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "number",
+  "checkbox",
+  "date",
+  "select",
+  "email",
+  "code",
+  "radio",
+]);
+
 /** Map a Nextly field type onto the coarse type a query validator needs. */
 function toSourceType(fieldType: string): WidgetSourceField["type"] {
   switch (fieldType) {
@@ -127,6 +157,13 @@ export interface WidgetSourceCollection {
   slug: string;
   fields: Array<{ name: string; type: string; label?: string }>;
   /**
+   * What a human calls this collection — the registry's plural label.
+   *
+   * Absent falls back to the slug, which is what every source published before
+   * this was carrying. A collection that never set one has no better answer.
+   */
+  label?: string;
+  /**
    * The field the collection's author nominated to name its entries
    * (`admin.useAsTitle`), when they nominated one.
    *
@@ -167,15 +204,30 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   // Through the shared rule, with BOTH halves: the author's nomination and the
   // names it must exist in. Resolved once here so no consumer has to ask again
   // with only one of them.
+  // Only the fields a card could actually print are candidates. Passing every
+  // name would let the shared rule nominate a structured field, and the entry
+  // list does not behave that way either: it reads the VALUE and falls back
+  // when the nominated one is not readable text. This is that same behaviour,
+  // decided from the declaration instead of from a row.
+  const printable = new Set(
+    collection.fields
+      .filter(field => PRINTABLE_FIELD_TYPES.has(field.type))
+      .map(field => field.name)
+  );
   const titleField = entryTitleField(
     collection.useAsTitle,
-    fields.map(field => field.name)
+    fields.filter(field => printable.has(field.name)).map(field => field.name)
   );
 
   return {
     id,
     ...(titleField === undefined ? {} : { titleField }),
-    label: collection.slug,
+    // What a HUMAN calls this collection, which is what `label` means. The slug
+    // is a storage identifier: a collection whose plural label is "Articles"
+    // was published to the source picker, and to every generated card's title,
+    // as `blog-posts` -- disagreeing with the name used everywhere else in the
+    // admin. The slug remains the identity, in `id`.
+    label: collection.label ?? collection.slug,
     // DERIVED from the id rather than restated beside it. The id's namespace is
     // the canonical identity -- `registerSource` refuses a source whose two
     // disagree -- so writing `"collection"` here as well would be the same fact

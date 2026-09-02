@@ -4,6 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import type React from "react";
 import { createContext, useContext, useEffect, useMemo } from "react";
 
+import { useSchemaUpdateInvalidation } from "@admin/hooks/useSchemaUpdateInvalidation";
+
 import { useAuthSession } from "../../hooks/queries/useAuthSession";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
@@ -222,6 +224,12 @@ interface BrandingProviderProps {
 }
 
 export function BrandingProvider({ children }: BrandingProviderProps) {
+  // Both queries below are cached for five minutes, and a schema change makes
+  // them stale — the workspace half carries the widget declarations, including
+  // the cards core derives per collection. This provider owns them, so it is
+  // the one that re-reads them.
+  useSchemaUpdateInvalidation();
+
   const {
     data: brandingData,
     // `isLoadingError`, not `isError`: the latter is also true when a

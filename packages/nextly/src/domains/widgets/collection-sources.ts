@@ -54,6 +54,11 @@ interface RegisteredCollection {
    */
   admin?: unknown;
   /**
+   * The singular/plural display names. Read defensively for the same reason as
+   * `admin`: the row is stored JSON.
+   */
+  labels?: unknown;
+  /**
    * The `timestamps` column pair. A required boolean on the stored record and
    * read defensively here, because the two values decide whether
    * `createdAt`/`updatedAt` exist as COLUMNS -- declaring them on a collection
@@ -172,6 +177,17 @@ async function readRegisteredCollections(): Promise<
  * read into a dashboard of broken cards.
  */
 /**
+ * What a human calls this collection, when the stored row carries a usable
+ * plural label. PLURAL because a source and its cards name a set of entries.
+ */
+function pluralLabelOf(collection: RegisteredCollection): string | undefined {
+  const labels = collection.labels;
+  if (typeof labels !== "object" || labels === null) return undefined;
+  const plural = (labels as { plural?: unknown }).plural;
+  return typeof plural === "string" && plural !== "" ? plural : undefined;
+}
+
+/**
  * The author's nominated title field, when the stored row carries a usable one.
  *
  * The row is JSON, so `admin` may be anything; a non-string nomination is read
@@ -202,6 +218,9 @@ export async function refreshCollectionSources(): Promise<void> {
         fields: readableFields(collection.fields),
         // Only an explicit `false` turns them off; absent means on, the way
         // `defineCollection` normalizes it and the registry stores it.
+        ...(pluralLabelOf(collection) === undefined
+          ? {}
+          : { label: pluralLabelOf(collection) }),
         ...(useAsTitleOf(collection) === undefined
           ? {}
           : { useAsTitle: useAsTitleOf(collection) }),

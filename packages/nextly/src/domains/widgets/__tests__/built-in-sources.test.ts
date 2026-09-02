@@ -246,3 +246,85 @@ describe("built-in sources", () => {
     expect(listSources()).toHaveLength(1);
   });
 });
+
+describe("what a source calls itself, and which field names its rows", () => {
+  it("labels itself the way a HUMAN names the collection", () => {
+    // 🔴 `label` means "what a human calls this". The slug is a storage
+    // identifier, so a collection whose plural label is "Articles" was
+    // published to the picker -- and to every generated card's title -- as
+    // `blog-posts`, disagreeing with the name used everywhere else in the admin.
+    registerBuiltInSources([
+      {
+        slug: "blog-posts",
+        label: "Articles",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:blog-posts")?.label).toBe("Articles");
+  });
+
+  it("falls back to the slug when the collection named itself nothing", () => {
+    // The control: without it the assertion above is satisfied by a source that
+    // labels itself from any string it happens to hold.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.label).toBe("posts");
+  });
+
+  it("resolves the title field from the author's nomination", () => {
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "headline",
+        fields: [
+          { name: "headline", type: "text" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("headline");
+  });
+
+  it("REFUSES a nominated field a card could not print", () => {
+    // 🔴 `toSourceType` maps every type it does not recognise to "string", so a
+    // `json` field is indistinguishable from a text field by the time a source
+    // is built -- and schema validation permits one as `useAsTitle`. The card
+    // would then ask for an object per row, which `asText` declines to
+    // stringify, drawing an em dash on every line. It falls back to a field the
+    // card CAN print, which is what the entry list does when it reads a value
+    // it cannot render.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        useAsTitle: "payload",
+        fields: [
+          { name: "payload", type: "json" },
+          { name: "title", type: "text" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:posts")?.titleField).toBe("title");
+  });
+
+  it("names no title field at all when nothing printable could be one", () => {
+    registerBuiltInSources([
+      {
+        slug: "readings",
+        fields: [
+          { name: "payload", type: "json" },
+          { name: "parts", type: "repeater" },
+        ],
+        timestamps: true,
+      },
+    ]);
+    expect(getSource("collection:readings")?.titleField).toBeUndefined();
+  });
+});
