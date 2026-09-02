@@ -33,6 +33,38 @@ export const COMMON_TITLE_FIELDS = [
 ] as const;
 
 /**
+ * The value of a title field, when it is one a reader would recognise as a name.
+ *
+ * 🔴 The VALUE half of the same question {@link entryTitleField} answers about
+ * FIELDS, and it lives here for the same reason: every surface that names an
+ * entry has to agree, and three separate spellings of this rule disagreed in
+ * three different ways -- one accepted a whitespace-only string, one refused a
+ * number, and only one trimmed. A collection whose title field holds an invoice
+ * number was named by it in the editor and by its id in the version-comparison
+ * heading, and a row whose `label` held two spaces was headed with those two
+ * spaces in one place and with its `subject` in another.
+ *
+ * TRIMMED, and the trimmed value is what comes back: a heading of whitespace is
+ * indistinguishable from a row that failed to load, and returning the untrimmed
+ * original would leave each caller to decide again.
+ *
+ * Numbers and bigints count. An author who nominates an invoice or issue number
+ * as the title means it, the entry table already shows that column, and the
+ * bigint case is real -- an id beyond `Number.MAX_SAFE_INTEGER` arrives from the
+ * driver as one. Objects and arrays are refused: they stringify to something no
+ * reader recognises as a name.
+ */
+export function readableTitleText(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value === "bigint") return String(value);
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * The field that names an entry, or `undefined` when nothing does.
  *
  * `undefined` is a real answer rather than a failure: a collection of pure data

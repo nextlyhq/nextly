@@ -26,27 +26,25 @@
  * exported from this module because this is where the admin's entry-title
  * questions are answered from.
  */
-import { COMMON_TITLE_FIELDS, entryTitleField } from "nextly/config";
+import {
+  COMMON_TITLE_FIELDS,
+  entryTitleField,
+  readableTitleText,
+} from "nextly/config";
 
 export { COMMON_TITLE_FIELDS, entryTitleField };
 
 /**
  * A value counts as a title if it is a scalar with something in it.
  *
- * Numbers included, because an author who nominates an invoice or issue number
- * as the title means it — and the entry table already shows that column, the
- * translation worklist already converts it, so rejecting it here would name one
- * entry three ways. Objects and arrays are refused: they stringify to something
- * no reader recognises as a name.
+ * Asked of core rather than answered here. This rule had three spellings and
+ * they disagreed: one accepted a whitespace-only string, one refused a number,
+ * and one refused a bigint -- so a collection whose title field held an invoice
+ * number was named by it in the editor and by its id in the version-comparison
+ * heading. Which FIELD names an entry and whether that field's VALUE can name
+ * one are halves of the same question, and they now live together.
  */
-function readableText(value: unknown): string | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? String(value) : undefined;
-  }
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+const readableText = readableTitleText;
 
 /**
  * What to call this entry, or `undefined` when it says nothing about itself.

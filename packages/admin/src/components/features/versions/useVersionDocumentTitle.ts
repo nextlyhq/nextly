@@ -13,6 +13,8 @@
  * @module components/features/versions/useVersionDocumentTitle
  */
 
+import { readableTitleText } from "nextly/config";
+
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
@@ -30,12 +32,16 @@ export type TitleScope =
   | { kind: "collection"; slug: string; entryId: string }
   | { kind: "single"; slug: string };
 
-/** A value is a usable title only if it is text with something in it. */
-function readableText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+/**
+ * A value is a usable title only if it is a scalar with something in it.
+ *
+ * 🔴 Asked of core, and the change is a WIDENING this heading was wrong to be
+ * without: the private copy here refused a number, while the editor heading for
+ * the same document accepted one. A Single whose label is an issue number was
+ * therefore named by it in the editor and by its slug on the page comparing its
+ * versions -- two names for one document, from two spellings of one rule.
+ */
+const readableText = readableTitleText;
 
 /**
  * Both queries are asked unconditionally and gated by `enabled`, because a hook

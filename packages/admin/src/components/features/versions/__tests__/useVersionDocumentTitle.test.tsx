@@ -117,6 +117,15 @@ describe("useVersionDocumentTitle — a single", () => {
     expect(forSingle().result.current).toBe("Site settings");
   });
 
+  it("names a single by a NUMERIC label, as the editor heading does", () => {
+    // 🔴 The private rule this hook used refused a number while the editor's
+    // accepted one, so a Single labelled with an issue or invoice number was
+    // named by it in the editor and by its slug on the page comparing its
+    // versions. Two names for one document, from two spellings of one rule.
+    singleSchemaMock.mockReturnValue({ data: { label: 4021 } });
+    expect(forSingle().result.current).toBe("4021");
+  });
+
   it("falls back to the slug, which is what the URL shows", () => {
     singleSchemaMock.mockReturnValue({ data: { label: "  " } });
     expect(forSingle().result.current).toBe("site-settings");
