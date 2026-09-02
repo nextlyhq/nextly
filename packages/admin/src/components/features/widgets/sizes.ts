@@ -53,7 +53,19 @@ export const WIDGET_SPAN_CLASSES: Readonly<Record<WidgetSize, string>> =
  */
 export function widgetSpanClass(size: WidgetSize | undefined): string {
   if (!size) return WIDGET_SPAN_CLASSES.full;
-  return WIDGET_SPAN_CLASSES[size] ?? WIDGET_SPAN_CLASSES.full;
+  // `Object.hasOwn`, not a plain lookup with `??`. The value arrives over the
+  // wire from a plugin declaration, so it can be any string -- and `constructor`
+  // or `toString` resolve to inherited `Object.prototype` members rather than
+  // `undefined`, which means the fallback never runs and the grid is handed a
+  // FUNCTION where it expected a class list. `__proto__` returns an object the
+  // same way.
+  //
+  // The fallback below is what makes an unknown size survivable at all, so a
+  // lookup that can silently skip it defeats the boundary rather than guarding
+  // it.
+  return Object.hasOwn(WIDGET_SPAN_CLASSES, size)
+    ? WIDGET_SPAN_CLASSES[size]
+    : WIDGET_SPAN_CLASSES.full;
 }
 
 /**

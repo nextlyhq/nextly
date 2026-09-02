@@ -447,25 +447,55 @@ function stepDecimals(valueDecimals: number, delta: number): number {
 }
 
 /**
- * The two options a keyword leaf offers, when offering both at once is
- * possible.
+ * How many options a segmented control may offer.
+ *
+ * Three, not two — the condition was never that two is special, it is that the
+ * WHOLE vocabulary fits in the control. A keyword offering three short values
+ * fits, and folding it into a menu makes an author open something to read three
+ * words that could have been on screen.
+ */
+const MAX_TOGGLE_OPTIONS = 3;
+
+/**
+ * The longest a single option may be, and the longest they may be together.
+ *
+ * Length decides as well as count, because this draws in a rail an author can
+ * drag narrow. Three long words do not sit side by side there, and a segmented
+ * control that wraps onto three lines is worse than the menu it replaced: it
+ * takes MORE height and still has to be read word by word. The bounds are
+ * deliberately mean, so the control appears only where it plainly fits and the
+ * menu keeps everything else.
+ */
+const MAX_OPTION_LENGTH = 8;
+const MAX_OPTIONS_LENGTH = 20;
+
+/**
+ * The options a keyword leaf offers, when offering all of them at once fits.
  *
  * A toggle is a PROJECTION of a keyword leaf and not a shape of its own — the
  * engine has no boolean — so it is offered only where the whole vocabulary fits
- * in it: exactly two values, and one keyword per value. A leaf taking a
- * shorthand of two keywords (`overflow: hidden auto`) has more to say than two
- * buttons can, and drawing one would hide the second axis entirely.
+ * in it: at most three values, each short, and one keyword per value. A leaf
+ * taking a shorthand of two keywords (`overflow: hidden auto`) has more to say
+ * than a row of buttons can, and drawing one would hide the second axis
+ * entirely.
+ *
+ * Returned whole or not at all. Offering the first three of a longer vocabulary
+ * would be a control that silently cannot reach the values it does not show.
  */
 export function toggleOptionsFor(
   leaf: StyleLeaf
-): readonly [string, string] | undefined {
+): readonly string[] | undefined {
   if (leaf.kind !== "keyword") return undefined;
   if ((leaf.maxParts ?? 1) !== 1) return undefined;
-  const [first, second, ...rest] = leaf.values;
-  if (first === undefined || second === undefined || rest.length > 0) {
-    return undefined;
-  }
-  return [first, second];
+
+  const values = leaf.values;
+  if (values.length < 2 || values.length > MAX_TOGGLE_OPTIONS) return undefined;
+  if (values.some(value => value.length > MAX_OPTION_LENGTH)) return undefined;
+
+  const together = values.reduce((sum, value) => sum + value.length, 0);
+  if (together > MAX_OPTIONS_LENGTH) return undefined;
+
+  return values;
 }
 
 /**
@@ -478,7 +508,7 @@ export function toggleOptionsFor(
  * show what is actually stored.
  */
 export function toggleShows(
-  options: readonly [string, string],
+  options: readonly string[],
   value: StyleValue | undefined
 ): boolean {
   if (value === undefined) return true;

@@ -487,6 +487,10 @@ describe("contributed widgets are validated at boot", () => {
       ])
     ).toThrow(NextlyError);
 
+    // NOT the vocabulary case. A chrome value this core does not know belongs
+    // to a newer one, and refusing it here would abort the install of a plugin
+    // whose card this admin frames anyway -- the same version boundary the
+    // sizes obey. That check is the registry's.
     expect(() =>
       assertAdminWidgets([
         withWidget({
@@ -495,7 +499,7 @@ describe("contributed widgets are validated at boot", () => {
           chrome: "borderless",
         }),
       ])
-    ).toThrow(NextlyError);
+    ).not.toThrow();
   });
 
   it("accepts chrome where it IS valid", () => {

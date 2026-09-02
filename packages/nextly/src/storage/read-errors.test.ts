@@ -62,3 +62,26 @@ describe("the over-cap refusal", () => {
     expect(isStorageReadTooLarge("nope")).toBe(false);
   });
 });
+
+describe("the documented entry point", () => {
+  it("exports BOTH refusals, not only the over-cap one", async () => {
+    /*
+     * A classifier a caller cannot import is a classifier that does not exist
+     * for them: the barrel is the documented surface, and reaching past it to
+     * `nextly/storage/read-errors` means knowing about a subpath nothing tells
+     * them about. The over-cap pair was already exported here, so the timeout
+     * pair being absent was an asymmetry rather than a policy.
+     *
+     * Imported dynamically because the barrel pulls the whole storage graph,
+     * which a module-level import would drag into every case in this file.
+     */
+    const barrel = await import("./index");
+
+    expect(barrel.StorageReadTimeoutError).toBeDefined();
+    expect(barrel.isStorageReadTimeout).toBeDefined();
+    // The control: the pair that was already exported, proving the assertion
+    // reads real bindings rather than passing on any name at all.
+    expect(barrel.StorageReadTooLargeError).toBeDefined();
+    expect(barrel.isStorageReadTooLarge).toBeDefined();
+  });
+});
