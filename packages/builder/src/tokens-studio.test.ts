@@ -109,6 +109,12 @@ describe("what each tab shows", () => {
 
     const rows = tokenRowsFor(clashing, "color");
     const survivor = rows.find(row => row.name === "color-primary");
+    // Stated separately so a MISSING row reads as a missing row. The optional
+    // chain below already fails when it is absent — `expect(undefined).toBe(
+    // false)` is not satisfied — but it fails saying "expected undefined to be
+    // false", which describes the issue check rather than the row that never
+    // arrived.
+    expect(survivor).toBeDefined();
     expect(survivor?.issues.some(issue => /both become/.test(issue))).toBe(
       false
     );
