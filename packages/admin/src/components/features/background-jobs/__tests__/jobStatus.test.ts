@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { JOB_DISPLAY_STATUSES } from "@admin/types/jobs";
 
+import { dueAt } from "../JobsTable";
 import { formatJobAge, jobStatusPresentation } from "../jobStatus";
 
 describe("job status presentation", () => {
@@ -69,5 +70,37 @@ describe("job age", () => {
 
   it("returns an unparseable value unchanged rather than NaN", () => {
     expect(formatJobAge("not-a-date", now)).toBe("not-a-date");
+  });
+});
+
+describe("when a job is due", () => {
+  /*
+   * `runAt` is the SCHEDULE and `nextAttemptAt` is the RETRY. A job scheduled
+   * for a future instant and never attempted carries the first and not the
+   * second, so reading only the retry showed a dash for exactly the case this
+   * screen exists to answer: a release scheduled to publish.
+   */
+  it("uses the schedule when nothing has been retried", () => {
+    expect(
+      dueAt({ runAt: "2026-09-03T09:00:00.000Z", nextAttemptAt: null } as never)
+    ).toBe("2026-09-03T09:00:00.000Z");
+  });
+
+  it("prefers the retry, which is the later decision", () => {
+    // A job that failed an attempt runs at its backoff, not at the time it was
+    // originally scheduled for.
+    expect(
+      dueAt({
+        runAt: "2026-09-03T09:00:00.000Z",
+        nextAttemptAt: "2026-09-03T09:05:00.000Z",
+      } as never)
+    ).toBe("2026-09-03T09:05:00.000Z");
+  });
+
+  it("is null only when neither is set", () => {
+    // The control: a job with no schedule and no retry is due now, and the
+    // column has nothing to say. Without this the two cases above would pass
+    // against a function that always returned its first argument.
+    expect(dueAt({ runAt: null, nextAttemptAt: null } as never)).toBeNull();
   });
 });

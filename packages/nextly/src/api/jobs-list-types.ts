@@ -9,8 +9,11 @@
  * a compile error in every exhaustive mapping downstream, which is the only
  * kind of notice that arrives before a user sees a blank pill.
  *
- * Types only. Nothing here reaches into the database or the runtime, so a
- * client that imports it pays for no graph beyond the shape.
+ * Shape and vocabulary, not machinery. What it carries besides types is the
+ * status list, the attention predicate that reads it, and the default
+ * retention — each one a decision a client would otherwise make for itself.
+ * Nothing here reaches into the database, so a client that imports it pays for
+ * no graph beyond what it asks.
  *
  * @module api/jobs-list-types
  */
@@ -20,8 +23,21 @@ import type { JobState } from "../schemas/jobs";
 
 export {
   JOB_DISPLAY_STATUSES,
+  jobNeedsAttention,
   type JobDisplayStatus,
 } from "../domains/jobs/job-display-status";
+
+/**
+ * How long a finished job is kept BY DEFAULT.
+ *
+ * Published because a monitor has to tell its reader that an absent job may
+ * have run and been pruned, and a client that writes its own "7 days" states a
+ * policy it cannot see. It is only the default: a host passing `retentionMs` to
+ * `runJobsPass` — `null` disables pruning entirely — keeps rows for some other
+ * period, and nothing on the read path can observe which. A client must present
+ * this as the default rather than as the installation's actual policy.
+ */
+export { DEFAULT_RETENTION_MS } from "../domains/jobs/job-retention";
 
 /**
  * One row as the route assembles it, with instants still `Date`.

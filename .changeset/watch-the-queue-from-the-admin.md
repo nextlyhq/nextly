@@ -57,6 +57,38 @@ because otherwise fifty rows read as the whole story. And it states the
 seven-day retention, because a list that silently forgets is one an operator
 reads as proof a job never ran.
 
+The Settings rail entry now opens for the background-jobs grant. It is a
+capability list that decides whether the panel appears at all, separate from the
+gate on each destination inside it, so an operator holding only
+`manage-background-jobs` passed the inner gate and was stopped by the outer one
+— the page reachable only by typing its URL, with nothing erroring to say so.
+That list is a second enumeration of the settings navigation, which is why the
+omission was possible; deriving the rail from the panel's own visible
+destinations is the real repair and is filed separately, because it means
+reworking a component this change has no other business in.
+
+Retention is presented as the DEFAULT, not as the installation's policy. A host
+passing `retentionMs` to `runJobsPass` keeps rows for another period, and `null`
+disables pruning entirely; nothing on the read path can see which was chosen, so
+a flat "removed after 7 days" is a claim the screen cannot support — and this is
+the sentence operators are meant to trust about absent rows. The number itself
+now comes from the core's own constant, moved to a leaf module so a client
+importing it does not pull the Direct API graph along with it.
+
+"Needs attention" is asked of the core's `jobNeedsAttention` rather than
+compared against `failed` here, so a second actionable terminal state cannot be
+silently omitted from the notice while the exhaustive presentation map goes on
+compiling.
+
+A due time reads the schedule as well as the retry. `runAt` is when a job asked
+to run and `nextAttemptAt` is when a failed one will try again; reading only the
+second showed a dash for a scheduled release, which is the case that brings
+someone to this screen.
+
+The failed-job reason stays in the narrow render. `hideOnMobile` removes a
+column from the card view rather than truncating it, so marking the error text
+that way left a phone showing that a job failed with no way to read why.
+
 The status vocabulary is imported from the core rather than restated. `nextly`
 now publishes `nextly/api/jobs-list-types`, and the wire item is DERIVED from
 the row the route emits, so a field or a status added on the server reaches the

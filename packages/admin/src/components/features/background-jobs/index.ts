@@ -1,7 +1,7 @@
 export {
   JobFailureSummary,
-  failedJobs,
   failedSlugs,
+  jobsNeedingAttention,
 } from "./JobFailureSummary";
 export type { JobFailureSummaryProps } from "./JobFailureSummary";
 export { JobsTable } from "./JobsTable";

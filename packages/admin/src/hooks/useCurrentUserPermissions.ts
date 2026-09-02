@@ -71,6 +71,16 @@ const SYSTEM_CAPABILITY_SLUGS: Record<
     "delete-api-keys",
     "manage-email-providers",
     "manage-email-templates",
+    // Background Jobs lives in the Settings panel, so its grant has to reveal
+    // the panel. Without it the destination passes its own gate while the rail
+    // entry above stays suppressed, and an authorized operator has no way in
+    // short of typing the URL — with nothing erroring to say so.
+    //
+    // This list is a second enumeration of `SETTINGS_NAV`, which is why the
+    // omission was possible at all; deriving the rail from the panel's visible
+    // destinations is the real repair and is filed separately, because it means
+    // reworking a 504-line component that this change has no other business in.
+    "manage-background-jobs",
   ],
   canViewWebhooks: ["read-webhooks", "update-webhooks", "create-webhooks"],
   // Read alone. Unlike webhooks, assembling and publishing releases do not

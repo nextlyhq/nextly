@@ -10,8 +10,12 @@
  * of an operator.
  */
 
+import { DEFAULT_RETENTION_MS } from "nextly/api/jobs-list-types";
+
 export {
+  DEFAULT_RETENTION_MS,
   JOB_DISPLAY_STATUSES,
+  jobNeedsAttention,
   type JobDisplayStatus,
   type JobListItem,
 } from "nextly/api/jobs-list-types";
@@ -32,10 +36,17 @@ export const JOB_WINDOW_SIZES = [25, 50, 100, 200] as const;
 export type JobWindowSize = (typeof JOB_WINDOW_SIZES)[number];
 
 /**
- * How long the queue keeps a finished job.
+ * How long the queue keeps a finished job BY DEFAULT, in days.
  *
- * Stated so the screen can say it. An operator who does not know a job list is
- * pruned reads an absence as "this never ran", which is the one wrong
- * conclusion this screen exists to prevent.
+ * Derived from the core's own constant rather than written here, and presented
+ * as the default rather than as this installation's policy — because it may not
+ * be. A host passing `retentionMs` to `runJobsPass` keeps rows for some other
+ * period, and `null` disables pruning altogether; nothing on the read path can
+ * observe which was chosen. Saying "removed after 7 days" flatly would be a
+ * claim the screen cannot support, which is worse than the vagueness, since the
+ * whole point of stating retention is that an absence must not be read as
+ * proof a job never ran.
  */
-export const JOB_RETENTION_DAYS = 7;
+export const DEFAULT_JOB_RETENTION_DAYS = Math.round(
+  DEFAULT_RETENTION_MS / (24 * 60 * 60 * 1000)
+);

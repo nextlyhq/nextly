@@ -14,6 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import {
   SETTINGS_NAV,
   isSettingsNavItemVisible,
@@ -78,6 +79,48 @@ describe("the Background Jobs settings entry", () => {
     expect(item).toBeDefined();
     if (!item) return;
     expect(isSettingsNavItemVisible(item, only("manage-settings"))).toBe(false);
+  });
+});
+
+describe("the RAIL above that entry, which the item's own gate cannot see", () => {
+  /*
+   * Two ways to be invisible, and the assertions above reach only the second.
+   * `DualSidebar` shows the Settings rail entry when `canViewSettings` is true;
+   * the item's own gate then decides what is inside. An operator holding only
+   * `manage-background-jobs` passed the inner gate and was stopped by the outer
+   * one, so the destination was reachable only by typing its URL.
+   *
+   * Driven through `buildCapabilities`, which is what the product calls, rather
+   * than through a literal capability object — a hand-built one keeps passing
+   * after the real derivation stops setting the flag.
+   */
+  it("reveals Settings to an operator whose ONLY grant is the jobs permission", () => {
+    expect(
+      buildCapabilities(["manage-background-jobs"], false).canViewSettings
+    ).toBe(true);
+  });
+
+  it("still hides it from someone holding an unrelated grant", () => {
+    // The control: without it the case above passes against a capability that
+    // is true for everyone, which is the other way to be wrong here.
+    expect(buildCapabilities(["read-media"], false).canViewSettings).toBe(
+      false
+    );
+  });
+
+  it("keeps revealing it for the grants it always revealed for", () => {
+    // Adding to this list must not narrow it. One representative grant per
+    // group it already covered.
+    for (const grant of [
+      "manage-settings",
+      "read-api-keys",
+      "manage-email-providers",
+      "manage-email-templates",
+    ]) {
+      expect(buildCapabilities([grant], false).canViewSettings, grant).toBe(
+        true
+      );
+    }
   });
 });
 

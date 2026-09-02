@@ -10,9 +10,13 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
-import type { JobListItem } from "@admin/types/jobs";
+import {
+  JOB_DISPLAY_STATUSES,
+  jobNeedsAttention,
+  type JobListItem,
+} from "@admin/types/jobs";
 
-import { failedJobs, JobFailureSummary } from "../JobFailureSummary";
+import { JobFailureSummary, jobsNeedingAttention } from "../JobFailureSummary";
 
 const { useJobs, canFor } = vi.hoisted(() => ({
   useJobs: vi.fn(),
@@ -43,11 +47,31 @@ function job(overrides: Partial<JobListItem> = {}): JobListItem {
   };
 }
 
-const holding = (items: JobListItem[]) => ({
-  data: { items, meta: { hasNext: false } },
+const holding = (items: JobListItem[], hasNext = false) => ({
+  data: { items, meta: { hasNext } },
 });
 
-describe("failedJobs", () => {
+describe("jobsNeedingAttention", () => {
+  it("agrees with the CORE predicate on every status it declares", () => {
+    /*
+     * A guard rather than a defect test, and worth saying so: the core answers
+     * `failed` and nothing else today, so a reverted `=== "failed"` would still
+     * pass this. What it pins is the day that changes — a second actionable
+     * terminal state makes the two disagree, and this is what notices it, since
+     * the exhaustive presentation map would compile either way.
+     */
+    for (const status of JOB_DISPLAY_STATUSES) {
+      const rows = [job({ status })];
+      expect(jobsNeedingAttention(rows).length, status).toBe(
+        jobNeedsAttention(status) ? 1 : 0
+      );
+    }
+    // The premise: the vocabulary really has both kinds in it, so agreeing
+    // everywhere is not agreement over a single case.
+    expect(JOB_DISPLAY_STATUSES.some(s => jobNeedsAttention(s))).toBe(true);
+    expect(JOB_DISPLAY_STATUSES.some(s => !jobNeedsAttention(s))).toBe(true);
+  });
+
   it("takes terminal failures and NOT retries", () => {
     const rows = [
       job({ id: "a", status: "failed" }),
@@ -55,7 +79,9 @@ describe("failedJobs", () => {
       job({ id: "c", status: "waiting" }),
       job({ id: "d", status: "succeeded" }),
     ];
-    expect(failedJobs(rows).map(row => row.id)).toEqual(["a"]);
+    expect(
+      jobsNeedingAttention(rows).map((row: JobListItem) => row.id)
+    ).toEqual(["a"]);
   });
 
   it("restricts to one task when asked, and admits it otherwise", () => {
@@ -63,12 +89,14 @@ describe("failedJobs", () => {
       job({ id: "a", slug: "releases:drain" }),
       job({ id: "b", slug: "webhooks:drain" }),
     ];
-    expect(failedJobs(rows, "webhooks:drain").map(row => row.id)).toEqual([
-      "b",
-    ]);
+    expect(
+      jobsNeedingAttention(rows, "webhooks:drain").map(
+        (row: JobListItem) => row.id
+      )
+    ).toEqual(["b"]);
     // The control: without the filter both are failures, so the case above
     // narrowed something rather than matching nothing for another reason.
-    expect(failedJobs(rows)).toHaveLength(2);
+    expect(jobsNeedingAttention(rows)).toHaveLength(2);
   });
 });
 
@@ -82,6 +110,31 @@ describe("JobFailureSummary", () => {
     useJobs.mockReturnValue(holding([job()]));
     render(<JobFailureSummary />);
     expect(screen.getByRole("status")).toHaveTextContent("releases:drain");
+  });
+
+  it("reports a count from a TRUNCATED window as a lower bound", () => {
+    /*
+     * `hasNext` says the server held more rows than this read asked for, so
+     * failures may sit outside the window. A headline number stated flatly
+     * would under-report them with the confidence of a total — the same lie the
+     * screen's truncation notice exists to prevent, in the one place a reader
+     * looks first.
+     */
+    useJobs.mockReturnValue(holding([job(), job({ id: "j2" })], true));
+    render(<JobFailureSummary />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /At least 2 background jobs failed/i
+    );
+  });
+
+  it("states a count PLAINLY when the window is complete", () => {
+    // The control: without it the qualifier could be permanent, which would
+    // make every count read as uncertain whether or not it is.
+    useJobs.mockReturnValue(holding([job(), job({ id: "j2" })], false));
+    render(<JobFailureSummary />);
+    const alert = screen.getByRole("status");
+    expect(alert).toHaveTextContent(/2 background jobs failed/i);
+    expect(alert).not.toHaveTextContent(/At least/i);
   });
 
   it("renders NOTHING when every job is fine", () => {

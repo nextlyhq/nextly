@@ -39,6 +39,22 @@ import {
 /** Sentinel for the "no filter" option (Radix Select forbids an empty value). */
 const ALL = "all" as const;
 
+/**
+ * When this job is next expected to run, or `null` when nothing is scheduled.
+ *
+ * `runAt` is the SCHEDULE and `nextAttemptAt` is the RETRY, and the core's own
+ * due rule reads both — a job scheduled for next Tuesday and never attempted
+ * has `runAt` set and `nextAttemptAt` null. Reading only the retry showed a
+ * dash for exactly the case that motivates this screen: a release scheduled to
+ * publish, which an operator opens the monitor to ask about.
+ *
+ * The retry wins when both are present, because it is the later decision: a
+ * job that failed an attempt runs at its backoff, not at its original time.
+ */
+export function dueAt(job: JobListItem): string | null {
+  return job.nextAttemptAt ?? job.runAt;
+}
+
 export interface JobsTableProps {
   rows: JobListItem[];
   isLoading?: boolean;
@@ -85,9 +101,12 @@ export const JobsTable: React.FC<JobsTableProps> = ({
         ),
       },
       {
+        // Kept in the card view. `hideOnMobile` does not truncate a column, it
+        // REMOVES it, so hiding this one leaves a phone showing that a job
+        // failed with no way to read why — the single fact this screen exists
+        // to deliver.
         name: "lastError",
         header: "Last error",
-        hideOnMobile: true,
         cell: ({ row }) =>
           row.lastError === null ? (
             <span className="text-sm text-muted-foreground">-</span>
@@ -103,20 +122,22 @@ export const JobsTable: React.FC<JobsTableProps> = ({
           ),
       },
       {
-        name: "nextAttemptAt",
-        header: "Next attempt",
+        name: "dueAt",
+        header: "Due",
         hideOnMobile: true,
-        cell: ({ row }) =>
-          row.nextAttemptAt === null ? (
+        cell: ({ row }) => {
+          const due = dueAt(row);
+          return due === null ? (
             <span className="text-sm text-muted-foreground">-</span>
           ) : (
             <span
               className="text-sm text-muted-foreground"
-              title={formatJobTimestamp(row.nextAttemptAt)}
+              title={formatJobTimestamp(due)}
             >
-              {formatJobAge(row.nextAttemptAt, now)}
+              {formatJobAge(due, now)}
             </span>
-          ),
+          );
+        },
       },
       {
         name: "updatedAt",
@@ -196,6 +217,10 @@ export const JobsTable: React.FC<JobsTableProps> = ({
       <DataTableView<JobListItem>
         columns={columns}
         rows={rows}
+        // Declared rather than left to the reflective fallback, which the admin
+        // conventions require and which keeps row identity part of this table's
+        // contract instead of a property of whatever shape the row has today.
+        getRowId={row => row.id}
         loading={isLoading}
         ariaLabel="Background jobs"
         emptyMessage={

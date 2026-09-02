@@ -35,7 +35,7 @@ import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundar
 import { JOBS_POLL_INTERVAL_MS, useJobs } from "@admin/hooks/queries/useJobs";
 import { useCan } from "@admin/hooks/useCan";
 import {
-  JOB_RETENTION_DAYS,
+  DEFAULT_JOB_RETENTION_DAYS,
   type JobDisplayStatus,
   type JobWindowSize,
 } from "@admin/types/jobs";
@@ -126,11 +126,11 @@ export const BackgroundJobsContent: React.FC = () => {
             them.{" "}
           </>
         )}
-        Finished jobs are removed after {JOB_RETENTION_DAYS} days, so a job
-        missing from this list may have run and been cleaned up rather than
-        never having run. Refreshes every{" "}
-        {Math.round(JOBS_POLL_INTERVAL_MS / 1000)} seconds while this tab is
-        open.
+        Finished jobs are pruned — after {DEFAULT_JOB_RETENTION_DAYS} days
+        unless this installation configured otherwise — so a job missing from
+        this list may have run and been cleaned up rather than never having run.
+        Refreshes every {Math.round(JOBS_POLL_INTERVAL_MS / 1000)} seconds while
+        this tab is open.
       </p>
     </div>
   );

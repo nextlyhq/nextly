@@ -77,9 +77,24 @@ describe("what the background jobs screen admits to", () => {
   it("states the retention window, so an absence is not read as never-ran", () => {
     useJobs.mockReturnValue(window_([job()], false));
     render(<BackgroundJobsContent />);
+    expect(screen.getByText(/Finished jobs are pruned/i)).toBeVisible();
+    expect(screen.getByText(/may have run and been cleaned up/i)).toBeVisible();
+  });
+
+  it("presents the retention as a DEFAULT rather than as this installation's", () => {
+    /*
+     * `runJobsPass` takes a `retentionMs`, and `null` disables pruning
+     * altogether, so nothing the read path can see says what this deployment
+     * actually keeps. A flat "removed after 7 days" is therefore a claim the
+     * screen cannot support — and this sentence exists precisely so operators
+     * trust what it says about absent rows.
+     */
+    useJobs.mockReturnValue(window_([job()], false));
+    render(<BackgroundJobsContent />);
     expect(
-      screen.getByText(/Finished jobs are removed after 7 days/i)
+      screen.getByText(/unless this installation configured otherwise/i)
     ).toBeVisible();
+    expect(screen.queryByText(/removed after 7 days/i)).toBeNull();
   });
 
   it("refuses the whole screen without the permission, and asks for nothing", () => {
@@ -95,12 +110,21 @@ describe("what the background jobs screen admits to", () => {
     );
   });
 
-  it("shows a failed job's error text in the table", () => {
+  it("carries the error text into the NARROW render as well as the wide one", () => {
+    /*
+     * `DataTableView` renders both a table and a card list and lets the layout
+     * choose, and `hideOnMobile` does not truncate a column — it REMOVES it
+     * from the card list. Marking `lastError` that way left a phone showing
+     * that a job failed with no way to read why, which is the single fact this
+     * screen exists to deliver.
+     *
+     * So the assertion is that the reason appears in BOTH renders. One
+     * occurrence is precisely the broken state.
+     */
     useJobs.mockReturnValue(
       window_([job({ status: "failed", lastError: "smtp refused" })], false)
     );
     render(<BackgroundJobsContent />);
-    // The premise for the notice above it: the row itself carries the reason.
-    expect(screen.getByTitle("smtp refused")).toBeVisible();
+    expect(screen.getAllByTitle("smtp refused").length).toBeGreaterThan(1);
   });
 });
