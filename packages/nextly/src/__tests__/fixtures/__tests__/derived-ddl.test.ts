@@ -49,23 +49,34 @@ describe("fixture DDL derived from the Drizzle schema", () => {
 
   it("rejects a duplicate slug whichever source built the table", async () => {
     const testDb = await createTestDb();
-    const raw = testDb.adapter.getDrizzle<{ $client: RawSqlite }>().$client;
+    const raw = testDb.adapter.getDrizzle<{
+      $client: RawSqlite & { exec(sql: string): unknown };
+    }>().$client;
 
-    // The property the assertion above stands in for, asked of the database
+    // The property the assertion above stands in for, asked of the DATABASE
     // rather than of its DDL text — so it holds whether `dynamic_collections`
     // came from the production generator or from `ddlFor`, and keeps holding
     // when another table moves between the two.
-    const uniques = (
-      raw.prepare("PRAGMA index_list(dynamic_collections)").all() as {
-        unique: number;
-      }[]
-    ).filter(index => index.unique === 1);
+    //
+    // Written as an insert rather than a count of unique indexes. That count
+    // cannot fail for the right reason: the text primary key and `table_name`
+    // supply two on their own, so it stays satisfied with the slug constraint
+    // gone — which is the one thing it exists to detect.
+    const row = (slug: string) =>
+      `INSERT INTO "dynamic_collections" ` +
+      `("id","slug","labels","table_name","fields","schema_hash","created_at","updated_at") ` +
+      `VALUES ('${slug}-id','${slug}','{}','${slug}_table','[]','h',1,1)`;
 
-    expect(
-      uniques.length,
-      "dynamic_collections carries `.unique()` on slug and table_name; a " +
-        "fixture without those accepts collisions production rejects"
-    ).toBeGreaterThanOrEqual(2);
+    raw.exec(row("first"));
+    // Same slug, different id and table_name, so only the slug can refuse it.
+    expect(() =>
+      raw.exec(
+        `INSERT INTO "dynamic_collections" ` +
+          `("id","slug","labels","table_name","fields","schema_hash","created_at","updated_at") ` +
+          `VALUES ('second-id','first','{}','second_table','[]','h',1,1)`
+      )
+    ).toThrow(/UNIQUE/i);
+
     await testDb.close();
   });
 
