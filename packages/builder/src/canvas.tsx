@@ -86,17 +86,6 @@ export { CANVAS_ROOT_CLASS };
 export const SELECTED_ATTRIBUTE = "data-nx-selected";
 
 /**
- * Marks every element drawing the block currently being dragged.
- *
- * EVERY element rather than one: a node id is unique in a document and not in
- * the tree drawn from it, so a repeating block is many elements for one id and
- * a mark that stopped at the first would dim one copy of a block that is
- * wholly in flight.
- *
- * Boolean by presence, for the reason {@link SELECTED_ATTRIBUTE} is: the
- * element already states its id.
- */
-/**
  * Marks a node the drag engine will refuse to pick up.
  *
  * Drawn so the grab cursor can be withheld from it. With no drag handle, that
@@ -107,6 +96,17 @@ export const SELECTED_ATTRIBUTE = "data-nx-selected";
  */
 export const LOCKED_ATTRIBUTE = "data-nx-locked";
 
+/**
+ * Marks every element drawing the block currently being dragged.
+ *
+ * EVERY element rather than one: a node id is unique in a document and not in
+ * the tree drawn from it, so a repeating block is many elements for one id and
+ * a mark that stopped at the first would dim one copy of a block that is
+ * wholly in flight.
+ *
+ * Boolean by presence, for the reason {@link SELECTED_ATTRIBUTE} is: the
+ * element already states its id.
+ */
 export const DRAG_SOURCE_ATTRIBUTE = "data-nx-drag-source";
 
 /**
@@ -1650,7 +1650,8 @@ function DropRefusalNotice({
 }): React.JSX.Element {
   const notice = useRef<HTMLDivElement | null>(null);
   const [at, setAt] = useState<{ x: number; y: number } | null>(null);
-  const { parentId, reason } = refusal;
+  const { parentId } = refusal;
+  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
 
   /*
    * Measured BEFORE the browser paints, not after.
@@ -1736,9 +1737,22 @@ function DropRefusalNotice({
     return () => {
       scroller.removeEventListener("scroll", measure);
     };
-  }, [parentId, reason]);
+    /*
+     * Re-measured when the WORDING changes, not merely when the container does.
+     *
+     * Two slots on one container share a `parentId` and a reason while carrying
+     * different permitted lists, so the message can be replaced without any of
+     * the identity this effect anchors on moving. A longer remedy wraps onto
+     * another line, and the clamp would still be holding the height of the
+     * sentence it replaced — which is exactly the case that pushes it back out
+     * of the band near the bottom of the viewport.
+     *
+     * Keyed on the rendered strings rather than on `regionId`, because height
+     * is a property of the text: two regions producing identical sentences need
+     * no re-measure, and one region whose list changed does.
+     */
+  }, [parentId, headline, remedy]);
 
-  const { headline, remedy } = refusalWording(refusal, movingType, regionType);
   return (
     <div
       ref={notice}

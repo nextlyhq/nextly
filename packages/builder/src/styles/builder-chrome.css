@@ -1192,6 +1192,26 @@
 }
 
 /*
+ * Text being edited shows a caret, not a grab.
+ *
+ * Inline editing turns the node's own element into editable content and stops
+ * the pointer events a drag would start from, so the gesture the grab cursor
+ * advertises is unavailable at exactly the moment the element most needs to
+ * advertise a different one: where the caret will land, and what a press-drag
+ * will select.
+ *
+ * Both spellings, because the attribute and the property are set by different
+ * layers — the builder marks the element it is editing, the browser reflects
+ * the editable state — and a rule keyed on only one of them is right until
+ * whichever it did not name changes.
+ */
+.nx-canvas [data-nx-node][data-nx-editing],
+.nx-canvas [data-nx-node][contenteditable="true"],
+.nx-canvas [data-nx-node][contenteditable="plaintext-only"] {
+  cursor: text;
+}
+
+/*
  * Held, and refused.
  *
  * Both are reachable because this drag is built on POINTER events with pointer
