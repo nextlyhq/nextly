@@ -2941,6 +2941,10 @@ describe("a segmented keyword control behaves as a toggle", () => {
     fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
 
     expect(editor.applyAll).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * A per-side property drawn as the box it describes.
  *
  * Two things are asserted here that no CSS file can state: that the box is
@@ -3070,5 +3074,6 @@ describe("a per-side property is drawn as a box", () => {
       '[data-property="padding"]'
     ) as HTMLElement | null;
     expect(box?.getAttribute("data-sides")).toBe("logical");
-    expect(box?.style.direction).toBe("rtl");  });
+    expect(box?.style.direction).toBe("rtl");
+  });
 });
