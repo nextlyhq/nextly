@@ -299,11 +299,13 @@ export function InspectorPanel({
   // Owned here rather than in the style tab: reading it needs a subscription to
   // the canvas, and the panel that decides which control shows a value should
   // not also hold one. Passed down as an answer, exactly as `cascade` is.
-  const canvas = useCanvasReading(
-    canvasRoot,
-    editor.selectedId,
-    editor.document
-  );
+  const canvas = useCanvasReading(canvasRoot, editor.selectedId, {
+    document: editor.document,
+    state: styleState?.state,
+    breakpoint,
+    cascade,
+    previewContainer,
+  });
   const inspection = inspectSelection(editor.document, editor.selectedId);
   /*
    * The NODE rather than the inspection, because the marker is about stored

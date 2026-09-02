@@ -36,6 +36,40 @@ import { observeRenderedTree } from "./rendered-tree";
 import { orientationOfElement, type SideOrientation } from "./side-orientation";
 import { markedElementOf } from "./style-subject";
 
+/**
+ * What the panel knows that can change the answer without moving an element.
+ *
+ * The axes are a COMPUTED property, so they move for reasons no mutation
+ * reports: a forced state selects different rules, a breakpoint or preview
+ * width changes which queries match, and new site styles change what is
+ * inherited. None of those adds, removes or re-marks a node, and watching
+ * attributes broadly is not open to us — `rendered-tree` records that both
+ * observers here WRITE attributes inside the tree they watch, so a broad filter
+ * re-enters for as long as the canvas is mounted.
+ *
+ * So the signals are taken from the panel, which already models every one of
+ * them, rather than inferred from the DOM.
+ *
+ * One gap remains and is worth naming: a restyle from OUTSIDE this model — a
+ * stylesheet swapped by the host, or an ancestor `dir` toggled by something
+ * that is not the editor — is not covered, and the box keeps the previous axes
+ * until anything else here changes. It is drawn from a reading that was true
+ * when taken, which is the reason an unreadable orientation draws rows rather
+ * than guessing.
+ */
+export interface RestyleSignals {
+  /** The document, so a commit re-reads. */
+  readonly document: EditorState["document"];
+  /** The forced state being previewed, which selects a different rule set. */
+  readonly state?: string | undefined;
+  /** The breakpoint the canvas is sized to, which changes what queries match. */
+  readonly breakpoint?: string | undefined;
+  /** The site's compiled styles, which decide what the element inherits. */
+  readonly cascade?: unknown;
+  /** The container the preview is measured against, for the same reason. */
+  readonly previewContainer?: string | undefined;
+}
+
 /** Everything the canvas can say about the selected node. */
 export interface CanvasReading {
   /** The element the node is drawn as, lowercased, or `undefined` if not drawn. */
@@ -73,8 +107,9 @@ function same(a: CanvasReading, b: CanvasReading): boolean {
 export function useCanvasReading(
   canvasRoot: HTMLElement | null | undefined,
   selectedId: string | null,
-  document: EditorState["document"]
+  restyledBy: RestyleSignals
 ): CanvasReading {
+  const { document, state, breakpoint, cascade, previewContainer } = restyledBy;
   const [reading, setReading] = React.useState<CanvasReading>(NOTHING);
 
   React.useEffect(() => {
@@ -123,7 +158,23 @@ export function useCanvasReading(
       stopTree?.();
       sizes?.disconnect();
     };
-  }, [canvasRoot, selectedId, document]);
+    /*
+     * Every dependency here is something that can RESTYLE the page without
+     * moving an element, which is the class of change no observer above can
+     * see. A forced state applies a different rule set; a breakpoint or preview
+     * width changes which queries match; new site styles change what is
+     * inherited. Each is already modelled by the panel, so the axes are re-read
+     * from the signal rather than from a guess about the DOM.
+     */
+  }, [
+    canvasRoot,
+    selectedId,
+    document,
+    state,
+    breakpoint,
+    cascade,
+    previewContainer,
+  ]);
 
   return reading;
 }

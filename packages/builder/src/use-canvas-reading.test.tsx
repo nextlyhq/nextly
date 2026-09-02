@@ -25,8 +25,11 @@ afterEach(cleanup);
 /** A document object, which this hook only ever uses as a change signal. */
 const DOCUMENT = {} as EditorState["document"];
 
-function Reader({ root }: { root: HTMLElement | null }) {
-  const { tag, orientation } = useCanvasReading(root, "n1", DOCUMENT);
+function Reader({ root, state }: { root: HTMLElement | null; state?: string }) {
+  const { tag, orientation } = useCanvasReading(root, "n1", {
+    document: DOCUMENT,
+    state,
+  });
   return (
     <>
       <span data-testid="tag">{tag ?? "unknown"}</span>
@@ -182,7 +185,38 @@ describe("keeping the axes current when nothing in the tree moves", () => {
     Reflect.deleteProperty(globalThis, "ResizeObserver");
   });
 
-  it("re-reads when the canvas RESIZES, which no tree mutation reports", () => {
+  it("re-reads when a RESTYLING signal changes, with nothing in the DOM moving", () => {
+    /*
+     * The axes are a computed property, so they move for reasons no mutation
+     * reports and no size change accompanies: a forced state selects a
+     * different rule set, and a breakpoint or preview width changes which
+     * queries match. Nothing is added, removed or re-marked, and the canvas box
+     * need not change at all — so the panel's own signal is the only thing that
+     * can say the answer may have moved.
+     */
+    const canvas = document.createElement("div");
+    canvas.innerHTML = '<h1 data-nx-node="n1">A title</h1>';
+    const drawn = canvas.firstElementChild as HTMLElement;
+    let axes = { writingMode: "horizontal-tb", direction: "ltr" };
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === drawn
+        ? (axes as unknown as CSSStyleDeclaration)
+        : REAL(element, pseudo)) as typeof window.getComputedStyle);
+
+    const view = render(<Reader root={canvas} state="base" />);
+    expect(screen.getByTestId("axes").textContent).toBe("horizontal-tb/ltr");
+
+    // A forced state now applies a rule that flips the inline axis.
+    axes = { writingMode: "horizontal-tb", direction: "rtl" };
+    view.rerender(<Reader root={canvas} state="hover" />);
+
+    expect(screen.getByTestId("axes").textContent).toBe("horizontal-tb/rtl");
+  });
+
+  it("re-reads when the canvas resize observer FIRES", () => {
     /*
      * Writing mode and direction are inherited and can be set by a media or
      * container query, so dragging the canvas across one of its own breakpoints
@@ -191,8 +225,10 @@ describe("keeping the axes current when nothing in the tree moves", () => {
      * pointing at the edges the previous width implied.
      *
      * `ResizeObserver` is not implemented by jsdom, so it is supplied here and
-     * its callback driven by hand — which is also why the hook checks for it
-     * rather than assuming it.
+     * its callback driven by hand. That is the limit of what this asserts: the
+     * hook re-reads WHEN THE OBSERVER FIRES. Whether a browser delivers that
+     * event for any particular restyle is not something this can establish, and
+     * it is why the signals above carry the cases a resize would miss.
      */
     let fire: (() => void) | undefined;
     class FakeResizeObserver {
