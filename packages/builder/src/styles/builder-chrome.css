@@ -2774,7 +2774,9 @@
 .nx-fonts__tokens,
 .nx-fonts__face,
 .nx-fonts__token,
-.nx-fonts__families {
+.nx-fonts__families,
+.nx-fonts__family-group,
+.nx-fonts__family-faces {
   display: flex;
   flex-direction: column;
 }
@@ -2788,8 +2790,12 @@
   gap: 0.5rem;
 }
 
+/* The bordered blocks the panel is built from. A family group is one of them:
+   same inset, same boundary, so the three read as one kind of card rather than
+   as three that happen to look alike. */
 .nx-fonts__face,
-.nx-fonts__token {
+.nx-fonts__token,
+.nx-fonts__family-group {
   gap: 0.25rem;
   border: 1px solid var(--nx-border);
   border-radius: 0.375rem;
@@ -2800,9 +2806,119 @@
   gap: 0.125rem;
 }
 
+/* A family's cuts, grouped under the name they share so the block reads as one
+   typeface rather than as repeated rows. Its stacking, list reset and boundary
+   all come from the rules above; only the inner spacing is its own. */
+.nx-fonts__family-faces {
+  gap: 0.375rem;
+}
+
+/* Which cut a row is. Quieter than the family name above it, because the name
+   is what an author scans for and the cut is what they confirm. */
+.nx-fonts__face-cut {
+  font-size: var(--text-xs);
+  color: var(--nx-muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- adding a font file ---------------------------------------------------
+   A labelled column rather than a grid: the panel is a narrow rail, and a
+   two-column form there collapses to unreadable field widths at the sizes this
+   surface is actually used at. */
+.nx-fonts__add {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--nx-border);
+}
+
+/* The group's own name. A `role="group"` needs one to be announced as a group
+   at all, and the visible heading and the accessible name are then the same
+   string rather than a caption and a hidden label that can disagree. */
+.nx-fonts__add-heading {
+  margin: 0 0 0.125rem;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+.nx-fonts__add-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--nx-muted-foreground);
+}
+
+/* One rule for every control, so the file input, the text fields and the select
+   share a boundary and a height instead of falling back to three different
+   platform presentations. */
+.nx-fonts__add-file,
+.nx-fonts__add-text {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.375rem 0.5rem;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  color: var(--nx-foreground);
+  background: var(--nx-background);
+  border: 1px solid var(--nx-border);
+  border-radius: 0.375rem;
+}
+
+.nx-fonts__add-file::file-selector-button {
+  margin-right: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: var(--text-xs);
+  font-family: inherit;
+  color: var(--nx-foreground);
+  background: var(--nx-muted);
+  border: 1px solid var(--nx-border);
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.nx-fonts__add-file:focus-visible,
+.nx-fonts__add-text:focus-visible,
+.nx-fonts__add-submit:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 2px;
+}
+
+.nx-fonts__add-submit {
+  margin-top: 0.125rem;
+  padding: 0.375rem 0.75rem;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--nx-primary-foreground);
+  background: var(--nx-primary);
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+/* Disabled is a STATE, not a colour: an author reads why from the fields above,
+   so this only has to stop reading as pressable. */
+.nx-fonts__add-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The refusal sits under the control that produced it and uses the destructive
+   token, so it carries the same meaning in both modes as every other error in
+   this chrome. */
+.nx-fonts__add-error {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--nx-destructive);
+}
+
 .nx-fonts__faces,
 .nx-fonts__tokens,
-.nx-fonts__families {
+.nx-fonts__families,
+.nx-fonts__family-faces {
   margin: 0;
   padding: 0;
   list-style: none;

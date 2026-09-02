@@ -21,7 +21,13 @@
  *
  * @module admin/BlocksField.classes.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,6 +44,13 @@ const seen: { inspector: Record<string, unknown> | undefined } = {
 let clientConfig: Record<string, unknown> | undefined;
 /** What the stored site-style read reports, so `pending` can be driven. */
 let storedRead: { data: unknown; isPending: boolean; error: unknown };
+/*
+ * What an upload answers with, and every file that reached it. A double that
+ * always succeeded could not show a refused save leaving a stored object, and
+ * counting the calls is how a retry that re-uploads the same bytes is seen.
+ */
+let uploadResult: { id: string; mimeType: string } | Error;
+const uploads: File[] = [];
 /** What a save answers, and what it was handed. */
 let saveResult: { success: boolean } | Error;
 const saved: Array<Record<string, unknown>> = [];
@@ -83,6 +96,15 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/*
+ * A closed literal, and deliberately still one. Deriving it from the real
+ * module — which is what stops a new import failing here as though the
+ * component were broken — cannot be done under jsdom: spreading
+ * `plugin-sdk/admin` evaluates the admin module, which reaches `EventSource`
+ * at import time and throws inside the hoisted factory. That is recorded
+ * separately; until it is closed, a name the component starts importing has to
+ * be added here by hand.
+ */
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
@@ -103,6 +125,21 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       saved.push(value);
       if (saveResult instanceof Error) throw saveResult;
       return saveResult;
+    },
+    isPending: false,
+  }),
+  /*
+   * Named explicitly despite the spread: uploading reaches the network, and a
+   * test that renders this panel must not. Answering a refusal rather than a
+   * success keeps the double from being MORE capable than the real hook —
+   * nothing here exercises a stored file, and a double that pretended to store
+   * one would let a broken upload path pass.
+   */
+  useUploadMedia: () => ({
+    mutateAsync: async (input: { file: File }) => {
+      uploads.push(input.file);
+      if (uploadResult instanceof Error) throw uploadResult;
+      return uploadResult;
     },
     isPending: false,
   }),
@@ -135,6 +172,8 @@ beforeEach(() => {
   seen.inspector = undefined;
   clientConfig = {};
   storedRead = { data: undefined, isPending: false, error: null };
+  uploadResult = { id: "m-new", mimeType: "font/woff2" };
+  uploads.length = 0;
   saveResult = { success: true };
   saved.length = 0;
 });
@@ -202,5 +241,205 @@ describe("the fonts panel reaching an author", () => {
     expect(screen.getByTestId("panel").textContent).toContain(
       "could not be read"
     );
+  });
+});
+
+describe("adding a font file through the panel", () => {
+  /** Choose a file, as the picker hands one over. */
+  async function pickFile(name = "Inter-Regular.woff2"): Promise<void> {
+    const input = screen.getByLabelText("Font file") as HTMLInputElement;
+    Object.defineProperty(input, "files", {
+      value: [new File([new Uint8Array([0x77])], name, { type: "font/woff2" })],
+      configurable: true,
+    });
+    await act(async () => {
+      fireEvent.change(input);
+    });
+  }
+
+  /** Press Add. Separate from the pick, because a RETRY is a second press on
+   *  the same file — the form keeps it on a refusal — and re-picking would
+   *  hand over a different `File`, which is a different case entirely. */
+  async function submitAdd(): Promise<void> {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /add font file/i }));
+    });
+  }
+
+  async function addFace(name = "Inter-Regular.woff2"): Promise<void> {
+    await pickFile(name);
+    await submitAdd();
+  }
+
+  it("appends to the STORED faces, not the config ones", async () => {
+    /*
+     * `save` replaces the section outright. Building the new list from the
+     * config tier dropped every face already stored — so adding a second face
+     * replaced the first — while copying config faces into storage stops them
+     * tracking the config they came from.
+     */
+    clientConfig = {
+      siteStyle: {
+        fonts: [{ family: "FromConfig", src: [{ url: "/c.woff2" }] }],
+      },
+    };
+    storedRead = {
+      data: {
+        fonts: [{ family: "AlreadyStored", src: [{ url: "/s.woff2" }] }],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    await addFace();
+
+    const written = saved.at(-1) as { fonts: Array<{ family: string }> };
+    expect(written.fonts.map(f => f.family)).toEqual([
+      "AlreadyStored",
+      "Inter",
+    ]);
+  });
+
+  it("REFUSES when the document holds a font row this version cannot read", async () => {
+    /*
+     * The read drops a row it cannot type, which is right for a render and
+     * wrong as a base for a write: `save` replaces the section, so appending
+     * to the read value saves a list the dropped row is missing from — and the
+     * save SUCCEEDS, because what it sends is exactly what the checker
+     * approves. The row is deleted and the author is told it worked.
+     */
+    storedRead = {
+      data: {
+        fonts: [
+          { family: "Readable", src: [{ url: "/s.woff2" }] },
+          // No `src` array, so the reader cannot type it and drops it.
+          { family: "FromAnOlderShape", source: "/legacy.woff" },
+        ],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    await addFace();
+
+    expect(saved).toHaveLength(0);
+    // Before the upload, so no bytes are stored that nothing will reference.
+    expect(uploads).toHaveLength(0);
+    expect(screen.getByRole("alert").textContent).toContain("fonts[1]");
+  });
+
+  it("adds normally when every stored row IS readable", async () => {
+    /*
+     * The control for the case above: a refusal keyed on something other than
+     * the drop — the row count, a non-empty section — would also refuse here,
+     * and the panel would be unable to add a font to any site that has one.
+     */
+    storedRead = {
+      data: {
+        fonts: [{ family: "Readable", src: [{ url: "/s.woff2" }] }],
+      },
+      isPending: false,
+      error: null,
+    };
+    openEditor();
+    await addFace();
+
+    expect(saved).toHaveLength(1);
+    expect(uploads).toHaveLength(1);
+  });
+
+  it("keeps the first face when a second add arrives before the read catches up", async () => {
+    /*
+     * The invalidation after a save is started with `void`, so the mutation
+     * resolves before the refetch that carries the new face into the read. An
+     * author adding a family's regular and then its bold reaches the second
+     * add while the read still describes the document as it was — and a base
+     * taken from it saves the second face OVER the first.
+     *
+     * The read is deliberately left unchanged between the two adds, which is
+     * exactly the window: what the writer saved must survive in the list it
+     * builds next, without the read having reported it.
+     */
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+
+    await addFace("Inter-Regular.woff2");
+    uploadResult = { id: "m-2", mimeType: "font/woff2" };
+    await addFace("Inter-Bold.woff2");
+
+    const written = saved.at(-1) as { fonts: Array<{ family: string }> };
+    expect(written.fonts).toHaveLength(2);
+    expect(written.fonts.map(f => f.family)).toEqual(["Inter", "Inter"]);
+  });
+
+  it("takes the format hint from the type validation settled on", async () => {
+    /*
+     * WOFF rather than WOFF2, because the two are separate rows in the shared
+     * table and a hint restated in this module would have to carry both. A
+     * browser told the wrong format skips the source without trying it.
+     */
+    uploadResult = { id: "m-woff", mimeType: "font/woff" };
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+    await addFace("Inter-Regular.woff");
+
+    const written = saved.at(-1) as {
+      fonts: Array<{ src: Array<{ format?: string }> }>;
+    };
+    expect(written.fonts[0]?.src[0]?.format).toBe("woff");
+  });
+
+  it("REFUSES while the stored faces are still loading", async () => {
+    /*
+     * An append derived from a read that has not arrived writes the new face
+     * alone and discards the rest — and reports success. Waiting costs one
+     * message; the alternative is silent loss.
+     */
+    storedRead = { data: undefined, isPending: true, error: null };
+    openEditor();
+
+    /*
+     * The reachable guarantee: the panel draws its loading state and the form
+     * is NOT rendered, so an author cannot start an add against faces that
+     * have not arrived. The writer refuses as well, which no test can drive
+     * through this UI precisely because of this.
+     */
+    expect(screen.getByTestId("panel").textContent).toContain("Loading fonts");
+    expect(screen.queryByLabelText("Font file")).toBeNull();
+    expect(saved).toHaveLength(0);
+  });
+
+  it("REFUSES media that is not a font, rather than saving a dead face", async () => {
+    /*
+     * The picker's `accept` is a hint a caller can bypass, and the media
+     * pipeline takes far more than fonts. A PNG saved as a face carries no
+     * `format()` — which the validator permits — and the byte route answers
+     * 404 for it, so the site would hold a family that never loads.
+     */
+    uploadResult = { id: "m-png", mimeType: "image/png" };
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+    await addFace("not-a-font.png");
+
+    expect(saved).toHaveLength(0);
+    expect(screen.getByRole("alert").textContent).toContain("woff");
+  });
+
+  it("does not upload the same file twice when the save is refused", async () => {
+    /*
+     * The two writes cannot be one — the bytes need an id before a face can
+     * point at one — so a refused save leaves a stored object no face
+     * references. Re-uploading on every retry turned a run of refusals into a
+     * copy per attempt.
+     */
+    saveResult = new Error("refused");
+    storedRead = { data: { fonts: [] }, isPending: false, error: null };
+    openEditor();
+
+    await pickFile();
+    await submitAdd();
+    await submitAdd();
+
+    expect(uploads).toHaveLength(1);
   });
 });

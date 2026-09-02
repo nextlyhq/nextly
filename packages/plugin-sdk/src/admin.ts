@@ -421,6 +421,23 @@ export {
 } from "@nextlyhq/admin";
 
 /**
+ * @experimental Upload a file into the media library, as the admin's own
+ * dropzone does.
+ *
+ * The one route a plugin has to put bytes on this site. It matters because
+ * several things a plugin may author cannot reference a file anywhere else:
+ * a `@font-face` is refused unless its `src` is a path on this origin, so a
+ * plugin offering a font has to store the file here first and point at the id
+ * it gets back.
+ *
+ * `mutateAsync({ file })` resolves to the stored `Media` record — its `id`
+ * addresses the bytes, and its `mimeType` is the type upload validation
+ * settled on rather than the one the browser guessed, which is the value to
+ * carry into anything that names a format.
+ */
+export { useUploadMedia } from "@nextlyhq/admin";
+
+/**
  * @experimental Reads the `clientConfig` this plugin declared in
  * `contributes.admin.clientConfig`, which is how a plugin's server-side
  * configuration reaches its browser components.
