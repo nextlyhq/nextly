@@ -78,6 +78,9 @@ describe("plugin field types in the TypeScript generator", () => {
       ]),
     ]);
 
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
     expect(file.code).toContain("score?: (\n    Rating<5>\n  ) | null;");
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
   });
@@ -100,6 +103,9 @@ describe("plugin field types in the TypeScript generator", () => {
       collection([{ name: "payload", type: "conditional-thing" }]),
     ]);
 
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
     expect(file.code).toContain(
       "payload?: (\n    T extends string ? number : boolean\n  ) | null;"
     );
@@ -119,6 +125,9 @@ describe("plugin field types in the TypeScript generator", () => {
       collection([{ name: "handler", type: "callback-thing" }]),
     ]);
 
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
     expect(file.code).toContain("handler?: (\n    () => number\n  ) | null;");
   });
 
@@ -216,6 +225,9 @@ describe("plugin field types in the TypeScript generator", () => {
 
     // An ordinary save relocates unmodelled options, so a callback reading the
     // raw field would silently start emitting the un-narrowed type.
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
     expect(file.code).toContain("score?: (\n    Rating<7>\n  ) | null;");
   });
 

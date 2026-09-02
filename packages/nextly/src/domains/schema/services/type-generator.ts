@@ -781,6 +781,27 @@ export class TypeGenerator {
   }
 
   /**
+   * The rendered member for a field whose type a plugin states, or `undefined`
+   * when the plugin renders nothing of its own.
+   *
+   * Rendering here rather than returning a flag is what keeps the two callers
+   * from diverging: provenance is expressed by WHICH return runs, so there is
+   * no value to thread and none to forget. Every other path reaches the plain
+   * return at the end of its method, where the type was built in this file and
+   * needs no bracketing.
+   */
+  private contributedMember(
+    fieldName: string,
+    field: Parameters<typeof pluginTsType>[0]
+  ): string | undefined {
+    const contributed = this.adoptContributedType(field);
+    if (contributed === undefined) return undefined;
+    return renderFieldMember(fieldName, contributed, field, {
+      contributed: true,
+    });
+  }
+
+  /**
    * Generates a TypeScript type string for a single field.
    */
   private generateFieldType(
@@ -796,10 +817,6 @@ export class TypeGenerator {
     const fieldName = field.name;
 
     let tsType: string;
-    // Whether `tsType` came from a plugin rather than from this file. It is
-    // what decides bracketing when null is unioned on — see
-    // `nullableTypeExpression`.
-    let fromPlugin = false;
 
     // Text fields (supports hasMany for array of strings)
     if (isTextField(field)) {
@@ -879,10 +896,9 @@ export class TypeGenerator {
     // state its own rendering; asked once, because the callback is plugin code
     // and nothing requires it to be pure.
     else {
-      const contributed = this.adoptContributedType(field);
-      if (contributed !== undefined) {
-        tsType = contributed;
-        fromPlugin = true;
+      const member = this.contributedMember(fieldName, field);
+      if (member !== undefined) {
+        return member;
       } else {
         // No rendering of its own, but the registry still knows what it stores.
         // Re-entered as the storage primitive's built-in type so the branch
@@ -902,9 +918,7 @@ export class TypeGenerator {
       }
     }
 
-    return renderFieldMember(fieldName, tsType, field, {
-      contributed: fromPlugin,
-    });
+    return renderFieldMember(fieldName, tsType, field);
   }
 
   // ============================================================
@@ -927,10 +941,6 @@ export class TypeGenerator {
     const isCodeSourced = field.source === "code";
 
     let tsType: string;
-    // Whether `tsType` came from a plugin rather than from this file. It is
-    // what decides bracketing when null is unioned on — see
-    // `nullableTypeExpression`.
-    let fromPlugin = false;
 
     switch (field.type) {
       case "text":
@@ -975,11 +985,9 @@ export class TypeGenerator {
         // registry says it stores. `string` remains the fallback only for a
         // type nothing in the process knows about, which is what a UI-authored
         // field of a since-removed plugin type is.
-        const contributed = this.adoptContributedType(field);
-        if (contributed !== undefined) {
-          tsType = contributed;
-          fromPlugin = true;
-          break;
+        const member = this.contributedMember(field.name, field);
+        if (member !== undefined) {
+          return member;
         }
         const storageType = pluginStorageFieldType(field);
         const asStorage =
@@ -994,9 +1002,7 @@ export class TypeGenerator {
       }
     }
 
-    return renderFieldMember(field.name, tsType, field, {
-      contributed: fromPlugin,
-    });
+    return renderFieldMember(field.name, tsType, field);
   }
 
   /**

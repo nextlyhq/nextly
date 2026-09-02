@@ -52,10 +52,9 @@ describe("nullableTypeExpression", () => {
   });
 
   it("brackets a contributed expression a syntax scan would have missed", () => {
-    // The case that retired the previous implementation: it tested for the
-    // literal `" extends "`, so a conditional formatted across lines went
-    // through unbracketed. Nothing about the formatting reaches the decision
-    // now.
+    // Bracketing is decided by provenance, so how the expression is formatted
+    // never reaches the decision: a conditional written across lines is
+    // bracketed exactly as a single-line one is.
     expect(
       nullableTypeExpression("T extends\n  U ? X : Y", { contributed: true })
     ).toBe("(\n    T extends\n  U ? X : Y\n  ) | null");
