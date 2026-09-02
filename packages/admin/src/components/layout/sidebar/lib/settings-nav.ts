@@ -10,6 +10,7 @@
  * permission.
  */
 import {
+  Activity,
   FileText,
   Image,
   Key,
@@ -98,6 +99,18 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Webhook,
         href: ROUTES.SETTINGS_WEBHOOKS,
         gate: { kind: "capability", capability: "webhooks" },
+      },
+      {
+        id: "background-jobs",
+        label: "Background Jobs",
+        icon: Activity,
+        href: ROUTES.SETTINGS_BACKGROUND_JOBS,
+        // The same permission the queue trigger takes. `lastError` carries
+        // whatever a handler threw, which is internal detail rather than
+        // content, and there is no seeded read-only slug to gate on — inventing
+        // one here would change what preset roles grant as a side effect of
+        // adding a screen.
+        gate: { kind: "permission", permission: "manage-background-jobs" },
       },
       {
         id: "image-sizes",

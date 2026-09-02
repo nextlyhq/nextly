@@ -21,18 +21,33 @@
  * @module domains/jobs/job-display-status
  */
 
-/** What a job row is doing, in the terms an operator reasons about. */
-export type JobDisplayStatus =
+/**
+ * Every status the derivation can produce, in the order a queue moves through
+ * them.
+ *
+ * A list rather than a bare union because a client needs to enumerate them —
+ * to offer a filter, or to map each to a presentation — and a client that
+ * writes its own copy of the vocabulary stops agreeing the moment a status is
+ * added here. The union below is derived from it, so there is one list.
+ *
+ * The order is the lifecycle, not a ranking, and a UI listing them may show
+ * them in it.
+ */
+export const JOB_DISPLAY_STATUSES = [
   /** Queued, never attempted. */
-  | "waiting"
+  "waiting",
   /** An attempt failed; another is scheduled. Self-healing, not an alarm. */
-  | "retrying"
+  "retrying",
   /** A runner holds the lease right now. */
-  | "running"
+  "running",
   /** Finished successfully. */
-  | "succeeded"
+  "succeeded",
   /** Attempts are spent. This will not happen without a person. */
-  | "failed";
+  "failed",
+] as const;
+
+/** What a job row is doing, in the terms an operator reasons about. */
+export type JobDisplayStatus = (typeof JOB_DISPLAY_STATUSES)[number];
 
 /** The columns the derivation reads, and nothing more. */
 export interface JobStatusInput {

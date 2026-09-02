@@ -32,6 +32,7 @@ import { getCachedNextly } from "../init";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
+import type { JobListRow } from "./jobs-list-types";
 import { respondList } from "./response-shapes";
 import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
@@ -94,7 +95,11 @@ export const listJobsRoute = withErrorHandler(async (request: Request) => {
   const rows = hasNext ? window.slice(0, limit) : window;
   const now = new Date();
 
-  const items = rows.map(row => ({
+  // Annotated with the PUBLISHED row type, so the shape this route emits and
+  // the shape the admin is typed against are one declaration. A field added
+  // here without adding it there is a compile error rather than a property the
+  // client renders as `undefined`.
+  const items: JobListRow[] = rows.map(row => ({
     id: row.id,
     slug: row.slug,
     state: row.state,

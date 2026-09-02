@@ -41,6 +41,7 @@ import RolesEditPage from "./dashboard/roles/edit";
 import CreateApiKeyPage from "./dashboard/settings/api-keys/create";
 import EditApiKeyPage from "./dashboard/settings/api-keys/edit/[id]";
 import ApiKeysPage from "./dashboard/settings/api-keys/index";
+import BackgroundJobsPage from "./dashboard/settings/background-jobs/index";
 import CreateEmailProviderPage from "./dashboard/settings/email-providers/create";
 import EditEmailProviderPage from "./dashboard/settings/email-providers/edit/[id]";
 import EmailProvidersPage from "./dashboard/settings/email-providers/index";
@@ -462,6 +463,15 @@ export const routeConfig: Record<string, RouteConfig> = {
   // Webhooks settings. `update-webhooks` is the backend's management umbrella
   // (it satisfies read/create/delete too), so each route accepts it in addition
   // to the specific slug — a role with only `update-webhooks` still reaches them.
+  // The background job monitor is a READ, but it is gated on the management
+  // permission: `lastError` is whatever a handler threw, and there is no seeded
+  // read-only slug for this resource to widen to.
+  [ROUTES.SETTINGS_BACKGROUND_JOBS]: {
+    component: BackgroundJobsPage,
+    type: "private",
+    requiredPermission: "manage-background-jobs",
+    section: overridableBy("settings"),
+  },
   [ROUTES.SETTINGS_WEBHOOKS]: {
     component: WebhooksPage,
     type: "private",

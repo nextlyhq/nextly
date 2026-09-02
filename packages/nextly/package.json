@@ -202,6 +202,10 @@
     "./api/email-template-preview-types": {
       "types": "./dist/api/email-template-preview-types.d.ts",
       "import": "./dist/api/email-template-preview-types.mjs"
+    },
+    "./api/jobs-list-types": {
+      "types": "./dist/api/jobs-list-types.d.ts",
+      "import": "./dist/api/jobs-list-types.mjs"
     }
   },
   "files": [
