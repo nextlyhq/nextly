@@ -190,6 +190,27 @@ type ComponentDef = {
 };
 
 /**
+ * The slugs a metadata sync REFUSED, read defensively from an untyped result.
+ *
+ * `syncCodeFirstCollections` resolves rather than rejecting on a per-collection
+ * failure, so a caller that only catches sees a partial failure as a success.
+ * Read through a guard for the same reason its sibling below is: the surface
+ * this module holds is duck-typed, and a fake may resolve anything at all.
+ */
+function syncFailedSlugs(result: unknown): string[] {
+  if (typeof result !== "object" || result === null) return [];
+  const errors = (result as { errors?: unknown }).errors;
+  if (!Array.isArray(errors)) return [];
+  return errors
+    .map(entry =>
+      typeof entry === "object" && entry !== null
+        ? (entry as { slug?: unknown }).slug
+        : undefined
+    )
+    .filter((slug): slug is string => typeof slug === "string");
+}
+
+/**
  * The slugs a metadata sync rewrote, read defensively from an untyped result.
  *
  * `SyncResult.updated` names the rows that went through `updateCollection`,
@@ -466,7 +487,25 @@ async function syncCodeFirstMetadataOnly(
       "collectionRegistryService"
     )) as CollectionRegistrySurface;
     const payload = buildCollectionSyncPayload(newConfig.collections ?? []);
-    if (payload.length > 0) await registry.syncCodeFirstCollections(payload);
+    // 🔴 The RESULT decides, not merely the absence of a throw. This sync
+    // reports a per-collection failure by resolving a `SyncResult` carrying
+    // `errors[]`, exactly as the singles sync below does -- so awaiting it and
+    // discarding the answer read a partial failure as a clean pass. Anything
+    // gated on `collections` then acted on metadata that had not landed: the
+    // recording policies would publish against a stale field tree, and the
+    // refusal set would be cleared while a reverted collection's registry row
+    // still held fields its table never received.
+    const result =
+      payload.length > 0
+        ? await registry.syncCodeFirstCollections(payload)
+        : undefined;
+    const failed = syncFailedSlugs(result);
+    if (failed.length > 0) {
+      collections = false;
+      logger?.warn(
+        `[Nextly HMR] metadata-only collection sync failed for ${failed.join(", ")}`
+      );
+    }
   } catch (err) {
     collections = false;
     logger?.warn(

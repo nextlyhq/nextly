@@ -39,10 +39,10 @@ export { COMMON_TITLE_FIELDS, entryTitleField };
  *
  * Asked of core rather than answered here. This rule had three spellings and
  * they disagreed: one accepted a whitespace-only string, one refused a number,
- * and one refused a bigint -- so a collection whose title field held an invoice
- * number was named by it in the editor and by its id in the version-comparison
- * heading. Which FIELD names an entry and whether that field's VALUE can name
- * one are halves of the same question, and they now live together.
+ * and one refused a bigint. Which FIELD names an entry and whether that field's
+ * VALUE can name one are halves of the same question, and they now live
+ * together -- so the answer cannot drift again in a direction nothing happens
+ * to exercise.
  */
 const readableText = readableTitleText;
 

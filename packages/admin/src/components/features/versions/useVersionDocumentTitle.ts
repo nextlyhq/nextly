@@ -35,11 +35,12 @@ export type TitleScope =
 /**
  * A value is a usable title only if it is a scalar with something in it.
  *
- * 🔴 Asked of core, and the change is a WIDENING this heading was wrong to be
- * without: the private copy here refused a number, while the editor heading for
- * the same document accepted one. A Single whose label is an issue number was
- * therefore named by it in the editor and by its slug on the page comparing its
- * versions -- two names for one document, from two spellings of one rule.
+ * Asked of core rather than spelled again here. For every value this hook can
+ * actually receive the two answers are identical -- `ApiSingle.label` is typed
+ * `string`, and this is the only place the rule is used -- so the convergence
+ * buys no behaviour today. It buys the guarantee that the same question keeps
+ * one answer: a fourth private copy is how the other three came to disagree
+ * about whitespace, numbers and bigints in the first place.
  */
 const readableText = readableTitleText;
 

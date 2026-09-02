@@ -557,6 +557,95 @@ describe("reloadNextlyConfig", () => {
     expect(setDeferredCollectionsSpy).toHaveBeenCalledWith(["books"]);
   });
 
+  it("does NOT clear refusals when the metadata sync reports per-slug errors", async () => {
+    // 🔴 `syncCodeFirstCollections` reports a per-collection failure by
+    // RESOLVING a SyncResult carrying `errors[]`, not by rejecting -- the
+    // singles sync beside it already reads that. Awaiting and discarding the
+    // answer read a partial failure as a clean pass, so a reverted
+    // collection's refusal was lifted while its registry row could still hold
+    // fields its table never received.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    // Every diff is zero-op, which is the no-DDL landing this branch guards.
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_authors",
+          columns: [
+            ...reservedColumns("dc_authors"),
+            { name: "name", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: [],
+        unchanged: [],
+        errors: [{ slug: "authors", error: "write failed" }],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    // The control that this reload took the no-DDL landing at all.
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(setDeferredCollectionsSpy).not.toHaveBeenCalled();
+  });
+
+  it("DOES clear refusals when that same sync reports no errors", async () => {
+    // The control the refusal above needs: without it, "do not clear on error"
+    // is satisfied by a branch that stopped clearing at all, which would leave
+    // every refusal standing for the life of the process.
+    loadConfigSpy.mockResolvedValue({
+      config: {
+        collections: [
+          {
+            slug: "authors",
+            tableName: "dc_authors",
+            fields: [{ name: "name", type: "text" }],
+          },
+        ],
+      },
+    });
+    introspectSpy.mockResolvedValue(
+      buildSnapshot([
+        {
+          name: "dc_authors",
+          columns: [
+            ...reservedColumns("dc_authors"),
+            { name: "name", type: "text", nullable: true },
+          ],
+        },
+      ])
+    );
+
+    const resolver = buildResolver({
+      collectionSyncResult: {
+        created: [],
+        updated: [],
+        unchanged: ["authors"],
+        errors: [],
+      },
+    });
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver });
+
+    expect(pipelineApplySpy).not.toHaveBeenCalled();
+    expect(setDeferredCollectionsSpy).toHaveBeenCalledWith([]);
+  });
+
   it("publishes NOTHING when the reload carries only a refusal", async () => {
     // 🔴 A reload whose only change is refused never reaches the metadata sync:
     // `hasChanges` stays false, and the metadata-only landing is gated on

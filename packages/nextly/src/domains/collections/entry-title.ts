@@ -39,10 +39,14 @@ export const COMMON_TITLE_FIELDS = [
  * FIELDS, and it lives here for the same reason: every surface that names an
  * entry has to agree, and three separate spellings of this rule disagreed in
  * three different ways -- one accepted a whitespace-only string, one refused a
- * number, and only one trimmed. A collection whose title field holds an invoice
- * number was named by it in the editor and by its id in the version-comparison
- * heading, and a row whose `label` held two spaces was headed with those two
- * spaces in one place and with its `subject` in another.
+ * number, and only one trimmed.
+ *
+ * The whitespace difference was reachable and visible: a row whose `label` held
+ * two spaces was headed with those two spaces in the activity feed and with its
+ * `subject` on every other surface. The number difference was not reachable
+ * through the type that carried it, which is the more interesting half -- three
+ * spellings drifted apart in a direction nothing yet exercised, and drift that
+ * nobody can see is what the next consumer discovers the hard way.
  *
  * TRIMMED, and the trimmed value is what comes back: a heading of whitespace is
  * indistinguishable from a row that failed to load, and returning the untrimmed
