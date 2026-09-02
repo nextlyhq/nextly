@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   collectionWidgets,
+  generatedCollectionSlug,
   readableGeneratedWidgets,
   setGeneratedWidgets,
 } from "../collection-widgets";
@@ -174,7 +175,7 @@ describe("which generated cards a reader may be told about", () => {
     setGeneratedWidgets([card("secret", "read-secret"), card("open")]);
 
     const readable = readableGeneratedWidgets(
-      permission => permission !== "read-secret",
+      slug => slug !== "secret",
       new Set()
     );
 
@@ -201,5 +202,31 @@ describe("which generated cards a reader may be told about", () => {
     expect(
       readableGeneratedWidgets(() => true, new Set()).map(w => w.id)
     ).toEqual(["posts", "pages"]);
+  });
+});
+
+describe("which collection a generated card is about", () => {
+  it("takes it from the QUERY, not from the widget id", () => {
+    // 🔴 Access is checked against the thing being READ. The id is a display
+    // identity that happens to be derived from the same slug; checking a name
+    // rather than the source is how the two come apart, and the query is what
+    // the read is actually performed against.
+    expect(
+      generatedCollectionSlug({
+        id: "collection/anything-count",
+        query: { source: "collection:posts", op: "count" },
+      } as unknown as Parameters<typeof generatedCollectionSlug>[0])
+    ).toBe("posts");
+  });
+
+  it("names nothing for a card that queries no collection", () => {
+    // The control, and what makes the refusal in `readableGeneratedWidgets`
+    // meaningful: a card whose subject cannot be identified is withheld.
+    expect(
+      generatedCollectionSlug({
+        id: "core/whatever",
+        query: { source: "system:users", op: "count" },
+      } as unknown as Parameters<typeof generatedCollectionSlug>[0])
+    ).toBeUndefined();
   });
 });

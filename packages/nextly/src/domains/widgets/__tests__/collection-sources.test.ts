@@ -24,6 +24,8 @@ type Row = {
   fields: Array<{ name: string; type: string; label?: string }>;
   timestamps?: boolean;
   status?: boolean;
+  labels?: unknown;
+  admin?: unknown;
 };
 
 const containerGet = container.get as ReturnType<typeof vi.fn>;
@@ -372,5 +374,56 @@ describe("fields inside a presentational group are addressable", () => {
     expect(
       getSource("collection:users")?.fields.map(f => f.name)
     ).not.toContain("secret");
+  });
+});
+
+describe("the display label a source takes from the registry", () => {
+  it("uses the collection's plural label", () => {
+    registryHolds([
+      {
+        slug: "blog-posts",
+        labels: { singular: "Article", plural: "Articles" },
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+    return refreshCollectionSources().then(() => {
+      expect(getSource("collection:blog-posts")?.label).toBe("Articles");
+    });
+  });
+
+  it("does not let a WHITESPACE label take the whole install down", async () => {
+    // 🔴 `validateSource` refuses a label that is empty after trimming, and
+    // `defineCollection` preserves `labels.plural: "   "` as written. A check
+    // for `!== ""` therefore accepted it, `registerSource` threw, and this
+    // refresh runs on every workspace, layout and widget-query request -- so one
+    // whitespace label failed all three for everybody.
+    registryHolds([
+      {
+        slug: "posts",
+        labels: { plural: "   " },
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await expect(refreshCollectionSources()).resolves.toBeUndefined();
+    expect(getSource("collection:posts")?.label).toBe("posts");
+  });
+
+  it("trims a label that is merely padded", async () => {
+    // The control: without it the assertion above is satisfied by a reader that
+    // ignores `labels` entirely and always answers with the slug.
+    registryHolds([
+      {
+        slug: "posts",
+        labels: { plural: "  Articles  " },
+        fields: [{ name: "title", type: "text" }],
+        timestamps: true,
+      },
+    ]);
+
+    await refreshCollectionSources();
+    expect(getSource("collection:posts")?.label).toBe("Articles");
   });
 });

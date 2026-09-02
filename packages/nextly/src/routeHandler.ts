@@ -92,20 +92,18 @@ import {
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { authorizationGroups, canReadEntity } from "./auth/entity-read-access";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { contributedWidgets } from "./domains/widgets/canonical";
 import {
+  generatedCollectionSlug,
   generatedWidgets,
   readableGeneratedWidgets,
   refreshCollectionWidgets,
 } from "./domains/widgets/collection-widgets";
 import type { WidgetDefinition } from "./domains/widgets/definition";
 import { publishableWidgets } from "./domains/widgets/publish";
-import {
-  holdsWidgetPermission,
-  permissionVerdicts,
-} from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -1678,13 +1676,35 @@ async function handleAdminMetaWorkspaceRequest(
   // bypass. The verdicts come from the same implementation the layout endpoint
   // filters with, so the two cannot disagree about what this reader may see.
   const caller = readAccessCaller(await readCaller(auth));
-  const generated = generatedWidgets();
-  const verdicts = await permissionVerdicts(
-    generated.map(widget => widget.requiredPermission),
-    caller
-  );
+  // The verdict the QUERY path takes. `canReadEntity` evaluates a collection's
+  // code-defined `access.read` as well as the stamped grant, and
+  // `callerHoldsPermission` does not -- so an API key those rules reject is
+  // refused by the query endpoint and would have been told the collection
+  // exists by this payload. One question, one answer.
+  const slugs = [
+    ...new Set(
+      generatedWidgets()
+        .map(generatedCollectionSlug)
+        .filter((slug): slug is string => slug !== undefined)
+    ),
+  ];
+  const readableCollections = new Set<string>();
+  for (const group of authorizationGroups(slugs)) {
+    const settled = await Promise.allSettled(
+      group.map(slug => canReadEntity(slug, caller))
+    );
+    group.forEach((slug, index) => {
+      const outcome = settled[index];
+      // A rejected decision DENIES. A check that threw has told us nothing, and
+      // "nothing" must not read as "allowed" for a payload that discloses which
+      // collections an install has.
+      if (outcome.status === "fulfilled" && outcome.value) {
+        readableCollections.add(slug);
+      }
+    });
+  }
   const readable = readableGeneratedWidgets(
-    requiredPermission => holdsWidgetPermission(requiredPermission, verdicts),
+    slug => readableCollections.has(slug),
     new Set(contributedWidgets().map(widget => widget.id))
   );
 

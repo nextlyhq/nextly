@@ -215,15 +215,47 @@ export async function refreshCollectionWidgets(): Promise<void> {
  * collision in the contribution's favour; this is the same answer, not a second
  * one.
  *
- * `allow` is asked once per distinct permission by the caller, which already
- * batches those decisions — asking here per widget would fire two checks for
- * every collection.
+ * 🔴 `allow` is asked about the COLLECTION, not about the card's declared
+ * permission, and the difference is an API key. `callerHoldsPermission` judges a
+ * key on its stamped grant alone, while `canReadEntity` — which the widget query
+ * endpoint uses — also evaluates the collection's code-defined `access.read`. A
+ * key stamped `read-secret` that those rules reject is refused by the query and
+ * would have been told the collection exists by this payload. The two must
+ * answer the same question, so this one asks the query path's.
+ *
+ * Asked once per distinct collection by the caller, which batches those
+ * decisions — asking here per widget would fire two checks for every one.
  */
 export function readableGeneratedWidgets(
-  allow: (requiredPermission: string | undefined) => boolean,
+  allow: (collectionSlug: string) => boolean,
   contributedIds: ReadonlySet<string>
 ): WidgetDefinition[] {
-  return generatedWidgets().filter(
-    widget => !contributedIds.has(widget.id) && allow(widget.requiredPermission)
-  );
+  return generatedWidgets().filter(widget => {
+    if (contributedIds.has(widget.id)) return false;
+    const slug = generatedCollectionSlug(widget);
+    // A generated card that names no collection cannot be checked against one,
+    // so it is withheld rather than published. This is unreachable today --
+    // every card here is built from a `collection:` source -- and the branch is
+    // free: it decides from a value already in hand, and refusing is the only
+    // safe answer for a card whose subject cannot be identified.
+    return slug !== undefined && allow(slug);
+  });
+}
+
+/**
+ * The collection a generated card is about, taken from the query it will run.
+ *
+ * From `query.source` rather than by unpicking the widget id, because the
+ * source is what the read is actually performed against — the id is a display
+ * identity that happens to be derived from the same slug, and checking access
+ * against a name rather than against the thing being read is how the two come
+ * apart.
+ */
+export function generatedCollectionSlug(
+  widget: WidgetDefinition
+): string | undefined {
+  const source = widget.query?.source;
+  if (typeof source !== "string") return undefined;
+  const prefix = "collection:";
+  return source.startsWith(prefix) ? source.slice(prefix.length) : undefined;
 }

@@ -184,7 +184,19 @@ function pluralLabelOf(collection: RegisteredCollection): string | undefined {
   const labels = collection.labels;
   if (typeof labels !== "object" || labels === null) return undefined;
   const plural = (labels as { plural?: unknown }).plural;
-  return typeof plural === "string" && plural !== "" ? plural : undefined;
+  if (typeof plural !== "string") return undefined;
+  // 🔴 TRIMMED, and the trim is what keeps a bad label from taking the install
+  // down. `validateSource` refuses a label that is empty AFTER trimming, and
+  // `defineCollection` preserves `labels.plural: "   "` as written -- so a
+  // check for `!== ""` accepts it, `registerSource` throws, and
+  // `refreshCollectionSources` runs on every workspace, layout and widget-query
+  // request. One whitespace label would fail all three for everybody.
+  //
+  // Falling back to the slug rather than passing the trimmed value on: a label
+  // of spaces names nothing, and the slug is the answer a collection with no
+  // label already gets.
+  const trimmed = plural.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 /**
@@ -198,9 +210,13 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
   const admin = collection.admin;
   if (typeof admin !== "object" || admin === null) return undefined;
   const nominated = (admin as { useAsTitle?: unknown }).useAsTitle;
-  return typeof nominated === "string" && nominated !== ""
-    ? nominated
-    : undefined;
+  if (typeof nominated !== "string") return undefined;
+  // Trimmed for the same reason, though this one fails softly: a nomination of
+  // spaces matches no field name, so the shared rule falls back rather than
+  // refusing. Normalised anyway, so the two readings of "the author stated
+  // nothing" agree.
+  const trimmed = nominated.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 export async function refreshCollectionSources(): Promise<void> {
