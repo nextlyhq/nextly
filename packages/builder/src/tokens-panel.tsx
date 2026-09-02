@@ -860,7 +860,14 @@ function TokenList({
             Just added, further down the list:
           </p>
           <ul>
-            <li>
+            {/*
+             * KEYED, like every row in the list above. This element's position
+             * never changes, so without a key React reuses one `TokenEntry`
+             * across different tokens and carries its local state with it — a
+             * second add would drop the new token into the previous row's
+             * removal confirmation.
+             */}
+            <li key={revealed.key}>
               <TokenEntry
                 row={revealed}
                 tokens={tokens}

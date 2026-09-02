@@ -1154,6 +1154,57 @@ describe("the panel explains itself and shows the whole set", () => {
     expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
   });
 
+  it("REMOUNTS the revealed row when a second add replaces it", () => {
+    /*
+     * The revealed entry sits at a fixed position, so without a key React
+     * reuses one `TokenEntry` across different tokens and carries its local
+     * state along — dropping a newly added token straight into the previous
+     * row's removal confirmation, an irreversible control armed against
+     * something the author never selected.
+     *
+     * HELD IN STATE rather than rerendered by hand, because that difference
+     * decides whether the bug is reachable at all. With a mock `onChange` the
+     * panel re-renders once with the NEW `revealAt` and the OLD token list, so
+     * the revealed row is momentarily absent, the block unmounts, and the leak
+     * cannot happen. A host that stores what it is given updates both together
+     * — which is what the product does, and the only composition that tests
+     * this.
+     */
+    function Host(): React.JSX.Element {
+      const [tokens, setTokens] = React.useState<SiteTokenSet>({
+        tokens: Array.from({ length: 60 }, (_, at) => ({
+          name: `color.c${at}`,
+          kind: "color" as const,
+          values: { light: "#111111" },
+        })),
+      });
+      return <Panel tokens={tokens} onChange={setTokens} />;
+    }
+    render(<Host />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+    // Read the name off the revealed block itself rather than inferring it
+    // from the generated pattern: the probe's subject must be resolved, not
+    // assumed, or a miss reads as a passing test.
+    const revealedName = (
+      document
+        .querySelector(".nx-tokens__revealed")
+        ?.querySelector("input") as HTMLInputElement | null
+    )?.value;
+    expect(revealedName).toBeDefined();
+    const first = revealedName;
+
+    // Arm the revealed row's removal confirmation.
+    fireEvent.click(screen.getByRole("button", { name: `Remove ${first!}` }));
+    expect(screen.getByText(/loses that style/i)).toBeTruthy();
+
+    // A second add replaces WHICH token is revealed, in one update.
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+
+    // The new token must arrive UNARMED.
+    expect(screen.queryByText(/loses that style/i)).toBeNull();
+  });
+
   it("groups every kind that HAS tokens into one list", () => {
     // The must-be-found half. Three kinds are present, so three headings are.
     mount(MIXED);
