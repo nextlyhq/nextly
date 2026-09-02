@@ -327,7 +327,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "dynamic_singles" ("created_at")`,
     `CREATE INDEX IF NOT EXISTS "dynamic_singles_updated_at_idx"
       ON "dynamic_singles" ("updated_at")`,
-    `CREATE TABLE IF NOT EXISTS "dynamic_components" (
+    `CREATE TABLE IF NOT EXISTS "${STORAGE_FORMAT.registryTable}" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "slug" TEXT NOT NULL UNIQUE,
       "label" TEXT NOT NULL,
@@ -347,16 +347,16 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL
     )`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_source_idx"
-      ON "dynamic_components" ("source")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_migration_status_idx"
-      ON "dynamic_components" ("migration_status")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_created_by_idx"
-      ON "dynamic_components" ("created_by")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_created_at_idx"
-      ON "dynamic_components" ("created_at")`,
-    `CREATE INDEX IF NOT EXISTS "dynamic_components_updated_at_idx"
-      ON "dynamic_components" ("updated_at")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_source_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("source")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_migration_status_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("migration_status")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_by_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_created_at_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("created_at")`,
+    `CREATE INDEX IF NOT EXISTS "${STORAGE_FORMAT.registryTable}_updated_at_idx"
+      ON "${STORAGE_FORMAT.registryTable}" ("updated_at")`,
     // Content-version store. Columns match schemas/versions/sqlite.ts. The
     // durable-sequence unique index is created here too, not just the table:
     // once a fallback-created DB exists, later boots skip ensureCoreTables and
