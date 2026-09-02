@@ -38,7 +38,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  resolveFieldGroupRegistryName,
+  resolveFieldGroupRegistryTable,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -485,8 +488,16 @@ export class SystemTableService extends BaseService {
       // prefers, because the rule is legacy-if-present. Resolving first makes
       // that impossible: the migrated name is only ever returned when the table
       // is really there, so the create below runs on a database that has none.
-      const registryTable = await resolveFieldGroupRegistryName(this.adapter);
-      const dcompExists = await this.tableExists(registryTable);
+      const registry = await resolveFieldGroupRegistryTable(this.adapter);
+      const registryTable = registry.name;
+      // `migrated` is the resolver's own answer and already means the table is
+      // there. The probe below cannot be asked on its own: it matches
+      // `sqlite_master.name` exactly while the resolver applies SQLite's
+      // case-folding rules, so a database holding `DYNAMIC_FIELD_GROUPS` reads
+      // as absent and the fixed-name legacy CREATE below would run — restoring
+      // the empty table every reader then prefers.
+      const dcompExists =
+        registry.migrated || (await this.tableExists(registryTable));
       if (dcompExists) {
         existing.push(registryTable);
         this.logger.info(`System table '${registryTable}' already exists`);

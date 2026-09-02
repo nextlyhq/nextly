@@ -464,6 +464,63 @@ const MUST_AGREE: Array<{
       chrome: 42,
     },
   },
+  {
+    case: "a defaultSize that is not a string",
+    expect: /defaultSize, when given, must be a string/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: 42,
+      component: "p#X",
+    },
+  },
+  {
+    // BLANK, not merely absent, and the two are what the channels disagreed
+    // about. The summary reader takes `""` as unstated and falls back to the
+    // deprecated `size` alias; the admin resolver's `??` keeps it and renders
+    // full width -- so the card was stored at one width and drawn at another.
+    // Blank names no size in any version, so refusing it is shape rather than
+    // vocabulary and an unknown value like "xxl" still passes.
+    case: "a BLANK defaultSize",
+    expect: /defaultSize, when given, must not be empty/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "",
+      size: "half",
+      component: "p#X",
+    },
+  },
+  {
+    case: "a defaultHeight that is not a string",
+    expect: /defaultHeight, when given, must be a string/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      defaultHeight: 2,
+      component: "p#X",
+    },
+  },
+  {
+    // The same hole one field over. A non-string height reached
+    // `DashboardWidget.height`, and re-adding the card copied it into a
+    // placement the next write refuses -- an ordinary edit turned into a draft
+    // that could never be saved.
+    case: "a BLANK defaultHeight",
+    expect: /defaultHeight, when given, must not be empty/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      defaultHeight: "",
+      component: "p#X",
+    },
+  },
 ];
 
 describe("the registry and contributions channels agree except where declared", () => {

@@ -71,13 +71,25 @@ export function useDashboardArrangement(
     [declared]
   );
 
-  // What an added card inherits. `size` on a resolved declaration IS its
-  // declared default, so a card the reader adds arrives the size its author
-  // intended rather than an arbitrary one.
+  // What an added card inherits. `size` and `height` on a resolved declaration
+  // ARE its declared defaults, so a card the reader adds arrives the geometry
+  // its author intended rather than an arbitrary one.
+  //
+  // 🔴 BOTH, not just the width. `defaultPlacements` copies a declared
+  // `defaultHeight` onto the server's initial placement, so returning only the
+  // size here meant removing a card and adding it back replaced a tall one with
+  // a card of no stated height -- and the next save persisted that, dropping a
+  // declared geometry permanently through a gesture that reads as undoable.
   const geometryFor = useCallback(
     (widgetId: string) => {
       const declaration = byId.get(widgetId);
-      return declaration ? { size: declaration.size } : undefined;
+      if (!declaration) return undefined;
+      return {
+        size: declaration.size,
+        ...(declaration.height === undefined
+          ? {}
+          : { height: declaration.height }),
+      };
     },
     [byId]
   );

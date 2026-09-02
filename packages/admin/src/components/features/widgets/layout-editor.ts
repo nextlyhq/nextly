@@ -17,6 +17,8 @@
  * @module components/features/widgets/layout-editor
  */
 
+import { MAX_PLACEMENTS } from "nextly/config";
+
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 /** The gap left between saved positions, so one can be inserted between two. */
@@ -153,6 +155,18 @@ export function addPlacement(
   widgetId: string,
   geometry?: { size?: string; height?: string }
 ): WidgetPlacement[] {
+  // 🔴 REFUSED at capacity, and refused HERE rather than only at the control.
+  // `MAX_PLACEMENTS` is what the layout endpoint accepts in one submission, and
+  // an install declaring more widgets than that offers the surplus through
+  // `available` -- so an unguarded add built a draft the server was always
+  // going to reject, and the reader met a generic "could not be saved" naming
+  // no limit they knew they had reached.
+  //
+  // A disabled button explains; it does not guarantee. This is the one path
+  // every add takes, and it is a pure function, so the guarantee is stated
+  // where it can be asserted directly rather than through a control that has
+  // to be reachable to be tested.
+  if (placements.length >= MAX_PLACEMENTS) return [...placements];
   const last = placements[placements.length - 1];
   return [
     ...placements,

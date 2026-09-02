@@ -17,6 +17,26 @@ import type { WidgetQuery } from "./query";
 export const WIDGET_SIZES = ["sm", "md", "lg", "xl", "full"] as const;
 export type WidgetSize = (typeof WIDGET_SIZES)[number];
 
+/**
+ * The deprecated `size?: "full" | "half"` alias, as a real size.
+ *
+ * Contributed declarations still carry it, and `half` meant "6 of 12" -- which
+ * is `lg` in the enum.
+ *
+ * 🔴 It lives HERE, beside the vocabulary it translates into, rather than in
+ * the admin where it was first written. Both the admin's resolver and the
+ * server's canonical summary have to read a legacy declaration, and the second
+ * one did not: it read `defaultSize` only, so a contribution declaring the alias
+ * produced a default placement with NO size while the grid rendered it at half
+ * width. The first save then stored an arrangement whose geometry disagreed
+ * with what the reader was looking at. One translation, asked by both.
+ */
+export function legacySizeToWidgetSize(
+  size: "full" | "half" | undefined
+): WidgetSize {
+  return size === "half" ? "lg" : "full";
+}
+
 /** Vertical step. Two values, because ragged card bottoms are the tell of a cheap grid. */
 export const WIDGET_HEIGHTS = ["short", "tall"] as const;
 export type WidgetHeight = (typeof WIDGET_HEIGHTS)[number];
@@ -213,6 +233,44 @@ function archetypeStanding(value: unknown): ArchetypeStanding {
     : { kind: "newer" };
 }
 
+/**
+ * Why a widget's declared geometry is the wrong SHAPE, or `undefined`.
+ *
+ * `defaultSize` and `defaultHeight` are strings in every version, and a blank
+ * one names nothing in any of them -- so this is a shape rule rather than a
+ * vocabulary rule, shared by both declaration channels, and an unknown value
+ * like `"xxl"` still passes. That is the distinction that lets it live outside
+ * the registry: a contribution may come from a plugin built against a newer
+ * core, and refusing an unfamiliar size would drop a card over a value the
+ * admin already survives.
+ *
+ * Blank is REFUSED rather than read as absent, because the two channels
+ * disagreed about which it was. The server's summary reader treats `""` as
+ * unstated and falls back to the deprecated `size` alias; the admin's resolver
+ * uses `??`, for which `""` is present, and keeps it -- so a declaration
+ * carrying `defaultSize: ""` beside `size: "half"` was stored as `lg` and drawn
+ * full width, and the card changed width when the arrangement arrived and
+ * changed back when it was re-added. Refusing the declaration is the only place
+ * that mistake is still visible to the author who made it.
+ *
+ * A non-string height is the same hole one field over: it reached the resolved
+ * widget, and re-adding that card copied it into a placement the next write
+ * refuses -- an ordinary edit turned into a draft that could never be saved.
+ */
+function geometryShapeProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  for (const field of ["defaultSize", "defaultHeight"] as const) {
+    const value = widget[field];
+    if (value === undefined) continue;
+    if (typeof value !== "string") {
+      return `${field}, when given, must be a string`;
+    }
+    if (value === "") return `${field}, when given, must not be empty`;
+  }
+  return undefined;
+}
+
 export function widgetValueProblem(
   widget: Record<string, unknown>
 ): string | undefined {
@@ -234,6 +292,9 @@ export function widgetValueProblem(
   if (widget.chrome !== undefined && typeof widget.chrome !== "string") {
     return "chrome, when given, must be a string";
   }
+
+  const geometry = geometryShapeProblem(widget);
+  if (geometry !== undefined) return geometry;
 
   // A permission slug is a STRING in every version -- a newer core may mint new
   // slugs, but it cannot make a slug stop being a string -- so this is shape

@@ -41,6 +41,8 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
+  MAX_PLACEMENTS,
+  layoutSizeProblem,
   serializeLayout,
   visibilityToken,
   type WidgetPlacement,
@@ -1009,5 +1011,53 @@ describe("DELETE /api/dashboard/layout", () => {
 
     expect(res.status).toBe(403);
     expect(deleted).toBeUndefined();
+  });
+});
+
+describe("the submission cap, when an install declares more than one write may carry", () => {
+  /** `MAX_PLACEMENTS` denied widgets in declared order, then one ungated. */
+  function overCapacity(): void {
+    for (let i = 0; i < MAX_PLACEMENTS; i++) {
+      registerWidget(
+        widget({
+          id: `core/denied-${i}`,
+          defaultOrder: i,
+          requiredPermission: "read-secrets",
+        })
+      );
+    }
+    registerWidget(widget({ id: "core/open", defaultOrder: MAX_PLACEMENTS }));
+    callerHoldsPermission.mockResolvedValue(false);
+  }
+
+  it("does not let widgets this caller cannot see consume it", async () => {
+    // 🔴 The cap used to be applied to the whole-registry materialization,
+    // before the visible half was partitioned out. Widgets the caller may not
+    // know exist therefore spent the allowance: two hundred denied ones ahead
+    // of an ungated widget left that reader with an EMPTY dashboard and the one
+    // card they were entitled to relegated to `available`.
+    overCapacity();
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["core/open"]);
+    expect(body.available ?? []).not.toContain("core/open");
+  });
+
+  it("still bounds what the caller is asked to submit", async () => {
+    // The other direction, and the reason the cap exists at all: a default the
+    // write contract would refuse is not a default. With every widget visible,
+    // the placements stay inside the limit and the surplus is offered instead.
+    for (let i = 0; i < MAX_PLACEMENTS + 5; i++) {
+      registerWidget(widget({ id: `core/w${i}`, defaultOrder: i }));
+    }
+    callerHoldsPermission.mockResolvedValue(true);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements).toHaveLength(MAX_PLACEMENTS);
+    expect(layoutSizeProblem(body.placements ?? [])).toBeUndefined();
+    // The surplus is reachable rather than lost.
+    expect(body.available).toContain(`core/w${MAX_PLACEMENTS}`);
   });
 });
