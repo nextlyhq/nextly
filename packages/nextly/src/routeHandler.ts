@@ -92,7 +92,6 @@ import {
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
-import { authorizationGroups, canReadEntity } from "./auth/entity-read-access";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { contributedWidgets } from "./domains/widgets/canonical";
@@ -104,6 +103,7 @@ import {
 } from "./domains/widgets/collection-widgets";
 import type { WidgetDefinition } from "./domains/widgets/definition";
 import { publishableWidgets } from "./domains/widgets/publish";
+import { readableCollections } from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
 import {
   currentFlattenedErrors,
@@ -1681,31 +1681,21 @@ async function handleAdminMetaWorkspaceRequest(
   // `callerHoldsPermission` does not -- so an API key those rules reject is
   // refused by the query endpoint and would have been told the collection
   // exists by this payload. One question, one answer.
-  const slugs = [
-    ...new Set(
-      generatedWidgets()
-        .map(generatedCollectionSlug)
-        .filter((slug): slug is string => slug !== undefined)
-    ),
-  ];
-  const readableCollections = new Set<string>();
-  for (const group of authorizationGroups(slugs)) {
-    const settled = await Promise.allSettled(
-      group.map(slug => canReadEntity(slug, caller))
-    );
-    group.forEach((slug, index) => {
-      const outcome = settled[index];
-      // A rejected decision DENIES. A check that threw has told us nothing, and
-      // "nothing" must not read as "allowed" for a payload that discloses which
-      // collections an install has.
-      if (outcome.status === "fulfilled" && outcome.value) {
-        readableCollections.add(slug);
-      }
-    });
-  }
+  const readableCollectionSlugs = await readableCollections(
+    generatedWidgets().map(generatedCollectionSlug),
+    caller
+  );
   const readable = readableGeneratedWidgets(
-    slug => readableCollections.has(slug),
-    new Set(contributedWidgets().map(widget => widget.id))
+    slug => readableCollectionSlugs.has(slug),
+    // Every DECLARED id, registrations included. Filtering only contributions
+    // left a registration colliding with a generated card published TWICE in
+    // this payload -- once as itself and once as core's derived guess -- and the
+    // canonical set resolves that collision in the registration's favour, so the
+    // two halves of the response disagreed about which declaration the card is.
+    new Set([
+      ...contributedWidgets().map(widget => widget.id),
+      ...publishableWidgets().map(widget => widget.id),
+    ])
   );
 
   const { workspace } = await buildAdminMeta(readable);

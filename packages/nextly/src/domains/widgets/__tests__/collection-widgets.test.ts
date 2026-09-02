@@ -37,17 +37,59 @@ describe("what a collection gets", () => {
     ]);
   });
 
-  it("takes the permission from the SOURCE rather than rebuilding it", () => {
-    // 🔴 The widget and the source must agree about which permission gates the
-    // collection. Rebuilding `read-${slug}` here would be a second answer, and
-    // a source whose permission was corrected would leave a card gated by the
-    // old one -- offered to a reader whose every query against it is refused.
+  it("carries NO requiredPermission, because the SERVER gates it", () => {
+    // 🔴 It used to carry the source's permission, and that was wrong in the
+    // direction that loses cards. The client checks `requiredPermission` against
+    // the flat `/me/permissions` list, which does not hold a grant that exists
+    // only in a collection's code-defined `access.read` — so a reader the server
+    // had approved saw both cards discarded by the grid, for a query it would
+    // have answered. The server filters these by collection on both paths that
+    // publish them; the client draws what it is sent.
     const widgets = collectionWidgets([
       source({ requiredPermission: "read-articles" }),
     ]);
-    expect(widgets.map(w => w.requiredPermission)).toEqual([
-      "read-articles",
-      "read-articles",
+    expect(widgets).toHaveLength(2);
+    for (const widget of widgets) {
+      expect(widget).not.toHaveProperty("requiredPermission");
+    }
+  });
+
+  it("derives a valid id for a slug carrying an underscore", () => {
+    // 🔴 `SLUG_PATTERN` permits `_` and a widget id does not, so
+    // `customer_notes` produced an id the registry refuses and BOTH cards were
+    // dropped — a supported class of collection that never got the feature.
+    const widgets = collectionWidgets([
+      source({ id: "collection:customer_notes", label: "customer_notes" }),
+    ]);
+    expect(widgets.map(w => w.id)).toEqual([
+      "collection/customer-notes-count",
+      "collection/customer-notes-recent",
+    ]);
+  });
+
+  it("gives NEITHER collection a card when two slugs derive one id", () => {
+    // The mapping is not injective: `a_b` and `a-b` both reduce to `a-b`.
+    // Neither has a claim over the other, and a card drawn for one while its
+    // query reads the other is the worst outcome available — so a collision
+    // costs both rather than silently picking a winner.
+    const widgets = collectionWidgets([
+      source({ id: "collection:a_b", label: "a_b" }),
+      source({ id: "collection:a-b", label: "a-b" }),
+    ]);
+    expect(widgets).toEqual([]);
+  });
+
+  it("still gives a card to collections that did not collide", () => {
+    // The control: without it the assertion above is satisfied by a collision
+    // rule that drops everything.
+    const widgets = collectionWidgets([
+      source({ id: "collection:a_b", label: "a_b" }),
+      source({ id: "collection:a-b", label: "a-b" }),
+      source({ id: "collection:posts", label: "posts" }),
+    ]);
+    expect(widgets.map(w => w.id)).toEqual([
+      "collection/posts-count",
+      "collection/posts-recent",
     ]);
   });
 
@@ -182,7 +224,7 @@ describe("which generated cards a reader may be told about", () => {
     expect(readable.map(w => w.id)).toEqual(["open"]);
   });
 
-  it("withholds a card whose id a CONTRIBUTION already claimed", () => {
+  it("withholds a card whose id a DECLARATION already claimed", () => {
     // The admin reads this array as the registration channel, and its merge
     // gives a registration authority over a colliding contribution's title,
     // archetype, query and permission. Publishing here would replace a plugin's

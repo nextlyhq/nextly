@@ -15,6 +15,7 @@
 import {
   authorizationGroups,
   callerHoldsPermission,
+  canReadEntity,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 
@@ -72,4 +73,45 @@ export function holdsWidgetPermission(
     return false;
   }
   return verdicts.get(requiredPermission) === true;
+}
+
+/**
+ * Which of these collections the caller may actually read.
+ *
+ * 🔴 `canReadEntity`, not `callerHoldsPermission`, and the difference is an API
+ * key: the second reads only the key's stamped grant while the first also
+ * evaluates the collection's code-defined `access.read`. The widget QUERY
+ * endpoint asks the first, so anything deciding whether to OFFER a card for a
+ * collection has to ask the same one — otherwise a card is advertised, placed,
+ * and then refused on every request.
+ *
+ * Two surfaces need this — the layout endpoint filters what it places and
+ * offers, and the workspace payload filters which collections it names — and a
+ * copy in either that drifted would be a disclosure rather than a cosmetic
+ * difference. Batched in the same bounded rounds as the permission verdicts
+ * above, and a rejected decision denies.
+ */
+export async function readableCollections(
+  slugs: readonly (string | undefined)[],
+  caller: ReadAccessCaller
+): Promise<Set<string>> {
+  const distinct = [
+    ...new Set(
+      slugs.filter(
+        (slug): slug is string => typeof slug === "string" && slug !== ""
+      )
+    ),
+  ];
+
+  const readable = new Set<string>();
+  for (const group of authorizationGroups(distinct)) {
+    const settled = await Promise.allSettled(
+      group.map(slug => canReadEntity(slug, caller))
+    );
+    group.forEach((slug, index) => {
+      const outcome = settled[index];
+      if (outcome.status === "fulfilled" && outcome.value) readable.add(slug);
+    });
+  }
+  return readable;
 }

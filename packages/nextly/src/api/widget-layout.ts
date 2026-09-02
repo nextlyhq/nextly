@@ -56,6 +56,7 @@ import {
 import {
   holdsWidgetPermission,
   permissionVerdicts,
+  readableCollections,
 } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -220,6 +221,7 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  * name the same permission, and asking twice is two database reads for one
  * answer.
  */
+
 async function visibleWidgets(
   caller: ReadAccessCaller
 ): Promise<CanonicalWidget[]> {
@@ -235,9 +237,23 @@ async function visibleWidgets(
     caller
   );
 
-  return all.filter(widget =>
-    holdsWidgetPermission(widget.requiredPermission, verdicts)
+  // 🔴 A GENERATED card is gated on its collection, not on a declared
+  // permission — it carries none. `callerHoldsPermission` judges an API key on
+  // its stamped grant alone, while `canReadEntity` also evaluates the
+  // collection's code-defined rules, and the widget query endpoint asks the
+  // second. A key those rules reject had the card offered here and every query
+  // for it refused. The same question, asked once per collection.
+  const readable = await readableCollections(
+    all.map(widget => widget.collection),
+    caller
   );
+
+  return all.filter(widget => {
+    if (widget.generated === true) {
+      return widget.collection !== undefined && readable.has(widget.collection);
+    }
+    return holdsWidgetPermission(widget.requiredPermission, verdicts);
+  });
 }
 
 /**

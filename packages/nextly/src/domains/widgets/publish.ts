@@ -35,7 +35,7 @@ import { listWidgets } from "./registry";
  * contributed widget, and for the same reason.
  */
 export function publishableWidgets(): WidgetDefinition[] {
-  const byId = new Map<string, WidgetDefinition>();
+  const publishable: WidgetDefinition[] = [];
 
   for (const definition of listWidgets()) {
     const serializable = jsonOnly(definition);
@@ -47,9 +47,8 @@ export function publishableWidgets(): WidgetDefinition[] {
       });
       continue;
     }
-    const widget = serializable as unknown as WidgetDefinition;
-    byId.set(widget.id, widget);
+    publishable.push(serializable as unknown as WidgetDefinition);
   }
 
-  return [...byId.values()];
+  return publishable;
 }

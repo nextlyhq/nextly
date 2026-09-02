@@ -127,6 +127,28 @@ function validateSourceLabel(s: Partial<WidgetSource>): void {
 }
 
 /**
+ * Confirms `titleField`, when given, names a field this source declares.
+ *
+ * 🔴 The value becomes a `select` entry on a generated card, and `select` is
+ * checked against this source's own field allowlist when the query runs — so a
+ * source naming a field it does not declare produces a card whose every request
+ * is refused, with the refusal arriving per reader rather than at the point the
+ * source was registered. A plugin registering its own source is the caller this
+ * protects: core's own derivation takes the name FROM `fields`, so it cannot
+ * disagree with itself.
+ */
+function validateSourceTitleField(s: Partial<WidgetSource>): void {
+  if (s.titleField === undefined) return;
+  if (typeof s.titleField !== "string" || s.titleField.trim() === "") {
+    fail(`${s.id}: titleField, when given, must be a non-empty string`);
+  }
+  const declared = (s.fields ?? []).some(field => field.name === s.titleField);
+  if (!declared) {
+    fail(`${s.id}: titleField "${s.titleField}" is not one of its fields`);
+  }
+}
+
+/**
  * The namespaces core OWNS, and the kind each one means.
  *
  * `plugin` is deliberately absent: it is what an id claiming no reserved
@@ -266,6 +288,8 @@ export function validateWidgetSource(
   validateSourceKind(s);
   validateSourceSupports(s);
   validateSourceFields(s);
+  // AFTER the fields, because it is checked against them.
+  validateSourceTitleField(s);
 }
 
 const globalForSources = globalThis as unknown as {

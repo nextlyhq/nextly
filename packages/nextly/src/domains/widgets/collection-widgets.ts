@@ -56,7 +56,18 @@ function widgetId(
   source: WidgetSource,
   kind: "count" | "recent"
 ): string | undefined {
-  const id = `collection/${source.id.slice("collection:".length)}-${kind}`;
+  // 🔴 An underscore is legal in a collection slug (`SLUG_PATTERN` permits it)
+  // and illegal in a widget id, so `customer_notes` produced an id the registry
+  // refuses and BOTH its cards were silently dropped -- a supported class of
+  // collection that never got the feature, with nothing to say why. Mapped to a
+  // hyphen, which is the id vocabulary's own separator.
+  //
+  // The mapping is not injective: `a_b` and `a-b` both become `a-b`. That is
+  // handled where the whole set is known, in `collectionWidgets`, because a
+  // collision is a property of the INSTALL rather than of either collection --
+  // deciding it here would need one of the two to win arbitrarily.
+  const slug = source.id.slice("collection:".length).replaceAll("_", "-");
+  const id = `collection/${slug}-${kind}`;
   // ASKED rather than assumed. A widget id is `namespace/name` in lowercase
   // slug form -- two segments, so the kind is a suffix rather than a third
   // segment -- and a collection slug that cannot produce one is skipped instead
@@ -82,9 +93,6 @@ function countWidget(source: WidgetSource): WidgetDefinition | undefined {
     description: `How many entries ${source.label} holds`,
     archetype: "metric",
     defaultSize: "sm",
-    ...(source.requiredPermission === undefined
-      ? {}
-      : { requiredPermission: source.requiredPermission }),
     query: { source: source.id, op: "count", status: "all" },
   };
 }
@@ -124,9 +132,6 @@ function recentWidget(source: WidgetSource): WidgetDefinition | undefined {
     description: `The ${source.label} entries changed most recently`,
     archetype: "list",
     defaultSize: "md",
-    ...(source.requiredPermission === undefined
-      ? {}
-      : { requiredPermission: source.requiredPermission }),
     query: {
       source: source.id,
       op: "list",
@@ -150,12 +155,24 @@ export function collectionWidgets(
   sources: readonly WidgetSource[]
 ): WidgetDefinition[] {
   const widgets: WidgetDefinition[] = [];
+  // 🔴 Two collections can derive ONE id — `a_b` and `a-b` both reduce to
+  // `a-b`. Neither has a claim over the other, and a card drawn for one while
+  // its query reads the other is the worst outcome available, so a collision
+  // costs BOTH collections their cards rather than silently picking a winner.
+  // Collected first, dropped second, so the decision does not depend on
+  // iteration order.
+  const claimed = new Map<string, number>();
+  const candidates: WidgetDefinition[] = [];
   for (const source of sources) {
     if (source.kind !== "collection") continue;
-    const count = countWidget(source);
-    if (count) widgets.push(count);
-    const recent = recentWidget(source);
-    if (recent) widgets.push(recent);
+    for (const widget of [countWidget(source), recentWidget(source)]) {
+      if (!widget) continue;
+      claimed.set(widget.id, (claimed.get(widget.id) ?? 0) + 1);
+      candidates.push(widget);
+    }
+  }
+  for (const widget of candidates) {
+    if (claimed.get(widget.id) === 1) widgets.push(widget);
   }
   return widgets;
 }
@@ -215,8 +232,14 @@ export async function refreshCollectionWidgets(): Promise<void> {
  * collision in the contribution's favour; this is the same answer, not a second
  * one.
  *
- * 🔴 `allow` is asked about the COLLECTION, not about the card's declared
- * permission, and the difference is an API key. `callerHoldsPermission` judges a
+ * 🔴 A generated card carries NO `requiredPermission`, and the server is what
+ * gates it. The permission the client could check is `read-<slug>` read off the
+ * flat `/me/permissions` list, and that list does not hold a grant that exists
+ * only in a collection's code-defined `access.read` — so a reader the server
+ * approved had both cards discarded by the grid, for a query it would have
+ * answered. One gate, on the side that can see every rule.
+ *
+ * 🔴 `allow` is asked about the COLLECTION, and the difference is an API key. `callerHoldsPermission` judges a
  * key on its stamped grant alone, while `canReadEntity` — which the widget query
  * endpoint uses — also evaluates the collection's code-defined `access.read`. A
  * key stamped `read-secret` that those rules reject is refused by the query and
@@ -228,10 +251,10 @@ export async function refreshCollectionWidgets(): Promise<void> {
  */
 export function readableGeneratedWidgets(
   allow: (collectionSlug: string) => boolean,
-  contributedIds: ReadonlySet<string>
+  declaredIds: ReadonlySet<string>
 ): WidgetDefinition[] {
   return generatedWidgets().filter(widget => {
-    if (contributedIds.has(widget.id)) return false;
+    if (declaredIds.has(widget.id)) return false;
     const slug = generatedCollectionSlug(widget);
     // A generated card that names no collection cannot be checked against one,
     // so it is withheld rather than published. This is unreachable today --

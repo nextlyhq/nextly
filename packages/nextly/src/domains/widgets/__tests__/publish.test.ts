@@ -86,8 +86,3 @@ describe("publishableWidgets", () => {
     );
   });
 });
-
-// Generated cards are NOT published here. They are caller-dependent -- their id
-// and title name a collection -- so the workspace route resolves them per
-// reader and passes them in; `readableGeneratedWidgets` in
-// `collection-widgets.test.ts` covers that filtering.

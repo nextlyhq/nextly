@@ -32,7 +32,10 @@
  * @module domains/widgets/canonical
  */
 
-import { generatedWidgets } from "./collection-widgets";
+import {
+  generatedCollectionSlug,
+  generatedWidgets,
+} from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import { listWidgets } from "./registry";
 
@@ -61,6 +64,16 @@ export interface CanonicalWidget {
    * surviving declaration came from, not which ids core can generate.
    */
   generated?: boolean;
+  /**
+   * The collection a GENERATED card reads, when it is one.
+   *
+   * Carried because access to such a card is a question about that collection
+   * rather than about a declared permission — it has none — and the summary is
+   * what layout resolution filters. Taken from the definition's QUERY where the
+   * generated channel supplies it, so the value names the thing actually read
+   * rather than a slug recovered from a display identity.
+   */
+  collection?: string;
   requiredPermission?: string;
   defaultSize?: string;
   defaultHeight?: string;
@@ -165,9 +178,11 @@ export function canonicalWidgets(
   // below still merges over whichever of the two is here, for the same reason.
   for (const definition of generatedWidgets()) {
     if (!byId.has(definition.id)) {
+      const collection = generatedCollectionSlug(definition);
       byId.set(definition.id, {
         ...fromRegistration(definition),
         generated: true,
+        ...(collection === undefined ? {} : { collection }),
       });
     }
   }
