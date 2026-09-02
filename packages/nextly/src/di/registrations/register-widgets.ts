@@ -37,13 +37,26 @@
  * @module di/registrations/register-widgets
  */
 
+import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
+import type { PluginDefinition } from "../../plugins/plugin-context";
+import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 
-export function resetWidgetRegistries(): void {
+export function resetWidgetRegistries(
+  plugins: readonly PluginDefinition[] = []
+): void {
   clearWidgets();
   clearSources();
+
+  // The OTHER channel a widget arrives by. A contribution never passes through
+  // `registerWidget`, so without this the server's canonical set holds core's
+  // cards alone -- and every server-side question about which widgets exist
+  // answers differently from the grid, which has always resolved both.
+  // Replaced rather than merged, for the same reason the registry is cleared
+  // above: a hot reload must not accumulate the previous boot's plugins.
+  setContributedWidgets(contributedWidgetSummaries(plugins));
 
   for (const definition of CORE_WIDGETS) {
     registerWidget(definition);

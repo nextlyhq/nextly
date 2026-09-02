@@ -17,6 +17,7 @@
  * @module plugins/validate-admin-widgets
  */
 
+import type { CanonicalWidget } from "../domains/widgets/canonical";
 import {
   actionProblem,
   chromeProblem,
@@ -412,4 +413,50 @@ export function assertAdminWidgets(plugins: PluginDefinition[]): void {
       warnUnknownArchetype(plugin.name, widget);
     }
   }
+}
+
+/**
+ * Every contributed widget across every plugin, reduced to the summary layout
+ * resolution reads.
+ *
+ * Built from `validatedAdminWidgets`, which is the same reduction admin-meta
+ * publishes — so the server's canonical set and the payload the admin renders
+ * from cannot disagree about which contributed widgets exist. A plugin whose
+ * declaration this validator refuses contributes nothing here, exactly as it
+ * contributes nothing to the admin.
+ *
+ * Reads the fields WITHOUT narrowing them: a contribution may come from a
+ * plugin built against a newer core, so `defaultSize` is copied as whatever
+ * string it is rather than checked against this core's vocabulary. Refusing an
+ * unknown one here would drop the whole card from the arrangement over a value
+ * the admin already survives.
+ */
+export function contributedWidgetSummaries(
+  plugins: readonly PluginDefinition[]
+): CanonicalWidget[] {
+  const summaries: CanonicalWidget[] = [];
+  for (const plugin of plugins) {
+    for (const widget of validatedAdminWidgets(plugin) ?? []) {
+      const declaration = widget as unknown as Record<string, unknown>;
+      const id = declaration.id;
+      if (typeof id !== "string" || id === "") continue;
+      summaries.push({
+        id,
+        ...(typeof declaration.requiredPermission === "string"
+          ? { requiredPermission: declaration.requiredPermission }
+          : {}),
+        ...(typeof declaration.defaultSize === "string"
+          ? { defaultSize: declaration.defaultSize }
+          : {}),
+        ...(typeof declaration.defaultHeight === "string"
+          ? { defaultHeight: declaration.defaultHeight }
+          : {}),
+        ...(typeof declaration.defaultOrder === "number" &&
+        Number.isFinite(declaration.defaultOrder)
+          ? { defaultOrder: declaration.defaultOrder }
+          : {}),
+      });
+    }
+  }
+  return summaries;
 }

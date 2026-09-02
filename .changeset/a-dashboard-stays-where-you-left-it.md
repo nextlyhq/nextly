@@ -26,14 +26,17 @@
 "nextly": patch
 ---
 
-A dashboard arrangement now survives a reload.
+The API a dashboard arrangement is stored through.
 
 `nextly_widget_layout` stores one row per reader: which cards, in which order,
 at which size, and which they have put away. `GET /api/dashboard/layout` returns
 that arrangement resolved against the live registry, and `PUT` replaces it,
-guarded by a version so two tabs cannot silently overwrite each other. A reader
-who has never arranged anything still sees the registry's own order, so nothing
-changes for anybody until they move a card.
+guarded by a version so two tabs cannot silently overwrite each other.
+
+This is the store and its endpoint only — the admin dashboard does not read it
+yet, so no reader's dashboard changes behaviour from this alone. It is the
+prerequisite the editing UI is built on, and the arrangement starts surviving a
+reload when that lands.
 
 The stored row holds an identity and a position and nothing else. It never
 copies a widget's `requiredPermission`: every question about whether this reader

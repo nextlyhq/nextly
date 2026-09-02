@@ -718,7 +718,7 @@ export async function registerServices(
   // needed. Building them from `transformedConfig.collections` here was the
   // defect: a Builder-authored collection has no config entry at all, so one
   // of the framework's two schema modes had no queryable source.
-  resetWidgetRegistries();
+  resetWidgetRegistries(transformedConfig.plugins ?? []);
 
   // Then layer in the registry-stored opt-outs. Builder-authored collections and
   // singles have no code-first config to publish from, so without this read their

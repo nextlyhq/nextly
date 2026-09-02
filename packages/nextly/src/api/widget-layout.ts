@@ -39,7 +39,7 @@ import {
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import type { WidgetDefinition } from "../domains/widgets/definition";
+import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
 import {
   MAX_LAYOUT_BYTES,
   defaultPlacements,
@@ -50,7 +50,6 @@ import {
   visibilityToken,
   type WidgetPlacement,
 } from "../domains/widgets/layout";
-import { listWidgets } from "../domains/widgets/registry";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
@@ -65,6 +64,7 @@ import {
 } from "./authenticated-read";
 import { readBoundedJsonBody } from "./read-json-body";
 import {
+  respondAction,
   respondData,
   respondMutation,
   SKIP_DATE_FORMATTING_HEADER,
@@ -122,7 +122,7 @@ function carriedPlacements(
   if (storedPlacements) {
     return partitionPlacements(storedPlacements, visibleIds).invisible;
   }
-  return partitionPlacements(defaultPlacements(listWidgets()), visibleIds)
+  return partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
     .invisible;
 }
 
@@ -143,10 +143,10 @@ function carriedPlacements(
  * materializations that agree only while nothing is hidden.
  */
 function visibleDefaults(
-  widgets: readonly WidgetDefinition[]
+  widgets: readonly CanonicalWidget[]
 ): WidgetPlacement[] {
   const visibleIds = new Set(widgets.map(widget => widget.id));
-  return partitionPlacements(defaultPlacements(listWidgets()), visibleIds)
+  return partitionPlacements(defaultPlacements(allWidgets()), visibleIds)
     .visible;
 }
 
@@ -181,8 +181,8 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
  */
 async function visibleWidgets(
   caller: ReadAccessCaller
-): Promise<WidgetDefinition[]> {
-  const all = listWidgets();
+): Promise<CanonicalWidget[]> {
+  const all = allWidgets();
 
   const slugs = [
     ...new Set(
@@ -226,7 +226,7 @@ async function visibleWidgets(
  * `typeof` on a value already in hand costs nothing.
  */
 function isVisibleTo(
-  widget: WidgetDefinition,
+  widget: CanonicalWidget,
   verdicts: ReadonlyMap<string, boolean>
 ): boolean {
   const slug: unknown = widget.requiredPermission;
@@ -479,10 +479,18 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
   // `respondMutation`, not `respondData`: this is a write, and every write in
   // this package answers `{ message, item }`. A bespoke top-level shape would
   // be one the shared client parser cannot read at all.
+  // Sorted the way a GET sorts, not echoed in submission order. A valid PUT may
+  // list placements in any array order — only each `order` field is validated —
+  // and the stored row is normalized by `partitionPlacements` on the next read.
+  // Echoing the raw array made this response a SECOND representation of the
+  // same arrangement: a client trusting it to chain another edit without
+  // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
+  const echoed = [...submitted].sort((a, b) => a.order - b.order);
+
   return respondMutation(
     "Dashboard layout saved.",
     {
-      placements: submitted,
+      placements: echoed,
       version,
       source: "own" satisfies LayoutSource,
       // Echoed so a client can make a second edit without a round trip. It is
@@ -506,3 +514,46 @@ function firstDuplicateId(
   }
   return undefined;
 }
+
+/**
+ * DELETE `/api/dashboard/layout` — put the dashboard back to the registry's
+ * own order.
+ *
+ * Removes the row rather than writing the current defaults into it, and the
+ * difference is the whole point. A written snapshot freezes today's defaults
+ * into the reader's arrangement, so a widget added later, or a `defaultOrder`
+ * a plugin changes later, never reaches them again — the reader would be
+ * "reset" onto a layout that stops tracking the thing it was reset to. With no
+ * row, resolution falls through to the live registry on every read, which is
+ * what a default IS.
+ *
+ * Refused for an API key on the same ground as the write: a dashboard
+ * arrangement belongs to a person, and a key resetting one would be discarding
+ * its minter's.
+ */
+export const deleteWidgetLayout = withErrorHandler(async (req: Request) => {
+  const auth = await requireAuthentication(req);
+  if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
+
+  if (auth.authMethod === "api-key") {
+    throw NextlyError.forbidden({
+      logContext: { reason: "an api key may not reset a dashboard layout" },
+    });
+  }
+
+  const service = await getLayoutService();
+  const caller = readAccessCaller(await readCaller(auth));
+  await service.deleteLayout(SCOPE_KIND, caller.userId);
+
+  // No version echoed, because there is no row to hold one: the next read
+  // answers 0 and `source: "default"`, which is the state the caller asked to
+  // be in. Returning a version here would hand a client a number to send back
+  // in a guard that now has nothing to guard.
+  return respondAction(
+    "Dashboard layout reset.",
+    {},
+    {
+      headers: OPAQUE_CONFIG_HEADERS,
+    }
+  );
+});

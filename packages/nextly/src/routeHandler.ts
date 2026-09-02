@@ -84,7 +84,11 @@ import {
   redeliverWebhookDelivery,
   drainWebhooks,
 } from "./api/webhooks";
-import { getWidgetLayout, putWidgetLayout } from "./api/widget-layout";
+import {
+  deleteWidgetLayout,
+  getWidgetLayout,
+  putWidgetLayout,
+} from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
@@ -491,6 +495,8 @@ async function handleDashboardRequest(
       return getWidgetLayout(req);
     case "putWidgetLayout":
       return putWidgetLayout(req);
+    case "deleteWidgetLayout":
+      return deleteWidgetLayout(req);
     default:
       return new Response(
         JSON.stringify({ error: "Unknown dashboard operation" }),
