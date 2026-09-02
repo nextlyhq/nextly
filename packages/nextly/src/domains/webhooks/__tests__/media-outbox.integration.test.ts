@@ -100,6 +100,43 @@ describe("webhook outbox capture — media (integration)", () => {
     current = await createTestNextly({});
   });
 
+  it("records the size of the bytes stored, not the one declared", async () => {
+    /*
+     * `uploadMedia` is exported, so the buffer and the `size` beside it are two
+     * separate claims a caller can make disagree. The row has to describe the
+     * object it points at: a smaller declared number would be persisted, sent
+     * in the webhook payload, and later read by anything that has to know how
+     * large the stored file is.
+     *
+     * Declared deliberately UNEQUAL here. Every other fixture in this file
+     * declares the true length, which is correct for what those cases test and
+     * is exactly why none of them can tell the two implementations apart.
+     */
+    const bytes = pdfDocument("declared-wrongly");
+    const media = service(current!);
+
+    const result = await media.uploadMedia(
+      {
+        file: bytes,
+        filename: "doc.pdf",
+        mimeType: "application/pdf",
+        size: 1,
+        uploadedBy: null,
+      },
+      { type: "user", id: "user-1" }
+    );
+
+    expect(bytes.length).toBeGreaterThan(1);
+    expect(result.data!.size).toBe(bytes.length);
+
+    const uploaded = (await events(current!)).filter(
+      r => r.type === "media.uploaded"
+    );
+    expect((envelopeOf(uploaded[0]).data as { size?: number }).size).toBe(
+      bytes.length
+    );
+  });
+
   it("records media.uploaded on upload", async () => {
     const media = service(current!);
     const result = await media.uploadMedia(
