@@ -185,7 +185,10 @@ function zoneSchemaFields(
   schemas: FieldGroupSchemaMap | undefined,
   instance: Record<string, unknown>
 ): FieldDefinition[] {
-  if (schemas === undefined || typeof schemas !== "object") return [];
+  // Truthy check, not `!== undefined`: the map is read off a stored
+  // definition, so a JSON round trip can deliver `null`, and `typeof null`
+  // is "object" — indexing it would throw inside the entry-write path.
+  if (!schemas || typeof schemas !== "object") return [];
   // Read through the reader that tries both spellings of the wire key: the
   // migration renames that key inside stored rows, and an unreadable type
   // would skip its children entirely.

@@ -103,6 +103,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -2151,13 +2152,13 @@ export class CollectionMutationService extends BaseService {
     componentFields: Map<string, FieldConfig[]>
   ): void {
     const declaredSlugs = (field: FieldConfig): string[] => {
-      const one = (field as { component?: unknown }).component;
-      const many = (field as { components?: unknown }).components;
+      // Through the shared extractor: a migrated definition's slugs sit on
+      // fieldGroup / fieldGroups, and a strip walk that misses them leaves
+      // the plaintext inside the working-draft snapshot.
+      const { single, many } = extractFieldGroupReferences(field);
       const slugs: string[] = [];
-      if (typeof one === "string") slugs.push(one);
-      if (Array.isArray(many)) {
-        for (const s of many) if (typeof s === "string") slugs.push(s);
-      }
+      if (single !== undefined) slugs.push(single);
+      if (many !== undefined) slugs.push(...many);
       return slugs;
     };
     const stripInstance = (instance: unknown, cfields: FieldConfig[]): void => {

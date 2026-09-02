@@ -472,11 +472,11 @@ export class FieldGroupQueryService extends BaseService {
         continue;
       }
 
+      // References resolved once, before the dispatch AND its failure path:
+      // the populate default for a migrated dynamic zone is a list, and the
+      // catch below can only answer that from the resolved field.
+      const f = withResolvedFieldGroupReferences(field);
       try {
-        // References resolved once at the boundary: a migrated definition
-        // carries them under `fieldGroup` / `fieldGroups`, which the keys the
-        // dispatch below opens never held.
-        const f = withResolvedFieldGroupReferences(field);
         if (f.components && f.components.length > 0) {
           result[fieldName] = await this.populateMultiComponentField(
             entryId,
@@ -530,7 +530,7 @@ export class FieldGroupQueryService extends BaseService {
           fieldName,
           error: error instanceof Error ? error.message : String(error),
         });
-        result[fieldName] = this.getPopulateDefaultValue(field);
+        result[fieldName] = this.getPopulateDefaultValue(f);
       }
     }
 
@@ -567,7 +567,11 @@ export class FieldGroupQueryService extends BaseService {
         if (!this.shouldPopulateField(field.name, select)) {
           continue;
         }
-        componentFields.push(field);
+        // Resolved once, at collection: every reader below — the dispatch,
+        // the slug reads, and the populate default for a failed or absent
+        // entry — sees the references on the keys it opens, whichever
+        // spelling the stored definition carries.
+        componentFields.push(withResolvedFieldGroupReferences(field));
       }
     }
     if (componentFields.length === 0) return entries;
@@ -576,14 +580,12 @@ export class FieldGroupQueryService extends BaseService {
 
     for (const field of componentFields) {
       try {
-        // Same boundary resolution as the single-entry populate path.
-        const f = withResolvedFieldGroupReferences(field);
-        if (f.components && f.components.length > 0) {
+        if (field.components && field.components.length > 0) {
           const dataMap = await this.batchPopulateMultiComponentField(
             entryIds,
             parentTable,
             field.name,
-            f,
+            field,
             depth,
             currentDepth,
             locale,
@@ -591,13 +593,13 @@ export class FieldGroupQueryService extends BaseService {
             access
           );
           fieldDataMaps.set(field.name, dataMap);
-        } else if (f.component) {
-          if (f.repeatable) {
+        } else if (field.component) {
+          if (field.repeatable) {
             const dataMap = await this.batchPopulateRepeatableField(
               entryIds,
               parentTable,
               field.name,
-              f.component,
+              field.component,
               depth,
               currentDepth,
               locale,
@@ -610,7 +612,7 @@ export class FieldGroupQueryService extends BaseService {
               entryIds,
               parentTable,
               field.name,
-              f.component,
+              field.component,
               depth,
               currentDepth,
               locale,

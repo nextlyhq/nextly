@@ -84,11 +84,14 @@ describe("createSanitizationHook — registry-shaped field groups", () => {
     const hook = createSanitizationHook(undefined);
     const data = { seo: { title: "<i>x</i>" } };
 
-    await hook(makeContext(data));
+    // The executor identity is the load-bearing property: the lookup must run
+    // on the CALLER's connection, so the sentinel the context carries is what
+    // the registry stub has to have received.
+    const executor = { sentinel: "tx" };
+    await hook(makeContext(data, executor));
 
     expect(data.seo).toEqual({ title: "x" });
-    // The lookup ran, and on the caller's connection.
-    expect(executors).toHaveLength(1);
+    expect(executors).toEqual([executor]);
   });
 
   it("resolves each row of a zone by its own instance type", async () => {

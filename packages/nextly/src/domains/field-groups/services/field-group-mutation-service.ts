@@ -595,12 +595,13 @@ export class FieldGroupMutationService extends BaseService {
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
 
-      await this.deleteFieldComponentData(
-        parentId,
-        parentTable,
-        field.name,
-        field
-      );
+      // Same boundary resolution as the save paths: the row cleanup finds the
+      // tables through the field's slugs, which a migrated definition carries
+      // under fieldGroup / fieldGroups — unresolved, every nested row the
+      // entry owns would be orphaned here.
+      const f = withResolvedFieldGroupReferences(field);
+
+      await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
     }
   }
 
@@ -613,12 +614,15 @@ export class FieldGroupMutationService extends BaseService {
     for (const field of fields) {
       if (!isFieldGroupField(field)) continue;
 
+      // Same boundary resolution as the pooled delete path above.
+      const f = withResolvedFieldGroupReferences(field);
+
       await this.deleteFieldComponentDataInTx(
         tx,
         parentId,
         parentTable,
-        field.name,
-        field
+        f.name,
+        f
       );
     }
   }

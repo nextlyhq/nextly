@@ -147,6 +147,22 @@ describe("sanitizeEntryData — nested-document descent", () => {
     ]);
     expect(data.seo).toEqual({ title: "<i>x</i>" });
   });
+
+  it("tolerates a null componentSchemas map on the stored definition", () => {
+    // A JSON round trip can deliver the map as null, and `typeof null` is
+    // "object" — this descent runs on the entry-write path, so an index into
+    // null here would throw on every save of such an entry.
+    const data = { seo: { title: "<i>x</i>" } };
+    sanitizeEntryData(data, [
+      field({
+        name: "seo",
+        type: "fieldGroup",
+        fieldGroup: "seo",
+        componentSchemas: null,
+      }),
+    ]);
+    expect(data.seo).toEqual({ title: "<i>x</i>" });
+  });
 });
 
 describe("attachFieldGroupChildren", () => {
