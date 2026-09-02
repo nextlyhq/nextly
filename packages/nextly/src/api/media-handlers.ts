@@ -448,7 +448,10 @@ async function handleUploadMedia(
       filename: file.name,
       // The same resolution the schema was given above. Validating one value
       // and storing another means the record can carry a type nothing checked.
-      mimeType: resolveClaimedMimeType(file.name, file.type, buffer),
+      // The value the schema ACCEPTED, not a second resolution of the same
+      // question. Two calls can diverge under any later edit, and the one that
+      // reaches storage would be the one nothing checked.
+      mimeType: input.mimeType,
       size: file.size,
       folderId: folderId || undefined,
     },

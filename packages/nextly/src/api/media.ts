@@ -184,11 +184,10 @@ export const POST = withErrorHandler(
       {
         buffer,
         filename: fileEnsured.name,
-        mimeType: resolveClaimedMimeType(
-          fileEnsured.name,
-          fileEnsured.type,
-          buffer
-        ),
+        // The value the schema ACCEPTED, not a second resolution of the same
+        // question — the one that reaches storage must be the one that was
+        // checked.
+        mimeType: input.mimeType,
         size: fileEnsured.size,
         folderId: folderId || undefined,
       },

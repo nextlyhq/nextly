@@ -188,6 +188,51 @@ describe("checking a font claim against the bytes", () => {
   });
 });
 
+describe("a font claim under an older spelling", () => {
+  it("comes back canonical, so the allowlist recognises it", () => {
+    /*
+     * Some operating systems and multipart libraries still report the pre-IANA
+     * names. Such a claim is not generic, so nothing falls back to the
+     * filename, and the allowlist — which knows one name per format — refuses a
+     * font this product accepts under its other spelling.
+     */
+    for (const format of WEB_FONT_FORMATS) {
+      expect(format.aliases.length).toBeGreaterThan(0);
+      for (const alias of format.aliases) {
+        expect(
+          resolveClaimedMimeType(
+            `Inter${format.extension}`,
+            alias,
+            fontBytes(format.signature)
+          )
+        ).toBe(format.mimeType);
+      }
+    }
+  });
+
+  it("still answers to the bytes under the older spelling", () => {
+    /*
+     * The control. Canonicalising a name must not become a way to launder
+     * content: an alias is a claim like any other and the signature decides.
+     */
+    expect(
+      resolveClaimedMimeType(
+        "Evil.woff",
+        "application/x-font-woff",
+        Buffer.from("not-a-font")
+      )
+    ).toBe("");
+  });
+
+  it("leaves a type that is not a font alias alone", () => {
+    // A second control: a canonicaliser that rewrote everything would satisfy
+    // both cases above while renaming every upload in the product.
+    expect(
+      resolveClaimedMimeType("photo.png", "image/png", Buffer.from("png"))
+    ).toBe("image/png");
+  });
+});
+
 describe("the inference answers to the bytes", () => {
   it("refuses an EXPLICIT font claim the bytes do not support", () => {
     /*

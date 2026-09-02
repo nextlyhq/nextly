@@ -32,12 +32,31 @@ export interface WebFontFormat {
    * unless something reads the signature directly.
    */
   readonly signature: string;
+  /**
+   * Older spellings a client may still report for this format.
+   *
+   * Some operating systems and multipart libraries carry the pre-IANA names,
+   * and a claim wearing one is not generic — so nothing would fall back to the
+   * filename, and the allowlist, which knows only the canonical name, refuses a
+   * font the product accepts under its other spelling.
+   */
+  readonly aliases: readonly string[];
 }
 
 /** Every web font format this product accepts, serves and advertises. */
 export const WEB_FONT_FORMATS: readonly WebFontFormat[] = [
-  { mimeType: "font/woff2", extension: ".woff2", signature: "wOF2" },
-  { mimeType: "font/woff", extension: ".woff", signature: "wOFF" },
+  {
+    mimeType: "font/woff2",
+    extension: ".woff2",
+    signature: "wOF2",
+    aliases: ["application/font-woff2", "application/x-font-woff2"],
+  },
+  {
+    mimeType: "font/woff",
+    extension: ".woff",
+    signature: "wOFF",
+    aliases: ["application/font-woff", "application/x-font-woff"],
+  },
 ];
 
 /** The same set as MIME types, for the allowlist and the serving gate. */
@@ -61,6 +80,18 @@ export function webFontMimeFromFilename(filename: string): string | undefined {
   const lower = filename.toLowerCase();
   return WEB_FONT_FORMATS.find(format => lower.endsWith(format.extension))
     ?.mimeType;
+}
+
+/**
+ * The canonical name for a font type, whichever spelling arrived.
+ *
+ * @param mimeType - A lower-cased claim
+ * @returns The IANA name, or `undefined` when this is not a web font at all
+ */
+export function canonicalWebFontMime(mimeType: string): string | undefined {
+  return WEB_FONT_FORMATS.find(
+    format => format.mimeType === mimeType || format.aliases.includes(mimeType)
+  )?.mimeType;
 }
 
 /**
@@ -128,19 +159,20 @@ export function resolveClaimedMimeType(
   // name could have identified.
   const generic = claimed.toLowerCase();
 
+  /*
+   * A font claim under ANY of its spellings, canonical or legacy, answers to
+   * the bytes and comes back canonical. The allowlist knows one name per
+   * format, so a claim arriving as `application/x-font-woff` is a font the
+   * product accepts being refused for how the client spelled it.
+   */
+  const canonical = canonicalWebFontMime(generic);
+  if (canonical !== undefined) {
+    return matchesWebFontSignature(buffer, canonical) ? canonical : "";
+  }
+
   if (generic !== "" && generic !== "application/octet-stream") {
-    /*
-     * A font type the CLIENT sent answers to the bytes exactly as an inferred
-     * one does. Platforms that do register these formats send `font/woff2`
-     * themselves, so trusting an explicit claim leaves the same objects
-     * servable by the same anonymous route on the same platforms — the only
-     * difference being who typed the string.
-     *
-     * Refused as an empty claim rather than passed on, because the caller that
-     * most needs this has no validator behind it: the published server action
-     * reaches the legacy service, which persists the type it is handed.
-     */
-    return matchesWebFontSignature(buffer, generic) ? claimed : "";
+    // Not a font by any spelling, so its bytes are somebody else's check.
+    return claimed;
   }
 
   const inferred = webFontMimeFromFilename(filename);
