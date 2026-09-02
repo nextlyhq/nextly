@@ -41,6 +41,7 @@ import * as React from "react";
 
 import { useSurvivingReport } from "./builder-notices";
 import {
+  classLibraryHasRoom,
   classRows,
   deletionWarning,
   filterClassRows,
@@ -322,8 +323,9 @@ export function ClassManagerPanel({
    * whose one non-supplied entry is malformed, duplicated or past the cap
    * offers deletion nowhere while both of those weaker tests say it does.
    */
-  const anyDeletable =
-    onDelete !== undefined && visible.some(row => !supplied.has(row.id));
+  const anyDeletable = visible.some(row =>
+    rowIsDeletable(row, supplied, onDelete)
+  );
   const rows = searchClassRows(filterClassRows(visible, active), query);
 
   return (
@@ -434,6 +436,22 @@ function FilterChips({
 }
 
 /**
+ * Whether one row can be deleted, asked in one place.
+ *
+ * The row drew its control from `isSupplied` and `onDelete` while the lede
+ * asked `onDelete` and the supplied set separately — two expressions of one
+ * rule, agreeing today and free to diverge the next time eligibility changes.
+ * Sharing the `Set` was not sharing the DECISION.
+ */
+function rowIsDeletable(
+  row: ClassRow,
+  supplied: ReadonlySet<string>,
+  onDelete: ((classId: string) => void) | undefined
+): boolean {
+  return onDelete !== undefined && !supplied.has(row.id);
+}
+
+/**
  * Why the list is empty, in the terms of whatever actually emptied it.
  *
  * Extracted from `ClassList` because four narrowings with four different
@@ -444,6 +462,7 @@ function EmptyClasses({
   searching,
   filter,
   canDelete,
+  canCreate,
 }: {
   searching: boolean;
   filter: ClassFilter;
@@ -453,6 +472,12 @@ function EmptyClasses({
    * to clear classes out would name an action this panel cannot perform.
    */
   canDelete: boolean;
+  /**
+   * Whether `class-library` would accept a new class. Asked of it rather than
+   * inferred from an empty list, because the two disagree exactly when every
+   * stored entry is unusable.
+   */
+  canCreate: boolean;
 }): React.JSX.Element {
   /*
    * Which narrowing produced the empty list. Blaming the search when the box
@@ -501,6 +526,29 @@ function EmptyClasses({
    * offer is where to go, not a button.
    */
   if (filter === "all") {
+    /*
+     * Whether a class can be made at all is `class-library`'s question, not
+     * something an empty list implies. A library whose stored entries are all
+     * malformed draws nothing here while every slot is still taken, and
+     * `newClassName` then refuses every creation as `library-full` — so "make
+     * the first one beside the style controls" would name an action that
+     * cannot succeed, on the one surface an author goes to for help.
+     */
+    if (!canCreate) {
+      return (
+        <div className="nx-classman__empty">
+          <p className="nx-classman__empty-head">
+            No classes can be shown, and none can be made.
+          </p>
+          <p className="nx-inspector__note">
+            This site&rsquo;s class library is full, and nothing in it can be
+            used — so no class is listed here and a new one would be refused.
+            Entries have to be removed from the stored classes before this panel
+            can do anything with them.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="nx-classman__empty">
         <p className="nx-classman__empty-head">No classes yet.</p>
@@ -641,6 +689,7 @@ function ClassList({
         searching={searching}
         filter={filter}
         canDelete={anyDeletable}
+        canCreate={classLibraryHasRoom(library)}
       />
     );
   }
@@ -661,6 +710,7 @@ function ClassList({
               pendingSlug={pendingSlugs?.[row.id]}
               library={library}
               isSupplied={supplied.has(row.id)}
+              canDelete={rowIsDeletable(row, supplied, onDelete)}
               usageKnown={usageKnown}
               onRename={onRename}
               onDelete={onDelete}
@@ -688,6 +738,7 @@ function ClassRowView({
   pendingSlug,
   library,
   isSupplied,
+  canDelete,
   usageKnown,
   onRename,
   onDelete,
@@ -697,6 +748,12 @@ function ClassRowView({
   pendingSlug?: string;
   library: readonly NamedClass[];
   isSupplied: boolean;
+  /**
+   * Whether this row may be deleted, decided by `rowIsDeletable` rather than
+   * here. The lede reports the same predicate over every row, so the sentence
+   * and the control cannot come apart.
+   */
+  canDelete: boolean;
   usageKnown: boolean;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
@@ -718,7 +775,7 @@ function ClassRowView({
           // author to hunt for the permission that would enable it, and there
           // is none — the class comes from the site's own configuration.
           <span className="nx-classman__origin">Default</span>
-        ) : onDelete === undefined ? null : (
+        ) : !canDelete || onDelete === undefined ? null : (
           <Button
             type="button"
             size="sm"

@@ -217,7 +217,13 @@ export function TokensPanel({
     <div className="nx-tokens">
       <div className="nx-tokens__head">
         <h2 className="nx-tokens__title">Tokens</h2>
-        <ModeSwitch mode={mode} onMode={setMode} />
+        <ModeSwitch
+          mode={mode}
+          onMode={next => {
+            setMode(next);
+            setRevealAt(undefined);
+          }}
+        />
       </div>
       {/*
        * What a token IS, before any of the machinery.
@@ -249,7 +255,16 @@ export function TokensPanel({
           {issue}
         </p>
       )}
-      <TokenSearch value={query} onValue={setQuery} />
+      <TokenSearch
+        value={query}
+        onValue={next => {
+          setQuery(next);
+          // A reveal answers ONE add. Left standing it pins a stored position
+          // that a later delete can hand to a different token, so any
+          // narrowing the author performs afterwards retires it.
+          setRevealAt(undefined);
+        }}
+      />
       {groups.length === 0 ? (
         <EmptyTokens searching={needle !== ""} />
       ) : (
@@ -350,8 +365,8 @@ function EmptyTokens({ searching }: { searching: boolean }): React.JSX.Element {
       <p className="nx-tokens__empty-head">No tokens yet.</p>
       <p className="nx-inspector__note">
         A token names one value — a colour, a size, a shadow — so every block
-        can point at it instead of repeating it, and you change them all from
-        one place.
+        can point at it instead of repeating it. This is where the tokens
+        themselves are edited.
       </p>
     </div>
   );
@@ -810,11 +825,18 @@ function TokenList({
    * to reach the tail because a query matching most names narrows nothing.
    */
   const [pagesOpen, setPagesOpen] = React.useState(1);
-  const reached =
-    revealAt === undefined ? -1 : rows.findIndex(row => row.at === revealAt);
-  const limit = Math.max(pagesOpen * TOKEN_PAGE_SIZE, reached + 1);
+  const limit = pagesOpen * TOKEN_PAGE_SIZE;
   const shown = rows.slice(0, limit);
-  const hidden = rows.length - shown.length;
+  /*
+   * A revealed row is drawn ON ITS OWN when it sits past the mounted page,
+   * never by raising the limit to reach it. A token is appended, so in a set
+   * of five thousand that index IS five thousand — raising the limit mounts
+   * every row before it and recreates exactly the freeze this cap prevents.
+   */
+  const at =
+    revealAt === undefined ? -1 : rows.findIndex(row => row.at === revealAt);
+  const revealed = at >= limit ? rows[at] : undefined;
+  const hidden = rows.length - shown.length - (revealed === undefined ? 0 : 1);
   return (
     <div className="nx-tokens__list">
       {rows.length === 0 ? null : (
@@ -832,7 +854,25 @@ function TokenList({
           ))}
         </ul>
       )}
-      {hidden === 0 ? null : (
+      {revealed === undefined ? null : (
+        <div className="nx-tokens__revealed">
+          <p className="nx-inspector__note">
+            Just added, further down the list:
+          </p>
+          <ul>
+            <li>
+              <TokenEntry
+                row={revealed}
+                tokens={tokens}
+                from={suppliedTokenFor(supplied, revealed.identity)}
+                mode={mode}
+                onChange={onChange}
+              />
+            </li>
+          </ul>
+        </div>
+      )}
+      {hidden <= 0 ? null : (
         <Button
           type="button"
           variant="outline"

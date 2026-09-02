@@ -19,6 +19,8 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { MAX_NAMED_CLASSES } from "@nextlyhq/blocks-engine";
+import { newClassName } from "./class-library";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1148,6 +1150,44 @@ describe("the panel explains itself", () => {
       />
     );
     expect(screen.getByText(/clear them out/i)).toBeTruthy();
+  });
+
+  it("does not offer creation when class-library would refuse it", () => {
+    /*
+     * A full library of entries the compiler cannot use draws NOTHING, so the
+     * empty list looks like a fresh site — while `newClassName` refuses every
+     * creation as `library-full`. Telling that author to make the first class
+     * names an action that cannot succeed, on the surface they came to for
+     * help. The verdict is `class-library`'s to give, not the list's to imply.
+     */
+    const full = Array.from({ length: MAX_NAMED_CLASSES }, (_, at) =>
+      cls(`id-${at}`, "Not A Slug", at)
+    );
+    const view = render(
+      <ClassManagerPanel
+        library={full}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+      />
+    );
+    // The control: the list really is empty, so this is about the verdict
+    // rather than about rows happening to render.
+    expect(screen.queryByText("No classes yet.")).toBeNull();
+    expect(screen.getByText(/none can be made/i)).toBeTruthy();
+    expect(newClassName("fresh", full).ok).toBe(false);
+
+    // Must-differ: an ordinarily empty library still teaches and still offers.
+    view.rerender(
+      <ClassManagerPanel
+        library={[]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+      />
+    );
+    expect(screen.getByText("No classes yet.")).toBeTruthy();
+    expect(screen.queryByText(/none can be made/i)).toBeNull();
   });
 
   it("keeps the filters, because they answer questions that OVERLAP", () => {

@@ -1121,7 +1121,7 @@ describe("the panel explains itself and shows the whole set", () => {
      * one control further on, and pressing Add again would make a second one.
      */
     const full: SiteTokenSet = {
-      tokens: Array.from({ length: 60 }, (_, at) => ({
+      tokens: Array.from({ length: 300 }, (_, at) => ({
         name: `color.c${at}`,
         kind: "color" as const,
         values: { light: "#111111" },
@@ -1139,6 +1139,19 @@ describe("the panel explains itself and shows the whole set", () => {
 
     expect(made).toBeDefined();
     expect(screen.getByDisplayValue(made!.name)).toBeTruthy();
+    /*
+     * And it is revealed WITHOUT mounting everything before it. Raising the
+     * limit to reach an appended row mounts every preceding one, which in a
+     * DTCG-sized set is the exact freeze the cap exists to prevent — so the
+     * mounted count must stay near the page, not near the total.
+     */
+    /*
+     * And WITHOUT mounting everything before it: the head is still one page.
+     * Raising the limit to reach an appended row mounts every preceding one,
+     * which in a DTCG-sized set is the exact freeze the cap exists to prevent
+     * — with 300 stored, that is 300 rows rather than 50 plus the new one.
+     */
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
   });
 
   it("groups every kind that HAS tokens into one list", () => {

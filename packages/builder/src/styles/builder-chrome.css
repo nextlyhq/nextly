@@ -3126,3 +3126,16 @@
     white-space: normal;
   }
 }
+
+/*
+ * The row drawn on its own after an add that landed past the mounted page.
+ *
+ * Separated rather than slotted into the list, because it is NOT the next row:
+ * everything between it and the last mounted one is still hidden behind the
+ * cap, and drawing it flush would claim an adjacency the list does not have.
+ */
+.nx-tokens__revealed {
+  border-top: 1px dashed var(--nx-builder-border);
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
