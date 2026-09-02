@@ -2350,6 +2350,16 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                 // box actually got rather than from what it was offered.
                 preview={canvasPreview}
                 dragHandlers={drag.handlers}
+                // The same object those handlers came from, forwarded whole.
+                // The canvas draws what the pointer currently means — which
+                // block is in flight, which container is receiving it, and why
+                // a region will not take it — and decides none of it.
+                //
+                // Whole rather than picked apart for the reason the handlers
+                // are: a set spread across several props can be partially
+                // wired, and a canvas told about a refusal but not about the
+                // block in flight explains a refusal while dimming nothing.
+                drag={drag}
                 // The pointer route into typing a block's text. Its keyboard
                 // counterpart is the Enter binding above, registered in the same
                 // place so a surface cannot gain one without the other.

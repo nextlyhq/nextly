@@ -49,10 +49,15 @@ import { NODE_ID_ATTRIBUTE } from "@nextlyhq/blocks-react";
 import {
   CANVAS_ROOT_CLASS,
   Canvas,
+  DRAG_SOURCE_ATTRIBUTE,
+  DROP_PARENT_ATTRIBUTE,
+  DROP_REFUSED_ATTRIBUTE,
+  LOCKED_ATTRIBUTE,
   SELECTED_ATTRIBUTE,
   canvasScale,
   nodeIdFromEvent,
 } from "./canvas";
+import type { CanvasDragState } from "./canvas-drag";
 import type { CanvasZoom } from "./canvas-zoom";
 
 // Explicit because this package does not enable vitest globals, and without
@@ -2506,5 +2511,324 @@ describe("forcing a state onto a tree React commits over time", () => {
     expect(second.getAttribute(SELECTED_ATTRIBUTE)).toBe("primary");
     expect(first.getAttribute(SELECTED_ATTRIBUTE)).toBeNull();
     expect(first.className).not.toContain(previewStateClass("hover"));
+  });
+});
+
+describe("the drag in flight is drawn on the canvas", () => {
+  /*
+   * A container plus the repeating block, because the two marks answer
+   * different questions and one fixture cannot exercise both: the source mark
+   * is about one node drawn many times, and the region marks are about a
+   * container node named by a drop.
+   */
+  beforeAll(() => {
+    clearBlocks();
+    registerBlocks(
+      [
+        {
+          name: "acme/leaf",
+          version: 1,
+          description: "A block.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+        {
+          // Draws its own child twice, which is what makes one node id many
+          // elements — the shape `core/collection-loop` has in the library.
+          name: "acme/twice",
+          version: 1,
+          description: "A block that repeats its child.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement(
+              "div",
+              { className },
+              createElement("div", {
+                key: "one",
+                [NODE_ID_ATTRIBUTE]: "child",
+              }),
+              createElement("div", { key: "two", [NODE_ID_ATTRIBUTE]: "child" })
+            ),
+        },
+        {
+          name: "acme/box",
+          version: 1,
+          description: "A container.",
+          example: { props: {} },
+          render: ({ className }: { className: string }) =>
+            createElement("div", { className }),
+        },
+      ] as never,
+      { source: "canvas-drag-marks-test" }
+    );
+  });
+  afterAll(clearBlocks);
+
+  const PAGE = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      { id: "box", type: "acme/box", version: 1, props: {} },
+      { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+    ],
+  };
+
+  const LOOP = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [{ id: "loop", type: "acme/twice", version: 1, props: {} }],
+  };
+
+  function draw(drag: CanvasDragState | undefined, page: unknown = PAGE) {
+    return render(
+      <Canvas
+        document={page as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        drag={drag}
+      />
+    );
+  }
+
+  const dragging = (over: Partial<CanvasDragState>): CanvasDragState => ({
+    draggingId: null,
+    draggingBlockName: "acme/leaf",
+    target: null,
+    refusal: null,
+    ...over,
+  });
+
+  it("marks EVERY rendering of the node in flight, not the first one found", async () => {
+    // A node id is unique in a document and not in the tree drawn from it, so a
+    // walk stopping at the first match dims one copy of a repeated block and
+    // leaves the rest at full opacity.
+    const { container } = draw(dragging({ draggingId: "child" }), LOOP);
+    await act(async () => undefined);
+
+    expect(
+      container.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
+    ).toHaveLength(2);
+  });
+
+  it("marks the container a drop would land in", async () => {
+    const { container } = draw(
+      dragging({
+        draggingId: "leaf",
+        target: {
+          id: "t",
+          regionId: "box::children",
+          at: { parentId: "box", slot: "children", index: 0 },
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    const parent = container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`);
+    expect(parent?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+    // The two region marks are mutually exclusive: `DropResolution` is a union,
+    // so a canvas showing both at once is drawing a state the engine cannot be in.
+    expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("marks the container that refuses, and says why and what it takes", async () => {
+    const { container, getByText } = draw(
+      dragging({
+        draggingId: "leaf",
+        refusal: {
+          regionId: "box::children",
+          parentId: "box",
+          reason: "wrong-parent",
+          permitted: ["acme/twice"],
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    const refused = container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`);
+    expect(refused?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+    expect(container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)).toBeNull();
+
+    // The whole point of the row: the reason the engine computed reaches the
+    // author, in words, naming the container and what it would accept.
+    expect(getByText("Box does not take a Leaf.")).toBeTruthy();
+    // `wrong-parent` carries the MOVING block's valid parents, so the remedy
+    // says where the leaf can go — never that the box accepts a Twice.
+    expect(getByText("Leaf goes inside Twice")).toBeTruthy();
+  });
+
+  it("draws no refusal while a target is still committed", async () => {
+    /*
+     * `useCanvasDrag` holds the committed target across a short crossing while
+     * setting the refusal from the region under the pointer immediately, so
+     * both are non-null for the width of the switch threshold.
+     *
+     * Drawing the refusal there contradicts two things at once: the indicator
+     * still points at the held target, and releasing commits it. The chrome
+     * would say the block cannot land while letting go moves it.
+     */
+    const { container, queryByText } = draw(
+      dragging({
+        draggingId: "leaf",
+        target: {
+          id: "t",
+          regionId: "box::children",
+          at: { parentId: "box", slot: "children", index: 0 },
+        } as never,
+        refusal: {
+          regionId: "box::children",
+          parentId: "box",
+          reason: "wrong-parent",
+          permitted: ["acme/twice"],
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    // Control: the target half IS drawn, so the absences below are about the
+    // refusal being withheld rather than about nothing having rendered.
+    expect(
+      container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)
+    ).not.toBeNull();
+    expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
+    expect(queryByText(/does not take/)).toBeNull();
+  });
+
+  it("draws no drag marks at all when no drag is supplied", async () => {
+    // The back-compat control: every host that has not been wired yet omits
+    // this prop, and must get exactly the canvas it had before.
+    const { container } = draw(undefined);
+    await act(async () => undefined);
+
+    expect(container.querySelector(`[${DRAG_SOURCE_ATTRIBUTE}]`)).toBeNull();
+    expect(container.querySelector(`[${DROP_PARENT_ATTRIBUTE}]`)).toBeNull();
+    expect(container.querySelector(`[${DROP_REFUSED_ATTRIBUTE}]`)).toBeNull();
+  });
+
+  it("does not rewrite a mark whose value has not changed", async () => {
+    /*
+     * The spacing overlay observes this subtree with a MutationObserver, and
+     * `setAttribute` queues a record even when the value written is the value
+     * already there. Unguarded, a mark rewritten on every pointermove is a
+     * re-measure per frame — which reads as jank rather than as a defect, so
+     * nothing else in the suite would catch it.
+     */
+    const state = dragging({ draggingId: "child" });
+    const { container, rerender } = draw(state, LOOP);
+    await act(async () => undefined);
+
+    const seen: MutationRecord[] = [];
+    const observer = new MutationObserver(records => seen.push(...records));
+    observer.observe(container, { attributes: true, subtree: true });
+
+    rerender(
+      <Canvas
+        document={LOOP as never}
+        siteStyles={{ css: "", classes: {} } as never}
+        drag={state}
+      />
+    );
+    await act(async () => undefined);
+    observer.disconnect();
+
+    expect(
+      seen.filter(record => record.attributeName === DRAG_SOURCE_ATTRIBUTE)
+    ).toHaveLength(0);
+  });
+
+  it("does not announce the refusal, because the keyboard move already does", async () => {
+    /*
+     * The drop indicator is `aria-hidden` for a stated reason: the equivalent
+     * keyboard move reports its own outcome through the editor's single live
+     * region, so a second element describing the same pointer gesture is read
+     * alongside the first. This message is the same kind of chrome and has to
+     * make the same choice, or one author's move is announced twice.
+     *
+     * Asserted on the absence of a live region rather than on the attribute
+     * alone, so swapping `aria-hidden` for `role="status"` — or for any other
+     * implicit live role — fails here rather than passing on a technicality.
+     */
+    const { container } = draw(
+      dragging({
+        draggingId: "leaf",
+        refusal: {
+          regionId: "box::children",
+          parentId: "box",
+          reason: "wrong-parent",
+          permitted: ["acme/twice"],
+        } as never,
+      })
+    );
+    await act(async () => undefined);
+
+    const notice = container.querySelector(".nx-drop-refusal");
+    // Control: the element must be FOUND, or the assertions below are
+    // satisfied by a selector that matches nothing.
+    expect(notice).not.toBeNull();
+    expect(notice?.getAttribute("aria-hidden")).toBe("true");
+    expect(notice?.getAttribute("role")).toBeNull();
+    expect(notice?.getAttribute("aria-live")).toBeNull();
+  });
+
+  it("marks a locked node, so the grab cursor can be withheld from it", async () => {
+    /*
+     * `useCanvasDrag` returns before creating a gesture for a locked node, and
+     * with no drag handle the cursor is the only thing advertising a block as
+     * movable. Offering it on a node the engine has already refused leaves an
+     * author pressing repeatedly at something that will never move.
+     *
+     * Both halves asserted: marking every node would withhold the affordance
+     * from the whole page, which is the same defect pointing the other way.
+     */
+    const { container } = draw(undefined, {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        { id: "box", type: "acme/box", version: 1, props: {}, locked: true },
+        { id: "leaf", type: "acme/leaf", version: 1, props: {} },
+      ],
+    });
+    await act(async () => undefined);
+
+    const locked = container.querySelectorAll(`[${LOCKED_ATTRIBUTE}]`);
+    expect(locked).toHaveLength(1);
+    expect(locked[0]?.getAttribute(NODE_ID_ATTRIBUTE)).toBe("box");
+  });
+
+  it("clears a drag mark from an element that has LOST its node id", async () => {
+    /*
+     * The stale-mark case, driven at the DOM the way its selection neighbour is.
+     * A render can move a node id from one existing element to another without
+     * touching the child list — an async block committing its resolved root
+     * mid-drag is one way — and the element left behind then matches nothing
+     * selected by node id.
+     *
+     * If the walk only ever visits elements carrying an id, that element keeps
+     * whatever it was last given: a block dimmed to 0.4 with nothing left that
+     * will ever clear it. The selection attribute is in the walk's selector list
+     * for exactly this reason; these have to be too.
+     */
+    draw(dragging({ draggingId: "child" }), LOOP);
+    await act(async () => undefined);
+
+    // `Array.from` rather than a spread: a `NodeList` is only iterable under a
+    // lib that declares its iterator, and this package compiles without one.
+    const marked = Array.from(
+      document.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
+    );
+    // Control: two copies must be found first, or the assertion below is
+    // satisfied by there having been nothing to strand.
+    expect(marked).toHaveLength(2);
+
+    const orphan = marked[0];
+    await act(async () => {
+      orphan?.removeAttribute(NODE_ID_ATTRIBUTE);
+    });
+
+    expect(orphan?.hasAttribute(DRAG_SOURCE_ATTRIBUTE)).toBe(false);
+    // The copy that kept its id keeps its mark, so this separates "cleared the
+    // orphan" from "cleared everything".
+    expect(
+      document.querySelectorAll(`[${DRAG_SOURCE_ATTRIBUTE}]`)
+    ).toHaveLength(1);
   });
 });
