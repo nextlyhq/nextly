@@ -78,7 +78,10 @@ describe("plugin field types in the TypeScript generator", () => {
       ]),
     ]);
 
-    expect(file.code).toContain("score?: Rating<5> | null;");
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
+    expect(file.code).toContain("score?: (\n    Rating<5>\n  ) | null;");
     expect(file.code).toContain('import type { Rating } from "@acme/ratings";');
   });
 
@@ -100,8 +103,11 @@ describe("plugin field types in the TypeScript generator", () => {
       collection([{ name: "payload", type: "conditional-thing" }]),
     ]);
 
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
     expect(file.code).toContain(
-      "payload?: (T extends string ? number : boolean) | null;"
+      "payload?: (\n    T extends string ? number : boolean\n  ) | null;"
     );
   });
 
@@ -119,7 +125,10 @@ describe("plugin field types in the TypeScript generator", () => {
       collection([{ name: "handler", type: "callback-thing" }]),
     ]);
 
-    expect(file.code).toContain("handler?: (() => number) | null;");
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
+    expect(file.code).toContain("handler?: (\n    () => number\n  ) | null;");
   });
 
   it("gives a user field its declared option under the declared name", () => {
@@ -216,7 +225,10 @@ describe("plugin field types in the TypeScript generator", () => {
 
     // An ordinary save relocates unmodelled options, so a callback reading the
     // raw field would silently start emitting the un-narrowed type.
-    expect(file.code).toContain("score?: Rating<7> | null;");
+    // Bracketed and broken across lines because the type came from a plugin:
+    // an arbitrary expression may bind looser than the union, and a trailing
+    // line comment would otherwise swallow the closing bracket.
+    expect(file.code).toContain("score?: (\n    Rating<7>\n  ) | null;");
   });
 
   it("imports nothing for a registered type no field uses", () => {

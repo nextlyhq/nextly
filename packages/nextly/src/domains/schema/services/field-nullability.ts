@@ -35,40 +35,37 @@ export function fieldAdmitsNull(field: object): boolean {
 }
 
 /**
- * Whether `${tsType} | null` would bind the union somewhere other than the
- * whole type.
- *
- * Union sits below almost everything in TypeScript's type grammar, so the
- * concatenation is safe for identifiers, generics, arrays, object literals,
- * intersections and other unions. Two constructs bind looser and capture the
- * union into a part of themselves:
- *
- * - a conditional type — `A extends B ? X : Y | null` attaches null to the
- *   FALSE branch, so the true branch still rejects it. Verified against the
- *   compiler rather than assumed.
- * - a function type — `() => X | null` makes the RETURN nullable and leaves the
- *   field itself non-null.
- *
- * Only a plugin's `codegen.tsType` callback can produce either; every built-in
- * type is atomic. The test is textual and errs toward parenthesising, which
- * costs a pair of brackets on a nested occurrence and never changes a meaning.
- * `zod-generator.ts` already wraps plugin-contributed expressions for exactly
- * this reason, and this follows it.
- */
-function bindsLooserThanUnion(tsType: string): boolean {
-  return tsType.includes("=>") || tsType.includes(" extends ");
-}
-
-/**
  * The type as written when the field admits null.
  *
  * `unknown` is returned untouched: it already admits null, and `unknown | null`
  * would be noise in a file a user reads.
+ *
+ * `contributed` says the expression came from a plugin's `codegen.tsType`
+ * callback rather than from this module, and it decides two things.
+ *
+ * **Brackets.** Union binds looser than almost everything, so concatenation is
+ * safe for every type built here. An arbitrary expression may bind looser
+ * still: a conditional attaches the union to its FALSE branch, leaving the true
+ * branch rejecting null, and a function type attaches it to the RETURN.
+ * Deciding by provenance rather than by inspecting the text means no formatting
+ * of the expression, and no type-level syntax added later, can change the
+ * answer.
+ *
+ * **A newline before the closing bracket.** A contributed expression may end in
+ * a line comment, and `//` runs to the end of its line, so `(Foo // why)` would
+ * swallow the bracket and leave a generated file that does not compile. The
+ * break puts the bracket beyond the comment's reach.
+ *
+ * `zod-generator.ts` brackets its own contributed expressions for the first of
+ * these reasons.
  */
-export function nullableTypeExpression(tsType: string): string {
+export function nullableTypeExpression(
+  tsType: string,
+  options: { contributed: boolean } = { contributed: false }
+): string {
   if (tsType === "unknown") return tsType;
-  return bindsLooserThanUnion(tsType)
-    ? `(${tsType}) | null`
+  return options.contributed
+    ? `(\n    ${tsType}\n  ) | null`
     : `${tsType} | null`;
 }
 
@@ -85,8 +82,9 @@ export function nullableTypeExpression(tsType: string): string {
 export function renderFieldMember(
   fieldName: string,
   tsType: string,
-  field: object
+  field: object,
+  options: { contributed: boolean } = { contributed: false }
 ): string {
   if (!fieldAdmitsNull(field)) return `  ${fieldName}: ${tsType};`;
-  return `  ${fieldName}?: ${nullableTypeExpression(tsType)};`;
+  return `  ${fieldName}?: ${nullableTypeExpression(tsType, options)};`;
 }
