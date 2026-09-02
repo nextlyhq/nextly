@@ -107,10 +107,7 @@ export function resolveAllowlist(
    * otherwise hold that spelling while an upload's claim arrives canonicalised,
    * and the two never meet: the install advertises a format it then refuses.
    */
-  resolved = resolved.map(t => {
-    const lower = t.toLowerCase().trim();
-    return canonicalWebFontMime(lower) ?? lower;
-  });
+  resolved = resolved.map(canonicalMimeType);
 
   const blockedInConfig = resolved.filter(t => BLOCKED_MIME_TYPES.has(t));
   for (const t of blockedInConfig) {
@@ -122,6 +119,32 @@ export function resolveAllowlist(
 }
 
 /**
+ * A media type reduced to the format it names.
+ *
+ * Two things travel with a type without being part of its identity, and both
+ * have made a comparison disagree with itself here:
+ *
+ * - PARAMETERS. `audio/ogg; codecs=opus` is an Ogg audio file, and a sniffer
+ *   that names the codec is describing the same format as a client that does
+ *   not. Comparing the whole string refuses a valid upload for being described
+ *   more precisely.
+ * - LEGACY SPELLINGS. The web font formats each answer to several names, and
+ *   the allowlist knows one.
+ *
+ * Both sides of every comparison pass through here, so an install and an
+ * upload cannot be talking about one format under two names.
+ *
+ * @param claimed - A type as some client, config file or sniffer spelled it
+ * @returns The type it names, or `""` when it named nothing
+ */
+export function canonicalMimeType(claimed: string): string {
+  // `split` on a non-empty string always yields a first element; the fallback
+  // is for the empty claim, where there is nothing to canonicalise.
+  const essence = claimed.split(";")[0]?.toLowerCase().trim() ?? "";
+  return canonicalWebFontMime(essence) ?? essence;
+}
+
+/**
  * Validate a claimed MIME type against the allowlist. Hard-block takes
  * precedence; wildcard entries like `"image/*"` match any
  * `image/<subtype>`.
@@ -130,7 +153,10 @@ export function validateMimeType(
   claimedMime: string,
   allowlist: readonly string[]
 ): MimeValidationResult {
-  const normalized = claimedMime.toLowerCase().trim();
+  // Canonicalised rather than merely lowercased, so the claim and the
+  // allowlist are compared in one spelling — the config side is canonicalised
+  // by `resolveAllowlist`, and a claim left raw meets it as a different string.
+  const normalized = canonicalMimeType(claimedMime);
 
   if (BLOCKED_MIME_TYPES.has(normalized)) {
     return { ok: false, reason: "blocked" };

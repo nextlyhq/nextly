@@ -27,7 +27,8 @@
 
 import { isSvgMimeType } from "../../storage/svg-security";
 
-import { canonicalWebFontMime, matchesWebFontSignature } from "./web-fonts";
+import { canonicalMimeType } from "./mime";
+import { matchesWebFontSignature } from "./web-fonts";
 
 export type MagicByteResult =
   | { ok: true }
@@ -49,8 +50,8 @@ export type MagicByteResult =
  * the evidence rule for exactly the claims an attacker chooses the spelling of.
  */
 function canonicalForSniffer(claimed: string): string {
-  if (claimed === "image/jpg") return "image/jpeg";
-  return canonicalWebFontMime(claimed) ?? claimed;
+  const canonical = canonicalMimeType(claimed);
+  return canonical === "image/jpg" ? "image/jpeg" : canonical;
 }
 
 function looksLikeSvg(buffer: Buffer): boolean {
@@ -86,7 +87,7 @@ export async function detectAndCompareMime(
     return { ok: false, reason: "font-claim-without-font-content" };
   }
 
-  const claimed = claimedMime.toLowerCase().trim();
+  const claimed = canonicalMimeType(claimedMime);
   const { fileTypeFromBuffer, supportedMimeTypes } = await import("file-type");
   const detected = await fileTypeFromBuffer(buffer);
 
@@ -116,7 +117,13 @@ export async function detectAndCompareMime(
       : { ok: true };
   }
 
-  const sniffed = detected.mime.toLowerCase();
+  /*
+   * Canonicalised for the same reason the claim is: the sniffer names the
+   * codec where it can — `audio/ogg; codecs=opus` — and a whole-string
+   * comparison reads that as a different format from the `audio/ogg` the
+   * client claimed, refusing a valid file for being described precisely.
+   */
+  const sniffed = canonicalMimeType(detected.mime);
 
   if (sniffed === "application/xml" || sniffed === "text/xml") {
     return {

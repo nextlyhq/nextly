@@ -24,8 +24,8 @@
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { RequestContext } from "../services/shared";
+import { canonicalMimeType } from "../services/upload-validation/mime";
 import {
-  canonicalWebFontMime,
   matchesWebFontSignature,
   WEB_FONT_MIME_TYPES,
 } from "../services/upload-validation/web-fonts";
@@ -99,21 +99,15 @@ export async function handleServeMediaBytes(
   }
 
   /*
-   * Normalised before the lookup, because upload validation and storage
-   * disagree about spelling: `validateMimeType` lowercases what it compares
-   * and the record keeps whatever the client sent. So `Font/WOFF2` is accepted
-   * on upload, stored with that spelling, and an exact match here would refuse
-   * to serve a font the same product had just approved. Mime tokens are
-   * case-insensitive, so the comparison has to be too.
+   * Canonicalised before the lookup, through the same helper the validator
+   * uses, because a stored row need not be spelled the way this table is.
+   * Uploads store the canonical type now, but nothing rewrites rows written
+   * before that: `Font/WOFF2` differs only in case, and `application/font-woff`
+   * and its x- variant were what some clients sent. An exact match would refuse
+   * to serve a font this product has served for as long as it has existed.
    */
-  /*
-   * Canonicalised, because a row PREDATING the upload-side fix may carry a
-   * legacy spelling — `application/font-woff` and its x- variant were what some
-   * clients sent, and nothing rewrites stored rows. An exact lookup refuses a
-   * font this product has served since before it knew the canonical name.
-   */
-  const servedType = canonicalWebFontMime(media.mimeType.toLowerCase().trim());
-  if (servedType === undefined || !PUBLIC_SERVE_MIME_TYPES.has(servedType)) {
+  const servedType = canonicalMimeType(media.mimeType);
+  if (!PUBLIC_SERVE_MIME_TYPES.has(servedType)) {
     return notFound();
   }
 

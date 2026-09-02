@@ -78,9 +78,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../di/container";
 import { ServiceContainer } from "../services";
-import { UploadValidator } from "../services/upload-validation";
-import type { SecurityBlockLike } from "../services/upload-validation";
 import { resolveClaimedMimeType } from "../services/upload-validation/mime";
+import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
+import type { Logger } from "../shared/types";
 import type { Media, MediaResponse } from "../types/media";
 import { UploadMediaInputSchema } from "../types/media";
 
@@ -95,6 +95,15 @@ function getRevalidatePath(): RevalidatePath {
   const mod = require("next/cache") as { revalidatePath: RevalidatePath };
   cachedRevalidatePath = mod.revalidatePath;
   return cachedRevalidatePath;
+}
+
+/**
+ * The installation's logger, or the console when none is registered — the
+ * same fallback `ServiceContainer` uses, so a refusal is recorded whether or
+ * not the host wired one up.
+ */
+function getLogger(): Logger {
+  return container.has("logger") ? container.get<Logger>("logger") : console;
 }
 
 function getServices(): ServiceContainer {
@@ -246,17 +255,32 @@ export async function uploadMediaAction(
      * Built the way `register-media` builds it, from the same config, so the
      * two paths cannot answer differently.
      */
-    const securityConfig = container.has("config")
-      ? container.get<{ security?: SecurityBlockLike }>("config")?.security
-      : undefined;
-    const validation = await new UploadValidator(securityConfig).validate({
+    const policy = resolveUploadPolicy();
+    const validation = await policy.validator.validate({
       buffer,
       filename: file.name,
       mimeType: claimedMimeType,
     });
     if (!validation.ok) {
-      // The public message only. `logContext` carries the sniffed type and the
-      // sizes, which are operator detail and never travel to a caller.
+      /*
+       * The refusal is logged before it is returned. Operators alert on bursts
+       * of these to spot polyglot probing, and a door that refuses silently is
+       * one they cannot see being tried — so this emits what the other
+       * validator-backed paths emit, under the same event name.
+       *
+       * The caller gets the public message only; `logContext` carries the
+       * sniffed type and the sizes, which are operator detail.
+       */
+      getLogger().warn("upload.rejected", {
+        event: "nextly.upload.rejected",
+        code: validation.errors[0]?.code,
+        route: "actions.uploadMedia",
+        mimeType: claimedMimeType,
+        filename: file.name,
+        size: file.size,
+        ...validation.logContext,
+      });
+
       return {
         success: false,
         error: validation.errors[0]?.message ?? "Upload rejected.",
@@ -278,7 +302,6 @@ export async function uploadMediaAction(
      * in the origin on direct navigation.
      */
     const validated = validation.value;
-    const svgCsp = securityConfig?.uploads?.svgCsp ?? true;
 
     const parseResult = UploadMediaInputSchema.safeParse({
       file: validated.buffer,
@@ -286,7 +309,8 @@ export async function uploadMediaAction(
       mimeType: validated.mimeType,
       size: validated.buffer.length,
       uploadedBy: options.uploadedBy,
-      ...(validated.isSvg && svgCsp && { contentDisposition: "attachment" }),
+      ...(validated.isSvg &&
+        policy.svgCsp && { contentDisposition: "attachment" }),
     });
 
     if (!parseResult.success) {

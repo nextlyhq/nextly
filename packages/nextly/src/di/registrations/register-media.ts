@@ -18,8 +18,7 @@ import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-dra
 import { MediaService as LegacyMediaService } from "../../services/media";
 import { MediaService as UnifiedMediaService } from "../../services/media/media-service";
 import { MediaFolderService } from "../../services/media-folder";
-import { UploadValidator } from "../../services/upload-validation";
-import type { SecurityBlockLike } from "../../services/upload-validation";
+import { resolveUploadPolicy } from "../../services/upload-validation/upload-policy";
 import type { IStorageAdapter } from "../../storage/types";
 import { container } from "../container";
 
@@ -43,11 +42,7 @@ export function registerMediaServices(ctx: RegistrationContext): void {
       }
     };
 
-    const config = container.has("config")
-      ? container.get<{ security?: SecurityBlockLike }>("config")
-      : undefined;
-    const uploadValidator = new UploadValidator(config?.security);
-    const svgCsp = config?.security?.uploads?.svgCsp ?? true;
+    const { validator: uploadValidator, svgCsp } = resolveUploadPolicy();
 
     return new UnifiedMediaService(
       legacyMediaService,

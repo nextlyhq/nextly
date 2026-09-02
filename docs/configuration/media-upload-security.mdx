@@ -107,7 +107,7 @@ Every validation failure emits a structured log event so operators can alert on 
 }
 ```
 
-The event fires from both upload paths (`upload-service.upload` and `media-service.upload`). Wire an alert on sudden bursts of `MAGIC_BYTE_MISMATCH` or `EXTENSION_BLOCKED` — those usually indicate polyglot probing.
+The event fires from every upload path that runs the validator: `upload-service.upload`, `media-service.upload`, and `actions.uploadMedia` (the published server action). The `route` field says which one, so an alert can tell a probed public form from a probed admin panel. Wire an alert on sudden bursts of `MAGIC_BYTE_MISMATCH` or `EXTENSION_BLOCKED` — those usually indicate polyglot probing.
 
 ## Error response shape
 

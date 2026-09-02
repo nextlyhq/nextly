@@ -3,7 +3,13 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { HTML_DOCUMENT, PNG_1X1 } from "./__tests__/format-fixtures";
+import {
+  HTML_DOCUMENT,
+  OGG_OPUS,
+  OGG_VORBIS,
+  PNG_1X1,
+  WOFF_HEADER,
+} from "./__tests__/format-fixtures";
 import { resolveClaimedMimeType } from "./mime";
 import { validateAndSanitizeUpload } from "./validate-upload";
 
@@ -147,6 +153,61 @@ describe("validateAndSanitizeUpload — pipeline ordering", () => {
       expect(out).toMatch(/<rect/);
       expect(r.value.buffer).not.toBe(dirty);
     }
+  });
+
+  it("accepts a font an install allowed under its LEGACY name", async () => {
+    /*
+     * `resolveAllowlist` canonicalises the config side, so an install naming
+     * `application/x-font-woff` gets an allowlist of `font/woff`. A claim
+     * arriving in that same legacy spelling — which callers reaching
+     * `UploadService` directly hand over untouched — met it as a different
+     * string and the install refused the format it had just allowed.
+     *
+     * Both sides canonicalise now, and the stored type is the canonical one.
+     */
+    const r = await validateAndSanitizeUpload(
+      {
+        buffer: WOFF_HEADER,
+        filename: "Inter.woff",
+        mimeType: "application/x-font-woff",
+      },
+      { ...baseConfig, allowedMimeTypes: ["application/x-font-woff"] }
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.mimeType).toBe("font/woff");
+  });
+
+  it("accepts an Ogg file whose codec the sniffer names", async () => {
+    /*
+     * A sniffer reports Opus-in-Ogg as `audio/ogg; codecs=opus`. The codec is
+     * a parameter on the same media type the client claims, so a whole-string
+     * comparison read it as a different format and refused a valid upload —
+     * of an accepted format, through the ordinary drop-a-file path where the
+     * type is inferred from the suffix.
+     */
+    for (const claimed of ["", "audio/ogg"]) {
+      const mimeType = resolveClaimedMimeType("voice.ogg", claimed, OGG_OPUS);
+      expect(mimeType).toBe("audio/ogg");
+
+      const r = await validateAndSanitizeUpload(
+        { buffer: OGG_OPUS, filename: "voice.ogg", mimeType },
+        baseConfig
+      );
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  it("accepts the same container without a codec parameter", async () => {
+    /*
+     * The control for the case above. Vorbis-in-Ogg is named `audio/ogg` with
+     * no parameter, so it passes a whole-string comparison too — which is what
+     * makes the Opus case evidence about parameters rather than about Ogg.
+     */
+    const r = await validateAndSanitizeUpload(
+      { buffer: OGG_VORBIS, filename: "music.ogg", mimeType: "audio/ogg" },
+      baseConfig
+    );
+    expect(r.ok).toBe(true);
   });
 
   it("logContext on failure carries operator detail", async () => {

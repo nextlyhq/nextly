@@ -103,6 +103,33 @@ describe("validateMimeType", () => {
     if (!r.ok) expect(r.reason).toBe("blocked");
   });
 
+  it("compares a LEGACY claim against a canonicalised allowlist", () => {
+    /*
+     * This function is exported, so a caller can reach it with a claim no
+     * route has normalised. `resolveAllowlist` canonicalises the config side,
+     * and a claim left in its legacy spelling met that as a different string —
+     * the install refusing the very format it had allowed.
+     *
+     * Asserted here rather than only through the pipeline, which canonicalises
+     * before calling and so cannot tell whether this layer does anything.
+     */
+    const canonicalised = resolveAllowlist(
+      ["application/x-font-woff"],
+      undefined
+    );
+    expect(canonicalised).toContain("font/woff");
+
+    const r = validateMimeType("application/x-font-woff", canonicalised);
+    expect(r.ok).toBe(true);
+  });
+
+  it("drops a parameter the client attached to its claim", () => {
+    // `text/plain; charset=utf-8` names `text/plain`; the parameter says how to
+    // read it, not what it is.
+    const r = validateMimeType("text/plain; charset=utf-8", ["text/plain"]);
+    expect(r.ok).toBe(true);
+  });
+
   it("rejects a type not in the allowlist", () => {
     const r = validateMimeType("application/zip", allowlist);
     expect(r.ok).toBe(false);

@@ -134,6 +134,48 @@ describe("uploadMediaAction and the configured allowlist", () => {
     expect(result.statusCode).toBe(400);
   });
 
+  it("LOGS a refusal, with the operator detail the caller never sees", async () => {
+    /*
+     * Operators alert on bursts of these to spot polyglot probing, and the
+     * other validator-backed paths emit the same event — so a door that
+     * refuses silently is one they cannot see being tried.
+     *
+     * The public result and the log are asserted together: the sniffed type
+     * belongs in one and must stay out of the other.
+     */
+    container.registerSingleton("config", () => ({
+      security: { uploads: { allowedMimeTypes: ["image/png"] } },
+    }));
+    const warn = vi.fn();
+    container.registerSingleton("logger", () => ({
+      warn,
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    }));
+
+    const result = await uploadMediaAction(upload("Inter.woff2", "", WOFF2), {
+      uploadedBy: TEST_USER_ID,
+    });
+
+    expect(result.statusCode).toBe(400);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message, detail] = warn.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(message).toBe("upload.rejected");
+    expect(detail).toMatchObject({
+      event: "nextly.upload.rejected",
+      code: "MIME_NOT_ALLOWED",
+      route: "actions.uploadMedia",
+      filename: "Inter.woff2",
+    });
+    // Operator detail reaches the log and not the caller.
+    expect(detail.claimedMimeType).toBe("font/woff2");
+    expect(JSON.stringify(result)).not.toContain("font/woff2");
+  });
+
   it("hands an allowed file to the media service", async () => {
     /*
      * The control, and it asserts an OUTCOME rather than the absence of one.
