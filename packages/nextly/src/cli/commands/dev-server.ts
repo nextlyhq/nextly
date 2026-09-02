@@ -218,8 +218,21 @@ export async function ensureCoreTables(
   // much as the replay does.
   const registryTable = await resolveRegistryTable(drizzleAdapter, logger);
 
+  // Only the probe is guarded. Everything the branch below does — the replay,
+  // and the exclusion around the registry step — must be able to fail the
+  // command: a `withMigrationExcluded` refusal means a migration owns the lock,
+  // and swallowing it here would fall through and push schema at a database
+  // whose registry is being renamed, which is the one thing the exclusion
+  // exists to prevent.
+  let usersExists = false;
   try {
-    const usersExists = await drizzleAdapter.tableExists("users");
+    usersExists = await drizzleAdapter.tableExists("users");
+  } catch {
+    // The probe itself can fail on a completely empty database; that reads as
+    // "no users table", which is the answer the fresh path wants anyway.
+  }
+
+  {
     if (usersExists) {
       if (dialect === "sqlite") {
         await applyCoreStatements(
@@ -259,8 +272,6 @@ export async function ensureCoreTables(
       }
       return;
     }
-  } catch {
-    // tableExists may fail if the DB is completely empty — continue with creation
   }
 
   // Refused rather than half-built. The push can create `users` and every
@@ -281,59 +292,77 @@ export async function ensureCoreTables(
   logger.newline();
   logger.info("Creating core database tables...");
 
-  // F8 PR 2: use the freshPushSchema helper for the static-tables push.
-  // No diff, no prompts, no journal — this is fresh-DB setup, not a user
-  // schema change. Behavior matches the legacy DrizzlePushService.apply
-  // verbatim (PG: pushSchema().apply; SQLite: manual statement loop;
-  // MySQL: generateMigration path).
-  try {
-    const db = drizzleAdapter.getDrizzle();
-    // Through the push bundle, not the raw dialect tables: naming the legacy
-    // registry here creates it, and the push succeeding means the fallback
-    // below never runs to correct it. `null` declares NEITHER, so the bundle
-    // omits the registry rather than guessing.
-    const staticSchemas = getDialectTablesForPush(dialect, {
-      fieldGroupRegistryTable: registryTable,
-    });
-    const result = await freshPushSchema(dialect, db, staticSchemas);
+  // Held around the whole bootstrap, not just the registry step. `users` being
+  // absent does not prove the database is fresh — one holding a registry and no
+  // `users` reaches here — and the name resolved above was sampled before this
+  // point. A migration renaming the registry in between would let the push
+  // recreate the spelling it had just moved away from. The exclusion in
+  // `db-sync.ts` is acquired only after this function returns, so it is too
+  // late to help.
+  await withMigrationExcluded(
+    {
+      adapter: drizzleAdapter,
+      logger,
+      label: "core table bootstrap",
+      mayCreateLock: true,
+      releaseOnInterrupt: true,
+    },
+    async () => {
+      // F8 PR 2: use the freshPushSchema helper for the static-tables push.
+      // No diff, no prompts, no journal — this is fresh-DB setup, not a user
+      // schema change. Behavior matches the legacy DrizzlePushService.apply
+      // verbatim (PG: pushSchema().apply; SQLite: manual statement loop;
+      // MySQL: generateMigration path).
+      try {
+        const db = drizzleAdapter.getDrizzle();
+        // Through the push bundle, not the raw dialect tables: naming the legacy
+        // registry here creates it, and the push succeeding means the fallback
+        // below never runs to correct it. `null` declares NEITHER, so the bundle
+        // omits the registry rather than guessing.
+        const staticSchemas = getDialectTablesForPush(dialect, {
+          fieldGroupRegistryTable: registryTable,
+        });
+        const result = await freshPushSchema(dialect, db, staticSchemas);
 
-    if (result.statementsExecuted.length > 0) {
-      logger.debug(
-        `[schema] Created ${result.statementsExecuted.length} tables via pushSchema`
-      );
+        if (result.statementsExecuted.length > 0) {
+          logger.debug(
+            `[schema] Created ${result.statementsExecuted.length} tables via pushSchema`
+          );
+        }
+        logger.success("Core tables created");
+      } catch (pushError) {
+        // pushSchema failed (e.g., TTY prompt needed, or drizzle-kit error).
+        // Fall back to raw SQL for SQLite, or error for PG/MySQL.
+        const pushMsg = describeError(pushError);
+        logger.debug(`pushSchema failed: ${pushMsg}`);
+
+        if (dialect === "sqlite") {
+          logger.debug("Falling back to raw SQL table creation for SQLite...");
+          await applyCoreStatements(
+            drizzleAdapter,
+            logger,
+            sqliteCoreStatementsFor({
+              registryTable,
+              // A database with no `users` may still legitimately need its
+              // registry created; the helper declines when the resolved name is
+              // the migrated one.
+              mayCreateRegistryTable: true,
+            })
+          );
+
+          // Also create system tables (dynamic_collections, etc.)
+          await ensureSystemTables(drizzleAdapter, logger);
+
+          logger.success("Core tables created (fallback)");
+        } else {
+          logger.error(
+            "Core tables not found. Please run `nextly migrate` first to create the database schema."
+          );
+          process.exit(1);
+        }
+      }
     }
-    logger.success("Core tables created");
-  } catch (pushError) {
-    // pushSchema failed (e.g., TTY prompt needed, or drizzle-kit error).
-    // Fall back to raw SQL for SQLite, or error for PG/MySQL.
-    const pushMsg = describeError(pushError);
-    logger.debug(`pushSchema failed: ${pushMsg}`);
-
-    if (dialect === "sqlite") {
-      logger.debug("Falling back to raw SQL table creation for SQLite...");
-      await applyCoreStatements(
-        drizzleAdapter,
-        logger,
-        sqliteCoreStatementsFor({
-          registryTable,
-          // A database with no `users` may still legitimately need its
-          // registry created; the helper declines when the resolved name is
-          // the migrated one.
-          mayCreateRegistryTable: true,
-        })
-      );
-
-      // Also create system tables (dynamic_collections, etc.)
-      await ensureSystemTables(drizzleAdapter, logger);
-
-      logger.success("Core tables created (fallback)");
-    } else {
-      logger.error(
-        "Core tables not found. Please run `nextly migrate` first to create the database schema."
-      );
-      process.exit(1);
-    }
-  }
+  );
 }
 
 // ============================================================================
