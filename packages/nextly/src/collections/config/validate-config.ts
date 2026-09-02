@@ -42,6 +42,7 @@ import {
   type BaseValidationError,
   DEFAULT_SQL_KEYWORDS_SET,
   validateComponentFieldRefShared,
+  validateContainerFieldsShared,
   validateFieldNameShared,
   validateFieldTypeShared,
   validateNumberDecimalDimensionsShared,
@@ -430,43 +431,27 @@ function validateField(
       validateRelationshipTargetShared(f, path, errsBase, allCollectionSlugs);
       break;
 
-    case "repeater": {
-      const arrayFields = f.fields;
-      if (!arrayFields) {
-        errors.push({
-          path: `${path}.fields`,
-          message: "Array field must have a 'fields' array",
-          code: "ARRAY_FIELDS_REQUIRED",
-        });
-      } else if (Array.isArray(arrayFields)) {
-        validateFieldsArray(
-          arrayFields,
-          `${path}.fields`,
-          errors,
-          allCollectionSlugs
-        );
-      }
+    case "repeater":
+      validateContainerFieldsShared(
+        f,
+        path,
+        errsBase,
+        { label: "Array field", code: "ARRAY_FIELDS_REQUIRED" },
+        (children, basePath) =>
+          validateFieldsArray(children, basePath, errors, allCollectionSlugs)
+      );
       break;
-    }
 
-    case "group": {
-      const groupFields = f.fields;
-      if (!groupFields) {
-        errors.push({
-          path: `${path}.fields`,
-          message: "Group field must have a 'fields' array",
-          code: "GROUP_FIELDS_REQUIRED",
-        });
-      } else if (Array.isArray(groupFields)) {
-        validateFieldsArray(
-          groupFields,
-          `${path}.fields`,
-          errors,
-          allCollectionSlugs
-        );
-      }
+    case "group":
+      validateContainerFieldsShared(
+        f,
+        path,
+        errsBase,
+        { label: "Group field", code: "GROUP_FIELDS_REQUIRED" },
+        (children, basePath) =>
+          validateFieldsArray(children, basePath, errors, allCollectionSlugs)
+      );
       break;
-    }
 
     case "component":
     case "fieldGroup":

@@ -691,7 +691,10 @@ export function validateComponentFieldRefShared(
   if (declaredSingle.length > 0) {
     const key = declaredSingle[0];
     const value = field[key];
-    if (typeof value !== "string" || value.length === 0) {
+    // Judged trimmed, matching the extractor: a blank reference resolves to
+    // nothing downstream, so accepting it here would boot a component field
+    // with no reference at all.
+    if (typeof value !== "string" || value.trim().length === 0) {
       errors.push({
         path: `${path}.${key}`,
         message: `'${key}' must be a string (component slug)`,
@@ -723,7 +726,8 @@ export function validateComponentFieldRefShared(
   }
 
   list.forEach((slug: unknown, index: number) => {
-    if (typeof slug !== "string") {
+    // Trimmed like the singular check: a blank entry resolves to nothing.
+    if (typeof slug !== "string" || slug.trim().length === 0) {
       errors.push({
         path: `${path}.${key}[${index}]`,
         message: "Each component slug must be a string",
@@ -731,4 +735,32 @@ export function validateComponentFieldRefShared(
       });
     }
   });
+}
+
+/**
+ * Validate a container field's inline `fields` list - the body the repeater
+ * and group cases share across every domain validator.
+ *
+ * The container's own label and error code are parameters because the three
+ * domains name the same missing-children failure differently; the children
+ * themselves validate through the caller's field walker, which owns the
+ * domain-specific rules.
+ */
+export function validateContainerFieldsShared(
+  field: Record<string, unknown>,
+  path: string,
+  errors: BaseValidationError[],
+  container: { label: string; code: string },
+  validateChildren: (fields: unknown[], basePath: string) => void
+): void {
+  const childFields = field.fields;
+  if (!childFields) {
+    errors.push({
+      path: `${path}.fields`,
+      message: `${container.label} must have a 'fields' array`,
+      code: container.code,
+    });
+  } else if (Array.isArray(childFields)) {
+    validateChildren(childFields, `${path}.fields`);
+  }
 }

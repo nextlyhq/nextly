@@ -1435,23 +1435,31 @@ ${allColumnDefs.join(",\n")}
     b: FieldDefinition
   ): boolean {
     if (a.type !== b.type) return false;
-    // manyToMany relations don't get columns — they get junction tables.
-    // Renaming one is a different operation (rename junction table). We
-    // do NOT auto-rename here because the junction-table flow has its
-    // own naming conventions; safer to bail out and require explicit
-    // handling. The caller's add/drop loop will do drop-junction +
-    // add-junction (data loss for the join) — admin UI ideally warns
-    // before this kind of edit.
-    if (usesJunctionTable(a)) {
+    // A field that occupies no parent column has nothing to rename: emitting
+    // RENAME COLUMN here targets a name the table never had, and every
+    // supported dialect rejects the save. Renaming a field group is a change
+    // of the association key on its own data table — a separate operation
+    // this generator does not attempt; the add/drop loops below handle the
+    // schema side. This covers the junction case too: a many-to-many's links
+    // live in its junction table, which produces no parent column either.
+    if (!fieldProducesColumn(a) || !fieldProducesColumn(b)) {
       return false;
     }
     if (a.type === "relationship") {
-      return (
-        a.options?.target === b.options?.target &&
-        a.options?.relationType === b.options?.relationType
-      );
+      return this.sameRelationTarget(a, b);
     }
     return true;
+  }
+
+  /**
+   * Whether two relationship definitions point at the same target under the
+   * same relation kind — the only relations a rename preserves.
+   */
+  private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
+    return (
+      a.options?.target === b.options?.target &&
+      a.options?.relationType === b.options?.relationType
+    );
   }
 
   /**

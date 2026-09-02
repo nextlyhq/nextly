@@ -1,4 +1,8 @@
 import { arrayMove } from "@dnd-kit/sortable";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "nextly/field-group-type";
 
 import type {
   BuilderField,
@@ -289,11 +293,16 @@ export function convertToFieldDefinition(field: BuilderField): FieldDefinition {
     definition.rowLabelField = field.rowLabelField;
   }
 
-  // Component properties
-  if (field.type === "component") {
-    if (field.component) definition.component = field.component;
-    if (field.components && field.components.length > 0) {
-      definition.components = field.components;
+  // Component properties — either type spelling, with the references resolved
+  // through the shared extractor onto the keys this editor edits. Reading the
+  // legacy keys alone dropped a migrated definition's references into
+  // pluginOptions, where the next save stripped the field's reference
+  // entirely and the manifest refinement rejected the result.
+  if (isFieldGroupFieldType(field.type)) {
+    const refs = extractFieldGroupReferences(field);
+    if (refs.single !== undefined) definition.component = refs.single;
+    if (refs.many !== undefined && refs.many.length > 0) {
+      definition.components = refs.many;
     }
     if (field.repeatable !== undefined)
       definition.repeatable = field.repeatable;
@@ -535,9 +544,11 @@ export function convertToBuilderField(
     labels: field.labels,
     initCollapsed: field.initCollapsed,
     rowLabelField: field.rowLabelField,
-    // Component properties
-    component: field.component,
-    components: field.components ? [...field.components] : undefined,
+    // Component properties. References resolve through the shared extractor,
+    // so a migrated definition loads its references onto the keys the editor
+    // edits rather than losing them into pluginOptions.
+    component: extractFieldGroupReferences(field).single,
+    components: extractFieldGroupReferences(field).many,
     repeatable: field.repeatable,
     // A blocks field's policy. Loading it is what makes writing it back
     // meaningful: without this the outbound branch always sees undefined.

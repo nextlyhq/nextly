@@ -493,7 +493,9 @@ defineValueDisplay(["repeater"], ({ value, field }) => {
   );
 });
 
-defineValueDisplay(["component"], ({ value, field }) => {
+// Both storage spellings: a migrated definition’s preview renders its
+// child fields instead of falling back to plain text.
+defineValueDisplay(["component", "fieldGroup"], ({ value, field }) => {
   const instances = Array.isArray(value) ? value : [value];
   if (instances.length === 0 || instances[0] === null) return <EmptyValue />;
 

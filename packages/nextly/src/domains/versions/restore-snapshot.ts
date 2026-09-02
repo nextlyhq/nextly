@@ -140,6 +140,11 @@ function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
   const declaresComponent =
     typeof (field as { component?: unknown }).component === "string" ||
     typeof (field as { fieldGroup?: unknown }).fieldGroup === "string" ||
+    // The retired spelling is read-only compatibility, but rows still carry
+    // it and the extractor resolves it as the single slug — a field declaring
+    // only this key must still be judged a component field here, or the
+    // restore skips its allow-list filtering entirely.
+    typeof (field as { componentSlug?: unknown }).componentSlug === "string" ||
     Array.isArray((field as { components?: unknown }).components) ||
     Array.isArray((field as { fieldGroups?: unknown }).fieldGroups);
   return declaresComponent ? new Set(componentSlugs(field)) : null;

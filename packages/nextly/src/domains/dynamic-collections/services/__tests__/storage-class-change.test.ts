@@ -53,5 +53,18 @@ describe.each(DIALECTS)(
       // emitting one here would be an ALTER against a name the table never had.
       expect(sql).not.toContain("DROP COLUMN");
     });
+
+    it("renaming a field group emits no parent-table RENAME COLUMN", () => {
+      // A field group has no column on the parent row, so a rename is a change
+      // of the association key on its own data table — the alter generator
+      // must not emit a rename of a column that cannot exist.
+      const sql = service.generateAlterTableMigration(
+        TABLE,
+        [asField({ name: "seo", type: "component", component: "seo" })],
+        [asField({ name: "meta", type: "component", component: "seo" })]
+      );
+
+      expect(sql).not.toContain("RENAME COLUMN");
+    });
   }
 );
