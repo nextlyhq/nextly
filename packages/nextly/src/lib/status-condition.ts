@@ -38,22 +38,18 @@ import {
   inArray,
   notInArray,
   or,
+  sql,
   type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
 
 import type { ReleaseDecisions } from "../domains/releases/release-scope";
 
-import {
-  DEFAULT_WORKFLOW,
-  isPublicState,
-  type ContentWorkflow,
-} from "./content-states";
-import type { StatusFilterValue } from "./status-filter";
+import type { StatusFilter } from "./status-filter";
 
 export interface StatusConditionInput {
   /** The resolved filter, or `null` when the read is not lifecycle-bounded. */
-  filter: { value: StatusFilterValue } | null;
+  filter: StatusFilter | null;
   /** The lifecycle column on the table being read. */
   statusColumn: SQLWrapper | undefined;
   /** The identity column, for the reveal and hide sets. */
@@ -66,15 +62,6 @@ export interface StatusConditionInput {
    * entirely rather than paying for a query that returns them.
    */
   decisions: ReleaseDecisions;
-  /**
-   * The workflow whose flags decide whether {@link StatusConditionInput.filter}
-   * names a public state.
-   *
-   * Defaults to the only workflow that exists today. It is an input rather than
-   * a lookup because the alternative is this module deciding for itself what a
-   * state means, which is the comparison it was written to remove.
-   */
-  workflow?: ContentWorkflow;
 }
 
 /**
@@ -86,22 +73,40 @@ export interface StatusConditionInput {
  */
 export function statusCondition(input: StatusConditionInput): SQL | undefined {
   const { filter, statusColumn, idColumn, decisions } = input;
-  const workflow = input.workflow ?? DEFAULT_WORKFLOW;
   if (filter === null || statusColumn === undefined) return undefined;
 
-  const base = eq(statusColumn, filter.value);
+  /*
+   * One state is an equality and several are a set membership.
+   *
+   * Kept as two forms rather than always emitting `IN`, because a single-value
+   * `IN` is the shape every existing query planner and every existing test sees
+   * today — and this widening should be invisible to a workflow that declares
+   * one public state, which is every workflow that exists before a team writes
+   * its own.
+   */
+  /*
+   * An EMPTY set is a read bounded to nothing — reachable when a workflow calls
+   * every state public and a caller asks explicitly for drafts. It must select
+   * no rows rather than select every row, and it must not reach the driver as
+   * `IN ()`, which two dialects reject outright.
+   */
+  const base =
+    filter.values.length === 0
+      ? sql`1 = 0`
+      : filter.values.length === 1
+        ? eq(statusColumn, filter.values[0])
+        : inArray(statusColumn, [...filter.values]);
 
-  // Only a PUBLIC read is adjusted. A read bounded to a non-public state is
+  // Only a PUBLIC read is adjusted. A read bounded to the non-public states is
   // asking for pending work: a document a release is about to publish is not
   // that, and one it is about to withdraw is not pending work either. An
   // unbounded read never reaches here.
   //
-  // Asked of the workflow rather than compared against the word `published`.
-  // A release publishes into whatever state the workflow calls public, so a
-  // literal here would stop widening the read the moment a team renamed it —
-  // and the failure is invisible: the scheduled publication simply never
-  // appears, on a query that returns rows and looks like it worked.
-  if (!isPublicState(filter.value, workflow)) return base;
+  // Read off the filter rather than re-derived from its values. The resolver is
+  // the only place that knows why a set was chosen, and asking the values again
+  // here would be a second answer to that question — one that disagrees the
+  // moment a workflow's public and non-public sets are not complementary.
+  if (!filter.isPublicRead) return base;
   if (idColumn === undefined) return base;
 
   const { reveal, hide } = decisions;

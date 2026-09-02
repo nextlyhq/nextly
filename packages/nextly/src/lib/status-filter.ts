@@ -6,9 +6,12 @@
 // Pure logic only — no DB or Drizzle coupling. Each query service maps the
 // returned filter value to its own SQL condition.
 
-import { NextlyError } from "../errors";
-
-import { publicStateNames } from "./content-states";
+import {
+  DEFAULT_WORKFLOW,
+  nonPublicStateNames,
+  publicStateNames,
+  type ContentWorkflow,
+} from "./content-states";
 
 /** Caller-facing status filter override. */
 export type StatusOption = "published" | "draft" | "all";
@@ -17,13 +20,32 @@ export type StatusOption = "published" | "draft" | "all";
  * The state name a lifecycle-bounded read filters by.
  *
  * NOT a closed union, deliberately. A workflow names its own states, so the set
- * of values this can hold is open the moment one is configurable, and a
- * two-value type would only be kept true by casting the third value into it —
- * which is how a consumer comparing the literal `"published"` would go on
- * compiling while silently taking the wrong branch. Consumers ask
- * `isPublicState` what the value MEANS rather than which word it is.
+ * of values this can hold is open, and a two-value type would only be kept true
+ * by casting the third value into it — which is how a consumer comparing the
+ * literal `"published"` would go on compiling while silently taking the wrong
+ * branch.
  */
 export type StatusFilterValue = string;
+
+/**
+ * The lifecycle a read is bounded to.
+ *
+ * A SET, because a workflow may call several states public — `published` and a
+ * `featured` that is also live — and an equality would drop every row in the
+ * others from public reads without erroring.
+ *
+ * `isPublicRead` is carried rather than re-derived. Consumers need it to decide
+ * whether a due release can widen the read, and the resolver is the only place
+ * that knows WHY the set was chosen: a caller naming `draft` and a workflow
+ * whose only non-public state happens to be absent produce different intents
+ * from the same names. Re-deriving it downstream is the second implementation
+ * this module exists to prevent.
+ */
+export interface StatusFilter {
+  readonly values: readonly StatusFilterValue[];
+  /** True when this read is bounded to the workflow's public states. */
+  readonly isPublicRead: boolean;
+}
 
 export type ResolveStatusFilterArgs = {
   /** True when the target collection/single has Draft/Published enabled. */
@@ -37,49 +59,49 @@ export type ResolveStatusFilterArgs = {
   overrideAccess: boolean;
   /** Explicit caller intent ('all' | 'draft' | 'published'). */
   explicit?: StatusOption;
+  /**
+   * The workflow whose states this collection moves through.
+   *
+   * Defaults to the only workflow that existed before workflows were
+   * configurable, so a collection that names none behaves exactly as it did.
+   */
+  workflow?: ContentWorkflow;
 };
 
 /**
- * Decide whether to apply a status filter and which value to filter by.
- * Returns null when no filter should be applied (collection has no status
- * column, or caller is trusted with no explicit choice, or explicit was 'all').
+ * Decide whether to bound this read to a lifecycle, and to which states.
+ *
+ * Returns `null` when no filter applies: the collection has no status column,
+ * the caller asked for everything, or a trusted caller said nothing.
+ *
+ * The two caller-facing words keep their meanings and gain the workflow's
+ * vocabulary. `published` is every state the workflow calls public and `draft`
+ * is every state it does not — so a team that adds `in_review` finds its
+ * drafts view already showing that work, without the query API learning a word.
  */
 export function resolveStatusFilter(
   args: ResolveStatusFilterArgs
-): { value: StatusFilterValue } | null {
+): StatusFilter | null {
+  const workflow = args.workflow ?? DEFAULT_WORKFLOW;
   if (!args.collectionHasStatus) return null;
   if (args.explicit === "all") return null;
-  if (args.explicit === "draft") return { value: "draft" };
-  if (args.explicit === "published") return { value: "published" };
+  if (args.explicit === "draft") {
+    return { values: nonPublicStateNames(workflow), isPublicRead: false };
+  }
+  if (args.explicit === "published") {
+    return { values: publicStateNames(workflow), isPublicRead: true };
+  }
   if (args.overrideAccess) return null;
   /*
-   * ASKED of the workflow rather than written as a literal. The answer is the
-   * same today — the default workflow declares exactly one public state, named
-   * `published` — and that identity is what makes this a safe change rather
-   * than a behavioural one.
+   * ASKED of the workflow rather than written as a literal, which is what lets
+   * a team add a state without teaching every reader a new word.
    *
-   * What it buys is where the answer LIVES. Admitting a third state later is
-   * then a change to the workflow, not to this function and not to the callers
-   * downstream of it, which is the difference between adding a state and
-   * teaching every reader a new word.
-   *
-   * The single-state assertion is deliberate and is not a limitation of the
-   * model: a workflow with two public states needs a set predicate rather than
-   * an equality, which `statusCondition` does not yet build. Refusing here is
-   * how that arrives as a caught error rather than as rows quietly missing from
-   * every public read.
+   * This is the branch that decides what an UNTRUSTED caller sees, so its
+   * failure mode is the dangerous one: a mistake here does not hide content,
+   * it publishes it. The workflow is the only input, and a state it does not
+   * declare as public is absent from this set by construction.
    */
-  const publicStates = publicStateNames();
-  if (publicStates.length !== 1) {
-    throw NextlyError.internal({
-      logContext: {
-        reason:
-          "The content workflow must declare exactly one public state until statusCondition builds a set predicate.",
-        publicStates: [...publicStates],
-      },
-    });
-  }
-  return { value: publicStates[0] };
+  return { values: publicStateNames(workflow), isPublicRead: true };
 }
 
 /**

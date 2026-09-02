@@ -10,6 +10,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_WORKFLOW,
+  MAX_STATE_NAME_LENGTH,
+  defineWorkflow,
+  nonPublicStateNames,
+  type ContentState,
   isPublicState,
   publicStateNames,
   type ContentWorkflow,
@@ -87,5 +91,132 @@ describe("what a state means", () => {
       ],
     };
     expect(publicStateNames(twoLive)).toEqual(["published", "featured"]);
+  });
+});
+
+describe("declaring a workflow", () => {
+  /*
+   * Every rule here is one whose violation is otherwise found at write time, on
+   * one dialect, in production. Declaration is the only moment the whole set is
+   * visible, so it is the only moment "two states share a name" or "nothing
+   * here is public" can be seen at all.
+   */
+  const ok = (states: ContentState[]): ContentWorkflow =>
+    defineWorkflow({ name: "editorial", states });
+
+  it("returns the workflow unchanged when it is sound", () => {
+    const states = [
+      { name: "draft", label: "Draft", isPublic: false },
+      { name: "in_review", label: "In legal review", isPublic: false },
+      { name: "live", label: "Live", isPublic: true },
+    ];
+    expect(ok(states).states).toEqual(states);
+  });
+
+  it("refuses a state name the status column cannot hold", () => {
+    // 21 characters against a varchar(20). SQLite would accept it and both
+    // other dialects would not, so a suite run on SQLite says nothing.
+    const tooLong = "awaiting_legal_review";
+    expect(tooLong.length).toBeGreaterThan(MAX_STATE_NAME_LENGTH);
+    expect(() =>
+      ok([
+        { name: "draft", isPublic: false },
+        { name: tooLong, isPublic: false },
+        { name: "live", isPublic: true },
+      ])
+    ).toThrow();
+  });
+
+  it("accepts a name of exactly the column's width", () => {
+    // The boundary, in the direction that must NOT throw — otherwise the check
+    // could be off by one and every test above would still pass.
+    const exact = "x".repeat(MAX_STATE_NAME_LENGTH);
+    expect(() =>
+      ok([
+        { name: exact, isPublic: false },
+        { name: "live", isPublic: true },
+      ])
+    ).not.toThrow();
+  });
+
+  it("refuses two states of one name", () => {
+    // Every question about that name becomes ambiguous — including whether it
+    // is public, which is the one the read path asks.
+    expect(() =>
+      ok([
+        { name: "draft", isPublic: false },
+        { name: "draft", isPublic: true },
+        { name: "live", isPublic: true },
+      ])
+    ).toThrow();
+  });
+
+  it("refuses a workflow with nothing public", () => {
+    // It would fail silently: every public read simply returns nothing, on a
+    // query that worked.
+    expect(() =>
+      ok([
+        { name: "draft", isPublic: false },
+        { name: "in_review", isPublic: false },
+      ])
+    ).toThrow();
+  });
+
+  it("refuses a workflow with no states at all", () => {
+    expect(() => ok([])).toThrow();
+  });
+
+  it("refuses an empty state name", () => {
+    expect(() =>
+      ok([
+        { name: "   ", isPublic: false },
+        { name: "live", isPublic: true },
+      ])
+    ).toThrow();
+  });
+});
+
+describe("the non-public complement", () => {
+  const EDITORIAL_WITH_HOLD: ContentWorkflow = {
+    name: "editorial",
+    states: [
+      { name: "draft", isPublic: false },
+      { name: "in_review", isPublic: false },
+      { name: "legal_hold", isPublic: false },
+      { name: "live", isPublic: true },
+    ],
+  };
+
+  it("covers EVERY state the workflow does not publish", () => {
+    // What a `draft` read must mean under a custom workflow. Returning only
+    // the state literally named `draft` would hide work in review from the
+    // view whose whole job is to show unpublished work.
+    expect(nonPublicStateNames(EDITORIAL_WITH_HOLD)).toEqual([
+      "draft",
+      "in_review",
+      "legal_hold",
+    ]);
+  });
+
+  it("partitions the workflow with the public set, leaving nothing out", () => {
+    // The two together must be the whole vocabulary: a state in neither is one
+    // no read can reach, and a state in both is one every read returns.
+    const all = EDITORIAL_WITH_HOLD.states.map(state => state.name).sort();
+    const partitioned = [
+      ...publicStateNames(EDITORIAL_WITH_HOLD),
+      ...nonPublicStateNames(EDITORIAL_WITH_HOLD),
+    ].sort();
+    expect(partitioned).toEqual(all);
+  });
+
+  it("is empty for a workflow whose every state is public", () => {
+    // The control: without it the case above passes against a function that
+    // returns every state regardless of the flag.
+    expect(
+      nonPublicStateNames({
+        name: "always-live",
+        states: [{ name: "live", isPublic: true }],
+      })
+    ).toEqual([]);
   });
 });
