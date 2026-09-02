@@ -25,6 +25,7 @@ import type { EmailService } from "./email/email-service";
 import { MediaService as LegacyMediaService } from "./media";
 import { MediaFolderService } from "./media-folder";
 import type { Logger } from "./shared";
+import { resolveUploadPolicy } from "./upload-validation/upload-policy";
 import { UsersService } from "./users";
 import type { UserExtSchemaService } from "./users/user-ext-schema-service";
 
@@ -401,7 +402,10 @@ export class ServiceContainer {
         this.adapter,
         logger,
         fastDrainScheduler,
-        retentionRunner
+        retentionRunner,
+        // The configured per-file cap. Server actions reach media through this
+        // container, and a default here refused what the install allows.
+        resolveUploadPolicy().maxSize
       );
     }
     return this._media;

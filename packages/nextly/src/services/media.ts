@@ -129,7 +129,14 @@ export class MediaService extends BaseService {
      * its own window and gate, and is absent only when neither has anything to
      * prune.
      */
-    private readonly retentionRunner?: RetentionRunner
+    private readonly retentionRunner?: RetentionRunner,
+    /**
+     * The per-file byte cap from the installation's upload policy. Supplied by
+     * whoever constructs this service, because the policy is resolved once and
+     * this writer is not where it is decided — a default here silently refused
+     * files the configured cap permits.
+     */
+    private readonly maxUploadBytes?: number
   ) {
     super(adapter, logger);
   }
@@ -307,7 +314,7 @@ export class MediaService extends BaseService {
         contentDisposition,
       } = input;
 
-      const sizeValidation = validateFileSize(size);
+      const sizeValidation = validateFileSize(size, this.maxUploadBytes);
       if (!sizeValidation.valid) {
         return {
           success: false,

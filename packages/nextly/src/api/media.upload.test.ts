@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { container } from "../di/container";
 import { MediaService } from "../domains/media/services/media-service";
 import { UploadValidator } from "../services/upload-validation";
+import { WOFF2_HEADER } from "../services/upload-validation/__tests__/format-fixtures";
 
 const mocks = vi.hoisted(() => ({ requirePermission: vi.fn() }));
 
@@ -104,7 +105,11 @@ const DEFAULT_LEGACY_RESULT = {
 };
 
 function buildStubBundle(
-  opts: { svgCsp?: boolean; legacyResult?: typeof DEFAULT_LEGACY_RESULT } = {}
+  opts: {
+    svgCsp?: boolean;
+    legacyResult?: typeof DEFAULT_LEGACY_RESULT;
+    security?: ConstructorParameters<typeof UploadValidator>[0];
+  } = {}
 ): StubBundle {
   const legacyUploadMedia = vi
     .fn()
@@ -128,12 +133,24 @@ function buildStubBundle(
     {} as never,
     () => storage as never,
     {} as never,
-    new UploadValidator(undefined),
+    new UploadValidator(opts.security),
     opts.svgCsp ?? true,
     logger as never
   );
 
   return { service, legacyUploadMedia };
+}
+
+/**
+ * A real font header padded out to `mb` megabytes.
+ *
+ * A font rather than an image because the size cap is the subject and does not
+ * depend on the format, while `image/*` reaches the image processor this stub
+ * bundle does not provide — which would refuse for a reason that has nothing
+ * to do with the limit being asserted.
+ */
+function bigFont(mb: number): Buffer {
+  return Buffer.concat([WOFF2_HEADER, Buffer.alloc(mb * 1024 * 1024)]);
 }
 
 describe("POST /api/media — unified validation pipeline", () => {
@@ -165,6 +182,45 @@ describe("POST /api/media — unified validation pipeline", () => {
     };
     const code = body.code ?? body.error?.code;
     expect(code).toBe("VALIDATION_ERROR");
+  });
+
+  it("accepts a file above the built-in cap when the install configured more", async () => {
+    /*
+     * The service's own pre-check ran before the validator with a constant of
+     * its own, so an install documented as accepting 20mb was refused at 10 by
+     * the guard standing in front of the one that had been configured.
+     */
+    mocks.requirePermission.mockResolvedValue({ userId: TEST_USER_ID });
+    const bundle = buildStubBundle({
+      security: { limits: { fileSize: "20mb" } },
+    });
+    container.registerSingleton("mediaService", () => bundle.service);
+    const { POST } = await mountedHandlers();
+
+    const res = await POST(
+      ...mountedRequest(bigFont(12), "big.woff2", "font/woff2")
+    );
+
+    expect(res.status).toBe(201);
+    expect(bundle.legacyUploadMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses past the configured cap", async () => {
+    // The control: without it the case above is satisfied by a service that
+    // stopped checking sizes at all.
+    mocks.requirePermission.mockResolvedValue({ userId: TEST_USER_ID });
+    const bundle = buildStubBundle({
+      security: { limits: { fileSize: "20mb" } },
+    });
+    container.registerSingleton("mediaService", () => bundle.service);
+    const { POST } = await mountedHandlers();
+
+    const res = await POST(
+      ...mountedRequest(bigFont(21), "huge.woff2", "font/woff2")
+    );
+
+    expect(res.status).toBe(400);
+    expect(bundle.legacyUploadMedia).not.toHaveBeenCalled();
   });
 
   it("rejects .exe regardless of MIME claim", async () => {
@@ -292,14 +348,11 @@ describe("POST through the mounted media handlers — font uploads", () => {
     container.registerSingleton("mediaService", () => bundle.service);
     const { POST } = await mountedHandlers();
 
-    // REAL WOFF2 bytes, so the case distinguishes a font from anything else
-    // renamed to look like one. Text here would pass a validator that trusts
-    // whatever it cannot identify, which is the implementation this must fail
-    // against.
-    const bytes = Buffer.concat([
-      Buffer.from("wOF2", "ascii"),
-      Buffer.alloc(64),
-    ]);
+    // A WOFF2 header a sniffer identifies, so the case distinguishes a font
+    // from anything else renamed to look like one. Text here would pass a
+    // validator that trusts whatever it cannot identify, which is the
+    // implementation this must fail against.
+    const bytes = WOFF2_HEADER;
     const res = await POST(...mountedRequest(bytes, "Inter.woff2", ""));
 
     expect(res.status).toBe(201);
@@ -315,9 +368,9 @@ describe("POST through the mounted media handlers — font uploads", () => {
     /*
      * The claim can be inferred from a filename, so nothing but the bytes
      * stands behind it — and the public route serves these types to anonymous
-     * callers as immutable, cacheable assets. `file-type` recognises neither
-     * WOFF nor WOFF2, so a validator trusting what it cannot identify accepts
-     * arbitrary content under a servable type.
+     * callers as immutable, cacheable assets, so a validator trusting
+     * whatever it cannot identify accepts arbitrary content under a servable
+     * type.
      *
      * Its control is the case above, which fails if font uploads stop working
      * at all; this one fails only when the signature goes unchecked.
