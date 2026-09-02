@@ -52,6 +52,20 @@ export interface ResolvedFieldGroupReferences {
 }
 
 /**
+ * The trimmed, non-empty strings of a plural reference value. Padded slugs
+ * resolve to nothing in a registry keyed by exact match — and would slip past
+ * the deletion reference-protection scan with them — so both plural spellings
+ * normalize through this one read.
+ */
+function trimmedReferenceList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((s): s is string => typeof s === "string")
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+}
+
+/**
  * Extracts the field-group slug(s) a field definition points at.
  *
  * Reads all the reference keys storage has ever used or is scheduled to use:
@@ -87,18 +101,28 @@ export function extractFieldGroupReferences(
     single = record.componentSlug.trim();
   }
 
-  let many: string[] | undefined;
-  if (Array.isArray(record.components)) {
-    const list = record.components.filter(
-      (s): s is string => typeof s === "string" && s.trim().length > 0
-    );
-    if (list.length > 0) many = list;
-  } else if (Array.isArray(record.fieldGroups)) {
-    const list = record.fieldGroups.filter(
-      (s): s is string => typeof s === "string" && s.trim().length > 0
-    );
-    if (list.length > 0) many = list;
-  }
+  const components = trimmedReferenceList(record.components);
+  const many =
+    components.length > 0
+      ? components
+      : trimmedReferenceList(record.fieldGroups);
 
-  return { single, many };
+  return { single, many: many.length > 0 ? many : undefined };
+}
+
+/**
+ * The same definition with its references resolved onto the current keys.
+ *
+ * Layers that walk stored definitions — the field-group write and read
+ * services above all — take their references from `component` / `components`
+ * in many places. Resolving once at the boundary, rather than at each read,
+ * is what keeps a migrated definition (`fieldGroup` / `fieldGroups`) flowing
+ * through those readers unchanged: the copy carries both spellings' answer on
+ * the keys the readers already open, and the original keys are preserved.
+ */
+export function withResolvedFieldGroupReferences<T extends object>(
+  field: T
+): T & { component?: string; components?: string[] } {
+  const { single, many } = extractFieldGroupReferences(field);
+  return { ...field, component: single, components: many };
 }

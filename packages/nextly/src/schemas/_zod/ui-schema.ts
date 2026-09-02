@@ -203,7 +203,16 @@ export type FieldNode = {
   initCollapsed?: boolean;
   rowLabelField?: string;
   component?: string;
+  /**
+   * The migrated spelling of `component`, on fields rewritten by the storage
+   * migration. Declared so the parser KEEPS the key — an undeclared key is
+   * stripped before any refinement runs, and the exactly-one-reference check
+   * below would then reject a valid migrated manifest.
+   */
+  fieldGroup?: string;
   components?: string[];
+  /** The migrated spelling of `components`, kept for the same reason. */
+  fieldGroups?: string[];
   repeatable?: boolean;
   fields?: FieldNode[];
 };
@@ -290,7 +299,11 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       initCollapsed: z.boolean().optional(),
       rowLabelField: z.string().optional(),
       component: z.string().optional(),
+      // Declared rather than stripped: the refinement below judges migrated
+      // references, and a key the object shape omits never reaches it.
+      fieldGroup: z.string().optional(),
       components: z.array(z.string()).optional(),
+      fieldGroups: z.array(z.string()).optional(),
       repeatable: z.boolean().optional(),
       // Nested fields for inline container types (repeater/group).
       fields: z.array(uiSchemaFieldSchema).optional(),
@@ -344,22 +357,18 @@ export const uiSchemaFieldSchema: z.ZodType<FieldNode> = z.lazy(() =>
       // must be a real slug — a blank or malformed reference points at no loadable
       // definition, so runtime writes to it would be silently dropped.
       if (isFieldGroupType(f.type)) {
-        const candidate = f as {
-          component?: unknown;
-          fieldGroup?: unknown;
-          components?: unknown;
-          fieldGroups?: unknown;
-        };
-        const singleRef = candidate.component ?? candidate.fieldGroup;
-        const multiRef = candidate.components ?? candidate.fieldGroups;
+        // Both spellings are declared on the object above, so they survive
+        // parsing and are readable off the node without a cast.
+        const singleRef = f.component ?? f.fieldGroup;
+        const multiRef = f.components ?? f.fieldGroups;
         const hasSingle = singleRef !== undefined;
         const hasMulti = multiRef !== undefined;
         const singlePath =
-          candidate.fieldGroup !== undefined
+          f.fieldGroup !== undefined
             ? "fieldGroup"
             : STORAGE_FORMAT.refKeys.single;
         const multiPath =
-          candidate.fieldGroups !== undefined
+          f.fieldGroups !== undefined
             ? "fieldGroups"
             : STORAGE_FORMAT.refKeys.many;
 

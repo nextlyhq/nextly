@@ -54,6 +54,23 @@ describe("Field Group Dual Vocabulary — type recognition & guards", () => {
       many: ["hero", "cta"],
     });
   });
+
+  it("trims retained plural references, like the singular spellings", () => {
+    // A padded slug resolves to nothing in a registry keyed by exact match —
+    // and would slip past the deletion reference-protection scan with it.
+    expect(
+      extractFieldGroupReferences({ components: [" hero ", "cta"] })
+    ).toEqual({
+      single: undefined,
+      many: ["hero", "cta"],
+    });
+    expect(
+      extractFieldGroupReferences({ fieldGroups: ["hero", " cta "] })
+    ).toEqual({
+      single: undefined,
+      many: ["hero", "cta"],
+    });
+  });
 });
 
 describe("Field Group Dual Vocabulary — schema table construction & diff", () => {

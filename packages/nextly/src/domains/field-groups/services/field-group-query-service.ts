@@ -27,7 +27,10 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
-import { isFieldGroupType } from "../storage/field-group-field-type";
+import {
+  isFieldGroupType,
+  withResolvedFieldGroupReferences,
+} from "../storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../storage/field-group-type-key";
 
 import {
@@ -470,12 +473,16 @@ export class FieldGroupQueryService extends BaseService {
       }
 
       try {
-        if (field.components && field.components.length > 0) {
+        // References resolved once at the boundary: a migrated definition
+        // carries them under `fieldGroup` / `fieldGroups`, which the keys the
+        // dispatch below opens never held.
+        const f = withResolvedFieldGroupReferences(field);
+        if (f.components && f.components.length > 0) {
           result[fieldName] = await this.populateMultiComponentField(
             entryId,
             parentTable,
             fieldName,
-            field,
+            f,
             depth,
             currentDepth,
             locale,
@@ -484,13 +491,13 @@ export class FieldGroupQueryService extends BaseService {
             strict,
             access
           );
-        } else if (field.component) {
-          if (field.repeatable) {
+        } else if (f.component) {
+          if (f.repeatable) {
             result[fieldName] = await this.populateRepeatableField(
               entryId,
               parentTable,
               fieldName,
-              field.component,
+              f.component,
               depth,
               currentDepth,
               locale,
@@ -504,7 +511,7 @@ export class FieldGroupQueryService extends BaseService {
               entryId,
               parentTable,
               fieldName,
-              field.component,
+              f.component,
               depth,
               currentDepth,
               locale,
@@ -569,12 +576,14 @@ export class FieldGroupQueryService extends BaseService {
 
     for (const field of componentFields) {
       try {
-        if (field.components && field.components.length > 0) {
+        // Same boundary resolution as the single-entry populate path.
+        const f = withResolvedFieldGroupReferences(field);
+        if (f.components && f.components.length > 0) {
           const dataMap = await this.batchPopulateMultiComponentField(
             entryIds,
             parentTable,
             field.name,
-            field,
+            f,
             depth,
             currentDepth,
             locale,
@@ -582,13 +591,13 @@ export class FieldGroupQueryService extends BaseService {
             access
           );
           fieldDataMaps.set(field.name, dataMap);
-        } else if (field.component) {
-          if (field.repeatable) {
+        } else if (f.component) {
+          if (f.repeatable) {
             const dataMap = await this.batchPopulateRepeatableField(
               entryIds,
               parentTable,
               field.name,
-              field.component,
+              f.component,
               depth,
               currentDepth,
               locale,
@@ -601,7 +610,7 @@ export class FieldGroupQueryService extends BaseService {
               entryIds,
               parentTable,
               field.name,
-              field.component,
+              f.component,
               depth,
               currentDepth,
               locale,

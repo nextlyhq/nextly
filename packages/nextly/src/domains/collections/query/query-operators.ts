@@ -570,12 +570,10 @@ function isComponentFieldDef(field: {
  * Build a map of field names to component field definitions.
  */
 function buildComponentFieldMap(
-  fields: Array<{
-    name: string;
-    type: string;
-    component?: string;
-    components?: string[];
-  }>
+  // The shared definition names all four reference keys. A narrower inline
+  // shape here rejects a caller's migrated object literal at the excess-
+  // property check, before extraction can read its references at all.
+  fields: ComponentFieldDefinition[]
 ): Map<string, ComponentFieldDefinition> {
   const map = new Map<string, ComponentFieldDefinition>();
 
@@ -632,12 +630,9 @@ function buildComponentFieldMap(
  */
 export function extractComponentFieldConditions(
   where: WhereFilter | undefined,
-  fields: Array<{
-    name: string;
-    type: string;
-    component?: string;
-    components?: string[];
-  }>
+  // Same shared definition: a migrated `{ type: "fieldGroup", fieldGroup }`
+  // literal must type-check against the input, not be rejected as excess.
+  fields: ComponentFieldDefinition[]
 ): ExtractComponentFiltersResult {
   if (!where) {
     return { componentFilters: [], cleanedWhere: undefined };

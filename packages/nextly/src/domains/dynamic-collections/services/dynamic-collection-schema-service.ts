@@ -113,12 +113,21 @@ export class DynamicCollectionSchemaService {
    * so changing between them is not a modification of anything: it is a removal from one storage
    * and an addition to the other. Read as a modification instead, it produced an ALTER COLUMN
    * against a name the table never had.
+   *
+   * Column production is the same kind of move: a plain type edited into a field group keeps its
+   * name but leaves the parent row, so the old column must be dropped, and the reverse must ADD
+   * one. Comparing only junction usage judged neither transition a storage-class change — the
+   * plain type's column stayed behind as a ghost the next sync then offered to remove, and the
+   * reverse was treated as a modification of a column that did not exist.
    */
   private storageClassChanged(
     previous: FieldDefinition,
     next: FieldDefinition
   ): boolean {
-    return usesJunctionTable(previous) !== usesJunctionTable(next);
+    return (
+      fieldProducesColumn(previous) !== fieldProducesColumn(next) ||
+      usesJunctionTable(previous) !== usesJunctionTable(next)
+    );
   }
 
   /**

@@ -172,6 +172,45 @@ describe("ui-schema field types (widened set)", () => {
       ).success
     ).toBe(true);
   });
+
+  // The migrated reference keys must be DECLARED on the field object, not
+  // merely tolerated: an undeclared key is stripped before any refinement
+  // runs, so a manifest the storage migration wrote would fail the
+  // exactly-one-reference check with both references reading as absent.
+  it("accepts a fieldGroup field carrying the migrated singular reference", () => {
+    const result = uiSchemaManifest.safeParse(
+      manifestWith({ name: "seo", type: "fieldGroup", fieldGroup: "seo" })
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.collections[0].fields[0].fieldGroup).toBe("seo");
+    }
+  });
+
+  it("accepts a fieldGroup field carrying the migrated plural reference", () => {
+    const result = uiSchemaManifest.safeParse(
+      manifestWith({
+        name: "layout",
+        type: "fieldGroup",
+        fieldGroups: ["hero", "cta"],
+      })
+    );
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.collections[0].fields[0].fieldGroups).toEqual([
+        "hero",
+        "cta",
+      ]);
+    }
+  });
+
+  it("still rejects a migrated fieldGroup field with no reference at all", () => {
+    expect(
+      uiSchemaManifest.safeParse(
+        manifestWith({ name: "seo", type: "fieldGroup" })
+      ).success
+    ).toBe(false);
+  });
 });
 
 // The owner column (`created_by`) is injected only on collection tables, so the
