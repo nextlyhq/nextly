@@ -47,6 +47,32 @@ const DECLARING = (coreBlocks as AnyBlockDefinition[]).filter(
 );
 
 /**
+ * The PART defaults, which this file did not inspect at all until now.
+ *
+ * `DECLARING` filters on `block.baseStyles`, and every case below walks that
+ * one field — so a property declared on a part has never been checked against
+ * the catalog or against the compiled sheet. That is not a hypothetical gap:
+ * `core/form`'s submit was written with `justify-self`, which the catalog does
+ * not carry, and the whole suite stayed green while the declaration was
+ * dropped and the button ran the full width of its column.
+ *
+ * Parts are where a block styles something it renders INSIDE its root, which
+ * is exactly where an author cannot reach with a style control — so a default
+ * dropped here is one nobody can put back.
+ */
+const DECLARING_PARTS: (readonly [string, string, NodeStyles])[] = (
+  coreBlocks as AnyBlockDefinition[]
+).flatMap(block =>
+  Object.entries(
+    (block.parts ?? {}) as Record<string, { baseStyles?: NodeStyles }>
+  ).flatMap(([partName, part]) =>
+    part.baseStyles === undefined
+      ? []
+      : [[block.name, partName, part.baseStyles] as const]
+  )
+);
+
+/**
  * Every style property a `NodeStyles` declares, across states and breakpoints.
  *
  * Walked rather than read from a known path: the shape is state → breakpoint →
@@ -277,6 +303,43 @@ describe("every default the core library declares", () => {
           `DROPPED silently rather than passed through, so the default has no ` +
           `effect. Note the catalog has flex CONTAINER properties and no flex ` +
           `ITEM properties at all.`
+      ).toEqual([]);
+    }
+  );
+
+  it("inspects every part that declares defaults", () => {
+    /*
+     * The population control for the case below. Without it, a walk that
+     * returned nothing — a renamed `parts` field, a changed shape — would leave
+     * the next assertion green while checking no part at all.
+     */
+    expect(
+      DECLARING_PARTS.map(([block, part]) => `${block}#${part}`).sort()
+    ).toEqual([
+      "core/form#control",
+      "core/form#submit",
+      "core/image#caption",
+      "core/quote#attribution",
+      "core/quote#quotation",
+    ]);
+  });
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s declares only properties STYLE_CATALOG knows",
+    (name, part, styles) => {
+      const declared = declaredProperties(styles);
+      expect(
+        declared.length,
+        `${name} part ${part} declared no properties`
+      ).toBeGreaterThan(0);
+      expect(
+        declared.filter(property => getStyleProperty(property) === undefined),
+        `${name} part ${part} declares a property the compiler does not know. ` +
+          `It will be DROPPED silently rather than passed through, so the ` +
+          `default has no effect — and a part is markup an author cannot ` +
+          `reach with a style control, so nobody can put it back. Note the ` +
+          `catalog has flex and grid CONTAINER properties and no ITEM ` +
+          `properties at all.`
       ).toEqual([]);
     }
   );

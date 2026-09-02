@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { BUTTON_BASE_STYLES } from "./button";
 import { form, renderForm, FORM_FIELD_TYPES, type FormProps } from "./form";
 
 function context(): PageContext {
@@ -166,7 +167,12 @@ describe("core/form", () => {
       const stored = { fields: 42 };
       const out = html(renderForm(args(stored as unknown as FormProps)));
 
-      expect(out).toContain('<button type="submit"');
+      // Matched on the attribute rather than on the opening tag's exact text:
+      // the submit carries a part class now, and asserting attribute ORDER
+      // makes this fail for a styling change while the property under test —
+      // that a non-array `fields` renders no fields — is untouched.
+      expect(out).toContain('type="submit"');
+      expect(out).toContain("<button");
       expect(out).not.toContain("<input");
     });
 
@@ -224,5 +230,67 @@ describe("core/form", () => {
 
       expect(out).not.toContain("style=");
     });
+  });
+});
+
+describe("a control an author can SEE", () => {
+  /*
+   * Measured in a browser before this existed: an input compiled to
+   * `border: 0px`, `background: transparent`, `padding: 0`, so a published
+   * form rendered as a column of labels with nothing under them. The fields
+   * were present, focusable and submittable, and invisible.
+   *
+   * The cause is a host CSS reset — Tailwind's Preflight, which the scaffold
+   * ships — taking away the border and background a user agent draws on an
+   * input. The `control` part already existed and stated only spacing.
+   *
+   * These assert the DECLARATION rather than the rendered appearance, which is
+   * the honest limit of a jsdom test: it cannot see a border. The rendered
+   * evidence is a browser check on a published page, recorded in the PR. What
+   * this pins is that the three properties which make a control visible under
+   * a reset cannot be removed without a test saying so.
+   */
+  const control = form.parts?.control?.baseStyles?.base?.base as
+    | Record<string, unknown>
+    | undefined;
+
+  it("draws a border, a background and padding", () => {
+    expect(control).toBeDefined();
+    expect(control?.border).toBeDefined();
+    expect(control?.backgroundColor).toBeDefined();
+    expect(control?.padding).toBeDefined();
+  });
+
+  it("takes its COLOURS from tokens and its spacing from literals", () => {
+    /*
+     * A literal colour is wrong in whichever of light and dark it was not
+     * chosen for, which is the reason a token set exists; spacing carries no
+     * such asymmetry. `core/card` states the same split for the same reason.
+     */
+    expect(control?.backgroundColor).toHaveProperty("$token");
+    expect(control?.color).toHaveProperty("$token");
+    expect(
+      (control?.border as Record<string, unknown> | undefined)?.color
+    ).toHaveProperty("$token");
+    expect(typeof control?.borderRadius).toBe("string");
+  });
+
+  it("gives the submit the SAME appearance as core/button", () => {
+    /*
+     * A form's submit and a button block are one control to an author, and
+     * describing that appearance twice is how a page comes to carry two
+     * different-looking primary actions — which is what it did while the
+     * submit was a bare element the reset stripped to plain text.
+     */
+    const submit = form.parts?.submit?.baseStyles?.base?.base as
+      | Record<string, unknown>
+      | undefined;
+    expect(submit).toBeDefined();
+    for (const key of Object.keys(BUTTON_BASE_STYLES.base.base)) {
+      expect(submit).toHaveProperty(key);
+    }
+    // The one deliberate difference: the form is a grid, so a stretched item
+    // would run the full column width and stop reading as a button.
+    expect(submit?.width).toBe("fit-content");
   });
 });

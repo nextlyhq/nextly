@@ -40,6 +40,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import type { BlockRenderArgs, PageContext } from "../context";
 
+import { BUTTON_BASE_STYLES } from "./button";
 import { INTERACTIVE } from "./categories";
 import { flag, oneOf, text, url } from "./props";
 
@@ -174,6 +175,71 @@ const FORM_PARTS = {
       base: {
         base: {
           margin: { blockEnd: "0.75rem" },
+          /*
+           * The control has to LOOK like a control.
+           *
+           * A user agent draws a border and a background on an input; a host
+           * reset takes both away, and Tailwind's Preflight — which the
+           * scaffold ships — is one. This part existed and stated only
+           * spacing, so a form rendered as a column of labels with nothing
+           * under them: the field was there, focusable and submittable, and
+           * invisible.
+           *
+           * Colours are tokens because a literal is wrong in whichever of
+           * light and dark it was not chosen for. Spacing and the radius are
+           * literals, which is safe for the same reason `core/card` gives.
+           */
+          boxSizing: "border-box",
+          width: "100%",
+          padding: {
+            blockStart: "0.5rem",
+            blockEnd: "0.5rem",
+            inlineStart: "0.75rem",
+            inlineEnd: "0.75rem",
+          },
+          backgroundColor: { $token: "color.background" },
+          color: { $token: "color.text" },
+          borderRadius: "6px",
+          border: {
+            // Per LOGICAL side, so it follows writing direction rather than
+            // assuming left-to-right.
+            width: {
+              blockStart: "1px",
+              blockEnd: "1px",
+              inlineStart: "1px",
+              inlineEnd: "1px",
+            },
+            style: "solid",
+            color: { $token: "color.border" },
+          },
+        },
+      },
+    },
+  },
+  /**
+   * The submit, wearing `core/button`'s own appearance.
+   *
+   * Reused rather than restated: a form's submit and a button block are the
+   * same control to an author, and describing that twice is how one page comes
+   * to carry two different-looking primary actions. `justifySelf` is the only
+   * addition — the form is a grid, so a stretched item would otherwise run the
+   * full column width and stop reading as a button at all.
+   */
+  submit: {
+    baseStyles: {
+      base: {
+        base: {
+          ...BUTTON_BASE_STYLES.base.base,
+          /*
+           * Sized to its words rather than to the column.
+           *
+           * The form is a grid and a grid item stretches, so without this the
+           * submit runs the full width and stops reading as a button. The
+           * obvious spelling is `justify-self: start` and the catalog does not
+           * carry it — the compiler drops a property it does not know, so that
+           * declaration would have been written, dropped, and invisible.
+           */
+          width: "fit-content",
         },
       },
     },
@@ -261,7 +327,9 @@ export function renderForm({
       {...(action === undefined ? {} : { action })}
     >
       {rows}
-      <button type="submit">{submitText}</button>
+      <button className={partClass("submit")} type="submit">
+        {submitText}
+      </button>
     </form>
   );
 }
