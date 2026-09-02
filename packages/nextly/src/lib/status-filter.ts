@@ -6,11 +6,24 @@
 // Pure logic only — no DB or Drizzle coupling. Each query service maps the
 // returned filter value to its own SQL condition.
 
+import { NextlyError } from "../errors";
+
+import { publicStateNames } from "./content-states";
+
 /** Caller-facing status filter override. */
 export type StatusOption = "published" | "draft" | "all";
 
-/** Subset that maps directly to a column equality predicate. */
-export type StatusFilterValue = "published" | "draft";
+/**
+ * The state name a lifecycle-bounded read filters by.
+ *
+ * NOT a closed union, deliberately. A workflow names its own states, so the set
+ * of values this can hold is open the moment one is configurable, and a
+ * two-value type would only be kept true by casting the third value into it —
+ * which is how a consumer comparing the literal `"published"` would go on
+ * compiling while silently taking the wrong branch. Consumers ask
+ * `isPublicState` what the value MEANS rather than which word it is.
+ */
+export type StatusFilterValue = string;
 
 export type ResolveStatusFilterArgs = {
   /** True when the target collection/single has Draft/Published enabled. */
@@ -39,7 +52,34 @@ export function resolveStatusFilter(
   if (args.explicit === "draft") return { value: "draft" };
   if (args.explicit === "published") return { value: "published" };
   if (args.overrideAccess) return null;
-  return { value: "published" };
+  /*
+   * ASKED of the workflow rather than written as a literal. The answer is the
+   * same today — the default workflow declares exactly one public state, named
+   * `published` — and that identity is what makes this a safe change rather
+   * than a behavioural one.
+   *
+   * What it buys is where the answer LIVES. Admitting a third state later is
+   * then a change to the workflow, not to this function and not to the callers
+   * downstream of it, which is the difference between adding a state and
+   * teaching every reader a new word.
+   *
+   * The single-state assertion is deliberate and is not a limitation of the
+   * model: a workflow with two public states needs a set predicate rather than
+   * an equality, which `statusCondition` does not yet build. Refusing here is
+   * how that arrives as a caught error rather than as rows quietly missing from
+   * every public read.
+   */
+  const publicStates = publicStateNames();
+  if (publicStates.length !== 1) {
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "The content workflow must declare exactly one public state until statusCondition builds a set predicate.",
+        publicStates: [...publicStates],
+      },
+    });
+  }
+  return { value: publicStates[0] };
 }
 
 /**

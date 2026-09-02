@@ -44,6 +44,11 @@ import {
 
 import type { ReleaseDecisions } from "../domains/releases/release-scope";
 
+import {
+  DEFAULT_WORKFLOW,
+  isPublicState,
+  type ContentWorkflow,
+} from "./content-states";
 import type { StatusFilterValue } from "./status-filter";
 
 export interface StatusConditionInput {
@@ -61,6 +66,15 @@ export interface StatusConditionInput {
    * entirely rather than paying for a query that returns them.
    */
   decisions: ReleaseDecisions;
+  /**
+   * The workflow whose flags decide whether {@link StatusConditionInput.filter}
+   * names a public state.
+   *
+   * Defaults to the only workflow that exists today. It is an input rather than
+   * a lookup because the alternative is this module deciding for itself what a
+   * state means, which is the comparison it was written to remove.
+   */
+  workflow?: ContentWorkflow;
 }
 
 /**
@@ -72,15 +86,22 @@ export interface StatusConditionInput {
  */
 export function statusCondition(input: StatusConditionInput): SQL | undefined {
   const { filter, statusColumn, idColumn, decisions } = input;
+  const workflow = input.workflow ?? DEFAULT_WORKFLOW;
   if (filter === null || statusColumn === undefined) return undefined;
 
   const base = eq(statusColumn, filter.value);
 
-  // Only a PUBLISHED read is adjusted. A draft-only read is asking for pending
-  // work: a document a release is about to publish is not that, and one it is
-  // about to withdraw is not pending work either. An unbounded read never
-  // reaches here.
-  if (filter.value !== "published") return base;
+  // Only a PUBLIC read is adjusted. A read bounded to a non-public state is
+  // asking for pending work: a document a release is about to publish is not
+  // that, and one it is about to withdraw is not pending work either. An
+  // unbounded read never reaches here.
+  //
+  // Asked of the workflow rather than compared against the word `published`.
+  // A release publishes into whatever state the workflow calls public, so a
+  // literal here would stop widening the read the moment a team renamed it —
+  // and the failure is invisible: the scheduled publication simply never
+  // appears, on a query that returns rows and looks like it worked.
+  if (!isPublicState(filter.value, workflow)) return base;
   if (idColumn === undefined) return base;
 
   const { reveal, hide } = decisions;
