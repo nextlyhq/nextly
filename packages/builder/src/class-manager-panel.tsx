@@ -35,7 +35,11 @@
  *
  * @module class-manager-panel
  */
-import type { NamedClass, NodeStyles } from "@nextlyhq/blocks-engine";
+import type {
+  NamedClass,
+  NodeStyles,
+  StyleCompileContext,
+} from "@nextlyhq/blocks-engine";
 import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
@@ -44,6 +48,7 @@ import {
   classDeclarations,
   classLibraryHasRoom,
   classRows,
+  usableSiteClasses,
   deletionWarning,
   filterClassRows,
   searchClassRows,
@@ -147,6 +152,11 @@ export interface ClassManagerPanelProps {
    */
   library: readonly NamedClass[] | undefined;
   /**
+   * The context the page is compiled with, forwarded to the row summaries so
+   * they describe the same stylesheet a visitor gets. See `classDeclarations`.
+   */
+  styleContext?: StyleCompileContext;
+  /**
    * Why the library is absent, when it is.
    *
    * A read that FAILED will not finish, and a surface that goes on saying
@@ -248,6 +258,7 @@ export function ClassManagerPanel({
   usage,
   documentClassIds,
   suppliedClassIds,
+  styleContext,
   onRename,
   onDelete,
 }: ClassManagerPanelProps): React.ReactElement {
@@ -269,9 +280,18 @@ export function ClassManagerPanel({
    * slug and class name — so the row would otherwise scan the library for its
    * own entry, once per row, which is the shape that made the token projection
    * quadratic.
+   *
+   * Built from the SURVIVING classes rather than the stored array. Two entries
+   * sharing an id keep the first in compiler order and the last in storage
+   * order, and an entry past `MAX_NAMED_CLASSES` is dropped entirely — so a
+   * map over the raw list could hand a visible row the styles of the entry the
+   * compiler threw away.
    */
   const stylesById = React.useMemo(
-    () => new Map((library ?? []).map(entry => [entry.id, entry.styles])),
+    () =>
+      new Map(
+        usableSiteClasses(library ?? []).map(entry => [entry.id, entry.styles])
+      ),
     [library]
   );
 
@@ -391,6 +411,7 @@ export function ClassManagerPanel({
         usageKnown={usageKnown}
         anyDeletable={anyDeletable}
         stylesById={stylesById}
+        styleContext={styleContext}
         onRename={onRename}
         onDelete={onDelete}
       />
@@ -666,6 +687,7 @@ function ClassList({
   usageKnown,
   anyDeletable,
   stylesById,
+  styleContext,
   onRename,
   onDelete,
 }: {
@@ -694,6 +716,8 @@ function ClassList({
   anyDeletable: boolean;
   /** Each class's styles by id, built once by the panel. */
   stylesById: ReadonlyMap<string, NodeStyles>;
+  /** Forwarded to each row's summary; see `classDeclarations`. */
+  styleContext: StyleCompileContext | undefined;
   onRename: ClassManagerPanelProps["onRename"];
   onDelete?: (classId: string) => void;
 }): React.ReactElement {
@@ -742,6 +766,7 @@ function ClassList({
               pendingSlug={pendingSlugs?.[row.id]}
               library={library}
               styles={stylesById.get(row.id)}
+              styleContext={styleContext}
               isSupplied={supplied.has(row.id)}
               canDelete={rowIsDeletable(row, supplied, onDelete)}
               usageKnown={usageKnown}
@@ -771,6 +796,7 @@ function ClassRowView({
   pendingSlug,
   library,
   styles,
+  styleContext,
   isSupplied,
   canDelete,
   usageKnown,
@@ -786,6 +812,8 @@ function ClassRowView({
    * `stylesById`.
    */
   styles: NodeStyles | undefined;
+  /** Forwarded to the summary; see `classDeclarations`. */
+  styleContext: StyleCompileContext | undefined;
   isSupplied: boolean;
   /**
    * Whether this row may be deleted, decided by `rowIsDeletable` rather than
@@ -821,7 +849,11 @@ function ClassRowView({
           pendingSlug={pendingSlug}
           row={row}
         />
-        <DeclarationSummary styles={styles} slug={row.slug} />
+        <DeclarationSummary
+          styles={styles}
+          slug={row.slug}
+          styleContext={styleContext}
+        />
         <UsageNote row={row} usageKnown={usageKnown} />
         {isSupplied ? (
           // Named rather than shown disabled. A greyed button invites an
@@ -1145,13 +1177,18 @@ function DeleteConfirm({
 function DeclarationSummary({
   styles,
   slug,
+  styleContext,
 }: {
   styles: NodeStyles | undefined;
   slug: string;
+  styleContext: StyleCompileContext | undefined;
 }): React.ReactElement | null {
   const summary = React.useMemo(
-    () => (styles === undefined ? undefined : classDeclarations(styles, slug)),
-    [styles, slug]
+    () =>
+      styles === undefined
+        ? undefined
+        : classDeclarations(styles, slug, styleContext),
+    [styles, slug, styleContext]
   );
   if (summary === undefined) return null;
   if (summary.shown.length === 0 && summary.elsewhere === 0) return null;

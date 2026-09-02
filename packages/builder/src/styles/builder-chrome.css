@@ -2094,10 +2094,13 @@
    * stylesheet on its own.
    */
   --nx-swatch: transparent;
-  flex: 0 0 auto;
-  width: 1.25rem;
-  height: 1.25rem;
-  border: 1px solid var(--nx-border);
+  /*
+   * FILLS the shared slot rather than being a box of its own. Each row owns an
+   * independent `auto` grid column, so a colour slot of a different width put
+   * its fields at a different indent from every other row's.
+   */
+  position: absolute;
+  inset: 0;
   border-radius: var(--radius-sm);
   background-image:
     linear-gradient(var(--nx-swatch), var(--nx-swatch)), var(--nx-checkerboard);
@@ -3187,6 +3190,23 @@
   max-width: 100%;
   border-radius: 1px;
   background: var(--nx-builder-text);
+}
+
+/*
+ * A negative length, drawn on the other side of a centre line.
+ *
+ * The line is what makes the direction readable: without it a bar growing
+ * leftwards from the right edge looks like a shorter bar, and the sign — which
+ * is the whole reason a margin token is negative — disappears.
+ */
+.nx-tokens__preview[data-sign="negative"] {
+  border-inline-start-color: transparent;
+}
+
+.nx-tokens__preview[data-sign="negative"] .nx-tokens__bar {
+  inset-inline-start: auto;
+  inset-inline-end: 0;
+  opacity: 0.55;
 }
 
 /*

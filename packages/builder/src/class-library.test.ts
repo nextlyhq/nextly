@@ -14,7 +14,22 @@
  *
  * @module class-library.test
  */
-import { BASE_BREAKPOINT, compileStyleValues } from "@nextlyhq/blocks-engine";
+import {
+  BASE_BREAKPOINT,
+  compileStyleValues,
+  type StyleCompileContext,
+} from "@nextlyhq/blocks-engine";
+
+/** A site that really does define `md`, so a stored `md` key emits a rule. */
+const WITH_MD: StyleCompileContext = {
+  breakpoints: {
+    viewport: [
+      { id: BASE_BREAKPOINT, label: "Base" },
+      { id: "md", label: "Medium", maxWidth: 768 },
+    ],
+    container: [],
+  },
+};
 import {
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
@@ -714,20 +729,26 @@ describe("what a class writes", () => {
      * product nor a fair sample. Showing only the base without saying so would
      * misdescribe a class whose real behaviour is responsive.
      */
-    const summary = classDeclarations(
-      {
-        base: {
-          [BASE_BREAKPOINT]: { color: "#112233" },
-          md: { color: "#445566" },
-        },
-        hover: { [BASE_BREAKPOINT]: { color: "#778899" } },
+    const styles = {
+      base: {
+        [BASE_BREAKPOINT]: { color: "#112233" },
+        md: { color: "#445566" },
       },
-      "hero"
-    );
+      hover: { [BASE_BREAKPOINT]: { color: "#778899" } },
+    };
+    const summary = classDeclarations(styles, "hero", WITH_MD);
     expect(summary.shown.map(d => d.property)).toEqual(["color"]);
-    // Two places this class also behaves differently: one other breakpoint and
-    // one other state.
+    // Two places this class also behaves differently: one other breakpoint the
+    // site DEFINES, and one other state.
     expect(summary.elsewhere).toBe(2);
+
+    /*
+     * Must-differ, and the point of taking a context at all: on a site that
+     * does NOT define `md`, the compiler emits no rule for it, so the class
+     * behaves no differently there and the count must not claim it does.
+     */
+    const withoutMd = classDeclarations(styles, "hero", undefined);
+    expect(withoutMd.elsewhere).toBe(1);
   });
 
   it("counts a state that sets nothing as nothing", () => {
@@ -735,7 +756,8 @@ describe("what a class writes", () => {
     // class behaves differently, so counting it would inflate the caveat.
     const summary = classDeclarations(
       { base: { [BASE_BREAKPOINT]: { color: "#112233" }, md: {} } },
-      "hero"
+      "hero",
+      WITH_MD
     );
     expect(summary.elsewhere).toBe(0);
   });

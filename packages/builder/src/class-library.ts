@@ -50,6 +50,7 @@
  */
 import {
   BASE_BREAKPOINT,
+  breakpointContexts,
   MAX_CLASSES_PER_NODE,
   MAX_NAMED_CLASSES,
   MAX_NAMED_CLASS_NAME_LENGTH,
@@ -61,6 +62,7 @@ import {
   type Declaration,
   type NamedClass,
   type NodeStyles,
+  type StyleCompileContext,
 } from "@nextlyhq/blocks-engine";
 
 /**
@@ -141,12 +143,18 @@ export interface ClassRow extends ClassChoice {
  * the whole library keeps a tail entry from being offered as though applying it
  * would do something.
  */
-export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
+export function usableSiteClasses(
+  library: readonly NamedClass[]
+): NamedClass[] {
   const bounded =
     library.length > MAX_NAMED_CLASSES
       ? library.slice(0, MAX_NAMED_CLASSES)
       : library;
-  return usableNamedClasses(bounded).map(entry => ({
+  return usableNamedClasses(bounded);
+}
+
+export function siteClasses(library: readonly NamedClass[]): ClassChoice[] {
+  return usableSiteClasses(library).map(entry => ({
     id: entry.id,
     slug: entry.slug,
     className: namedClassName(entry.slug),
@@ -174,6 +182,52 @@ function indexedUsage(usage: ClassUsageCounts, classId: string): number {
 }
 
 /**
+ * Every (state, breakpoint) pair this class stores values under.
+ *
+ * The WALK, separated from the judgement below, because a nested loop carrying
+ * three different reasons to skip a pair is the shape the cognitive gate exists
+ * to catch. Iterating `STYLE_STATES` rather than the record's own keys keeps
+ * the walk to states the engine defines.
+ */
+function storedContexts(
+  styles: NodeStyles
+): { state: string; breakpoint: string; count: number }[] {
+  const pairs: { state: string; breakpoint: string; count: number }[] = [];
+  for (const state of STYLE_STATES) {
+    const byBreakpoint = styles[state];
+    if (byBreakpoint === undefined) continue;
+    for (const breakpoint of Object.keys(byBreakpoint)) {
+      const values = byBreakpoint[breakpoint];
+      pairs.push({
+        state,
+        breakpoint,
+        count: values === undefined ? 0 : Object.keys(values).length,
+      });
+    }
+  }
+  return pairs;
+}
+
+/**
+ * How many of those pairs are a place the class behaves DIFFERENTLY.
+ *
+ * Three things disqualify a pair, and each is a separate fact rather than a
+ * step in a walk: it is the base the row already shows; the compiler emits no
+ * context for that breakpoint, so it writes no rule; or it sets nothing.
+ */
+function contextsElsewhere(
+  styles: NodeStyles,
+  emitted: ReadonlySet<string>
+): number {
+  return storedContexts(styles).filter(
+    pair =>
+      !(pair.state === "base" && pair.breakpoint === BASE_BREAKPOINT) &&
+      emitted.has(pair.breakpoint) &&
+      pair.count > 0
+  ).length;
+}
+
+/**
  * What a class DOES, as the declarations it writes.
  *
  * A row named the class and counted its documents and never said what it was
@@ -195,30 +249,40 @@ function indexedUsage(usage: ClassUsageCounts, classId: string): number {
  */
 export function classDeclarations(
   styles: NodeStyles,
-  slug: string
+  slug: string,
+  /**
+   * The context the PAGE is compiled with, so the summary describes the same
+   * stylesheet the visitor gets.
+   *
+   * Two things come from it and neither can be guessed here. `mayFetchUrl` is
+   * the site's remote-host policy, and compiling without it lists a
+   * declaration the real compile drops. `breakpoints` decides which contexts
+   * are emitted at all, so a class holding styles for a breakpoint the site
+   * has since deleted writes no rule — counting that key would claim behaviour
+   * the page does not have.
+   *
+   * Absent is coherent rather than a gap: `breakpointContexts` answers with
+   * the base context alone, which is what a site with no configured
+   * breakpoints emits.
+   */
+  context?: StyleCompileContext
 ): { shown: readonly Declaration[]; elsewhere: number } {
   const base = styles.base?.[BASE_BREAKPOINT];
   const shown =
     base === undefined
       ? []
-      : compileStyleValues(base, `class:${slug}`).declarations;
-  /*
-   * Counted as (state, breakpoint) PAIRS that hold anything, because that is
-   * what "more elsewhere" means to an author: each pair is a place this class
-   * behaves differently. Iterating `STYLE_STATES` rather than the object's own
-   * keys keeps the walk to states the engine defines.
-   */
-  let elsewhere = 0;
-  for (const state of STYLE_STATES) {
-    const byBreakpoint = styles[state];
-    if (byBreakpoint === undefined) continue;
-    for (const breakpoint of Object.keys(byBreakpoint)) {
-      if (state === "base" && breakpoint === BASE_BREAKPOINT) continue;
-      const values = byBreakpoint[breakpoint];
-      if (values !== undefined && Object.keys(values).length > 0)
-        elsewhere += 1;
-    }
-  }
+      : compileStyleValues(
+          base,
+          `class:${slug}`,
+          undefined,
+          undefined,
+          undefined,
+          { mayFetchUrl: context?.mayFetchUrl }
+        ).declarations;
+  const emitted = new Set(
+    breakpointContexts(context?.breakpoints).map(entry => entry.id)
+  );
+  const elsewhere = contextsElsewhere(styles, emitted);
   return { shown, elsewhere };
 }
 

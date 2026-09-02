@@ -134,13 +134,21 @@ describe("what the studio draws", () => {
     const { container } = render(
       <Panel tokens={unresolvable} onChange={vi.fn()} />
     );
+    /*
+     * Both rows own the same slot; only one of them has a swatch inside it.
+     * Asserting on the SLOT count as well as the swatch count is what keeps
+     * this about painting rather than about the column silently losing a cell.
+     */
+    const slots = Array.from(container.querySelectorAll(".nx-tokens__preview"));
+    expect(slots.length).toBe(2);
     const swatches = Array.from(
       container.querySelectorAll(".nx-tokens__swatch")
     );
+    expect(swatches.length).toBe(1);
     expect(swatches[0]?.getAttribute("style")).toContain("#112233");
     // A `var()` resolves against the PANEL rather than the canvas, so painting
-    // it would show a colour the page does not have.
-    expect(swatches[1]?.getAttribute("data-empty")).toBe("");
+    // it would show a colour the page does not have — the slot stays, empty.
+    expect(slots[1]?.querySelector(".nx-tokens__swatch")).toBeNull();
   });
 });
 
@@ -1274,12 +1282,74 @@ describe("the panel explains itself and shows the whole set", () => {
         { name: "custom.thing", kind: "custom", values: { light: "whatever" } },
       ],
     });
-    expect(document.querySelector(".nx-tokens__preview")).toBeNull();
     expect(document.querySelector(".nx-tokens__bar")).toBeNull();
-    // Every row still carries the empty slot, so the column does not collapse.
+    expect(document.querySelector(".nx-tokens__shadow")).toBeNull();
+    // Every row still carries its slot, EMPTY, so the column does not go ragged
+    // — which is the failure that made colour share this element in the first
+    // place.
+    const slots = Array.from(document.querySelectorAll(".nx-tokens__preview"));
+    expect(slots.length).toBe(3);
+    expect(slots.every(slot => slot.childElementCount === 0)).toBe(true);
+  });
+
+  it("draws no preview for a token the ENGINE refuses to write", () => {
+    /*
+     * Preview eligibility is the engine's verdict, not a second rule here. A
+     * value `checkCssValue` rejects is absent from the page stylesheet, and the
+     * browser may still accept it on an inline `width` — so a panel judging for
+     * itself would draw a preview of a token the page does not carry.
+     */
+    mount({
+      tokens: [
+        { name: "size.ok", kind: "dimension", values: { light: "8px" } },
+        {
+          name: "size.bad",
+          kind: "dimension",
+          values: { light: "8px; color: red" },
+        },
+      ],
+    });
+    // The control: the good one IS drawn, so this is about the refusal rather
+    // than about previews being off altogether.
+    const bars = document.querySelectorAll(".nx-tokens__bar");
+    expect(bars.length).toBe(1);
+    expect((bars[0] as HTMLElement).style.width).toContain("8px");
+  });
+
+  it("keeps a negative length's SIZE and its direction", () => {
+    /*
+     * A dimension token may validly be negative — a margin pulling something
+     * back. CSS refuses a negative `width`, so the declaration was discarded
+     * and `min-width` left the same sliver a zero shows: a working token drawn
+     * as though it had neither size nor direction.
+     */
+    mount({
+      tokens: [
+        { name: "pull.back", kind: "dimension", values: { light: "-8px" } },
+      ],
+    });
+    const bar = document.querySelector<HTMLElement>(".nx-tokens__bar");
+    expect(bar?.style.width).toContain("8px");
     expect(
-      document.querySelectorAll(".nx-tokens__swatch[data-empty]").length
-    ).toBe(3);
+      document.querySelector(".nx-tokens__preview")?.getAttribute("data-sign")
+    ).toBe("negative");
+  });
+
+  it("refuses a length whose SIGN it cannot read", () => {
+    // A bar drawn on the wrong side of the line is worse than none, and a
+    // `calc()` hides its sign behind arithmetic this panel does not do.
+    mount({
+      tokens: [
+        {
+          name: "odd.one",
+          kind: "dimension",
+          values: { light: "calc(4px - 8px)" },
+        },
+      ],
+    });
+    expect(document.querySelector(".nx-tokens__bar")).toBeNull();
+    // The slot stays, so the column does not go ragged.
+    expect(document.querySelector(".nx-tokens__preview")).not.toBeNull();
   });
 
   it("groups every kind that HAS tokens into one list", () => {

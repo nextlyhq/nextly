@@ -997,7 +997,7 @@ function TokenEntry({
 
   return (
     <div className="nx-tokens__row">
-      <TokenPreview kind={row.kind} value={row.value} />
+      <TokenPreview row={row} />
       <div className="nx-tokens__fields">
         <label className="sr-only" htmlFor={`${id}-name`}>
           Name of {row.name}
@@ -1220,10 +1220,25 @@ function suppliedTokenFor(
  * and `custom` holds whatever a site put there; drawing either would be an
  * illustration rather than a preview.
  */
-function drawableValue(kind: TokenKind, value: string): string | undefined {
-  if (kind === "color") return colourHexOf(value, undefined);
-  if (!PREVIEWED_KINDS.has(kind)) return undefined;
-  const own = value.trim();
+function drawableValue(row: TokenRow): string | undefined {
+  /*
+   * The ENGINE decides whether a value is written at all. It refuses on five
+   * conditions this panel must not restate — a name that is not a token name,
+   * no light value, a value `checkCssValue` rejects, a value that would fetch,
+   * and a collision on one custom property — and a value the engine drops but
+   * the browser happens to accept inline would otherwise be previewed as a
+   * token the page does not carry.
+   */
+  if (!row.written) return undefined;
+  if (row.kind === "color") return colourHexOf(row.value, undefined);
+  if (!PREVIEWED_KINDS.has(row.kind)) return undefined;
+  /*
+   * A SECOND question, and the only one that is genuinely this panel's: the
+   * engine writes a `var()` happily, but it resolves against the canvas's
+   * custom properties and this panel has its own — so drawing it here would
+   * show a value the page does not have.
+   */
+  const own = row.value.trim();
   if (own === "" || /var\s*\(/i.test(own)) return undefined;
   return own;
 }
@@ -1236,6 +1251,49 @@ const PREVIEWED_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
   "fontWeight",
   "shadow",
 ]);
+
+/**
+ * A length, drawn as a length.
+ *
+ * Its own component because the sign is a question of its own and answering it
+ * inline put `TokenPreview` past the CRAP gate.
+ */
+function DimensionPreview({ value }: { value: string }): React.JSX.Element {
+  /*
+   * A dimension may validly be NEGATIVE — a margin token pulling something
+   * back. CSS refuses a negative `width`, so the declaration was discarded
+   * and `min-width` left the same sliver a zero shows: a working token drawn
+   * as though it had neither size nor direction.
+   *
+   * The sign is taken off the front of the stored TEXT and reported as a
+   * direction, which is a string operation rather than a parse. A value whose
+   * sign is not visible that way — `calc()` among them — gets no bar at all,
+   * because a bar drawn on the wrong side of the line is worse than none.
+   */
+  const negative = value.startsWith("-");
+  const magnitude = negative ? value.slice(1).trim() : value;
+  if (magnitude === "" || /calc\s*\(/i.test(magnitude)) {
+    return <span className="nx-tokens__preview" aria-hidden="true" />;
+  }
+  return (
+    <span
+      className="nx-tokens__preview"
+      aria-hidden="true"
+      data-sign={negative ? "negative" : undefined}
+    >
+      {/*
+        Capped at the track rather than scaled to it. There is no maximum a
+        token is measured against, so any scale would be invented; a bar that
+        runs to the end says "at least this wide" and claims nothing more.
+
+        The cap is `max-width` in the stylesheet rather than `min()` here, so
+        the width reaching CSS is the stored value itself — a function around
+        it is one more thing that has to parse before anything is drawn.
+      */}
+      <span className="nx-tokens__bar" style={{ width: magnitude }} />
+    </span>
+  );
+}
 
 /**
  * A preview of what the value is, where one can be drawn honestly.
@@ -1252,26 +1310,26 @@ const PREVIEWED_KINDS: ReadonlySet<TokenKind> = new Set<TokenKind>([
  * not one. The panel shows unsaved and invalid values on purpose, so it cannot
  * assume the emitter's guards have already run.
  */
-function TokenPreview({
-  kind,
-  value,
-}: {
-  kind: TokenKind;
-  value: string;
-}): React.JSX.Element {
-  const drawable = drawableValue(kind, value);
+function TokenPreview({ row }: { row: TokenRow }): React.JSX.Element {
+  const kind = row.kind;
+  const drawable = drawableValue(row);
   if (drawable === undefined) {
-    return (
-      <span className="nx-tokens__swatch" aria-hidden="true" data-empty="" />
-    );
+    return <span className="nx-tokens__preview" aria-hidden="true" />;
   }
   if (kind === "color") {
+    /*
+     * The swatch is now the slot's FILL rather than a box of its own. Each row
+     * owns an independent `auto` grid column, so a colour slot narrower than
+     * the others started its fields earlier and produced exactly the ragged
+     * edge one common slot exists to prevent.
+     */
     return (
-      <span
-        className="nx-tokens__swatch"
-        aria-hidden="true"
-        style={{ "--nx-swatch": drawable } as React.CSSProperties}
-      />
+      <span className="nx-tokens__preview" aria-hidden="true">
+        <span
+          className="nx-tokens__swatch"
+          style={{ "--nx-swatch": drawable } as React.CSSProperties}
+        />
+      </span>
     );
   }
   if (kind === "shadow") {
@@ -1282,20 +1340,7 @@ function TokenPreview({
     );
   }
   if (kind === "dimension") {
-    return (
-      <span className="nx-tokens__preview" aria-hidden="true">
-        {/*
-          Capped at the track rather than scaled to it. There is no maximum a
-          token is measured against, so any scale would be invented; a bar that
-          runs to the end says "at least this wide" and claims nothing more.
-
-          The cap is `max-width` in the stylesheet rather than `min()` here, so
-          the width reaching CSS is the stored value itself — a function around
-          it is one more thing that has to parse before anything is drawn.
-        */}
-        <span className="nx-tokens__bar" style={{ width: drawable }} />
-      </span>
-    );
+    return <DimensionPreview value={drawable} />;
   }
   if (kind === "duration") {
     return (

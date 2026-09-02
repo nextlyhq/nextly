@@ -1316,6 +1316,15 @@ describe("the panel explains itself", () => {
         library={[styled]}
         usage={undefined}
         documentClassIds={[]}
+        styleContext={{
+          breakpoints: {
+            viewport: [
+              { id: BASE_BREAKPOINT, label: "Base" },
+              { id: "md", label: "Medium", maxWidth: 768 },
+            ],
+            container: [],
+          },
+        }}
         onRename={vi.fn()}
       />
     );
@@ -1346,6 +1355,41 @@ describe("the panel explains itself", () => {
       />
     );
     expect(document.querySelector(".nx-classman__declares")).toBeNull();
+  });
+
+  it("shows the styles of the class the COMPILER kept, not the last stored", () => {
+    /*
+     * Two entries sharing an id: `usableNamedClasses` keeps the first in
+     * compiler order, while a map over the raw array keeps the last in storage
+     * order. The visible row would then display declarations belonging to the
+     * entry the compiler threw away — a row describing a rule the page does
+     * not have.
+     */
+    const kept: NamedClass = {
+      id: "id-hero",
+      slug: "hero",
+      orderIndex: 0,
+      styles: { base: { [BASE_BREAKPOINT]: { color: "#111111" } } },
+    };
+    const dropped: NamedClass = {
+      id: "id-hero",
+      slug: "hero",
+      orderIndex: 1,
+      styles: { base: { [BASE_BREAKPOINT]: { paddingBlockStart: "4rem" } } },
+    };
+    render(
+      <ClassManagerPanel
+        library={[kept, dropped]}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+      />
+    );
+    const drawn = document.querySelector(".nx-classman__properties");
+    expect(drawn).not.toBeNull();
+    // The survivor's property, and NOT the dropped duplicate's.
+    expect(drawn?.textContent).toContain("color");
+    expect(drawn?.textContent).not.toContain("padding");
   });
 
   it("keeps the filters, because they answer questions that OVERLAP", () => {
