@@ -41,6 +41,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { allWidgets, type CanonicalWidget } from "../domains/widgets/canonical";
+import { refreshCollectionWidgets } from "../domains/widgets/collection-widgets";
 import {
   MAX_LAYOUT_BYTES,
   MAX_PLACEMENTS,
@@ -198,6 +199,11 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
 async function visibleWidgets(
   caller: ReadAccessCaller
 ): Promise<CanonicalWidget[]> {
+  // Same freshness the admin's own payload gets. Without this the endpoint
+  // would place and offer a set derived on some earlier request -- a collection
+  // created since would have no card to add, and one deleted since would still
+  // be offered and then refused on save.
+  await refreshCollectionWidgets();
   const all = allWidgets();
 
   const slugs = [

@@ -23,6 +23,7 @@
 import { getNextlyLogger } from "../../observability/logger";
 import { jsonOnly, unserializableKeys } from "../../plugins/json-round-trip";
 
+import { generatedWidgets } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import { listWidgets } from "./registry";
 
@@ -35,9 +36,14 @@ import { listWidgets } from "./registry";
  * contributed widget, and for the same reason.
  */
 export function publishableWidgets(): WidgetDefinition[] {
-  const publishable: WidgetDefinition[] = [];
+  const byId = new Map<string, WidgetDefinition>();
 
-  for (const definition of listWidgets()) {
+  // Generated cards FIRST, so an explicit registration of the same id replaces
+  // one: a generated widget is core's guess at a useful card, and an author who
+  // registered that id meant something by it. `Map` semantics below make the
+  // last write win, which is why the order is this way round rather than the
+  // reverse.
+  for (const definition of [...generatedWidgets(), ...listWidgets()]) {
     const serializable = jsonOnly(definition);
     if (serializable === undefined) {
       getNextlyLogger().error({
@@ -47,8 +53,9 @@ export function publishableWidgets(): WidgetDefinition[] {
       });
       continue;
     }
-    publishable.push(serializable as unknown as WidgetDefinition);
+    const widget = serializable as unknown as WidgetDefinition;
+    byId.set(widget.id, widget);
   }
 
-  return publishable;
+  return [...byId.values()];
 }

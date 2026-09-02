@@ -16,37 +16,19 @@
  */
 
 /**
- * Field names that conventionally hold a title, in preference order.
+ * Which field NAMES an entry, and the conventional names used when nothing is
+ * nominated.
  *
- * `subject` and `heading` are here because a mail-like or article-like
- * collection names its entries with them, and a reader scanning a list of
- * either sees nothing useful without them.
+ * Re-exported from core rather than defined here. The server resolves the same
+ * question -- the activity feed labels a row with it, and the dashboard's
+ * generated list widgets pick a row label with it before the query is made --
+ * so the rule lives beside the collection domain and both sides ask it. Kept
+ * exported from this module because this is where the admin's entry-title
+ * questions are answered from.
  */
-export const COMMON_TITLE_FIELDS = [
-  "title",
-  "name",
-  "label",
-  "subject",
-  "heading",
-] as const;
+import { COMMON_TITLE_FIELDS, entryTitleField } from "nextly/config";
 
-/**
- * The field that names an entry, from the author's choice then convention.
- *
- * `undefined` where neither applies, so a caller can tell "no conventional
- * title field" from "the title field is empty" and answer each in its own way.
- */
-export function entryTitleField(
-  useAsTitle: string | undefined,
-  fieldNames: readonly string[]
-): string | undefined {
-  // `id` is not a title even when nominated: it is what the fallbacks already
-  // show, and treating it as one would hide a real title field behind it.
-  if (useAsTitle && useAsTitle !== "id" && fieldNames.includes(useAsTitle)) {
-    return useAsTitle;
-  }
-  return COMMON_TITLE_FIELDS.find(name => fieldNames.includes(name));
-}
+export { COMMON_TITLE_FIELDS, entryTitleField };
 
 /**
  * A value counts as a title if it is a scalar with something in it.

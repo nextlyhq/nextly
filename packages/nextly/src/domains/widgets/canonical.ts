@@ -32,6 +32,7 @@
  * @module domains/widgets/canonical
  */
 
+import { generatedWidgets } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import { listWidgets } from "./registry";
 
@@ -142,6 +143,14 @@ export function canonicalWidgets(
   // a card taking another plugin's geometry, or vanishing.
   for (const widget of contributed) {
     if (widget.id && !byId.has(widget.id)) byId.set(widget.id, widget);
+  }
+  // Generated cards sit BETWEEN the two declared channels. A contribution
+  // already holding the id keeps it -- a plugin that declared that widget meant
+  // it, and core's derived guess must not displace it -- while a registration
+  // below still merges over whichever of the two is here, for the same reason.
+  for (const definition of generatedWidgets()) {
+    if (!byId.has(definition.id))
+      byId.set(definition.id, fromRegistration(definition));
   }
   for (const definition of listWidgets()) {
     const registration = fromRegistration(definition);

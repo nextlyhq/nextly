@@ -93,6 +93,7 @@ import { postWidgetQuery } from "./api/widget-query";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
+import { refreshCollectionWidgets } from "./domains/widgets/collection-widgets";
 import { publishableWidgets } from "./domains/widgets/publish";
 import { NextlyError } from "./errors/nextly-error";
 import {
@@ -1504,6 +1505,12 @@ async function buildAdminMeta(): Promise<{
   // half already describes the RUNNING installation rather than the configured
   // one -- `showBuilder` from the live resolver, `customGroups` from the
   // database -- is the same property this relies on.
+  // Re-derived per request, not at boot. A collection drawn in the Schema
+  // Builder exists the moment it is saved, so a set frozen at boot describes an
+  // install that has since changed -- and in production "the next restart" means
+  // the next deploy. This is the same read `refreshCollectionSources` already
+  // performs once per dashboard batch.
+  await refreshCollectionWidgets();
   const registered = publishableWidgets();
   if (registered.length > 0) {
     workspace.widgets = registered;
