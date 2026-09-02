@@ -1113,6 +1113,34 @@ describe("the panel explains itself and shows the whole set", () => {
     expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(100);
   });
 
+  it("reveals a token added PAST the page it would land behind", () => {
+    /*
+     * Clearing the search was only half of it. A new token is appended, so in a
+     * kind that already fills its page it lands after the mounted slice and is
+     * hidden by the CAP rather than by the query — the same invisible write,
+     * one control further on, and pressing Add again would make a second one.
+     */
+    const full: SiteTokenSet = {
+      tokens: Array.from({ length: 60 }, (_, at) => ({
+        name: `color.c${at}`,
+        kind: "color" as const,
+        values: { light: "#111111" },
+      })),
+    };
+    const onChange = vi.fn();
+    const view = render(<Panel tokens={full} onChange={onChange} />);
+    // The control: row 60 is genuinely behind the cap before the add.
+    expect(screen.getAllByDisplayValue(/^color\.c/).length).toBe(50);
+
+    fireEvent.click(screen.getByRole("button", { name: /Add colour token/i }));
+    const next = onChange.mock.calls[0]?.[0] as SiteTokenSet;
+    const made = next.tokens[next.tokens.length - 1];
+    view.rerender(<Panel tokens={next} onChange={onChange} />);
+
+    expect(made).toBeDefined();
+    expect(screen.getByDisplayValue(made!.name)).toBeTruthy();
+  });
+
   it("groups every kind that HAS tokens into one list", () => {
     // The must-be-found half. Three kinds are present, so three headings are.
     mount(MIXED);

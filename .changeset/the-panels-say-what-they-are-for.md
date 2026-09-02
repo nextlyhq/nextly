@@ -32,7 +32,9 @@ vocabulary came before any sentence about what a token does to the site, so an
 author who did not already know the concept had nothing to read.
 
 Each panel now opens with a sentence in the author's words. The tokens panel
-says that changing a token changes every block using it, on every page. The
+says that every block using a token follows it, on every page, and names the
+mode being edited — a token can hold separate light and dark values, and an
+edit reaches only the one on screen. The
 classes panel says a class is a saved set of styles and that you apply one
 beside the style controls — which explains the split rather than leaving the
 absent create button reading as a missing feature.

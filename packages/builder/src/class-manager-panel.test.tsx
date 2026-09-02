@@ -1111,6 +1111,45 @@ describe("the panel explains itself", () => {
     expect(screen.getByText(/Rename them/i)).toBeTruthy();
   });
 
+  it("asks the DRAWN rows whether anything can be deleted", () => {
+    /*
+     * The stored library is not the set on screen. `classRows` goes through
+     * `siteClasses`, which caps the list and drops entries the compiler cannot
+     * use — a duplicate slug among them, where only the first slot is written.
+     *
+     * Here the written row is supplied (no delete control) and the only
+     * non-supplied entry is the duplicate that never renders. Scanning the
+     * stored library said deletion was available; nothing on screen offered it.
+     */
+    const duplicate = [cls("id-hero", "hero", 0), cls("id-ghost", "hero", 1)];
+    const view = render(
+      <ClassManagerPanel
+        library={duplicate}
+        usage={undefined}
+        documentClassIds={[]}
+        suppliedClassIds={["id-hero"]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    // The must-be-found control: the duplicate really is absent from the rows,
+    // so the assertion below is about deletability and not about an empty list.
+    expect(nameField("hero")).toBeTruthy();
+    expect(screen.queryByText(/clear them out/i)).toBeNull();
+
+    // Must-differ: make the drawn row deletable and the promise returns.
+    view.rerender(
+      <ClassManagerPanel
+        library={duplicate}
+        usage={undefined}
+        documentClassIds={[]}
+        onRename={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/clear them out/i)).toBeTruthy();
+  });
+
   it("keeps the filters, because they answer questions that OVERLAP", () => {
     /*
      * Not converted to groups, and this test is why. `filterClassRows` tests

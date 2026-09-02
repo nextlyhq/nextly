@@ -166,6 +166,15 @@ export function TokensPanel({
    * times, on every render — and a search re-ran all of it per character. A
    * DTCG import is not bounded to a size where that stays invisible.
    */
+  /*
+   * The stored position of the row that must be reachable after an add.
+   *
+   * Clearing the search is not enough on its own: a new token is appended, so
+   * in a kind that already fills its page it lands AFTER the mounted slice and
+   * is hidden by the cap instead of by the query — the same invisible-write
+   * failure, one control further on.
+   */
+  const [revealAt, setRevealAt] = React.useState<number | undefined>(undefined);
   const rows = React.useMemo(() => tokenRows(tokens, mode), [tokens, mode]);
   /*
    * Grouped in one pass over that projection, in `TOKEN_KINDS` order so the
@@ -260,6 +269,7 @@ export function TokensPanel({
             </div>
             <TokenList
               rows={group.rows}
+              revealAt={revealAt}
               tokens={tokens}
               supplied={supplied}
               mode={mode}
@@ -271,7 +281,10 @@ export function TokensPanel({
       <AddToken
         tokens={tokens}
         onChange={onChange}
-        onAdded={() => setQuery("")}
+        onAdded={at => {
+          setQuery("");
+          setRevealAt(at);
+        }}
       />
       {/*
        * The transfer control, BELOW the tokens rather than above them.
@@ -760,6 +773,7 @@ const TOKEN_PAGE_SIZE = 50;
 
 function TokenList({
   rows,
+  revealAt,
   tokens,
   supplied,
   mode,
@@ -774,6 +788,14 @@ function TokenList({
    * disagree the moment a filter was added to one of them.
    */
   rows: readonly TokenRow[];
+  /**
+   * A stored position that must be on screen, whatever the page count says.
+   *
+   * Opens exactly far enough to include it rather than lifting the cap: the
+   * cap exists because every row mounts two inputs and a preview, and an add
+   * is no reason to mount a thousand of them.
+   */
+  revealAt: number | undefined;
   tokens: SiteTokenSet;
   supplied: SiteTokenSet | undefined;
   mode: TokenMode;
@@ -788,7 +810,9 @@ function TokenList({
    * to reach the tail because a query matching most names narrows nothing.
    */
   const [pagesOpen, setPagesOpen] = React.useState(1);
-  const limit = pagesOpen * TOKEN_PAGE_SIZE;
+  const reached =
+    revealAt === undefined ? -1 : rows.findIndex(row => row.at === revealAt);
+  const limit = Math.max(pagesOpen * TOKEN_PAGE_SIZE, reached + 1);
   const shown = rows.slice(0, limit);
   const hidden = rows.length - shown.length;
   return (
@@ -849,7 +873,7 @@ function AddToken({
    * `shadow.2`, `shadow.3`, each one also hidden. The tabs could not produce
    * this: they had nothing to narrow with.
    */
-  onAdded: () => void;
+  onAdded: (at: number) => void;
 }): React.JSX.Element {
   const [kind, setKind] = React.useState<TokenKind>("color");
   const id = React.useId();
@@ -875,8 +899,9 @@ function AddToken({
         variant="outline"
         size="sm"
         onClick={() => {
-          onChange(addToken(tokens, kind).tokens);
-          onAdded();
+          const made = addToken(tokens, kind);
+          onChange(made.tokens);
+          onAdded(made.at);
         }}
       >
         Add {TOKEN_KIND_LABELS[kind].toLowerCase()} token

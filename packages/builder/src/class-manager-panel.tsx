@@ -261,13 +261,7 @@ export function ClassManagerPanel({
     () => new Set(suppliedClassIds ?? []),
     [suppliedClassIds]
   );
-  /*
-   * Whether deletion is reachable ANYWHERE, which the callback alone does not
-   * answer: a row draws its delete control only when it is not supplied.
-   */
-  const anyDeletable =
-    onDelete !== undefined &&
-    (library ?? []).some(entry => !supplied.has(entry.id));
+
   /*
    * The name search, which is what makes every class REACHABLE.
    *
@@ -312,10 +306,25 @@ export function ClassManagerPanel({
   }
 
   const usageKnown = usage !== undefined;
-  const rows = searchClassRows(
-    filterClassRows(classRows(library, usage ?? {}, documentClassIds), active),
-    query
-  );
+  /*
+   * Every row this panel can draw, before any narrowing.
+   *
+   * `classRows` goes through `siteClasses`, which caps at `MAX_NAMED_CLASSES`
+   * and drops entries the compiler cannot use — so the stored library is NOT
+   * the set on screen, and asking it a question about the screen gives an
+   * answer about neither.
+   */
+  const visible = classRows(library, usage ?? {}, documentClassIds);
+  /*
+   * Whether deletion is reachable ANYWHERE, which neither the callback nor the
+   * stored library answers on its own. A row draws its delete control only
+   * when it is not supplied, and only if it is drawn at all — so a library
+   * whose one non-supplied entry is malformed, duplicated or past the cap
+   * offers deletion nowhere while both of those weaker tests say it does.
+   */
+  const anyDeletable =
+    onDelete !== undefined && visible.some(row => !supplied.has(row.id));
+  const rows = searchClassRows(filterClassRows(visible, active), query);
 
   return (
     <div className="nx-classman">
