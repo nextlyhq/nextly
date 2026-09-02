@@ -117,3 +117,20 @@ export function jobDisplayStatus(
 export function jobNeedsAttention(status: JobDisplayStatus): boolean {
   return status === "failed";
 }
+
+/**
+ * The STORED states that can produce an attention status.
+ *
+ * The bridge between the derived vocabulary and a SQL predicate. A caller
+ * asking "is anything wrong" wants to ask the database, not to fetch a recent
+ * window and inspect it — a window is the most recent N rows, so a busy queue
+ * hides an older failure inside it and the caller concludes, wrongly, that
+ * nothing is wrong.
+ *
+ * Derived from {@link jobDisplayStatus}: it answers `failed` only for a row
+ * whose stored state is `failed`, so that is the only state to select. Kept
+ * beside the predicate it mirrors, because the two must change together.
+ */
+export const ATTENTION_STATES = [
+  "failed",
+] as const satisfies readonly JobStatusInput["state"][];

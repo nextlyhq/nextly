@@ -1,5 +1,6 @@
 import { lazy } from "react";
 
+import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
 import { RELEASE_SECTION_PERMISSIONS } from "../constants/navigation";
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
@@ -393,10 +394,14 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
 
   // Settings routes
+  // Any grant that reaches SOMETHING in the panel may open the panel's own URL.
+  // Narrowing it to `manage-settings` turned the rail entry into a door that
+  // closed in the face of anyone whose only destination was further in; the
+  // page itself sends them on to the first one they can reach.
   [ROUTES.SETTINGS]: {
     component: SettingsPage,
     type: "private",
-    requiredPermission: "manage-settings",
+    requiredPermission: settingsPanelSlugs(),
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_EMAIL_PROVIDERS]: {

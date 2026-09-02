@@ -67,11 +67,28 @@ erroring to say so. The list is now derived from the navigation, so a
 destination added to the panel reveals it by construction and the same omission
 cannot be made twice.
 
+Two enumerations of the Settings panel became one. Whether the rail entry
+appears and whether `/admin/settings` opens at all were each maintained by hand
+beside the navigation table, so Background Jobs was added to the panel and to
+neither — and fixing only the first produced a rail entry that led to a page
+which turned the operator away. Both now read the table, so a destination added
+to the panel is both visible and reachable by construction.
+
 The failure summary asks the SERVER for one task's jobs. It was fetching the
 global recent window and filtering it, which filters rows a busier task has
 already crowded out: mounted beside a release, it would have stayed silent about
 that release's failure whenever webhook deliveries were noisier. The endpoint
 takes a `slug` and narrows in the query, before the limit.
+
+It also asks for FAILURES rather than sifting recent rows. A window is the most
+recent N jobs, so N healthy ones running after a failure push it out — and a
+summary that looked inside that window would report nothing wrong with the
+confidence of a check it never performed. The endpoint takes stored states, and
+the core publishes which of them need attention.
+
+A long error is readable without a mouse. A clipped line with the full text in a
+`title` is unreachable on touch, which is where a queue often gets checked; a
+long error is now a native disclosure, operable by pointer, touch and keyboard.
 
 A failed read no longer looks like a healthy queue. When the request errors
 there is no data, and rendering nothing there is exactly what "nothing failed"

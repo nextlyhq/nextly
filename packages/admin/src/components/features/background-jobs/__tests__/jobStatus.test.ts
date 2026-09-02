@@ -5,8 +5,8 @@
  * failed, another is scheduled, and nobody needs to act. Presenting it in the
  * same red as a terminal failure is the documented common mistake in queue
  * tooling — it raises an alarm for a self-healing job, and buries the dead one
- * among transient noise. So `failed` is the only destructive pill, and that is
- * asserted rather than left to a reviewer to notice.
+ * among transient noise. `failed` is therefore the only destructive pill, and
+ * the assertion below is what holds that apart.
  */
 import { describe, expect, it } from "vitest";
 

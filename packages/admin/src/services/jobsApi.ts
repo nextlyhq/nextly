@@ -20,6 +20,9 @@ function toQuery(params: ListJobsParams): string {
   if (params.limit !== undefined) search.set("limit", String(params.limit));
   // A blank slug is "no filter"; only a non-empty value narrows the query.
   if (params.slug) search.set("slug", params.slug);
+  if (params.states && params.states.length > 0) {
+    search.set("state", params.states.join(","));
+  }
   const query = search.toString();
   return query ? `?${query}` : "";
 }

@@ -55,6 +55,47 @@ export function dueAt(job: JobListItem): string | null {
   return job.nextAttemptAt ?? job.runAt;
 }
 
+/** Longer than this and the cell offers to expand rather than clipping. */
+const ERROR_INLINE_LIMIT = 90;
+
+/**
+ * A recorded error, readable on every input device.
+ *
+ * A clipped line with the full text in `title` reads fine with a mouse and is
+ * unreadable without one: touch devices have no reliable hover, so the only
+ * complete copy was unreachable on exactly the screens an operator checks a
+ * queue from. A short error is shown whole and wrapped; a long one becomes a
+ * native disclosure, which is operable by pointer, touch and keyboard alike and
+ * needs no script.
+ */
+const JobErrorCell: React.FC<{ error: string | null }> = ({ error }) => {
+  if (error === null) {
+    return <span className="text-sm text-muted-foreground">-</span>;
+  }
+  if (error.length <= ERROR_INLINE_LIMIT) {
+    return (
+      <span className="block max-w-80 font-mono text-xs break-words text-muted-foreground">
+        {error}
+      </span>
+    );
+  }
+  return (
+    <details className="max-w-80 group">
+      <summary className="cursor-pointer list-none font-mono text-xs text-muted-foreground marker:content-none">
+        <span className="line-clamp-2 break-words group-open:hidden">
+          {error}
+        </span>
+        <span className="underline underline-offset-2 group-open:hidden">
+          Show full error
+        </span>
+      </summary>
+      <span className="mt-1 block font-mono text-xs break-words whitespace-pre-wrap text-muted-foreground">
+        {error}
+      </span>
+    </details>
+  );
+};
+
 export interface JobsTableProps {
   rows: JobListItem[];
   isLoading?: boolean;
@@ -107,19 +148,7 @@ export const JobsTable: React.FC<JobsTableProps> = ({
         // to deliver.
         name: "lastError",
         header: "Last error",
-        cell: ({ row }) =>
-          row.lastError === null ? (
-            <span className="text-sm text-muted-foreground">-</span>
-          ) : (
-            // Full text in the tooltip: the truncation is for the table's
-            // shape, and an error an operator cannot read is not reported.
-            <span
-              className="block max-w-80 truncate font-mono text-xs text-muted-foreground"
-              title={row.lastError}
-            >
-              {row.lastError}
-            </span>
-          ),
+        cell: ({ row }) => <JobErrorCell error={row.lastError} />,
       },
       {
         name: "dueAt",

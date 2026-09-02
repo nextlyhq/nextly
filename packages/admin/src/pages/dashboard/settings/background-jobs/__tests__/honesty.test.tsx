@@ -6,8 +6,7 @@
  * the whole story; if finished jobs are pruned and the screen does not say so,
  * a job that ran last week and was cleaned up is indistinguishable from one
  * that never ran. Both conclusions are wrong in the direction that stops
- * someone looking further, which is why they are asserted rather than trusted
- * to a reviewer's eye.
+ * someone looking further, so both sentences are asserted here.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -125,6 +124,27 @@ describe("what the background jobs screen admits to", () => {
       window_([job({ status: "failed", lastError: "smtp refused" })], false)
     );
     render(<BackgroundJobsContent />);
-    expect(screen.getAllByTitle("smtp refused").length).toBeGreaterThan(1);
+    // Asserted on the TEXT rather than a tooltip: a `title` is unreachable on a
+    // touch device, so an error that lives only there is not reported at all on
+    // the screens an operator checks a queue from.
+    expect(screen.getAllByText("smtp refused").length).toBeGreaterThan(1);
+  });
+
+  it("offers a long error as an operable disclosure, not a clipped line", () => {
+    /*
+     * A clipped line plus `title` reads fine with a mouse and is unreadable
+     * without one. A native disclosure works by pointer, touch and keyboard,
+     * and the full text is in the DOM either way — so the reason is reachable
+     * rather than merely present.
+     */
+    const long = `connect ECONNREFUSED 10.0.0.5:587 ${"x".repeat(120)}`;
+    useJobs.mockReturnValue(
+      window_([job({ status: "failed", lastError: long })], false)
+    );
+    render(<BackgroundJobsContent />);
+    const disclosures = screen.getAllByText("Show full error");
+    expect(disclosures.length).toBeGreaterThan(0);
+    // The whole message is present, not a prefix of it.
+    expect(screen.getAllByText(long).length).toBeGreaterThan(0);
   });
 });

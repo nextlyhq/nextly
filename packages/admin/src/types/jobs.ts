@@ -13,6 +13,7 @@
 import { DEFAULT_RETENTION_MS } from "nextly/api/jobs-list-types";
 
 export {
+  ATTENTION_STATES,
   DEFAULT_RETENTION_MS,
   JOB_DISPLAY_STATUSES,
   jobNeedsAttention,
@@ -38,6 +39,14 @@ export interface ListJobsParams {
    * missing from a result that looks complete.
    */
   slug?: string;
+  /**
+   * Restrict to these STORED states.
+   *
+   * How a caller asks "did anything fail" without scanning a window: the
+   * endpoint answers "the most recent N", so looking for failures inside that
+   * window finds none whenever N healthy jobs ran more recently.
+   */
+  states?: readonly string[];
 }
 
 /** The window sizes the screen offers. The endpoint's own ceiling is 200. */

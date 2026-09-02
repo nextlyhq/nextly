@@ -211,3 +211,54 @@ export function visibleSettingsNav(
     }))
     .filter(group => group.items.length > 0 || group.pluginPlacement);
 }
+
+/** Any grant that reaches the API-keys screen; the panel gates it as a capability. */
+const API_KEY_SLUGS = [
+  "read-api-keys",
+  "create-api-keys",
+  "update-api-keys",
+  "delete-api-keys",
+] as const;
+
+/** Any grant that reaches the webhooks screen, for the same reason. */
+const WEBHOOK_SLUGS = [
+  "read-webhooks",
+  "update-webhooks",
+  "create-webhooks",
+] as const;
+
+/**
+ * Every grant that reaches SOMETHING in the Settings panel.
+ *
+ * Read off the table rather than listed beside it, and consumed by three
+ * separate decisions that were each maintained by hand: whether the rail entry
+ * appears, whether `/admin/settings` opens at all, and which destination a
+ * viewer without `manage-settings` lands on. Background Jobs was added to the
+ * panel and to none of the three, so the destination passed its own gate while
+ * the rail was suppressed — and once the rail was fixed, the link led to a page
+ * that bounced. A destination added here now satisfies all three by
+ * construction.
+ *
+ * User Management is excluded deliberately. Those destinations answer to
+ * `canViewUsers` and `canViewRoles`, which the rail consults separately, and
+ * folding them in would widen every consumer of the settings capability to
+ * anybody who may read users.
+ */
+export function settingsPanelSlugs(): string[] {
+  const slugs = new Set<string>();
+  for (const group of SETTINGS_NAV) {
+    if (group.id === "users") continue;
+    for (const item of group.items) {
+      if (item.gate.kind === "permission") {
+        slugs.add(item.gate.permission);
+        continue;
+      }
+      for (const slug of item.gate.capability === "apiKeys"
+        ? API_KEY_SLUGS
+        : WEBHOOK_SLUGS) {
+        slugs.add(slug);
+      }
+    }
+  }
+  return [...slugs];
+}

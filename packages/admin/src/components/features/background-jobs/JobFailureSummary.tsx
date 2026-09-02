@@ -28,6 +28,7 @@ import { ROUTES } from "@admin/constants/routes";
 import { useJobs } from "@admin/hooks/queries/useJobs";
 import { useCan } from "@admin/hooks/useCan";
 import {
+  ATTENTION_STATES,
   DEFAULT_JOB_RETENTION_DAYS,
   jobNeedsAttention,
   type JobListItem,
@@ -88,7 +89,16 @@ export const JobFailureSummary: React.FC<JobFailureSummaryProps> = ({
   // notice would stay silent about exactly the failure it was mounted to
   // report.
   const { data, isError } = useJobs(
-    { limit, ...(slug === undefined ? {} : { slug }) },
+    {
+      limit,
+      ...(slug === undefined ? {} : { slug }),
+      // Ask for the jobs that NEED ATTENTION, rather than for recent jobs to
+      // sift. A window of the most recent rows cannot answer "did anything
+      // fail": N healthy jobs running afterwards push the failure out of it,
+      // and the notice then reports silence with the confidence of a check it
+      // never performed.
+      states: ATTENTION_STATES,
+    },
     { enabled: canRead }
   );
 

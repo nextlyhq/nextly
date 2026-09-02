@@ -22,6 +22,7 @@ import type { JobDisplayStatus } from "../domains/jobs/job-display-status";
 import type { JobState } from "../schemas/jobs";
 
 export {
+  ATTENTION_STATES,
   JOB_DISPLAY_STATUSES,
   jobNeedsAttention,
   type JobDisplayStatus,

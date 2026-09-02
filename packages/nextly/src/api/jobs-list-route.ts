@@ -29,6 +29,7 @@ import { container } from "../di";
 import { jobDisplayStatus } from "../domains/jobs/job-display-status";
 import type { JobsRepository } from "../domains/jobs/jobs-repository";
 import { getCachedNextly } from "../init";
+import { JOB_STATES, type JobState } from "../schemas/jobs";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
 
 import { PRIVATE_NO_STORE_HEADERS } from "./authenticated-read";
@@ -57,6 +58,27 @@ const MAX_LIMIT = 200;
 function readSlug(request: Request): string | undefined {
   const raw = new URL(request.url).searchParams.get("slug");
   return raw === null || raw.length === 0 ? undefined : raw;
+}
+
+/**
+ * The stored states to restrict the window to, or `undefined` for every state.
+ *
+ * A caller asking "did anything fail" must be able to ask the DATABASE. This
+ * endpoint answers "the most recent N", so a caller that fetched the window and
+ * looked for failures inside it would find none whenever N healthy jobs ran
+ * more recently — and would report that nothing failed, which is the one wrong
+ * answer such a question has.
+ *
+ * Unrecognised names are dropped rather than refused: the parameter narrows a
+ * read, so a name this build does not know can only ever widen the result if
+ * honoured, and dropping it keeps the query to states that exist.
+ */
+function readStates(request: Request): JobState[] | undefined {
+  const raw = new URL(request.url).searchParams.get("state");
+  if (raw === null || raw.length === 0) return undefined;
+  const asked = raw.split(",").map(value => value.trim());
+  const known = JOB_STATES.filter(state => asked.includes(state));
+  return known.length === 0 ? undefined : [...known];
 }
 
 /** Clamped rather than refused: a caller asking for too much gets the ceiling. */
@@ -112,9 +134,11 @@ export const listJobsRoute = withErrorHandler(async (request: Request) => {
    * a result that looks complete. The filter has to happen before the limit or
    * it does not happen at all.
    */
+  const states = readStates(request);
   const window = await repository.listRecent({
     limit: limit + 1,
     ...(slug === undefined ? {} : { slug }),
+    ...(states === undefined ? {} : { states }),
   });
   const hasNext = window.length > limit;
   const rows = hasNext ? window.slice(0, limit) : window;

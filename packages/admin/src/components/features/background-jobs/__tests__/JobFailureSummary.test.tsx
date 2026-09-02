@@ -11,6 +11,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import {
+  ATTENTION_STATES,
   JOB_DISPLAY_STATUSES,
   jobNeedsAttention,
   type JobListItem,
@@ -149,6 +150,25 @@ describe("JobFailureSummary", () => {
     useJobs.mockReturnValue({ data: undefined, isError: true });
     render(<JobFailureSummary />);
     expect(screen.getByRole("status")).toHaveTextContent(/could not be read/i);
+  });
+
+  it("asks the database for FAILURES rather than sifting a recent window", () => {
+    /*
+     * The silence this closes. A window is the most recent N rows, so N healthy
+     * jobs running after a failure push it out — and a summary that looked
+     * inside that window would report nothing wrong, with the confidence of a
+     * check it never performed. Asking for the attention states makes the
+     * question one the database answers.
+     */
+    useJobs.mockReturnValue(holding([]));
+    render(<JobFailureSummary />);
+    expect(useJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ states: ATTENTION_STATES }),
+      expect.anything()
+    );
+    // The premise: the core really names at least one such state, so this is
+    // not an empty filter that selects everything.
+    expect(ATTENTION_STATES.length).toBeGreaterThan(0);
   });
 
   it("asks the SERVER for one task rather than filtering the window", () => {

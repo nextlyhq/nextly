@@ -18,6 +18,7 @@ import { buildCapabilities } from "@admin/hooks/useCurrentUserPermissions";
 import {
   SETTINGS_NAV,
   isSettingsNavItemVisible,
+  settingsPanelSlugs,
   type SettingsNavAccess,
 } from "@admin/components/layout/sidebar/lib/settings-nav";
 import { routeConfig } from "@admin/pages/registry";
@@ -147,6 +148,27 @@ describe("the RAIL above that entry, which the item's own gate cannot see", () =
         true
       );
     }
+  });
+});
+
+describe("the panel's own URL, which the rail entry actually points at", () => {
+  /*
+   * The third place this journey can break, after the rail gate and the
+   * destination's gate. `/admin/settings` is both the panel's URL and the
+   * General settings page, so guarding it on `manage-settings` turned the rail
+   * entry into a door that closed in the face of anyone whose only destination
+   * was further in: they saw the link, clicked it, and were returned to the
+   * dashboard.
+   */
+  it("opens for every grant that reaches something in the panel", () => {
+    const guard = routeConfig[ROUTES.SETTINGS]?.requiredPermission;
+    const accepted = Array.isArray(guard) ? guard : [guard];
+    for (const slug of settingsPanelSlugs()) {
+      expect(accepted, slug).toContain(slug);
+    }
+    // The premise: the panel really declares several grants, so this is not a
+    // one-element list agreeing with itself.
+    expect(settingsPanelSlugs().length).toBeGreaterThan(3);
   });
 });
 

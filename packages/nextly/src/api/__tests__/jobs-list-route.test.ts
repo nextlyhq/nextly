@@ -25,6 +25,9 @@ let requestedLimit = 0;
 /** What task the QUERY was narrowed to, if any. */
 let requestedSlug: string | undefined;
 
+/** Which stored states the QUERY was narrowed to, if any. */
+let requestedStates: readonly string[] | undefined;
+
 /** Rows the fake repository holds; each test sets its own count. */
 let stored: JobSummaryRow[] = [];
 
@@ -52,9 +55,11 @@ const repository = {
   listRecent: async (input: {
     limit: number;
     slug?: string;
+    states?: readonly string[];
   }): Promise<JobSummaryRow[]> => {
     requestedLimit = input.limit;
     requestedSlug = input.slug;
+    requestedStates = input.states;
     // Narrowed HERE, before the limit, exactly as the repository does it.
     const matching =
       input.slug === undefined
@@ -195,6 +200,26 @@ describe("GET /api/jobs", () => {
     stored = [job("j1")];
     await listJobsRoute(request("?slug="));
     expect(requestedSlug).toBeUndefined();
+  });
+
+  it("narrows to the asked-for stored states", async () => {
+    // How a caller asks "did anything fail" without scanning a window: N
+    // healthy jobs running after a failure would push it out of the recent
+    // rows, and the caller would report nothing wrong.
+    stored = [job("j1")];
+    await listJobsRoute(request("?state=failed"));
+    expect(requestedStates).toEqual(["failed"]);
+  });
+
+  it("drops a state name it does not recognise rather than querying it", async () => {
+    // The parameter narrows a read. A name this build does not know cannot be
+    // honoured, and querying it verbatim would return nothing while looking
+    // like a successful check.
+    stored = [job("j1")];
+    await listJobsRoute(request("?state=failed,not-a-state"));
+    expect(requestedStates).toEqual(["failed"]);
+    await listJobsRoute(request("?state=not-a-state"));
+    expect(requestedStates).toBeUndefined();
   });
 
   it("refuses a caller without the jobs permission", async () => {
