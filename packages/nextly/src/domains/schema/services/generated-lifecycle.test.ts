@@ -43,8 +43,7 @@ describe("the rendered members", () => {
   it("is neither optional nor nullable", () => {
     // The column is NOT NULL DEFAULT 'draft', so a read always has a value.
     // Offering `?` or `| null` would describe a state the database cannot
-    // produce, which is the same error this module's neighbour fixed in the
-    // opposite direction for nullable columns.
+    // produce.
     expect(lifecycleStatusMember()).not.toContain("status?:");
     expect(lifecycleStatusMember()).not.toContain("| null");
   });
@@ -53,7 +52,7 @@ describe("the rendered members", () => {
 describe("a collection that declares the lifecycle", () => {
   it("gets it in BOTH generated artifacts", () => {
     // Both, because a payload valid against one must be valid against the
-    // other — the drift that produced this file's neighbour.
+    // other.
     const ts = new TypeGenerator().generateTypesFile([collection(true)]).code;
     const zod = new ZodGenerator().generateSchema(collection(true)).code;
 
