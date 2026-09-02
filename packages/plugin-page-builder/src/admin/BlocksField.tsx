@@ -97,6 +97,8 @@ import {
   ClassManagerPanel,
   type ClassCreation,
   FontsPanel,
+  type FontsPanelProps,
+  type FontFaceUpload,
   type ClassRenameOutcome,
 } from "@nextlyhq/builder/shell";
 import {
@@ -106,6 +108,7 @@ import {
   useEntryFieldsPanel,
   useReportUnsavedWork,
   useSuppressAdminChrome,
+  useUploadMedia,
 } from "@nextlyhq/plugin-sdk/admin";
 // From @nextlyhq/ui rather than sonner: the Toaster the admin mounts is ui's,
 // and sonner keeps its queue in module state, so a toast published into another
@@ -997,6 +1000,123 @@ function nextOrderIndex(library: readonly NamedClass[]): number {
         : highest,
     0
   );
+}
+
+/**
+ * Store a font file on this site, then declare the `@font-face` that loads it.
+ *
+ * Two writes that have to happen in this order and cannot be one: the file must
+ * exist and have an id before anything can point at it, and a face pointing at
+ * an id that was never stored is a family the page silently fails to load.
+ *
+ * The face is built from what upload validation SETTLED on rather than from
+ * what the browser guessed — `media.mimeType` is the type the bytes were proved
+ * to be, so the `format()` hint in the emitted rule cannot disagree with the
+ * file the route will serve.
+ *
+ * @param stored - The faces already declared, which the new one is appended to
+ * @returns A writer answering with a message when it refused, `undefined` when
+ *   the face is stored
+ */
+function useFontFaceWriter(
+  stored: readonly FontFaceDef[] | undefined
+): (request: FontFaceUpload) => Promise<string | undefined> {
+  const { save: saveSiteStyle } = useSaveSiteStyle();
+  const { mutateAsync: uploadMedia } = useUploadMedia();
+
+  return useCallback(
+    async (request: FontFaceUpload): Promise<string | undefined> => {
+      let media;
+      try {
+        media = await uploadMedia({ file: request.file });
+      } catch (reason) {
+        /*
+         * The upload's own refusal, which is the one an author can act on: it
+         * names the format, the size cap or the signature mismatch. Replacing
+         * it with wording of our own would describe a policy this surface does
+         * not hold.
+         */
+        return reason instanceof Error
+          ? reason.message
+          : "That file could not be uploaded.";
+      }
+
+      const face: FontFaceDef = {
+        family: request.family,
+        /*
+         * The route that serves bytes to a reader with no session. A stored
+         * media URL is not usable here: `validateFontFace` refuses anything
+         * carrying a scheme or an authority, and a backend that stores absolute
+         * URLs would produce exactly that.
+         */
+        src: [
+          {
+            url: `/api/media/${media.id}/raw`,
+            format: fontFormatFor(media.mimeType),
+          },
+        ],
+        weight: request.weight,
+        style: request.style,
+      };
+
+      const result = await saveSiteStyle("fonts", [...(stored ?? []), face]);
+      if (result.saved) return undefined;
+      /*
+       * Joined rather than picked from, for the reason the breakpoint writer
+       * joins: `issues` is keyed by path, and taking the first tells an author
+       * about one refused field while a second is also refused.
+       */
+      const reasons = Object.values(result.issues);
+      return reasons.length > 0
+        ? reasons.join(" ")
+        : "That font could not be saved.";
+    },
+    [saveSiteStyle, stored, uploadMedia]
+  );
+}
+
+/**
+ * The fonts panel, with the writer that adds a face.
+ *
+ * Its own component rather than another hook in the editor: the editor already
+ * carries more state than one screen can hold, and a panel that needs a writer
+ * is the thing that should own it. The upload also concerns nobody else on this
+ * surface, so the editor gains one element and no new state.
+ */
+function FontsPanelWithUpload({
+  faces,
+  tokens,
+  absence,
+  onOpenTokens,
+  storedFaces,
+}: FontsPanelProps & {
+  storedFaces: readonly FontFaceDef[] | undefined;
+}): React.JSX.Element {
+  const addFontFace = useFontFaceWriter(storedFaces);
+  return (
+    <FontsPanel
+      absence={absence}
+      faces={faces}
+      onAddFace={addFontFace}
+      onOpenTokens={onOpenTokens}
+      tokens={tokens}
+    />
+  );
+}
+
+/**
+ * The `format()` hint for a validated media type.
+ *
+ * Derived from the type upload validation settled on, so it names the file
+ * that will actually be served. An unrecognised type contributes no hint at
+ * all rather than a guessed one: `format()` is advisory, and a browser told
+ * the wrong format skips the source entirely.
+ */
+function fontFormatFor(mimeType: string): string | undefined {
+  const settled = mimeType.toLowerCase().trim();
+  if (settled === "font/woff2") return "woff2";
+  if (settled === "font/woff") return "woff";
+  return undefined;
 }
 
 function useBreakpointWriter(
@@ -2227,7 +2347,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
               />
             ),
             fonts: () => (
-              <FontsPanel
+              <FontsPanelWithUpload
                 faces={offerableFaces(
                   canvasSiteStyle,
                   siteStylePending,
@@ -2247,6 +2367,7 @@ function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
                   the right panel and the right row themselves.
                 */
                 onOpenTokens={() => requestPanel("tokens")}
+                storedFaces={configSiteStyle?.fonts}
               />
             ),
             /*

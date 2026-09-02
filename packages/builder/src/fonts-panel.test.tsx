@@ -12,11 +12,19 @@
  * @module fonts-panel.test
  */
 import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import * as React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FontsPanel } from "./fonts-panel";
+import type { FontFaceUpload } from "./fonts-panel";
 
 afterEach(cleanup);
 
@@ -287,5 +295,162 @@ describe("the panel over a site that has been read", () => {
     render(<FontsPanel faces={[]} tokens={{ tokens: [] }} />);
     expect(screen.getByText(/loads no font files of its own/)).toBeTruthy();
     expect(screen.getByText(/no typeface tokens yet/)).toBeTruthy();
+  });
+});
+
+describe("adding a font file", () => {
+  const woff2 = (name: string): File =>
+    new File([new Uint8Array([0x77, 0x4f, 0x46, 0x32])], name, {
+      type: "font/woff2",
+    });
+
+  /** Choose a file the way a picker does, since jsdom has no picker. */
+  async function chooseFile(file: File): Promise<void> {
+    const input = screen.getByLabelText("Font file") as HTMLInputElement;
+    Object.defineProperty(input, "files", { value: [file], writable: false });
+    await act(async () => {
+      fireEvent.change(input);
+    });
+  }
+
+  it("offers NO control when the host cannot store a file", () => {
+    /*
+     * Absent rather than disabled. A host with no media pipeline cannot store
+     * anything, and a greyed-out button is a promise that something is coming.
+     */
+    render(<FontsPanel faces={[face("Brand")]} tokens={tokens} />);
+    expect(screen.queryByLabelText("Font file")).toBeNull();
+    expect(screen.queryByRole("button", { name: /add font file/i })).toBeNull();
+  });
+
+  it("hands the host the file and the descriptors the author stated", async () => {
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(
+      <FontsPanel
+        faces={[face("Brand")]}
+        onAddFace={onAddFace}
+        tokens={tokens}
+      />
+    );
+
+    await chooseFile(woff2("Inter-BoldItalic.woff2"));
+    fireEvent.change(screen.getByLabelText("Weight"), {
+      target: { value: "700" },
+    });
+    fireEvent.change(screen.getByLabelText("Style"), {
+      target: { value: "italic" },
+    });
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(onAddFace).toHaveBeenCalledTimes(1);
+    const request = onAddFace.mock.calls[0]?.[0];
+    expect(request?.file.name).toBe("Inter-BoldItalic.woff2");
+    // The family is prefilled from the stem; the weight and style are NOT
+    // inferred from it, because a wrong one loads and silently matches nothing.
+    expect(request?.family).toBe("Inter");
+    expect(request?.weight).toBe("700");
+    expect(request?.style).toBe("italic");
+  });
+
+  it("does not overwrite a family the author already typed", async () => {
+    /*
+     * The prefill is a convenience, and a convenience that discards typing is
+     * not one. Re-picking a file is the ordinary way to correct a mistake.
+     */
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    fireEvent.change(screen.getByLabelText("Family"), {
+      target: { value: "Founders Grotesk" },
+    });
+    await chooseFile(woff2("Inter-Regular.woff2"));
+
+    expect((screen.getByLabelText("Family") as HTMLInputElement).value).toBe(
+      "Founders Grotesk"
+    );
+  });
+
+  it("shows the host's refusal and KEEPS what the author entered", async () => {
+    /*
+     * A refusal an author can act on has to leave the thing being refused on
+     * screen. Clearing the form would make the fix a re-entry.
+     */
+    const onAddFace = vi.fn(
+      async (_request: FontFaceUpload) => "That file is not a font."
+    );
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe(
+      "That file is not a font."
+    );
+    expect((screen.getByLabelText("Family") as HTMLInputElement).value).toBe(
+      "Inter"
+    );
+  });
+
+  it("clears the file and family once the host stored one", async () => {
+    // The control for the case above: without it, "keeps the fields" is also
+    // satisfied by a form that never clears them.
+    const onAddFace = vi.fn(async (_request: FontFaceUpload) => undefined);
+    render(<FontsPanel faces={[]} onAddFace={onAddFace} tokens={tokens} />);
+
+    await chooseFile(woff2("Inter-Regular.woff2"));
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("button", { name: /add font file/i }));
+    });
+
+    expect((screen.getByLabelText("Family") as HTMLInputElement).value).toBe(
+      ""
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("the faces this site loads", () => {
+  it("groups the cuts of one family under its name", () => {
+    /*
+     * Adding a typeface means adding its regular, its bold and its italic, and
+     * a flat list repeats the name down the panel while saying nothing about
+     * which weights the family covers.
+     */
+    const brand = (weight: string, style?: string): FontFaceDef => ({
+      family: "Brand",
+      src: [{ url: `/fonts/${weight}${style ?? ""}.woff2`, format: "woff2" }],
+      weight,
+      ...(style !== undefined && { style }),
+    });
+
+    render(
+      <FontsPanel
+        faces={[brand("400"), brand("700"), brand("400", "italic")]}
+        tokens={tokens}
+      />
+    );
+
+    /*
+     * Scoped to the faces section. The tokens section below names the same
+     * family — that is the join this panel exists for — so an unscoped query
+     * matches text this case is not about and would report two headings for a
+     * grouping that produced one.
+     */
+    const listed = within(
+      screen.getByRole("region", { name: "Font files this site loads" })
+    );
+    expect(listed.getAllByText("Brand")).toHaveLength(1);
+    expect(listed.getByText("400")).toBeTruthy();
+    expect(listed.getByText("700")).toBeTruthy();
+    expect(listed.getByText("400 Italic")).toBeTruthy();
+  });
+
+  it("calls a face declaring neither weight nor style the Regular", () => {
+    render(<FontsPanel faces={[face("Brand")]} tokens={tokens} />);
+    expect(screen.getByText("Regular")).toBeTruthy();
   });
 });

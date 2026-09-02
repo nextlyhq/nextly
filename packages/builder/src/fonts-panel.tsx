@@ -39,6 +39,7 @@
 import { cssString } from "@nextlyhq/blocks-engine";
 import type { FontFaceDef, SiteTokenSet } from "@nextlyhq/blocks-engine";
 import type * as React from "react";
+import { useState } from "react";
 
 import {
   emittableFaces,
@@ -70,6 +71,38 @@ export interface FontsPanelProps {
    * than the field is what keeps one editor for one question.
    */
   onOpenTokens?: () => void;
+  /**
+   * Add a font file to this site, when the host can store one.
+   *
+   * Optional, and its absence hides the control rather than disabling it: a
+   * host with no media pipeline cannot store a file, and a disabled button is
+   * a promise that something is coming.
+   *
+   * The panel does not upload — it cannot reach a media pipeline from here,
+   * and should not. It collects what only an author knows, which is which
+   * family this file belongs to and which weight and style within it, and
+   * hands the host a file. Resolves to a message when the host refused and to
+   * `undefined` when it stored one: the shape every other writer in this
+   * editor already answers with.
+   */
+  onAddFace?: (request: FontFaceUpload) => Promise<string | undefined>;
+}
+
+/**
+ * A font file and the descriptors an author states for it.
+ *
+ * The weight and style are asked for rather than read from the file, because
+ * getting them wrong is silent: a face declaring `400` for a bold file loads,
+ * matches nothing the author meant, and the page renders in the fallback with
+ * no error anywhere. A filename is a guess about them; the author is not.
+ */
+export interface FontFaceUpload {
+  file: File;
+  family: string;
+  /** `400`, `700`, or a variable range such as `100 900`. */
+  weight: string;
+  /** `normal` or `italic`. */
+  style: string;
 }
 
 /** The specimen, one sentence with ascenders, descenders and round forms. */
@@ -429,18 +462,218 @@ function FaceList({
       </p>
     );
   }
+  /*
+   * Grouped by family, because that is the unit an author thinks in: adding a
+   * typeface means adding its regular, its bold and its italic, and a flat list
+   * repeats the same name down the panel while saying nothing about which
+   * weights the family actually covers. The grouping is by the name AS WRITTEN,
+   * for the reason `hostedFamilies` lowercases only for comparison — two faces
+   * spelled differently declare different families to the browser, and drawing
+   * them under one heading would claim a coverage the page does not have.
+   */
+  const families = new Map<string, FontFaceDef[]>();
+  for (const face of emittable) {
+    const group = families.get(face.family);
+    if (group === undefined) families.set(face.family, [face]);
+    else group.push(face);
+  }
+
   return (
     <ul className="nx-fonts__faces">
-      {emittable.map(face => (
-        <li className="nx-fonts__face" key={faceKey(face)}>
-          <span className="nx-fonts__face-name">{face.family}</span>
-          <span className="nx-fonts__specimen" style={faceSpecimenStyle(face)}>
-            {specimenFor(face)}
-          </span>
+      {[...families].map(([family, group]) => (
+        <li className="nx-fonts__family-group" key={family}>
+          <span className="nx-fonts__face-name">{family}</span>
+          <ul className="nx-fonts__family-faces">
+            {group.map(face => (
+              <li className="nx-fonts__face" key={faceKey(face)}>
+                <span className="nx-fonts__face-cut">{faceCut(face)}</span>
+                <span
+                  className="nx-fonts__specimen"
+                  style={faceSpecimenStyle(face)}
+                >
+                  {specimenFor(face)}
+                </span>
+              </li>
+            ))}
+          </ul>
         </li>
       ))}
     </ul>
   );
+}
+
+/**
+ * Which cut of the family a face is, in the words a type foundry uses.
+ *
+ * A face declaring neither is the family's ordinary weight, and saying
+ * "400 normal" for it would be louder than the fact deserves — the row exists
+ * to distinguish cuts, so an undistinguished one says "Regular".
+ */
+function faceCut(face: FontFaceDef): string {
+  const weight = face.weight?.trim() ?? "";
+  const italic = face.style?.trim().toLowerCase() === "italic";
+  if (weight === "" && !italic) return "Regular";
+  return [weight, italic ? "Italic" : ""].filter(part => part !== "").join(" ");
+}
+
+/**
+ * The family a filename suggests, as a starting point the author can correct.
+ *
+ * `Inter-BoldItalic.woff2` is `Inter`: the stem up to the first separator, with
+ * the rest dropped because it usually names the weight and style, which are
+ * asked for separately. A guess about the FAMILY is safe to prefill — the
+ * author sees it in a field and reads it against the file they just chose —
+ * where a guess about weight would be applied silently and match nothing.
+ */
+function familyFromFilename(name: string): string {
+  const stem = name.replace(/\.[^.]+$/, "");
+  const head = stem.split(/[-_]/)[0] ?? stem;
+  return head.trim();
+}
+
+/**
+ * The form that adds a face.
+ *
+ * `.woff2` and `.woff` only, and stated exactly rather than as `font/*`: those
+ * two are what the byte route serves to an anonymous reader, so offering a
+ * picker that admits a TTF would let an author choose a file this site accepts
+ * into storage and then never serves — a refusal arriving one screen later,
+ * about a file they cannot see the problem with.
+ */
+function AddFaceForm({
+  onAddFace,
+}: {
+  onAddFace: (request: FontFaceUpload) => Promise<string | undefined>;
+}): React.JSX.Element {
+  const [file, setFile] = useState<File | null>(null);
+  const [family, setFamily] = useState("");
+  const [weight, setWeight] = useState("400");
+  const [style, setStyle] = useState("normal");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const chooseFile = (chosen: File | null): void => {
+    setFile(chosen);
+    setError(null);
+    // Only when the author has not typed one. Overwriting what they wrote
+    // because they re-picked a file would discard the more reliable of the two.
+    if (chosen !== null && family.trim() === "") {
+      setFamily(familyFromFilename(chosen.name));
+    }
+  };
+
+  const submit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (file === null || family.trim() === "" || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const refusal = await onAddFace({
+        file,
+        family: family.trim(),
+        weight: weight.trim(),
+        style,
+      });
+      if (refusal !== undefined) {
+        setError(refusal);
+        return;
+      }
+      // Cleared only on success, so a refusal leaves every field where the
+      // author left it and the fix is one edit rather than a re-entry.
+      setFile(null);
+      setFamily("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="nx-fonts__add" onSubmit={void_(submit)}>
+      <label className="nx-fonts__add-label" htmlFor="nx-fonts-file">
+        Font file
+      </label>
+      <input
+        accept=".woff2,.woff,font/woff2,font/woff"
+        className="nx-fonts__add-file"
+        id="nx-fonts-file"
+        onChange={event => chooseFile(event.target.files?.[0] ?? null)}
+        type="file"
+      />
+
+      <label className="nx-fonts__add-label" htmlFor="nx-fonts-family">
+        Family
+      </label>
+      <input
+        className="nx-fonts__add-text"
+        id="nx-fonts-family"
+        onChange={event => setFamily(event.target.value)}
+        placeholder="Inter"
+        type="text"
+        value={family}
+      />
+
+      <label className="nx-fonts__add-label" htmlFor="nx-fonts-weight">
+        Weight
+      </label>
+      {/*
+        A list rather than a closed select: a variable font declares a RANGE
+        (`100 900`), which no menu of fixed weights can express, and a face
+        stored with a single weight from such a file is matched for one weight
+        and ignored for the rest.
+      */}
+      <input
+        className="nx-fonts__add-text"
+        id="nx-fonts-weight"
+        list="nx-fonts-weights"
+        onChange={event => setWeight(event.target.value)}
+        type="text"
+        value={weight}
+      />
+      <datalist id="nx-fonts-weights">
+        {["100", "200", "300", "400", "500", "600", "700", "800", "900"].map(
+          value => (
+            <option key={value} value={value} />
+          )
+        )}
+      </datalist>
+
+      <label className="nx-fonts__add-label" htmlFor="nx-fonts-style">
+        Style
+      </label>
+      <select
+        className="nx-fonts__add-text"
+        id="nx-fonts-style"
+        onChange={event => setStyle(event.target.value)}
+        value={style}
+      >
+        <option value="normal">Normal</option>
+        <option value="italic">Italic</option>
+      </select>
+
+      <button
+        className="nx-fonts__add-submit"
+        disabled={busy || file === null || family.trim() === ""}
+        type="submit"
+      >
+        {busy ? "Adding…" : "Add font file"}
+      </button>
+
+      {error !== null && (
+        <p className="nx-fonts__add-error" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
+/** A promise-returning submit handler, in the shape a form event wants. */
+function void_(
+  handler: (event: React.FormEvent) => Promise<void>
+): (event: React.FormEvent) => void {
+  return event => {
+    void handler(event);
+  };
 }
 
 /** Faces absent: a read in flight and a read that failed need different words. */
@@ -472,6 +705,7 @@ export function FontsPanel({
   tokens,
   absence,
   onOpenTokens,
+  onAddFace,
 }: FontsPanelProps): React.JSX.Element {
   if (faces === undefined) return <FacesAbsent absence={absence} />;
 
@@ -484,6 +718,7 @@ export function FontsPanel({
           Font files this site loads
         </h3>
         <FaceList faces={faces} />
+        {onAddFace !== undefined && <AddFaceForm onAddFace={onAddFace} />}
       </section>
 
       <section aria-labelledby="nx-fonts-tokens">

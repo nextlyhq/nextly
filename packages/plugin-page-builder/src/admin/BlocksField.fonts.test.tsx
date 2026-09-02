@@ -83,6 +83,15 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   };
 });
 
+/*
+ * A closed literal, and deliberately still one. Deriving it from the real
+ * module — which is what stops a new import failing here as though the
+ * component were broken — cannot be done under jsdom: spreading
+ * `plugin-sdk/admin` evaluates the admin module, which reaches `EventSource`
+ * at import time and throws inside the hoisted factory. That is recorded
+ * separately; until it is closed, a name the component starts importing has to
+ * be added here by hand.
+ */
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => clientConfig,
@@ -103,6 +112,19 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
       saved.push(value);
       if (saveResult instanceof Error) throw saveResult;
       return saveResult;
+    },
+    isPending: false,
+  }),
+  /*
+   * Named explicitly despite the spread: uploading reaches the network, and a
+   * test that renders this panel must not. Answering a refusal rather than a
+   * success keeps the double from being MORE capable than the real hook —
+   * nothing here exercises a stored file, and a double that pretended to store
+   * one would let a broken upload path pass.
+   */
+  useUploadMedia: () => ({
+    mutateAsync: async () => {
+      throw new Error("No uploads in this harness.");
     },
     isPending: false,
   }),
