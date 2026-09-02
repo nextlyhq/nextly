@@ -218,8 +218,9 @@ export function resolveReadBounds(options?: StorageReadOptions): {
  * classify what it caught rather than matching a name the runtime chose. Built
  * here rather than per adapter so every storage deadline says the same thing.
  *
- * The timer is unreferenced: a read that finishes early leaves it pending, and
- * a pending deadline must not be a reason the process stays alive.
+ * The timer is unreferenced so a pending deadline is never a reason the process
+ * stays alive, and the returned `cancel` clears it once the read settles — the
+ * unref alone would leave one scheduled per read for the whole timeout.
  *
  * @param timeoutMs - How long the read may take
  * @param context - What is being read, carried into the refusal's log side
@@ -227,7 +228,7 @@ export function resolveReadBounds(options?: StorageReadOptions): {
 export function deadlineSignal(
   timeoutMs: number,
   context: string
-): AbortSignal {
+): { signal: AbortSignal; cancel: () => void } {
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort(new StorageReadTimeoutError(context, timeoutMs));
@@ -235,7 +236,19 @@ export function deadlineSignal(
   // Guarded because `unref` is Node's, and this module is bundled for runtimes
   // whose `setTimeout` returns a number.
   (timer as { unref?: () => void }).unref?.();
-  return controller.signal;
+  return {
+    signal: controller.signal,
+    /*
+     * Called once the read has settled, whichever way it went. `unref` only
+     * stops a pending timer holding the process open; it still sits on the
+     * timer heap retaining the controller and the path, so a server doing a
+     * thousand reads a second keeps thirty seconds of them alive and then runs
+     * a thousand aborts that answer nobody.
+     */
+    cancel: () => {
+      clearTimeout(timer);
+    },
+  };
 }
 
 /**

@@ -40,17 +40,17 @@ import { LocalStorageAdapter } from "../local-adapter";
  * exercise these reports that rather than reporting coverage it does not have.
  */
 const CAN_MAKE_FIFO = ((): boolean => {
-  const probe = join(
-    mkdtempSync(join(tmpdir(), "nextly-fifo-probe-")),
-    "probe"
-  );
+  // The DIRECTORY is what gets removed, not just the node inside it: removing
+  // only the child left an empty `nextly-fifo-probe-*` behind in the system
+  // temp directory on every evaluation of this module, succeed or fail.
+  const probeDir = mkdtempSync(join(tmpdir(), "nextly-fifo-probe-"));
   try {
-    execFileSync("mkfifo", [probe], { stdio: "ignore" });
+    execFileSync("mkfifo", [join(probeDir, "probe")], { stdio: "ignore" });
     return true;
   } catch {
     return false;
   } finally {
-    rmSync(probe, { force: true });
+    rmSync(probeDir, { recursive: true, force: true });
   }
 })();
 

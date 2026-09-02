@@ -283,12 +283,12 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
      * `read` answers within the deadline it advertised instead of holding its
      * caller for as long as the mount stays down.
      */
-    const signal = deadlineSignal(bounds.timeoutMs, filePath);
+    const deadline = deadlineSignal(bounds.timeoutMs, filePath);
     const work = this.readWithinCap(
       fullPath,
       filePath,
       bounds.maxBytes,
-      signal
+      deadline.signal
     );
     /*
      * A lost race rejects the caller from `withDeadline` and leaves this
@@ -296,7 +296,16 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
      * read whose outcome has already been reported.
      */
     void work.catch(() => undefined);
-    return await withDeadline(work, signal);
+    try {
+      return await withDeadline(work, deadline.signal);
+    } finally {
+      /*
+       * Whichever side won. If the deadline fired, clearing is a no-op; if the
+       * read finished first, this is what stops a timer per read sitting on the
+       * heap for the whole timeout with nobody left to answer.
+       */
+      deadline.cancel();
+    }
   }
 
   // ============================================================
@@ -331,6 +340,15 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
        * file costs one fstat rather than a walk up to the cap. It cannot stand
        * alone, which is why the counting below is not redundant with it.
        */
+      /*
+       * Checked before the fstat, not only inside the chunk loop below. An
+       * `open` that completes AFTER the deadline has already answered the
+       * caller would otherwise spend a second filesystem call — on the same
+       * stalled mount, blocking another threadpool slot — for a result nobody
+       * is waiting for. The `finally` still closes the descriptor.
+       */
+      if (signal.aborted) throw signal.reason as Error;
+
       const { size } = await handle.stat();
       if (size > maxBytes) {
         /*
