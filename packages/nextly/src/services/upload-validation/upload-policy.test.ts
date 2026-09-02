@@ -58,6 +58,22 @@ describe("resolveUploadPolicy", () => {
     expect(resolveUploadPolicy().svgCsp).toBe(false);
   });
 
+  it("carries the configured size cap, read off the validator it built", () => {
+    /*
+     * The number the guards further down the write path use. Resolving it a
+     * second time from the same config would agree today and drift the moment
+     * either derivation is edited, so it is read from the validator that will
+     * actually do the refusing.
+     */
+    container.registerSingleton("config", () => ({
+      security: { limits: { fileSize: "20mb" } },
+    }));
+
+    const policy = resolveUploadPolicy();
+    expect(policy.maxSize).toBe(20 * 1024 * 1024);
+    expect(policy.maxSize).toBe(policy.validator.config().maxSize);
+  });
+
   it("answers with defaults when nothing is registered", () => {
     // Reached during scaffolding and in tests, where refusing to build a
     // policy would take down the upload path rather than secure it.

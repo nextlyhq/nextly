@@ -29,6 +29,15 @@ export interface UploadPolicy {
    * safe answer.
    */
   readonly svgCsp: boolean;
+  /**
+   * The per-file byte cap from `security.limits.fileSize`.
+   *
+   * Read off the validator's own resolved config rather than resolved a
+   * second time: two derivations of one setting agree until one of them is
+   * edited, and this one exists so the guards further down the write path can
+   * agree with the check that actually refuses.
+   */
+  readonly maxSize: number;
 }
 
 /**
@@ -41,8 +50,11 @@ export function resolveUploadPolicy(): UploadPolicy {
     ? container.get<{ security?: SecurityBlockLike }>("config")?.security
     : undefined;
 
+  const validator = new UploadValidator(security);
+
   return {
-    validator: new UploadValidator(security),
+    validator,
     svgCsp: security?.uploads?.svgCsp ?? true,
+    maxSize: validator.config().maxSize,
   };
 }

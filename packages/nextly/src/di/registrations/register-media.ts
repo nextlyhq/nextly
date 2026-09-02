@@ -28,7 +28,21 @@ export function registerMediaServices(ctx: RegistrationContext): void {
   const { adapter, logger, storage, mediaStorage, imageProcessor } = ctx;
 
   container.registerSingleton<UnifiedMediaService>("mediaService", () => {
-    const legacyMediaService = new LegacyMediaService(adapter, logger);
+    const {
+      validator: uploadValidator,
+      svgCsp,
+      maxSize,
+    } = resolveUploadPolicy();
+
+    // The wrapped writer gets the same cap the wrapper enforces; its own
+    // default would refuse, from the inside, a file the policy just allowed.
+    const legacyMediaService = new LegacyMediaService(
+      adapter,
+      logger,
+      undefined,
+      undefined,
+      maxSize
+    );
     const folderService = new MediaFolderService(adapter, logger);
 
     // Late-binding getter so storage plugins registered after initial
@@ -41,8 +55,6 @@ export function registerMediaServices(ctx: RegistrationContext): void {
         return null;
       }
     };
-
-    const { validator: uploadValidator, svgCsp } = resolveUploadPolicy();
 
     return new UnifiedMediaService(
       legacyMediaService,

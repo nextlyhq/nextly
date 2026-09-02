@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { container } from "../di/container";
 import { ServiceContainer } from "../services";
 
+import { PNG_1X1 } from "../services/upload-validation/__tests__/format-fixtures";
 import type { UploadMediaInput } from "../types/media";
 
 import { uploadMediaAction } from "./upload-media";
@@ -197,6 +198,47 @@ describe("uploadMediaAction and the configured allowlist", () => {
     expect(uploadMedia).toHaveBeenCalledTimes(1);
     // The stub's own refusal, so a 400 could only have come from the policy.
     expect(result.statusCode).toBe(503);
+  });
+
+  it("accepts a file above 10MB when the install configured a larger cap", async () => {
+    /*
+     * `security.limits.fileSize` is documented with a 20mb example, and three
+     * separate places carried their own 10MB constant: the input schema, the
+     * unified service's pre-check, and the writer this action calls. The
+     * validator allowed the file and the next guard down refused it, naming a
+     * limit the install never set.
+     *
+     * Asserted in both directions, because a cap that was simply removed
+     * satisfies the first half alone.
+     */
+    container.registerSingleton("config", () => ({
+      security: {
+        uploads: { allowedMimeTypes: ["image/png"] },
+        limits: { fileSize: "20mb" },
+      },
+    }));
+    const uploadMedia = stubMediaService();
+    const twelveMB = Buffer.concat([PNG_1X1, Buffer.alloc(12 * 1024 * 1024)]);
+
+    const accepted = await uploadMediaAction(
+      upload("big.png", "image/png", twelveMB),
+      { uploadedBy: TEST_USER_ID }
+    );
+    expect(accepted.statusCode).not.toBe(400);
+    expect(uploadMedia).toHaveBeenCalledTimes(1);
+
+    // Still refused past the configured cap, so this is the install's limit
+    // being honoured rather than no limit at all.
+    const refused = await uploadMediaAction(
+      upload(
+        "huge.png",
+        "image/png",
+        Buffer.concat([PNG_1X1, Buffer.alloc(21 * 1024 * 1024)])
+      ),
+      { uploadedBy: TEST_USER_ID }
+    );
+    expect(refused.statusCode).toBe(400);
+    expect(uploadMedia).toHaveBeenCalledTimes(1);
   });
 
   it("stores the SANITIZED bytes, not the ones that were uploaded", async () => {
