@@ -27,8 +27,9 @@ import {
   blockPartClassName,
   blockTypeClassName,
   defaultSiteTokens,
-  tokenKindsForProperty,
+  type TokenLookup,
   getStyleProperty,
+  validateStyleValues,
 } from "@nextlyhq/blocks-engine";
 import type {
   AnyBlockDefinition,
@@ -110,15 +111,75 @@ function declaredProperties(styles: NodeStyles): string[] {
  * A token reference is a leaf rather than a branch: `{ $token }` compiles to a
  * single `var()`, so descending into it would count a declaration twice.
  */
+function countLeaves(value: unknown): number {
+  if (typeof value !== "object" || value === null) return 1;
+  if (typeof (value as { $token?: unknown }).$token === "string") return 1;
+  return Object.values(value as Record<string, unknown>).reduce<number>(
+    (total, nested) => total + countLeaves(nested),
+    0
+  );
+}
+
+/**
+ * Every branch of a declaration that bottoms out in NOTHING, as a dotted path.
+ *
+ * Recursive, and that is the whole of it. A top-level `border: {}` is easy to
+ * spot by counting leaves; `border: { width: {}, style: "solid" }` is not,
+ * because the surviving sibling keeps the total nonzero. That shape is what
+ * removing all four of the form control's border widths actually leaves behind,
+ * and the emitted-versus-expected comparison cannot see it either — both sides
+ * fall together, so the counts still agree while the border stops drawing.
+ *
+ * A `{ $token }` is a leaf rather than a branch: it compiles to one `var()`, so
+ * descending into it would report the token's own fields as empty.
+ */
+function emptyBranches(value: unknown, path: string): string[] {
+  if (typeof value !== "object" || value === null) return [];
+  if (typeof (value as { $token?: unknown }).$token === "string") return [];
+  const entries = Object.entries(value as Record<string, unknown>);
+  // The base case that matters: an object with no entries declares nothing,
+  // wherever it sits.
+  if (entries.length === 0) return [path];
+  return entries.flatMap(([key, nested]) =>
+    emptyBranches(nested, `${path}.${key}`)
+  );
+}
+
+/**
+ * Declared branches that carry no value, named per state and breakpoint.
+ *
+ * A separate question from "does every leaf reach the stylesheet", and separate
+ * for a reason. That one compares TOTALS — leaves summed over every context
+ * against declarations found under the block's selector — so a property empty in
+ * one context and populated in another still totals correctly and passes.
+ * `border: {}` in `hover` beside a real `border` in `base` is exactly that shape.
+ *
+ * This one needs no stylesheet at all: an empty branch is wrong where it is
+ * written, whatever its siblings emit. `declaredProperties` lists a key whatever
+ * its value, so without this `border: {}` was 0 emitted of 0 expected — not
+ * "fewer than expected", and it passed. Emptying `BUTTON_BASE_STYLES.border`
+ * removes the reset that keeps a `<button>` and an `<a>` the same shape, and
+ * every suite stayed green.
+ */
+function emptyDeclarations(styles: NodeStyles): string[] {
+  const empty: string[] = [];
+  for (const [state, byBreakpoint] of Object.entries(styles)) {
+    if (byBreakpoint === undefined) continue;
+    for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
+      if (values === undefined) continue;
+      for (const [property, value] of Object.entries(
+        values as Record<string, unknown>
+      )) {
+        for (const branch of emptyBranches(value, property)) {
+          empty.push(`${branch} at ${state}/${breakpoint}`);
+        }
+      }
+    }
+  }
+  return empty;
+}
+
 function leafCount(styles: NodeStyles, property: string): number {
-  const countLeaves = (value: unknown): number => {
-    if (typeof value !== "object" || value === null) return 1;
-    if (typeof (value as { $token?: unknown }).$token === "string") return 1;
-    return Object.values(value as Record<string, unknown>).reduce<number>(
-      (total, nested) => total + countLeaves(nested),
-      0
-    );
-  };
   let total = 0;
   for (const byBreakpoint of Object.values(styles)) {
     if (byBreakpoint === undefined) continue;
@@ -321,6 +382,79 @@ describe("every default the core library declares", () => {
     }
   );
 
+  it.each(DECLARING.map(block => [block.name, block] as const))(
+    "%s declares no property with an empty value",
+    (name, block) => {
+      const empty = emptyDeclarations(block.baseStyles as NodeStyles);
+      expect(
+        empty,
+        `${name} declares ${empty.join(", ")} with no value at all, which ` +
+          `emits nothing while reading as a default the block carries.`
+      ).toEqual([]);
+    }
+  );
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s declares no property with an empty value",
+    (name, part, styles) => {
+      const empty = emptyDeclarations(styles);
+      expect(
+        empty,
+        `${name} part ${part} declares ${empty.join(", ")} with no value at ` +
+          `all — and a part is markup an author cannot reach with a style ` +
+          `control, so nobody can put the missing default back.`
+      ).toEqual([]);
+    }
+  );
+
+  it("REPORTS an empty declaration, in one context beside a populated one", () => {
+    /*
+     * The positive control, and it is load-bearing rather than decorative:
+     * every default in the library has at least one leaf, so the cases above
+     * pass by finding nothing and would go on passing if `emptyDeclarations`
+     * were deleted, returned early, or stopped descending.
+     *
+     * The fixture puts the empty composite in `hover` BESIDE a populated one in
+     * `base`, which is the shape a totals comparison cannot see: the leaves sum
+     * correctly, the declarations are all found, and the hover border is still
+     * missing.
+     */
+    expect(
+      emptyDeclarations({
+        base: { base: { border: { style: "solid" } } },
+        hover: { base: { border: {} } },
+      } as NodeStyles)
+    ).toEqual(["border at hover/base"]);
+
+    /*
+     * And the NESTED shape, which counting leaves cannot reach: the surviving
+     * `style` keeps the total nonzero, and the emitted-versus-expected check
+     * agrees with itself because both sides fall together. This is what
+     * removing all four of the form control's border widths actually leaves.
+     */
+    expect(
+      emptyDeclarations({
+        base: {
+          base: {
+            border: {
+              width: {},
+              style: "solid",
+              color: { $token: "color.border-strong" },
+            },
+          },
+        },
+      } as NodeStyles)
+    ).toEqual(["border.width at base/base"]);
+
+    // Must-differ: a populated declaration is silent, so the control is about
+    // emptiness rather than about `border` being unreadable.
+    expect(
+      emptyDeclarations({
+        base: { base: { border: { style: "solid" } } },
+      } as NodeStyles)
+    ).toEqual([]);
+  });
+
   it.each(DECLARING_PARTS)(
     "%s part %s reaches the compiled stylesheet, property by property",
     (name, part, styles) => {
@@ -353,6 +487,9 @@ describe("every default the core library declares", () => {
         expected.length,
         `${name} part ${part} declared no property to check`
       ).toBeGreaterThan(0);
+      // A property declared with no value at all is a separate question, asked
+      // per context by `emptyDeclarations` — this one is about leaves that went
+      // in and did not come out.
       const missing = expected
         .filter(({ leaves, emitted }) => emitted < leaves)
         .map(
@@ -427,6 +564,9 @@ describe("every default the core library declares", () => {
         `${name} declared no property to check`
       ).toBeGreaterThan(0);
 
+      // A property declared with no value at all is a separate question, asked
+      // per context by `emptyDeclarations` — this one is about leaves that went
+      // in and did not come out.
       const missing = expected
         .filter(({ leaves, emitted }) => emitted < leaves)
         .map(
@@ -444,51 +584,6 @@ describe("every default the core library declares", () => {
     }
   );
 });
-
-/**
- * Every token reference a `NodeStyles` makes, at any depth.
- *
- * Walked to the leaf rather than read one level down: a token may sit inside an
- * object-shaped declaration — a per-corner radius, a per-side border colour —
- * and a check that only inspected top-level values would report those clean.
- */
-function tokenNamesIn(value: unknown): string[] {
-  if (typeof value !== "object" || value === null) return [];
-  const record = value as Record<string, unknown>;
-  if (typeof record.$token === "string") return [record.$token];
-  return Object.values(record).flatMap(tokenNamesIn);
-}
-
-/**
- * Every token reference a `NodeStyles` makes, WITH the property it is made for.
- *
- * The property is what {@link tokenNamesIn} throws away, and it is the half that
- * decides whether a reference is usable: a name can exist in the guaranteed set
- * and still be the wrong KIND for where it is written.
- *
- * The property is the key at the state/breakpoint level — the third level down —
- * so the walk carries it once it is past `styles[state][breakpoint]` and then
- * descends without changing it. A token inside an object-shaped declaration
- * belongs to the property that declaration names.
- */
-function tokenReferencesIn(
-  styles: NodeStyles
-): { property: string; token: string }[] {
-  const found: { property: string; token: string }[] = [];
-  for (const byBreakpoint of Object.values(styles)) {
-    if (byBreakpoint === undefined) continue;
-    for (const values of Object.values(byBreakpoint)) {
-      if (values === undefined) continue;
-      for (const [property, value] of Object.entries(
-        values as Record<string, unknown>
-      )) {
-        for (const token of tokenNamesIn(value))
-          found.push({ property, token });
-      }
-    }
-  }
-  return found;
-}
 
 describe("a token a default depends on must be one the site set defines", () => {
   /**
@@ -510,173 +605,153 @@ describe("a token a default depends on must be one the site set defines", () => 
    * legitimate and the declaration reaches the stylesheet carrying a `var()`
    * nobody defined.
    */
+  /*
+   * The KIND question, asked of the ENGINE'S OWN VALIDATOR rather than of a
+   * union computed here.
+   *
+   * This was `tokenKindsForProperty(property)`, which returns the union across a
+   * composite property's leaves. For `border` that union is `dimension | color`,
+   * so a COLOUR token written into `border.width.blockStart` was accepted — the
+   * property does take a colour, at a different leaf. Verified: that mutation
+   * passed all 100 tests in these two suites.
+   *
+   * `validateStyleValues` answers this per LEAF, and refuses both an unknown
+   * token and a kind the leaf does not take. It is asked DIRECTLY rather than
+   * through `compileStyleValues`, which was the first attempt and reported
+   * nothing: the compiler keeps only `severity === "error"` issues to decide
+   * what to refuse, and a kind mismatch is a WARNING, so it emitted
+   * `border-block-start-width: var(--site-color-border-strong)` with an empty
+   * warnings list. Measured, which is why the control below exists.
+   *
+   * That is also why no production check catches this: the validator has the
+   * answer, the compiler discards it, and a block default is compiled without a
+   * token table in the first place.
+   *
+   * Consuming the owning module rather than restating it also retires the walker
+   * this file used to carry: a second traversal of the catalog's shapes, living
+   * in a test, is the drift this replaces.
+   */
+  const GUARANTEED_TOKENS: TokenLookup = {
+    kindOf: name =>
+      defaultSiteTokens().find(token => token.name === name)?.kind,
+  };
+
+  /** The validator's token complaints about ONE state/breakpoint's values. */
+  function tokenIssuesAt(
+    values: Readonly<Record<string, unknown>>,
+    path: string
+  ): string[] {
+    return validateStyleValues(
+      values,
+      path,
+      "strict",
+      undefined,
+      false,
+      GUARANTEED_TOKENS
+    )
+      .filter(
+        issue =>
+          issue.code === "token-kind-mismatch" || issue.code === "unknown-token"
+      )
+      .map(issue => `${issue.path}: ${issue.message}`);
+  }
+
+  /** Every token complaint the VALIDATOR makes about one style envelope. */
+  function tokenIssues(styles: NodeStyles): string[] {
+    const issues: string[] = [];
+    for (const [state, byBreakpoint] of Object.entries(styles)) {
+      if (byBreakpoint === undefined) continue;
+      for (const [breakpoint, values] of Object.entries(byBreakpoint)) {
+        if (values === undefined) continue;
+        issues.push(...tokenIssuesAt(values, `${state}/${breakpoint}`));
+      }
+    }
+    return issues;
+  }
+
   it.each(DECLARING.map(block => [block.name, block] as const))(
-    "%s names only tokens the guaranteed set defines",
+    "%s writes each token at a leaf that accepts it",
     (name, block) => {
-      const guaranteed = new Set(defaultSiteTokens().map(token => token.name));
-      const named = tokenNamesIn(block.baseStyles);
-
-      // A block naming no token passes vacuously, which is correct — but the
-      // population is asserted below so this file cannot pass having inspected
-      // nothing.
-      const undefinedTokens = named.filter(token => !guaranteed.has(token));
-
       expect(
-        undefinedTokens,
-        `${name} depends on ${undefinedTokens.join(", ")}, which no guaranteed ` +
-          `token defines. The reference compiles to a var() with nothing behind ` +
-          `it, so the property silently falls back to its initial value — the ` +
-          `same failure as the tokens nothing emitted, one level in.`
+        tokenIssues(block.baseStyles as NodeStyles),
+        `${name} writes a token the compiler refuses at that leaf, so the ` +
+          `declaration reaches the stylesheet carrying a var() the browser drops.`
       ).toEqual([]);
     }
   );
 
   it.each(DECLARING_PARTS)(
-    "%s part %s names only tokens the guaranteed set defines",
+    "%s part %s writes each token at a leaf that accepts it",
     (name, part, styles) => {
-      /*
-       * The same question as the case above, asked of parts — which the case
-       * above cannot reach, because it iterates `DECLARING` and a part's styles
-       * hang off `block.parts[]` rather than `block.baseStyles`.
-       *
-       * It matters more here than on a root. A part is markup an author cannot
-       * select with a style control, so a default that dangles is one nobody can
-       * put back; and the catalog check beside it cannot see this failure at all
-       * — the property is legitimate and the declaration reaches the stylesheet,
-       * carrying a `var()` nothing defines.
-       */
-      const guaranteed = new Set(defaultSiteTokens().map(token => token.name));
-      const named = tokenNamesIn(styles);
-      const undefinedTokens = named.filter(token => !guaranteed.has(token));
-
       expect(
-        undefinedTokens,
-        `${name} part ${part} depends on ${undefinedTokens.join(", ")}, which ` +
-          `no guaranteed token defines. The reference compiles to a var() with ` +
-          `nothing behind it, so the property silently falls back to its ` +
-          `initial value — and a part is markup an author cannot reach with a ` +
-          `style control, so nobody can put it back.`
+        tokenIssues(styles),
+        `${name} part ${part} writes a token the compiler refuses at that leaf ` +
+          `— and a part is markup an author cannot reach with a style control, ` +
+          `so nobody can put the dropped declaration back.`
       ).toEqual([]);
     }
   );
 
-  it("inspects at least one PART that DOES depend on a token", () => {
-    // The population control for the parts case, which passes by finding
-    // nothing exactly as the block case does. Without it a walk that returned
-    // no part styles — a renamed field, a changed shape — would leave every
-    // part green having inspected no token at all.
-    const withTokens = DECLARING_PARTS.filter(
-      ([, , styles]) => tokenNamesIn(styles).length > 0
-    ).map(([block, part]) => `${block}#${part}`);
-
-    expect(withTokens).toContain("core/form#control");
-  });
-
-  it.each(DECLARING.map(block => [block.name, block] as const))(
-    "%s uses each token where its KIND is accepted",
-    (name, block) => {
-      /*
-       * A name that exists is not a name that works. `backgroundColor` accepts
-       * a `color`; pointing it at the guaranteed DIMENSION `space.4` emits
-       * `background-color: var(--site-space-4)`, which the browser drops — and
-       * every check beside this one stays green, because the property is in the
-       * catalog, the declaration reaches the stylesheet, and the token is in the
-       * guaranteed set.
-       *
-       * Production cannot catch it either. `validateStyleValues` DOES refuse a
-       * kind mismatch, but only when it is given the site's token table, and a
-       * block default is compiled without one — so the check that exists never
-       * runs on the values in this file.
-       *
-       * Asked of `tokenKindsForProperty`, which is the engine's own answer, and
-       * a UNION across a composite property's leaves. That is looser than
-       * per-leaf: a token accepted at one leaf of a property passes here when
-       * written at another. It is the exported answer, and it catches the case
-       * that matters — a kind the property does not accept anywhere.
-       */
-      const guaranteed = new Map(
-        defaultSiteTokens().map(token => [token.name, token.kind])
-      );
-      const wrong = tokenReferencesIn(block.baseStyles as NodeStyles)
-        .filter(({ token }) => guaranteed.has(token))
-        .filter(({ property, token }) => {
-          const accepted = tokenKindsForProperty(property);
-          return !accepted.includes(guaranteed.get(token)!);
-        })
-        .map(
-          ({ property, token }) =>
-            `${property} takes ${tokenKindsForProperty(property).join(" or ") || "no token"} ` +
-            `but names ${token}, which is a ${guaranteed.get(token)!}`
-        );
-
-      expect(
-        wrong,
-        `${name} writes a token where its kind is refused, so the declaration ` +
-          `compiles to a var() the browser drops.`
-      ).toEqual([]);
-    }
-  );
-
-  it.each(DECLARING_PARTS)(
-    "%s part %s uses each token where its KIND is accepted",
-    (name, part, styles) => {
-      const guaranteed = new Map(
-        defaultSiteTokens().map(token => [token.name, token.kind])
-      );
-      const wrong = tokenReferencesIn(styles)
-        .filter(({ token }) => guaranteed.has(token))
-        .filter(({ property, token }) => {
-          const accepted = tokenKindsForProperty(property);
-          return !accepted.includes(guaranteed.get(token)!);
-        })
-        .map(
-          ({ property, token }) =>
-            `${property} names ${token}, a ${guaranteed.get(token)!}`
-        );
-
-      expect(
-        wrong,
-        `${name} part ${part} writes a token where its kind is refused — and a ` +
-          `part is markup an author cannot reach with a style control, so ` +
-          `nobody can put the dropped declaration back.`
-      ).toEqual([]);
-    }
-  );
-
-  it("inspects a property that actually CONSTRAINS the kind", () => {
+  it("REPORTS a token written at a leaf that does not accept it", () => {
     /*
-     * The control for the two cases above, which pass by finding nothing. If
-     * every property accepted every kind — or `tokenKindsForProperty` returned
-     * an empty union for the ones under test — they would be green having
-     * refused nothing.
+     * The control. Every case above passes by finding nothing, so a compile
+     * that reported nothing at all — a missing token table, a renamed warning
+     * code — would leave them all green having checked no leaf.
+     *
+     * `border.width` takes a dimension and `color.border-strong` is a colour,
+     * which is the exact mutation that defeated the union form of this check.
      */
-    expect(tokenKindsForProperty("backgroundColor")).toContain("color");
-    expect(tokenKindsForProperty("backgroundColor")).not.toContain("dimension");
+    expect(
+      tokenIssues({
+        base: {
+          base: {
+            border: {
+              width: { blockStart: { $token: "color.border-strong" } },
+            },
+          },
+        },
+      } as NodeStyles)
+    ).not.toEqual([]);
+
+    /*
+     * And the same leaf with a token of the RIGHT kind is silent.
+     *
+     * A TOKEN rather than the literal `"1px"` this first used. A literal never
+     * reaches token lookup or kind validation at all, so it stays silent however
+     * those behave — including if they began rejecting every dimension at this
+     * leaf, which is the failure this control exists to rule out. `space.4` is a
+     * dimension, and a width leaf takes one.
+     */
+    expect(
+      tokenIssues({
+        base: {
+          base: { border: { width: { blockStart: { $token: "space.4" } } } },
+        },
+      } as NodeStyles)
+    ).toEqual([]);
   });
 
-  it("inspects at least one block that DOES depend on a token", () => {
-    // The population control. Every case above passes by finding nothing, so a
-    // library that stopped using tokens entirely — or a walker that returned
-    // nothing — would leave the whole describe green while checking no token at
-    // all. `core/card` is the reason this check exists.
-    const withTokens = DECLARING.filter(
-      block => tokenNamesIn(block.baseStyles).length > 0
-    ).map(block => block.name);
-
-    expect(withTokens).toContain("core/card");
-  });
-
-  it("detects a token reference at any depth, including inside an object", () => {
-    // The walker's own control, and the nested form is the one that matters:
-    // `core/card`'s border colour sits INSIDE an object-shaped declaration, so a
-    // shallow reader would report it clean.
+  it("REPORTS a token the guaranteed set does not define", () => {
+    /*
+     * The other half of what this check inherited. A separate membership walk
+     * used to answer this — a `tokenNamesIn` traversal compared against a
+     * `Set` of names — and two guards answering one question drift as
+     * traversal or resolution changes. The validator answers both from one
+     * implementation, so the membership walk is gone and its control lives
+     * here.
+     */
     expect(
-      tokenNamesIn({ base: { base: { gap: { $token: "space.4" } } } })
-    ).toEqual(["space.4"]);
+      tokenIssues({
+        base: { base: { backgroundColor: { $token: "color.nonesuch" } } },
+      } as NodeStyles)
+    ).not.toEqual([]);
+
+    // Must-differ: a token the set DOES define is silent, so this is about the
+    // name rather than about every token reference being reported.
     expect(
-      tokenNamesIn({
-        base: { base: { border: { color: { $token: "color.border" } } } },
-      })
-    ).toEqual(["color.border"]);
+      tokenIssues({
+        base: { base: { backgroundColor: { $token: "color.surface" } } },
+      } as NodeStyles)
+    ).toEqual([]);
   });
 });
