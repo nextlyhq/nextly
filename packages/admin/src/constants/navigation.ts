@@ -15,7 +15,7 @@ import {
   Webhook,
   type LucideIcon,
 } from "../components/icons";
-import { API_KEY_ACTION_PERMISSIONS } from "../lib/permissions/api-key-actions";
+import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 
 import { ROUTES } from "./routes";
 
@@ -126,7 +126,7 @@ export type SidebarNavigation = NavigationItem[];
  * it. `create-api-keys` is deliberately absent — it opens the create form, not
  * the list this entry links to.
  */
-export const API_KEYS_LIST_PERMISSIONS = API_KEY_ACTION_PERMISSIONS.read;
+export const API_KEYS_LIST_PERMISSIONS = apiKeyGrantsFor("read");
 
 export const RELEASE_SECTION_PERMISSIONS = [
   "read-content-releases",

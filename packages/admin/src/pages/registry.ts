@@ -11,7 +11,7 @@ import {
   collectionContentSection,
   overridableBy,
 } from "../lib/navigation/section-resolvers";
-import { API_KEY_ACTION_PERMISSIONS } from "../lib/permissions/api-key-actions";
+import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
 
@@ -470,7 +470,7 @@ export const routeConfig: Record<string, RouteConfig> = {
     // umbrella, so the route does too. Guarding on the narrower grant alone
     // turned the Create control into a door that closed on a holder the API
     // would have served.
-    requiredPermission: [...API_KEY_ACTION_PERMISSIONS.create],
+    requiredPermission: apiKeyGrantsFor("create"),
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_EDIT]: {

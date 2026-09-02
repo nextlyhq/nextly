@@ -262,3 +262,14 @@ export {
 } from "./services/upload-validation/mime";
 export type { AcceptedFormat } from "./services/upload-validation/mime";
 export type { WebFontFormat } from "./services/upload-validation/web-fonts";
+
+// The API-key authorization policy. Exported here so the admin's route guards
+// and controls derive from the same declaration the endpoints enforce, rather
+// than restating the action-or-update umbrella a second time.
+export {
+  API_KEY_RESOURCE,
+  API_KEY_ACTION_POLICY,
+  apiKeyPermissionsFor,
+  apiKeyPermissionSlugsFor,
+  type ApiKeyOperation,
+} from "./domains/auth/api-key-policy";

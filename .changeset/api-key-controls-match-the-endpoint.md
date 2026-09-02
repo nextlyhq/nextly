@@ -35,10 +35,15 @@ every active row still offered Edit and Revoke. A reader who could only view
 keys was shown three controls, each leading to a route or request that turns
 them away.
 
-Each control is now gated on the grants its own operation needs, derived from
-one declaration that mirrors the server's rule — the action's own grant, or the
-`update-api-keys` umbrella that reaches all four. Creating answers to
-`create-api-keys` or that umbrella, editing to `update-api-keys`, revoking to
-`delete-api-keys` or the umbrella. The table's two gates are required props
-rather than defaulted, so a call site cannot omit them and silently offer
-everything.
+Each control is now gated on the grants its own operation needs, and the row
+itself follows the same gate as the Edit item rather than staying clickable
+into a route that refuses. The create route accepts what the endpoint accepts
+instead of the narrower grant alone.
+
+The rule behind all of them is declared once, in the package that enforces it:
+`nextly/config` exports the API-key policy, the endpoints authorise from it, and
+the admin's route guards and controls derive their grant slugs from the same
+declaration through `permissionSlug`. Writing that rule twice is what let the
+list route demand `update-api-keys` while the endpoint accepted `read-api-keys`.
+The table's two gates are required props rather than defaulted, so a call site
+cannot omit them and silently offer everything.
