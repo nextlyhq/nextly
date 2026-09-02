@@ -183,6 +183,28 @@ function indexedUsage(usage: ClassUsageCounts, classId: string): number {
 }
 
 /**
+ * The path handed to the compiler for a SUMMARY compile.
+ *
+ * Short, constant, and deliberately not the class's own identity. `basePath` is
+ * only ever repeated into diagnostics, and this module discards them — but it is
+ * also charged against the style-issue budget, and an exhausted budget refuses
+ * the WHOLE map rather than the property that exhausted it.
+ *
+ * So path length decides what compiles. Measured on one map of 150 long unknown
+ * keys beside one valid `color`, with a 128-character slug:
+ *
+ *     compileStyleValues(values, `class:${slug}/hover/md`) -> 0 declarations
+ *     compileStyleValues(values, "class")                  -> 1 declaration
+ *
+ * `compilePageCss` compiles the same class under `/classes/<position>/styles/...`,
+ * so a longer path here would let the panel report "nothing" for styling the page
+ * does emit — a disagreement produced by the diagnostic string rather than by the
+ * styles. Kept shorter than the page's own path, so this can only ever be at
+ * least as permissive as what the visitor gets.
+ */
+const SUMMARY_PATH = "class";
+
+/**
  * Every (state, breakpoint) pair this class stores values under.
  *
  * The WALK, separated from the judgement below, because a nested loop carrying
@@ -235,7 +257,6 @@ function storedContexts(
 function contextsElsewhere(
   styles: NodeStyles,
   emitted: ReadonlySet<string>,
-  slug: string,
   context?: StyleCompileContext
 ): number {
   return storedContexts(styles).filter(
@@ -250,7 +271,7 @@ function contextsElsewhere(
       // of "stored values become declarations" is asked instead.
       compileStyleValues(
         pair.values,
-        `class:${slug}/${pair.state}/${pair.breakpoint}`,
+        SUMMARY_PATH,
         undefined,
         undefined,
         undefined,
@@ -281,7 +302,6 @@ function contextsElsewhere(
  */
 export function classDeclarations(
   styles: NodeStyles,
-  slug: string,
   /**
    * The context the PAGE is compiled with, so the summary describes the same
    * stylesheet the visitor gets.
@@ -307,7 +327,7 @@ export function classDeclarations(
       ? []
       : compileStyleValues(
           base,
-          `class:${slug}`,
+          SUMMARY_PATH,
           undefined,
           undefined,
           undefined,
@@ -316,7 +336,7 @@ export function classDeclarations(
   const emitted = new Set(
     breakpointContexts(context?.breakpoints).map(entry => entry.id)
   );
-  const elsewhere = contextsElsewhere(styles, emitted, slug, context);
+  const elsewhere = contextsElsewhere(styles, emitted, context);
   return { shown, elsewhere };
 }
 
