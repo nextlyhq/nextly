@@ -730,16 +730,52 @@ export function defaultSiteTokens(): SiteToken[] {
     /**
      * A hairline: a card outline, a table rule, a divider between sections.
      *
-     * ONE border colour rather than a subtle/strong scale. A scale is far harder
-     * to remove from a guaranteed set than to add to it, and no block has yet
-     * asked for the distinction — the admin has three tiers because its density
-     * demands them, and a content page is not that. A site wanting more defines
-     * its own; `resolveSiteTokens` layers additions by name.
+     * DECORATIVE, and that is now a claim rather than an omission. `#e5e7eb` on
+     * `#ffffff` is 1.24:1 and `#1f2937` on `#0b0f19` is 1.30:1 — far below the
+     * 3:1 WCAG 2.2 requires of a boundary that IDENTIFIES a control (SC 1.4.11,
+     * Non-text Contrast). That is correct for what this names: a divider and a
+     * card outline are decoration the same rule exempts, and a hairline heavy
+     * enough to pass 3:1 would stop being a hairline.
+     *
+     * It is the wrong token for anything a person has to find, which is what
+     * `color.border-strong` is for. This docblock previously argued for ONE
+     * border colour "until a block asks for the distinction"; `core/form` asked,
+     * and the split is the one Material 3 draws between `outline` and
+     * `outline-variant` for the same reason.
      */
     {
       name: "color.border",
       kind: "color",
       values: { light: "#e5e7eb", dark: "#1f2937" },
+    },
+    /**
+     * The boundary of a CONTROL: an input, a select, a textarea.
+     *
+     * Separate from `color.border` because the two answer to different rules. A
+     * divider is decoration; the edge of a text field is the only thing telling
+     * a person where to click, so WCAG 2.2 SC 1.4.11 requires 3:1 against what
+     * sits behind it. `core/form` gives its control the page's own background on
+     * purpose, so this border is its ONLY boundary and a decorative hairline
+     * left the field invisible — the exact defect the control styles exist to
+     * fix, reintroduced one property in.
+     *
+     * Chosen by calculation, not by eye, against both surfaces a control can sit
+     * on — and asserted that way in the tests rather than as a literal, so a
+     * later retune of the palette cannot quietly drop below the floor:
+     *
+     *     light  #6b7280 on #ffffff 4.83:1   on #f9fafb 4.63:1
+     *     dark   #9ca3af on #0b0f19 7.54:1   on #151b2b 6.76:1
+     *
+     * It carries the same values as `color.muted` today, and is a separate token
+     * anyway: they are one value serving two roles, and a site retuning its
+     * caption grey must not thereby move every control boundary it never
+     * mentioned. Material 3 keeps `outline` and `on-surface-variant` apart on
+     * exactly that argument.
+     */
+    {
+      name: "color.border-strong",
+      kind: "color",
+      values: { light: "#6b7280", dark: "#9ca3af" },
     },
     /**
      * Secondary text: a caption, a timestamp, a field hint.

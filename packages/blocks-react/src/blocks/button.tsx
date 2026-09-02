@@ -114,7 +114,16 @@ export async function renderButton({
  * default is keyed by block TYPE, so it could not tell variants apart even if
  * they existed.
  */
-const BUTTON_BASE_STYLES = {
+/**
+ * What a primary action looks like, stated once.
+ *
+ * Exported because `core/form` renders one too. A form's submit IS a button in
+ * every sense an author cares about, and two blocks describing that appearance
+ * separately would drift into two different-looking primary actions on one
+ * page — which is what happened while the form styled nothing and a host reset
+ * left its submit as plain text beside this control.
+ */
+export const BUTTON_BASE_STYLES = {
   base: {
     base: {
       display: "inline-block",
