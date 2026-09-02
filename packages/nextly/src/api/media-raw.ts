@@ -24,7 +24,11 @@
 import { getService } from "../di";
 import { NextlyError } from "../errors/nextly-error";
 import type { RequestContext } from "../services/shared";
-import { WEB_FONT_MIME_TYPES } from "../services/upload-validation/web-fonts";
+import {
+  canonicalWebFontMime,
+  matchesWebFontSignature,
+  WEB_FONT_MIME_TYPES,
+} from "../services/upload-validation/web-fonts";
 import { DEFAULT_READ_MAX_BYTES } from "../storage/fetch-stored-bytes";
 import { readStoredMediaBytes } from "../storage/read-stored-media";
 import { getMediaStorage } from "../storage/storage";
@@ -102,7 +106,14 @@ export async function handleServeMediaBytes(
    * to serve a font the same product had just approved. Mime tokens are
    * case-insensitive, so the comparison has to be too.
    */
-  if (!PUBLIC_SERVE_MIME_TYPES.has(media.mimeType.toLowerCase().trim())) {
+  /*
+   * Canonicalised, because a row PREDATING the upload-side fix may carry a
+   * legacy spelling — `application/font-woff` and its x- variant were what some
+   * clients sent, and nothing rewrites stored rows. An exact lookup refuses a
+   * font this product has served since before it knew the canonical name.
+   */
+  const servedType = canonicalWebFontMime(media.mimeType.toLowerCase().trim());
+  if (servedType === undefined || !PUBLIC_SERVE_MIME_TYPES.has(servedType)) {
     return notFound();
   }
 
@@ -123,10 +134,32 @@ export async function handleServeMediaBytes(
   // because from outside they are the same thing: there is no font here.
   if (bytes === null) return notFound();
 
+  /*
+   * THE BYTES DECIDE, at serve time, not only at upload time.
+   *
+   * This route makes a stored MIME type confer anonymous access, and that
+   * metadata was not always trustworthy: the published server action reaches
+   * the legacy service, which persisted whatever type a client sent without
+   * comparing it to the content. So an installation upgrading into this feature
+   * can already hold a row labelled `font/woff2` carrying anything at all, and
+   * the upload-side signature check does not reach back and rewrite it.
+   *
+   * Checked here rather than migrated, because the bytes are already in hand
+   * and the comparison is four of them — a migration would have to be run,
+   * would have to be run everywhere, and would still leave this route trusting
+   * a label. Refused as 404 rather than an error, for the same reason the type
+   * gate above is: the route says nothing about objects it will not serve.
+   */
+  if (!matchesWebFontSignature(bytes, servedType)) {
+    return notFound();
+  }
+
   return new Response(new Uint8Array(bytes), {
     status: 200,
     headers: {
-      "Content-Type": media.mimeType,
+      // The CANONICAL type, so a row stored under a legacy spelling is served
+      // under the name a browser expects.
+      "Content-Type": servedType,
       "Content-Length": String(bytes.byteLength),
       "Cache-Control": IMMUTABLE_FOR_A_YEAR,
       /*

@@ -83,10 +83,16 @@ function storedAs(mimeType: string): void {
   });
 }
 
+/** Bytes that genuinely begin as a WOFF2, which the route now requires. */
+const WOFF2_BYTES = Buffer.concat([
+  Buffer.from("wOF2", "ascii"),
+  Buffer.alloc(48),
+]);
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.manager.getAdapterForCollection.mockReturnValue(mocks.adapter);
-  mocks.adapter.read.mockResolvedValue(Buffer.from("OTTO-bytes"));
+  mocks.adapter.read.mockResolvedValue(WOFF2_BYTES);
 });
 
 describe("the public byte route", () => {
@@ -96,7 +102,9 @@ describe("the public byte route", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("font/woff2");
-    expect(await response.text()).toBe("OTTO-bytes");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      new Uint8Array(WOFF2_BYTES)
+    );
   });
 
   it("REFUSES a type outside the servable set, and says nothing about it", async () => {
@@ -184,6 +192,44 @@ describe("the public byte route", () => {
     // NOT 502: an outage tells a visitor to retry, and this response is
     // cacheable for a year.
     expect(response.status).not.toBe(502);
+  });
+
+  it("REFUSES a row whose stored type is not what its bytes are", async () => {
+    /*
+     * The row's MIME type is the whole of this route's access control, and that
+     * metadata was not always trustworthy: the published server action reaches
+     * the legacy service, which persisted whatever type a client sent without
+     * comparing it to the content. An installation upgrading into this feature
+     * can already hold a row labelled `font/woff2` carrying anything, and the
+     * upload-side check does not reach back and rewrite it.
+     *
+     * Its control is the serving case above, which fails if the route stops
+     * serving fonts at all; this one fails only when the label is trusted.
+     */
+    storedAs("font/woff2");
+    mocks.adapter.read.mockResolvedValue(Buffer.from("not-a-font", "utf8"));
+
+    const response = await getRaw("m1");
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe("");
+  });
+
+  it("serves a row stored under a LEGACY font type", async () => {
+    /*
+     * Rows predating the upload-side canonicalisation carry the older spelling,
+     * and nothing rewrites them — an exact lookup refuses a font this product
+     * has served since before it knew the canonical name.
+     */
+    storedAs("application/font-woff");
+    mocks.adapter.read.mockResolvedValue(
+      Buffer.concat([Buffer.from("wOFF", "ascii"), Buffer.alloc(48)])
+    );
+
+    const response = await getRaw("m1");
+    expect(response.status).toBe(200);
+    // Served under the name a browser expects, not the one the row happens to
+    // carry.
+    expect(response.headers.get("Content-Type")).toBe("font/woff");
   });
 
   it("answers 404 for a record that is not there", async () => {
