@@ -190,7 +190,7 @@ async function applyCoreStatements(
 
 export async function ensureCoreTables(
   adapter: CLIDatabaseAdapter,
-  _options: ResolvedDevOptions,
+  options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
@@ -258,7 +258,12 @@ export async function ensureCoreTables(
             adapter: drizzleAdapter,
             logger,
             label: "core table reconcile",
-            mayCreateLock: true,
+            // `--no-auto-sync` promises to leave schema changes to migrations,
+            // and its credential may hold DML without DDL. `sync-guard` reserves
+            // `false` for exactly that: the lock table is not created, and a
+            // database without one has never run a migration, so the residual
+            // is a first-ever migration starting during this sync.
+            mayCreateLock: options.autoSync !== false,
             // Idempotent table creation, and the documented way to stop a sync
             // is Ctrl+C — a claim stuck behind a dead process is the worse
             // outcome, which is the trade a sync already makes.
@@ -305,7 +310,7 @@ export async function ensureCoreTables(
       adapter: drizzleAdapter,
       logger,
       label: "core table bootstrap",
-      mayCreateLock: true,
+      mayCreateLock: options.autoSync !== false,
       releaseOnInterrupt: true,
     },
     async () => {
@@ -331,7 +336,7 @@ export async function ensureCoreTables(
         // below never runs to correct it. `null` declares NEITHER, so the bundle
         // omits the registry rather than guessing.
         const staticSchemas = getDialectTablesForPush(dialect, {
-          fieldGroupRegistryTable: registryTable,
+          fieldGroupRegistryTable: pushRegistry,
         });
         const result = await freshPushSchema(dialect, db, staticSchemas);
 
@@ -353,7 +358,7 @@ export async function ensureCoreTables(
             drizzleAdapter,
             logger,
             sqliteCoreStatementsFor({
-              registryTable,
+              registryTable: pushRegistry,
               // A database with no `users` may still legitimately need its
               // registry created; the helper declines when the resolved name is
               // the migrated one.
