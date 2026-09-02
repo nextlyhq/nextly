@@ -24,6 +24,7 @@
  *    cannot see.
  */
 import {
+  blockPartClassName,
   blockTypeClassName,
   defaultSiteTokens,
   getStyleProperty,
@@ -340,6 +341,56 @@ describe("every default the core library declares", () => {
           `reach with a style control, so nobody can put it back. Note the ` +
           `catalog has flex and grid CONTAINER properties and no ITEM ` +
           `properties at all.`
+      ).toEqual([]);
+    }
+  );
+
+  it.each(DECLARING_PARTS)(
+    "%s part %s reaches the compiled stylesheet, property by property",
+    (name, part, styles) => {
+      /*
+       * The second failure mode, which the membership case above cannot see: a
+       * catalog property is STILL dropped when its value does not match the
+       * grammar the catalog declares for it. The root styles have had this
+       * check since they had the first one; parts had neither.
+       */
+      const block = (coreBlocks as AnyBlockDefinition[]).find(
+        candidate => candidate.name === name
+      ) as AnyBlockDefinition;
+      const css = compiledCss(block);
+      const selector = blockPartClassName(name, part);
+      expect(css, `nothing was emitted for ${name} part ${part}`).toContain(
+        selector
+      );
+      const declared = declaredProperties(styles);
+      const expected = declared.map(property => ({
+        property,
+        leaves: isScalarDeclaration(styles, property)
+          ? 1
+          : leafCount(styles, property),
+        emitted: declarationsFor(
+          css,
+          selector,
+          cssNameOf(property),
+          declared.map(cssNameOf)
+        ),
+      }));
+      expect(
+        expected.length,
+        `${name} part ${part} declared no property to check`
+      ).toBeGreaterThan(0);
+      const missing = expected
+        .filter(({ leaves, emitted }) => emitted < leaves)
+        .map(
+          ({ property, leaves, emitted }) =>
+            `${property} (${emitted} of ${leaves} emitted)`
+        );
+      expect(
+        missing,
+        `${name} part ${part} declares ${missing.join(", ")} but the compiled ` +
+          `stylesheet does not carry every leaf. A part is markup an author ` +
+          `cannot reach with a style control, so a default dropped here is ` +
+          `one nobody can put back.`
       ).toEqual([]);
     }
   );

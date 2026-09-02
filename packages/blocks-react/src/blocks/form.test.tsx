@@ -275,6 +275,29 @@ describe("a control an author can SEE", () => {
     expect(typeof control?.borderRadius).toBe("string");
   });
 
+  it("puts the submit's part class on the button it renders", () => {
+    /*
+     * The style and the markup are two halves of one fact and the suite held
+     * only the first. `args()` returns an empty `partClass`, so removing the
+     * className from the button left every style test green while the compiled
+     * submit rule matched nothing — returning the control to the reset-stripped
+     * plain text this whole change exists to fix.
+     */
+    const out = html(
+      renderForm({
+        ...args({
+          submitText: "Send",
+          fields: [{ name: "email", label: "Email", type: "email" }],
+        } as unknown as FormProps),
+        partClass: (part: string) => `nx-part-${part}`,
+      } as unknown as BlockRenderArgs<FormProps>)
+    );
+    expect(out).toContain('class="nx-part-submit"');
+    // Must-be-found control: the control part is marked the same way, so a
+    // `partClass` that returned nothing would fail here rather than pass.
+    expect(out).toContain("nx-part-control");
+  });
+
   it("gives the submit the SAME appearance as core/button", () => {
     /*
      * A form's submit and a button block are one control to an author, and
@@ -288,6 +311,16 @@ describe("a control an author can SEE", () => {
     expect(submit).toBeDefined();
     for (const key of Object.keys(BUTTON_BASE_STYLES.base.base)) {
       expect(submit).toHaveProperty(key);
+    }
+    /*
+     * And the WHOLE envelope, not only its base leaf. Comparing leaves alone
+     * would stay green as `core/button` grew a hover or a breakpoint the
+     * submit never received — the exact drift this part exists to prevent,
+     * invisible to the test written to prevent it.
+     */
+    const whole = form.parts?.submit?.baseStyles as Record<string, unknown>;
+    for (const state of Object.keys(BUTTON_BASE_STYLES)) {
+      expect(whole).toHaveProperty(state);
     }
     // The one deliberate difference: the form is a grid, so a stretched item
     // would run the full column width and stop reading as a button.

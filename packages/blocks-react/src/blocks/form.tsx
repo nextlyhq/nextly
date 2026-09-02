@@ -226,8 +226,20 @@ const FORM_PARTS = {
    * full column width and stop reading as a button at all.
    */
   submit: {
+    /*
+     * The WHOLE envelope, not its base leaf.
+     *
+     * Spreading `BUTTON_BASE_STYLES.base.base` copies today's base
+     * declarations and silently drops every other state and breakpoint the
+     * button might grow. The first hover or responsive default added to
+     * `core/button` would reach the button block and not the form's submit,
+     * and the two controls this part exists to keep identical would diverge
+     * with nothing saying so.
+     */
     baseStyles: {
+      ...BUTTON_BASE_STYLES,
       base: {
+        ...BUTTON_BASE_STYLES.base,
         base: {
           ...BUTTON_BASE_STYLES.base.base,
           /*
