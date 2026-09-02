@@ -8,12 +8,21 @@
  * among transient noise. `failed` is therefore the only destructive pill, and
  * the assertion below is what holds that apart.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  formatDateTime,
+  setGlobalDateTimeConfig,
+} from "@admin/lib/dates/format";
 
 import { JOB_DISPLAY_STATUSES } from "@admin/types/jobs";
 
 import { dueAt } from "../JobsTable";
-import { formatJobAge, jobStatusPresentation } from "../jobStatus";
+import {
+  formatJobAge,
+  formatJobTimestamp,
+  jobStatusPresentation,
+} from "../jobStatus";
 
 describe("job status presentation", () => {
   it("gives every status the core declares a label", () => {
@@ -102,5 +111,41 @@ describe("when a job is due", () => {
     // column has nothing to say. Without this the two cases above would pass
     // against a function that always returned its first argument.
     expect(dueAt({ runAt: null, nextAttemptAt: null } as never)).toBeNull();
+  });
+});
+
+describe("timestamp formatting", () => {
+  /*
+   * The admin renders dates through one configured formatter — an installation
+   * sets a timezone and a format, and `GeneralSettingsSyncProvider` applies it.
+   * A local `toLocaleString()` reads the BROWSER's settings instead, so the
+   * same instant renders two different ways on one page and whoever configured
+   * it sees no error.
+   */
+  const ISO = "2026-09-02T12:00:00.000Z";
+
+  afterEach(() => {
+    setGlobalDateTimeConfig({});
+  });
+
+  it("renders through the admin's configured formatter", () => {
+    setGlobalDateTimeConfig({ timezone: "Asia/Tokyo" });
+    expect(formatJobTimestamp(ISO)).toBe(formatDateTime(new Date(ISO)));
+  });
+
+  it("HONOURS the configured timezone, so the configuration is doing something", () => {
+    // The must-differ control. Without it the case above passes against a
+    // formatter that ignores the configuration entirely, since both sides would
+    // then fall back to the same browser default.
+    setGlobalDateTimeConfig({ timezone: "Asia/Tokyo" });
+    const tokyo = formatJobTimestamp(ISO);
+    setGlobalDateTimeConfig({ timezone: "America/Los_Angeles" });
+    const losAngeles = formatJobTimestamp(ISO);
+    expect(tokyo).not.toBe(losAngeles);
+  });
+
+  it("returns a placeholder for an absent instant and the raw text for an unparseable one", () => {
+    expect(formatJobTimestamp(null)).toBe("-");
+    expect(formatJobTimestamp("not-a-date")).toBe("not-a-date");
   });
 });

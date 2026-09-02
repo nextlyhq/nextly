@@ -211,15 +211,35 @@ describe("GET /api/jobs", () => {
     expect(requestedStates).toEqual(["failed"]);
   });
 
-  it("drops a state name it does not recognise rather than querying it", async () => {
-    // The parameter narrows a read. A name this build does not know cannot be
-    // honoured, and querying it verbatim would return nothing while looking
-    // like a successful check.
+  it("REFUSES a state name it does not recognise", async () => {
+    /*
+     * Dropping the unknown name looks conservative and inverts the request: with
+     * every name dropped the filter disappears, so a caller asking to narrow
+     * receives a successful read of EVERY state — the widest possible answer to
+     * a request for a narrower one, with a 200 on it.
+     */
     stored = [job("j1")];
-    await listJobsRoute(request("?state=failed,not-a-state"));
-    expect(requestedStates).toEqual(["failed"]);
-    await listJobsRoute(request("?state=not-a-state"));
+    requestedStates = undefined;
+
+    const response = await listJobsRoute(request("?state=faield"));
+
+    expect(response.status).toBe(400);
+    // And the query was never issued, so nothing widened on the way to failing.
     expect(requestedStates).toBeUndefined();
+  });
+
+  it("refuses a partially unknown filter rather than honouring half of it", async () => {
+    stored = [job("j1")];
+    const response = await listJobsRoute(request("?state=failed,faield"));
+    expect(response.status).toBe(400);
+  });
+
+  it("still accepts every name it does recognise", async () => {
+    // The control: without it the two cases above pass against a route that
+    // refuses all filters.
+    stored = [job("j1")];
+    await listJobsRoute(request("?state=failed,pending"));
+    expect(requestedStates).toEqual(["pending", "failed"]);
   });
 
   it("refuses a caller without the jobs permission", async () => {

@@ -9,9 +9,13 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { JOB_STATES } from "../../../schemas/jobs/types";
+
 import {
+  ATTENTION_STATES,
   jobDisplayStatus,
   jobNeedsAttention,
+  storedStatesFor,
   type JobStatusInput,
 } from "../job-display-status";
 
@@ -89,5 +93,64 @@ describe("what a job row means to a person", () => {
     ] as const) {
       expect(jobNeedsAttention(quiet)).toBe(false);
     }
+  });
+});
+
+describe("the status facts table, checked against the function it describes", () => {
+  /*
+   * `STATUS_FACTS` claims which stored states can appear as each display
+   * status, and `ATTENTION_STATES` is computed from it. A table asserted by
+   * hand is a second implementation of `jobDisplayStatus`; these derive it from
+   * the function instead, so the two cannot disagree.
+   */
+  const NOW = new Date("2026-09-02T12:00:00.000Z");
+  const PAST = new Date("2026-09-02T11:00:00.000Z");
+  const FUTURE = new Date("2026-09-02T13:00:00.000Z");
+
+  /** Every row shape the derivation can distinguish, over every stored state. */
+  const rows = JOB_STATES.flatMap(state =>
+    [0, 1].flatMap(attemptCount =>
+      [null, PAST, FUTURE].map(lockedUntil => ({
+        state,
+        attemptCount,
+        lockedUntil,
+      }))
+    )
+  );
+
+  it("declares every stored state that can actually produce each status", () => {
+    for (const row of rows) {
+      const status = jobDisplayStatus(row, NOW);
+      expect(
+        storedStatesFor(status),
+        `${row.state} attempts=${row.attemptCount} lease=${String(row.lockedUntil)} -> ${status}`
+      ).toContain(row.state);
+    }
+    // The premise: the sweep covered every stored state and produced more than
+    // one status, so "contains" is not trivially satisfied.
+    expect(new Set(rows.map(r => r.state)).size).toBe(JOB_STATES.length);
+    expect(
+      new Set(rows.map(r => jobDisplayStatus(r, NOW))).size
+    ).toBeGreaterThan(2);
+  });
+
+  it("selects exactly the states an attention-needing status can hold", () => {
+    // Computed here from the PREDICATE, independently of how the constant is
+    // built, so a constant that stopped tracking the predicate fails.
+    const expected = new Set(
+      rows
+        .filter(row => jobNeedsAttention(jobDisplayStatus(row, NOW)))
+        .map(row => row.state)
+    );
+    expect(new Set(ATTENTION_STATES)).toEqual(expected);
+    // The premise: some status really does need attention, so this is not two
+    // empty sets agreeing.
+    expect(ATTENTION_STATES.length).toBeGreaterThan(0);
+  });
+
+  it("does not select a state that only quiet statuses can hold", () => {
+    // The control. `done` is reachable only as `succeeded`, which needs nobody,
+    // so a filter that included it would be selecting healthy rows.
+    expect(ATTENTION_STATES).not.toContain("done");
   });
 });

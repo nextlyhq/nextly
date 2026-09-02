@@ -21,6 +21,8 @@
  * @module domains/jobs/job-display-status
  */
 
+import { JOB_STATES, type JobState } from "../../schemas/jobs/types";
+
 /**
  * Every status the derivation can produce, in the order a queue moves through
  * them.
@@ -49,9 +51,46 @@ export const JOB_DISPLAY_STATUSES = [
 /** What a job row is doing, in the terms an operator reasons about. */
 export type JobDisplayStatus = (typeof JOB_DISPLAY_STATUSES)[number];
 
+/**
+ * What each display status MEANS, in the two ways callers need to know.
+ *
+ * One declaration rather than a predicate and a list that happen to agree.
+ * `jobNeedsAttention` and {@link ATTENTION_STATES} answer the same question at
+ * different layers — "does a person have to act" and "which rows should SQL
+ * select to find out" — and written separately they agree only until a second
+ * actionable status is added. The list would then stay stale, and the database
+ * would discard the new failures before the predicate could ever see them.
+ *
+ * `storedStates` is the inverse of {@link jobDisplayStatus}: the states a row
+ * can hold and still be shown as this status. It is not one-to-one, and that
+ * asymmetry is the whole reason a derivation is needed — `waiting` and
+ * `retrying` are both stored `pending`, and a job executing right now is
+ * `pending` with a live lease. A test derives this table from the function
+ * rather than trusting it, so the two cannot drift either.
+ */
+interface JobStatusFacts {
+  /** Whether this status is one a person has to do something about. */
+  readonly needsAttention: boolean;
+  /** Every stored state that can be displayed as this status. */
+  readonly storedStates: readonly JobState[];
+}
+
+const STATUS_FACTS: Record<JobDisplayStatus, JobStatusFacts> = {
+  waiting: { needsAttention: false, storedStates: ["pending"] },
+  retrying: { needsAttention: false, storedStates: ["pending"] },
+  // EVERY stored state, because a live lease is read before the column and
+  // overrides it. `claim` takes the lease without changing the state, so an
+  // in-flight job is usually `pending` — but a row in any state that still
+  // carries an unexpired lease displays as running, so a caller narrowing by
+  // this status in SQL cannot use the column to do it and must test the lease.
+  running: { needsAttention: false, storedStates: [...JOB_STATES] },
+  succeeded: { needsAttention: false, storedStates: ["done"] },
+  failed: { needsAttention: true, storedStates: ["failed"] },
+};
+
 /** The columns the derivation reads, and nothing more. */
 export interface JobStatusInput {
-  state: "pending" | "running" | "done" | "failed";
+  state: JobState;
   attemptCount: number;
   /**
    * When this runner's lease expires, or `null` when nothing holds one.
@@ -115,11 +154,23 @@ export function jobDisplayStatus(
  * anything wrong" must not have to enumerate the vocabulary to find out.
  */
 export function jobNeedsAttention(status: JobDisplayStatus): boolean {
-  return status === "failed";
+  return STATUS_FACTS[status].needsAttention;
 }
 
 /**
- * The STORED states that can produce an attention status.
+ * The stored states a row can hold and still be displayed as `status`.
+ *
+ * The inverse of {@link jobDisplayStatus}, exposed so a caller narrowing a
+ * query by a DISPLAY status can name the stored states that produce it —
+ * `retrying` and `waiting` are both `pending`, so a caller comparing the
+ * display vocabulary against the column would select nothing.
+ */
+export function storedStatesFor(status: JobDisplayStatus): readonly JobState[] {
+  return STATUS_FACTS[status].storedStates;
+}
+
+/**
+ * The STORED states a caller must select to find every job needing attention.
  *
  * The bridge between the derived vocabulary and a SQL predicate. A caller
  * asking "is anything wrong" wants to ask the database, not to fetch a recent
@@ -127,10 +178,15 @@ export function jobNeedsAttention(status: JobDisplayStatus): boolean {
  * hides an older failure inside it and the caller concludes, wrongly, that
  * nothing is wrong.
  *
- * Derived from {@link jobDisplayStatus}: it answers `failed` only for a row
- * whose stored state is `failed`, so that is the only state to select. Kept
- * beside the predicate it mirrors, because the two must change together.
+ * COMPUTED from {@link STATUS_FACTS} rather than listed, so a status added
+ * there with `needsAttention` widens this set in the same edit. A hand-written
+ * list goes stale silently and in the dangerous direction: the SQL discards the
+ * new failures before any predicate can inspect them.
  */
-export const ATTENTION_STATES = [
-  "failed",
-] as const satisfies readonly JobStatusInput["state"][];
+export const ATTENTION_STATES: readonly JobState[] = [
+  ...new Set(
+    JOB_DISPLAY_STATUSES.filter(
+      status => STATUS_FACTS[status].needsAttention
+    ).flatMap(status => STATUS_FACTS[status].storedStates)
+  ),
+];

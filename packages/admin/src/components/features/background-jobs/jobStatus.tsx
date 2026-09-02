@@ -14,6 +14,7 @@
 import { Badge } from "@nextlyhq/ui";
 import type React from "react";
 
+import { formatDateTime } from "@admin/lib/dates/format";
 import type { JobDisplayStatus } from "@admin/types/jobs";
 
 type BadgeVariant = "success" | "warning" | "destructive" | "default";
@@ -91,17 +92,24 @@ export const JobStatusBadge: React.FC<{ status: string }> = ({ status }) => {
 };
 
 /**
- * Render an ISO-8601 instant in the viewer's locale and timezone.
+ * Render an ISO-8601 instant the way the rest of the admin renders one.
+ *
+ * Through `formatDateTime` rather than `toLocaleString`, so these agree with
+ * every other date on screen. The installation configures a timezone and a
+ * date format, and a local call reads the BROWSER's instead — which produces
+ * two different renderings of the same instant on one page, and the
+ * disagreement is invisible to whoever set the configuration.
  *
  * The jobs read opts out of server-side timezone rewriting so a `lastError`
- * that is itself a timestamp survives verbatim, which means every instant on
- * this screen arrives in UTC and is formatted here.
+ * that is itself a timestamp survives verbatim, so every instant here arrives
+ * in UTC and is formatted on the client. That decides WHERE the formatting
+ * happens; it does not license a second answer to how.
  */
 export function formatJobTimestamp(iso: string | null): string {
   if (!iso) return "-";
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString();
+  return formatDateTime(date);
 }
 
 /**

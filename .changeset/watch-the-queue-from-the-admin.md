@@ -80,6 +80,24 @@ already crowded out: mounted beside a release, it would have stayed silent about
 that release's failure whenever webhook deliveries were noisier. The endpoint
 takes a `slug` and narrows in the query, before the limit.
 
+Which statuses need attention, and which stored states express them, are one
+declaration. A predicate saying "this needs a person" and a list saying "select
+these rows" are the same decision at two layers, and written separately they
+agree only until a second actionable status is added — at which point the list
+goes stale and the database discards the new failures before the predicate can
+see them. The list is now computed from the same table the predicate reads, and
+a test derives that table from the status function rather than trusting it.
+
+An unknown job state is refused rather than dropped. Dropping looks
+conservative and inverts the request: with every name dropped the filter
+disappears, so `?state=faield` returned a successful read of every state — the
+widest possible answer to a request for a narrower one.
+
+Job timestamps render through the admin's configured formatter. An installation
+sets a timezone and a date format; a local `toLocaleString` reads the browser's
+instead, so the same instant appeared two different ways on one page and nothing
+said so.
+
 It also asks for FAILURES rather than sifting recent rows. A window is the most
 recent N jobs, so N healthy ones running after a failure push it out — and a
 summary that looked inside that window would report nothing wrong with the

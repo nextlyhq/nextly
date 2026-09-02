@@ -28,6 +28,7 @@
 import { container } from "../di";
 import { jobDisplayStatus } from "../domains/jobs/job-display-status";
 import type { JobsRepository } from "../domains/jobs/jobs-repository";
+import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import { JOB_STATES, type JobState } from "../schemas/jobs";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../shared/lib/date-formatting";
@@ -69,16 +70,30 @@ function readSlug(request: Request): string | undefined {
  * more recently — and would report that nothing failed, which is the one wrong
  * answer such a question has.
  *
- * Unrecognised names are dropped rather than refused: the parameter narrows a
- * read, so a name this build does not know can only ever widen the result if
- * honoured, and dropping it keeps the query to states that exist.
+ * An unrecognised name is REFUSED, not dropped. Dropping looks conservative and
+ * inverts the request: drop every name in `?state=faield` and the filter is
+ * gone, so a caller asking to narrow gets a successful read of every state
+ * instead — the widest possible answer to a request for a narrower one, with a
+ * 200 on it. Refusing keeps a typo a typo.
  */
 function readStates(request: Request): JobState[] | undefined {
   const raw = new URL(request.url).searchParams.get("state");
   if (raw === null || raw.length === 0) return undefined;
   const asked = raw.split(",").map(value => value.trim());
-  const known = JOB_STATES.filter(state => asked.includes(state));
-  return known.length === 0 ? undefined : [...known];
+  const unknown = asked.filter(
+    value => !JOB_STATES.some(state => state === value)
+  );
+  if (unknown.length > 0) {
+    throw NextlyError.validation({
+      errors: unknown.map(value => ({
+        path: "state",
+        code: "unknown_job_state",
+        message: `Unknown job state "${value}". Known states: ${JOB_STATES.join(", ")}.`,
+      })),
+      logContext: { unknown, known: [...JOB_STATES] },
+    });
+  }
+  return JOB_STATES.filter(state => asked.includes(state));
 }
 
 /** Clamped rather than refused: a caller asking for too much gets the ceiling. */
