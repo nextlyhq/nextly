@@ -230,9 +230,37 @@ describe("the default accept map", () => {
     expect(DEFAULT_ACCEPTED_FILE_TYPES).not.toHaveProperty("font/otf");
   });
 
-  it("names the fonts in the copy an author reads before dragging", () => {
-    // A format the dropzone accepts but the description omits is a format
-    // nobody tries, so the two have to move together.
-    expect(getAcceptDescription(undefined, 10 * MB)).toContain("WOFF2");
+  it("names EVERY accepted extension in the copy an author reads", () => {
+    /*
+     * Derived from the map rather than checked against a list written here,
+     * which is the only version that cannot drift: an earlier form asserted
+     * "WOFF2" alone and passed while the copy omitted WOFF, the very format
+     * the map had just gained.
+     *
+     * So the assertion enumerates the MAP. A format added there and forgotten
+     * in the description fails this without anyone editing the test.
+     */
+    const description = getAcceptDescription(undefined, 10 * MB).toLowerCase();
+    const extensions = Object.values(DEFAULT_ACCEPTED_FILE_TYPES).flat();
+
+    // The population, asserted before the verdict: an empty map would satisfy
+    // a loop that never runs, and read as every format being named.
+    expect(extensions.length).toBeGreaterThan(0);
+    for (const extension of extensions) {
+      // Case-insensitive, because the property is that the format is NAMED —
+      // some carry their own spelling (WebP) rather than plain capitals.
+      expect(description).toContain(extension.replace(/^\./, "").toLowerCase());
+    }
+  });
+
+  it("names no format the map does not accept", () => {
+    /*
+     * The control. The case above is satisfied by a description listing every
+     * format in existence, which would tell an author a TTF is welcome and let
+     * the server refuse it after the upload.
+     */
+    const description = getAcceptDescription(undefined, 10 * MB).toLowerCase();
+    expect(description).not.toContain("ttf");
+    expect(description).not.toContain("otf");
   });
 });

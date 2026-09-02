@@ -211,6 +211,39 @@ function parseAcceptString(acceptString?: string): Accept | undefined {
 }
 
 /**
+ * Formats whose own spelling is not simply their extension in capitals.
+ *
+ * Presentation only, and deliberately separate from the map above: WHICH
+ * formats are offered stays derived, so an entry missing from here costs a
+ * capital letter rather than an omission an author acts on.
+ */
+const EXTENSION_CASING: Record<string, string> = { webp: "WebP" };
+
+/**
+ * Name the formats an accept map actually admits.
+ *
+ * DERIVED from the map rather than restated beside it. The hand-written
+ * version had already drifted: the map accepted WOFF and the copy named only
+ * WOFF2, so an author holding a `.woff` read that it was unsupported and did
+ * not try. A format the dropzone accepts but the copy omits is a format nobody
+ * uses, and the two lists have no mechanism keeping them level.
+ *
+ * Extensions rather than mime types, because that is what an author sees on
+ * their own file. Deduplicated through a Set: several entries can name the
+ * same extension, and a repeated one reads as a mistake in the copy.
+ */
+function describeAcceptedTypes(accept: Accept): string {
+  const labels = new Set<string>();
+  for (const extensions of Object.values(accept)) {
+    for (const extension of extensions) {
+      const bare = extension.replace(/^\./, "");
+      labels.add(EXTENSION_CASING[bare] ?? bare.toUpperCase());
+    }
+  }
+  return [...labels].join(", ");
+}
+
+/**
  * Get human-readable file type description from accept string
  */
 export function getAcceptDescription(
@@ -220,10 +253,7 @@ export function getAcceptDescription(
   const sizeLimit = ` up to ${formatFileSize(maxSize)}`;
 
   if (!acceptString) {
-    // Kept in step with DEFAULT_ACCEPTED_FILE_TYPES: this string is what an
-    // author reads to decide whether a file is worth dragging, so a format the
-    // dropzone accepts but the copy omits is a format nobody tries.
-    return `PNG, JPG, GIF, WebP, MP4, MOV, PDF, WOFF2${sizeLimit}`;
+    return `${describeAcceptedTypes(DEFAULT_ACCEPTED_FILE_TYPES)}${sizeLimit}`;
   }
 
   const types: string[] = [];
