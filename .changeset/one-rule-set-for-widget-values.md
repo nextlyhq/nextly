@@ -26,23 +26,25 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-One rule set for widget field values, whichever channel a widget arrives by.
+The two channels into the widget registry now agree where they should, and
+differ only where a plugin's version says they must.
 
-`registerWidget` and `contributes.admin.widgets` validate related but distinct
-shapes, and the rules they genuinely share had been written twice. Four fields
-had already drifted apart one at a time -- the shortcut rule, the queryless
-no-query rule, `defaultOrder` and `chrome` -- each added to one validator,
-missed by the other, and each time the contributed side was the more permissive.
+`registerWidget` and `contributes.admin.widgets` had been validating the same
+field values with two rule sets, and four fields came apart one at a time. The
+shared half is now one rule both ask.
 
-Measuring the whole surface rather than the next instance found five more:
-a blank title, a `defaultSize` outside the vocabulary (which silently rendered
-the card full width), `minSize` above `defaultSize`, an unknown `defaultHeight`,
-and `actions` declared on an archetype that is not `actions`.
+The shared half is deliberately narrow. A contribution crosses a VERSION
+boundary -- a plugin may be built against a newer core -- so a closed-vocabulary
+check applied there aborts a whole plugin install the moment that plugin names a
+size, height or chrome value this core has not learned yet. The admin already
+survives those by falling back. Vocabulary checks are therefore the registry's
+alone, and only version-independent rules are shared: a shortcut missing its
+label or href, a non-finite order, a query that is not an object, and a
+placement rule that runs only for archetypes this core recognises.
 
-`widgetValueProblem` is now the single rule both channels ask. Shape stays with
-each channel, because they differ there on purpose: a contribution may omit
-`title` and `defaultSize`, which resolution fills in.
+One rule moved the other way: the registry accepted a truthy non-object `query`
+that the contributions gate refused, so it now refuses one too.
 
-A divergence test pins the whole relationship -- every rule both channels must
-agree on, and the four differences that are deliberate, each recorded with the
-reason it is not drift.
+A divergence test records the whole relationship -- the rules both channels must
+agree on, and every difference that is deliberate, each with the reason it is
+not drift.

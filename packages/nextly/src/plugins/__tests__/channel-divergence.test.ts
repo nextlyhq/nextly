@@ -144,12 +144,9 @@ const DECLARED_DIFFERENCES: Array<{
       actions: [{ label: "L", href: "/admin/users/create" }],
     },
   },
-];
-
-/** Rules that must hold identically on both sides. */
-const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   {
-    case: "defaultSize outside the vocabulary",
+    case: "a defaultSize this core does not know",
+    why: "a closed vocabulary states THIS core's version; a plugin built against a newer one may name a size we have never heard of, and `sizes.ts` already falls back to full width calling that expected input rather than defensive decoration",
     widget: {
       id: "acme/thing",
       title: "T",
@@ -159,6 +156,22 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
     },
   },
   {
+    case: "a defaultHeight this core does not know",
+    why: "same version boundary, and the contribution contract does not even declare the field -- the resolver never reads it, so refusing would abort an install over a value nothing consumes",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      defaultHeight: "gigantic",
+      component: "p#X",
+    },
+  },
+];
+
+/** Rules that must hold identically on both sides. */
+const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
+  {
     case: "minSize above defaultSize",
     widget: {
       id: "acme/thing",
@@ -166,17 +179,6 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
       archetype: "custom",
       defaultSize: "sm",
       minSize: "xl",
-      component: "p#X",
-    },
-  },
-  {
-    case: "defaultHeight outside the vocabulary",
-    widget: {
-      id: "acme/thing",
-      title: "T",
-      archetype: "custom",
-      defaultSize: "sm",
-      defaultHeight: "gigantic",
       component: "p#X",
     },
   },
@@ -239,6 +241,16 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
       defaultSize: "sm",
       query: { source: "collection:p", op: "count" },
       chrome: "none",
+    },
+  },
+  {
+    case: "a query that is not an object",
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "metric",
+      defaultSize: "sm",
+      query: "bogus",
     },
   },
 ];
