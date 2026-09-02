@@ -150,6 +150,37 @@ describe("resolveSettingsLanding", () => {
   });
 
   /**
+   * The other direction, which the assertion above cannot see.
+   *
+   * That one checks the DANGEROUS failure: a landing the route would refuse.
+   * A stale `routePermission` fails the other way — widen the route to admit
+   * `read-api-keys` and this table would still skip the entry, sending a
+   * reader who could now open the page somewhere else. The landing is simply
+   * absent, so nothing lands anywhere it should not and the check above stays
+   * green.
+   *
+   * Asserting equality with the route's own declaration closes it. Both now
+   * read one constant, so this passes by construction rather than by
+   * vigilance — and fails the moment someone re-types the value.
+   */
+  it("declares the same grant the route itself declares", () => {
+    const declaring = SETTINGS_NAV.flatMap(group => group.items).filter(
+      item => item.routePermission !== undefined
+    );
+
+    // The premise: an empty list would make this vacuous.
+    expect(declaring.length).toBeGreaterThan(0);
+
+    for (const item of declaring) {
+      expect(
+        item.routePermission,
+        `${item.id} declares a route grant that differs from the route's own ` +
+          `requiredPermission; the panel would skip a destination the page admits`
+      ).toEqual(routeConfig[item.href]?.requiredPermission);
+    }
+  });
+
+  /**
    * A control for the assertion above: it must be capable of failing. The
    * panel does show a destination whose route is narrower than its gate, so
    * consulting visibility ALONE — which is what the check would do if

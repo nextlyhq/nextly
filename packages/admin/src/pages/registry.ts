@@ -1,7 +1,10 @@
 import { lazy } from "react";
 
 import { settingsPanelSlugs } from "../components/layout/sidebar/lib/settings-nav";
-import { RELEASE_SECTION_PERMISSIONS } from "../constants/navigation";
+import {
+  API_KEYS_ROUTE_PERMISSION,
+  RELEASE_SECTION_PERMISSIONS,
+} from "../constants/navigation";
 import { type PublicRoutePath, ROUTES } from "../constants/routes";
 import {
   builderSection,
@@ -457,7 +460,7 @@ export const routeConfig: Record<string, RouteConfig> = {
   [ROUTES.SETTINGS_API_KEYS]: {
     component: ApiKeysPage,
     type: "private",
-    requiredPermission: "update-api-keys",
+    requiredPermission: API_KEYS_ROUTE_PERMISSION,
     section: overridableBy("settings"),
   },
   [ROUTES.SETTINGS_API_KEYS_CREATE]: {

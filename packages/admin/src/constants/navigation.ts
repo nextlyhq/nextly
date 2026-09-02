@@ -110,6 +110,22 @@ export type SidebarNavigation = NavigationItem[];
  * same implication, so a role holding only `create` can create a release
  * through the API and must be able to see the one it just made.
  */
+/**
+ * The grant the API Keys LIST route demands.
+ *
+ * Named because two places gate on it and they must agree, and because they
+ * are not the same question: the Settings panel SHOWS the entry to any api-key
+ * grant, while this route admits only `update-api-keys`. The sidebar consults
+ * it to avoid choosing a landing destination that would then refuse the
+ * reader, and a copy of the value there would go stale in the direction no
+ * test can see — widen the route and the copy still refuses someone the page
+ * would now admit.
+ *
+ * Lives here rather than in the panel's own table because `pages/registry`
+ * already imports that table, so the table cannot import the registry back.
+ */
+export const API_KEYS_ROUTE_PERMISSION = "update-api-keys";
+
 export const RELEASE_SECTION_PERMISSIONS = [
   "read-content-releases",
   "create-content-releases",

@@ -21,6 +21,7 @@ import {
   Users,
   Webhook,
 } from "@admin/components/icons";
+import { API_KEYS_ROUTE_PERMISSION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 
 /**
@@ -103,11 +104,12 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Key,
         href: ROUTES.SETTINGS_API_KEYS,
         gate: { kind: "capability", capability: "apiKeys" },
-        // The list screen is guarded on `update-api-keys` alone, while the link
-        // is shown to any api-key grant. A reader holding only `read-api-keys`
-        // may therefore see this entry and not be able to open it, so it must
-        // never be chosen as their landing destination.
-        routePermission: "update-api-keys",
+        // The list screen is guarded more narrowly than the link is shown: any
+        // api-key grant reveals this entry, but only `update-api-keys` opens
+        // it. Taken from the route's own constant rather than copied, so
+        // widening the route cannot leave this refusing a reader the page
+        // would now admit.
+        routePermission: API_KEYS_ROUTE_PERMISSION,
       },
       {
         id: "webhooks",
