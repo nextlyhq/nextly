@@ -407,6 +407,13 @@ export async function ensureCoreTables(
     }
   );
 
+  // Dropped here for the same reason as the reconcile branch: the SQLite
+  // fallback above also calls `ensureSystemTables`, which memoises the registry
+  // name on this adapter for the process's life, and this scope releases its
+  // claim before `db:sync` takes the outer one. A migration completing in that
+  // window would leave the sync querying a table that has since been renamed.
+  forgetFieldGroupStorageNames(drizzleAdapter);
+
   if (pushFailed) {
     logger.error(
       "Core tables not found. Please run `nextly migrate` first to create the database schema."
