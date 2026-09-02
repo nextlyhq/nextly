@@ -89,7 +89,12 @@ export function DashboardEditChrome({
         // reloaded, so the arrangement stays exactly where it is.
         <div
           role="alert"
-          className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
+          // Full-strength `border-destructive`, which is what every other error
+          // surface in the admin uses. The faded `/40` composited to 1.69:1 on
+          // the page surface against the 3:1 a non-decorative border needs, and
+          // this border is not decorative: it is what separates the alert from
+          // the arrangement behind it, for a reader who cannot rely on the tint.
+          className="rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm"
           data-testid="dashboard-edit-error"
         >
           Your dashboard could not be saved. Your changes are still here — try
