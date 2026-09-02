@@ -3,12 +3,14 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { HTML_DOCUMENT, PNG_1X1 } from "./__tests__/format-fixtures";
+import { resolveClaimedMimeType } from "./mime";
 import { validateAndSanitizeUpload } from "./validate-upload";
 
 const loadFixture = (rel: string): Buffer =>
   readFileSync(join(__dirname, "__tests__/fixtures", rel));
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG = PNG_1X1;
 const baseConfig = {
   allowedMimeTypes: undefined,
   additionalMimeTypes: undefined,
@@ -99,6 +101,35 @@ describe("validateAndSanitizeUpload — pipeline ordering", () => {
     if (r.ok) {
       expect(r.value.isSvg).toBe(false);
       expect(r.value.buffer).toBe(PNG); // not rewritten
+    }
+  });
+
+  it("refuses HTML renamed to an accepted extension, whoever named the type", async () => {
+    /*
+     * Both spellings of one bypass, and they have to be asserted together: an
+     * attacker writes the filename AND the reported type, so hardening either
+     * route alone leaves the same upload one keystroke from succeeding.
+     *
+     * `.html` is a blocked extension and `text/html` a blocked type, but
+     * neither string appears here — `payload.pdf` claiming `application/pdf`
+     * passes both blocklists, and HTML carries no signature to contradict it.
+     */
+    for (const claimed of ["", "application/pdf"]) {
+      const mimeType = resolveClaimedMimeType(
+        "payload.pdf",
+        claimed,
+        HTML_DOCUMENT
+      );
+      // The type under test is the accepted one either way; the inferred route
+      // reaching some other type would refuse for an unrelated reason.
+      expect(mimeType).toBe("application/pdf");
+
+      const r = await validateAndSanitizeUpload(
+        { buffer: HTML_DOCUMENT, filename: "payload.pdf", mimeType },
+        baseConfig
+      );
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.errors[0].code).toBe("MAGIC_BYTE_MISMATCH");
     }
   });
 

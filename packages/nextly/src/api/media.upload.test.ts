@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { container } from "../di/container";
 import { MediaService } from "../domains/media/services/media-service";
 import { UploadValidator } from "../services/upload-validation";
+import { WOFF2_HEADER } from "../services/upload-validation/__tests__/format-fixtures";
 
 const mocks = vi.hoisted(() => ({ requirePermission: vi.fn() }));
 
@@ -292,14 +293,11 @@ describe("POST through the mounted media handlers — font uploads", () => {
     container.registerSingleton("mediaService", () => bundle.service);
     const { POST } = await mountedHandlers();
 
-    // REAL WOFF2 bytes, so the case distinguishes a font from anything else
-    // renamed to look like one. Text here would pass a validator that trusts
-    // whatever it cannot identify, which is the implementation this must fail
-    // against.
-    const bytes = Buffer.concat([
-      Buffer.from("wOF2", "ascii"),
-      Buffer.alloc(64),
-    ]);
+    // A WOFF2 header a sniffer identifies, so the case distinguishes a font
+    // from anything else renamed to look like one. Text here would pass a
+    // validator that trusts whatever it cannot identify, which is the
+    // implementation this must fail against.
+    const bytes = WOFF2_HEADER;
     const res = await POST(...mountedRequest(bytes, "Inter.woff2", ""));
 
     expect(res.status).toBe(201);
@@ -315,9 +313,9 @@ describe("POST through the mounted media handlers — font uploads", () => {
     /*
      * The claim can be inferred from a filename, so nothing but the bytes
      * stands behind it — and the public route serves these types to anonymous
-     * callers as immutable, cacheable assets. `file-type` recognises neither
-     * WOFF nor WOFF2, so a validator trusting what it cannot identify accepts
-     * arbitrary content under a servable type.
+     * callers as immutable, cacheable assets, so a validator trusting
+     * whatever it cannot identify accepts arbitrary content under a servable
+     * type.
      *
      * Its control is the case above, which fails if font uploads stop working
      * at all; this one fails only when the signature goes unchecked.

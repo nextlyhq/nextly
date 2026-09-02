@@ -8,19 +8,52 @@
  * had that policy apply to one door and not the other, and what lands here is
  * retrievable through the anonymous byte route.
  *
- * The cases below assert REFUSALS only, deliberately: a refusal returns before
- * any service is constructed or `next/cache` is resolved, so the harness needs
- * nothing but the container and stays honest about what it exercises.
+ * A refusal returns before any service is constructed, so those cases need
+ * nothing but the container. The cases that get PAST validation assert what
+ * the media service was handed, since that is where storing the validator's
+ * input rather than its output becomes observable.
  *
  * @module actions/upload-media.test
  */
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../di/container";
+import { ServiceContainer } from "../services";
+
+import type { UploadMediaInput } from "../types/media";
 
 import { uploadMediaAction } from "./upload-media";
 
 const TEST_USER_ID = "00000000-0000-4000-8000-000000000000";
+
+/**
+ * Replace the media service the action reaches, so what it was HANDED can be
+ * asserted. The double is narrower than `LegacyMediaService` and answers the
+ * one method the action calls, with the shape that method returns.
+ *
+ * It refuses, deliberately. A success sends the action on to `revalidatePath`,
+ * which resolves `next/cache` through `createRequire` and is not available
+ * here — so the refusal keeps the subject of these tests the arguments the
+ * service received rather than a module the harness cannot supply.
+ */
+function stubMediaService() {
+  // Typed from the real input, so what the assertions read is the shape the
+  // service is actually handed rather than a literal restating it.
+  const uploadMedia = vi.fn(async (_input: UploadMediaInput) => ({
+    success: false as const,
+    statusCode: 503,
+    code: "STORAGE_UNAVAILABLE",
+    message: "No storage in this harness.",
+    data: null,
+  }));
+  container.registerSingleton("adapter", () => ({
+    getCapabilities: () => ({ dialect: "sqlite" }),
+  }));
+  vi.spyOn(ServiceContainer.prototype, "media", "get").mockReturnValue({
+    uploadMedia,
+  } as unknown as ServiceContainer["media"]);
+  return uploadMedia;
+}
 
 /** A drop carrying bytes and whatever type the client claimed. */
 function upload(name: string, type: string, bytes: Buffer): FormData {
@@ -31,8 +64,17 @@ function upload(name: string, type: string, bytes: Buffer): FormData {
   return form;
 }
 
-/** Real WOFF2 bytes, so a refusal is never merely a signature mismatch. */
-const WOFF2 = Buffer.concat([Buffer.from("wOF2", "ascii"), Buffer.alloc(48)]);
+/**
+ * A WOFF2 header a sniffer will actually identify: the magic, then the sfnt
+ * flavor at offset 4 that a real file carries. Stopping at the four magic
+ * bytes describes no font, and is refused for that reason — which would make
+ * every refusal below ambiguous between the policy and the fixture.
+ */
+const WOFF2 = Buffer.concat([
+  Buffer.from("wOF2", "ascii"),
+  Buffer.from([0x00, 0x01, 0x00, 0x00]),
+  Buffer.alloc(44),
+]);
 
 beforeEach(() => {
   container.clear();
@@ -40,6 +82,7 @@ beforeEach(() => {
 
 afterEach(() => {
   container.clear();
+  vi.restoreAllMocks();
 });
 
 describe("uploadMediaAction and the configured allowlist", () => {
@@ -91,24 +134,86 @@ describe("uploadMediaAction and the configured allowlist", () => {
     expect(result.statusCode).toBe(400);
   });
 
-  it("does not refuse a file the policy allows, for lack of a policy", async () => {
+  it("hands an allowed file to the media service", async () => {
     /*
-     * The control, and it has to be here: both cases above are satisfied by an
-     * action that rejects everything — including by throwing before it reaches
-     * the validator at all. This one gets PAST validation, so it fails on the
-     * service the harness deliberately does not provide rather than on the
-     * policy, which is the only way to tell "refused by policy" from "refused
-     * because nothing works".
+     * The control, and it asserts an OUTCOME rather than the absence of one.
+     * Both cases above are satisfied by an action that rejects everything,
+     * including one that throws on its way to the validator — and a throw
+     * returns 500, so "not 400" is a condition a broken allowed-file path
+     * meets. What separates the two is the service being REACHED, which only
+     * happens past validation.
      */
     container.registerSingleton("config", () => ({
       security: { uploads: { allowedMimeTypes: ["font/woff2"] } },
     }));
+    const uploadMedia = stubMediaService();
 
     const result = await uploadMediaAction(upload("Inter.woff2", "", WOFF2), {
       uploadedBy: TEST_USER_ID,
     });
 
-    // Not the validator's 400 — it got past the policy and fell over further in.
-    expect(result.statusCode).not.toBe(400);
+    expect(uploadMedia).toHaveBeenCalledTimes(1);
+    // The stub's own refusal, so a 400 could only have come from the policy.
+    expect(result.statusCode).toBe(503);
+  });
+
+  it("stores the SANITIZED bytes, not the ones that were uploaded", async () => {
+    /*
+     * `ValidatedFile.buffer` is the sanitized document for an SVG, so passing
+     * the original to the service computes the safe copy and discards it —
+     * leaving scripted markup in storage, reachable by URL.
+     *
+     * The script survives in the INPUT, which is what makes the assertion
+     * about sanitisation rather than about an empty file: the same bytes are
+     * asserted present on the way in and absent on the way out.
+     */
+    container.registerSingleton("config", () => ({
+      security: { uploads: { allowedMimeTypes: ["image/svg+xml"] } },
+    }));
+    const uploadMedia = stubMediaService();
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+      "utf8"
+    );
+    expect(svg.toString("utf8")).toContain("<script>");
+
+    await uploadMediaAction(upload("logo.svg", "image/svg+xml", svg), {
+      uploadedBy: TEST_USER_ID,
+    });
+
+    expect(uploadMedia).toHaveBeenCalledTimes(1);
+    const stored = uploadMedia.mock.calls[0]?.[0];
+    expect(stored?.file.toString("utf8")).not.toContain("<script>");
+    // The row has to describe the bytes that were written, and sanitisation
+    // changes their length.
+    expect(stored?.size).toBe(stored?.file.length);
+    expect(stored?.contentDisposition).toBe("attachment");
+  });
+
+  it("leaves the disposition alone when the install turned svgCsp off", async () => {
+    /*
+     * The other spelling of the same decision. `attachment` is conditional on
+     * the flag the unified service reads, so an install that turned it off
+     * must not have it applied here — a hard-coded disposition would satisfy
+     * the case above and silently override the setting.
+     */
+    container.registerSingleton("config", () => ({
+      security: {
+        uploads: { allowedMimeTypes: ["image/svg+xml"], svgCsp: false },
+      },
+    }));
+    const uploadMedia = stubMediaService();
+
+    await uploadMediaAction(
+      upload(
+        "logo.svg",
+        "image/svg+xml",
+        Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>', "utf8")
+      ),
+      { uploadedBy: TEST_USER_ID }
+    );
+
+    const stored = uploadMedia.mock.calls[0]?.[0];
+    expect(stored?.contentDisposition).toBeUndefined();
   });
 });

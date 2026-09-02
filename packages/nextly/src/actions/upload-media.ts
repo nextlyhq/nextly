@@ -81,7 +81,7 @@ import { ServiceContainer } from "../services";
 import { UploadValidator } from "../services/upload-validation";
 import type { SecurityBlockLike } from "../services/upload-validation";
 import { resolveClaimedMimeType } from "../services/upload-validation/mime";
-import type { Media } from "../types/media";
+import type { Media, MediaResponse } from "../types/media";
 import { UploadMediaInputSchema } from "../types/media";
 
 // `next/cache` resolved via createRequire — see api/with-error-handler.ts
@@ -101,6 +101,38 @@ function getServices(): ServiceContainer {
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
   const adapter = container.get("adapter") as DrizzleAdapter;
   return new ServiceContainer(adapter);
+}
+
+/**
+ * Turn a media service result into an action result, revalidating the listing
+ * when the write succeeded.
+ *
+ * Upload and update answer identically here, and a second copy drifts from the
+ * first as soon as either changes what a success returns — so both ask this.
+ *
+ * @param result - What the service reported
+ * @param revalidatePath - Caller's override for the path to revalidate
+ * @param failureMessage - Fallback text when the service reported none
+ */
+function settleMediaWrite(
+  result: MediaResponse,
+  revalidatePath: string | undefined,
+  failureMessage: string
+): UploadMediaActionResult {
+  if (result.success && result.data) {
+    getRevalidatePath()(revalidatePath || "/admin/media");
+    return {
+      success: true,
+      data: result.data,
+      statusCode: result.statusCode,
+    };
+  }
+
+  return {
+    success: false,
+    error: result.message || failureMessage,
+    statusCode: result.statusCode,
+  };
 }
 
 /**
@@ -201,24 +233,6 @@ export async function uploadMediaAction(
       buffer
     );
 
-    const parseResult = UploadMediaInputSchema.safeParse({
-      file: buffer,
-      filename: file.name,
-      mimeType: claimedMimeType,
-      size: file.size,
-      uploadedBy: options.uploadedBy,
-    });
-
-    if (!parseResult.success) {
-      const errors = parseResult.error.issues;
-      const firstError = errors[0];
-      return {
-        success: false,
-        error: firstError?.message || "Invalid file data",
-        statusCode: 400,
-      };
-    }
-
     /*
      * 5. The CONFIGURED validator, before anything is stored.
      *
@@ -250,30 +264,49 @@ export async function uploadMediaAction(
       };
     }
 
-    // 6. Upload via MediaService
-    const services = getServices();
-    const result = await services.media.uploadMedia(parseResult.data);
+    /*
+     * 6. What gets stored is the validator's OUTPUT, never its input.
+     *
+     * For an SVG those differ: `value.buffer` is the sanitized document, and
+     * persisting the original would compute the safe copy and then throw it
+     * away. The size travels from the same buffer for the same reason — the
+     * row has to describe the bytes that were actually written, and
+     * sanitisation changes their length.
+     *
+     * `svgCsp` is resolved as `register-media` resolves it, so a sanitized
+     * SVG is served as an attachment on this path too rather than rendering
+     * in the origin on direct navigation.
+     */
+    const validated = validation.value;
+    const svgCsp = securityConfig?.uploads?.svgCsp ?? true;
 
-    // 6. Revalidate cache via createRequire-resolved next/cache.
-    if (result.success && result.data) {
-      const pathToRevalidate = options.revalidatePath || "/admin/media";
-      getRevalidatePath()(pathToRevalidate);
+    const parseResult = UploadMediaInputSchema.safeParse({
+      file: validated.buffer,
+      filename: validated.filename,
+      mimeType: validated.mimeType,
+      size: validated.buffer.length,
+      uploadedBy: options.uploadedBy,
+      ...(validated.isSvg && svgCsp && { contentDisposition: "attachment" }),
+    });
 
+    if (!parseResult.success) {
+      const errors = parseResult.error.issues;
+      const firstError = errors[0];
       return {
-        success: true,
-        data: result.data,
-        statusCode: result.statusCode,
+        success: false,
+        error: firstError?.message || "Invalid file data",
+        statusCode: 400,
       };
     }
 
-    // 7. Handle service errors
-    return {
-      success: false,
-      error: result.message || "Upload failed",
-      statusCode: result.statusCode,
-    };
+    // 7. Upload via MediaService
+    const services = getServices();
+    const result = await services.media.uploadMedia(parseResult.data);
+
+    // 8. Revalidate on success, and map whatever the service reported.
+    return settleMediaWrite(result, options.revalidatePath, "Upload failed");
   } catch (error) {
-    // 8. Handle unexpected errors
+    // 9. Handle unexpected errors
     console.error("[uploadMediaAction] Unexpected error:", error);
 
     return {
@@ -401,24 +434,8 @@ export async function updateMediaAction(
     const services = getServices();
     const result = await services.media.updateMedia(mediaId, updates);
 
-    // 3. Revalidate cache via createRequire-resolved next/cache.
-    if (result.success && result.data) {
-      const pathToRevalidate = options?.revalidatePath || "/admin/media";
-      getRevalidatePath()(pathToRevalidate);
-
-      return {
-        success: true,
-        data: result.data,
-        statusCode: result.statusCode,
-      };
-    }
-
-    // 4. Handle service errors
-    return {
-      success: false,
-      error: result.message || "Update failed",
-      statusCode: result.statusCode,
-    };
+    // 3. Revalidate on success, and map whatever the service reported.
+    return settleMediaWrite(result, options?.revalidatePath, "Update failed");
   } catch (error) {
     console.error("[updateMediaAction] Unexpected error:", error);
 
