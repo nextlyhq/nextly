@@ -57,6 +57,7 @@ import {
   NAMED_CLASS_SLUG_RE,
   STYLE_STATES,
   compileStyleValues,
+  isPlainRecord,
   namedClassName,
   usableNamedClasses,
   type Declaration,
@@ -191,18 +192,34 @@ function indexedUsage(usage: ClassUsageCounts, classId: string): number {
  */
 function storedContexts(
   styles: NodeStyles
-): { state: string; breakpoint: string; count: number }[] {
-  const pairs: { state: string; breakpoint: string; count: number }[] = [];
+): { state: string; breakpoint: string; values: Record<string, unknown> }[] {
+  const pairs: {
+    state: string;
+    breakpoint: string;
+    values: Record<string, unknown>;
+  }[] = [];
   for (const state of STYLE_STATES) {
-    const byBreakpoint = styles[state];
-    if (byBreakpoint === undefined) continue;
+    const byBreakpoint: unknown = styles[state];
+    // GUARDED at both levels, the way `compilePageCss` guards the same two.
+    //
+    // The type says these are records; the stored document only promises to be
+    // JSON. A persisted `{ base: { base: null } }` passes `usableSiteClasses`,
+    // and `Object.keys(null)` throws — which took the whole class manager down
+    // rather than hiding one row. Three shapes reached it: a null state map, a
+    // null values map under any state, and a null base that went on to
+    // `compileStyleValues` and threw inside the engine instead.
+    //
+    // `isPlainRecord` rather than a null check, because it is the predicate the
+    // compiler already uses for exactly this and it also excludes the shapes
+    // that do not throw and still style nothing — a number, a string, an array.
+    // Skipping silently is right HERE and not in the compiler: this is a
+    // summary of what a class does, and a context that writes no rule does
+    // nothing. `compilePageCss` is where the author is told why.
+    if (!isPlainRecord(byBreakpoint)) continue;
     for (const breakpoint of Object.keys(byBreakpoint)) {
-      const values = byBreakpoint[breakpoint];
-      pairs.push({
-        state,
-        breakpoint,
-        count: values === undefined ? 0 : Object.keys(values).length,
-      });
+      const values: unknown = byBreakpoint[breakpoint];
+      if (!isPlainRecord(values)) continue;
+      pairs.push({ state, breakpoint, values });
     }
   }
   return pairs;
@@ -217,13 +234,28 @@ function storedContexts(
  */
 function contextsElsewhere(
   styles: NodeStyles,
-  emitted: ReadonlySet<string>
+  emitted: ReadonlySet<string>,
+  slug: string,
+  context?: StyleCompileContext
 ): number {
   return storedContexts(styles).filter(
     pair =>
       !(pair.state === "base" && pair.breakpoint === BASE_BREAKPOINT) &&
       emitted.has(pair.breakpoint) &&
-      pair.count > 0
+      // COMPILED, not counted. A stored key is not a declaration: a property
+      // the catalog does not define, or a value whose grammar it refuses,
+      // writes nothing — so counting keys claimed "1 more elsewhere" for
+      // styling the page does not have, which is the same class of lie as
+      // counting a breakpoint the site has since deleted. The one implementation
+      // of "stored values become declarations" is asked instead.
+      compileStyleValues(
+        pair.values,
+        `class:${slug}/${pair.state}/${pair.breakpoint}`,
+        undefined,
+        undefined,
+        undefined,
+        { mayFetchUrl: context?.mayFetchUrl }
+      ).declarations.length > 0
   ).length;
 }
 
@@ -267,9 +299,11 @@ export function classDeclarations(
    */
   context?: StyleCompileContext
 ): { shown: readonly Declaration[]; elsewhere: number } {
-  const base = styles.base?.[BASE_BREAKPOINT];
+  const base: unknown = styles.base?.[BASE_BREAKPOINT];
   const shown =
-    base === undefined
+    // The same guard the walk below uses, for the same reason: a stored `null`
+    // here reached `Object.hasOwn` inside `compileStyleValues` and threw.
+    !isPlainRecord(base)
       ? []
       : compileStyleValues(
           base,
@@ -282,7 +316,7 @@ export function classDeclarations(
   const emitted = new Set(
     breakpointContexts(context?.breakpoints).map(entry => entry.id)
   );
-  const elsewhere = contextsElsewhere(styles, emitted);
+  const elsewhere = contextsElsewhere(styles, emitted, slug, context);
   return { shown, elsewhere };
 }
 

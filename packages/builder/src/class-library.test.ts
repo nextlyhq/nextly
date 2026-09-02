@@ -56,6 +56,7 @@ import {
   withClassApplied,
   withClassRemoved,
   classDeclarations,
+  usableSiteClasses,
 } from "./class-library";
 
 /** A library entry, with the styles envelope left empty where it is not read. */
@@ -766,5 +767,91 @@ describe("what a class writes", () => {
     const summary = classDeclarations({}, "hero");
     expect(summary.shown).toEqual([]);
     expect(summary.elsewhere).toBe(0);
+  });
+
+  it("counts a context whose values COMPILE to nothing as nothing", () => {
+    /*
+     * A stored key is not a declaration. A property the catalog does not define
+     * is dropped by the compiler rather than passed through, so counting keys
+     * claimed "1 more elsewhere" for styling no visitor can see — the same class
+     * of lie as counting a breakpoint the site has since deleted, which the case
+     * above already refuses.
+     *
+     * `md` here holds a key of the right SHAPE and no meaning, so a count of
+     * stored keys says 1 and the compiled answer says 0.
+     */
+    const summary = classDeclarations(
+      {
+        base: {
+          [BASE_BREAKPOINT]: { color: "#112233" },
+          md: { notARealProperty: "1rem" },
+        },
+      } as never,
+      "hero",
+      WITH_MD
+    );
+
+    expect(summary.elsewhere).toBe(0);
+    // Must-be-found control: the base still compiled, so the zero above is a
+    // judgement about `md` and not a walk that found nothing anywhere.
+    expect(summary.shown.map(d => d.property)).toEqual(["color"]);
+  });
+});
+
+describe("persisted class styles that are not the shape the type promises", () => {
+  /*
+   * The type says states map to breakpoints map to values. The stored document
+   * only promises to be JSON, and `usableSiteClasses` admits a class whose
+   * `styles` is a plain record without walking into it — so a malformed nested
+   * value reached the projection and threw, taking down the WHOLE class manager
+   * rather than hiding one row.
+   *
+   * Each shape below is a separate throw site, which is why they are separate
+   * cases rather than one loop: two threw inside this module's own walk and one
+   * got as far as `compileStyleValues` and threw inside the engine.
+   */
+  const cases: [string, unknown][] = [
+    ["a null base, which reached the compiler", { base: { base: null } }],
+    ["a null state map", { base: null }],
+    ["a null values map under a non-base state", { hover: { base: null } }],
+    ["a state map that is an array", { base: [] }],
+    ["values that are a string", { base: { base: "red" } }],
+  ];
+
+  it.each(cases)("survives %s", (_label, styles) => {
+    expect(() => classDeclarations(styles as never, "hero")).not.toThrow();
+  });
+
+  it("treats a malformed context as styling NOTHING, not as behaviour", () => {
+    /*
+     * Not throwing is half the answer. The other half is what it then says: a
+     * context the compiler writes no rule for is not a place the class behaves
+     * differently, so it must not be counted — otherwise the row trades a crash
+     * for a caveat that misdescribes the page.
+     */
+    const summary = classDeclarations(
+      {
+        base: { [BASE_BREAKPOINT]: { color: "#112233" }, md: null },
+        hover: null,
+      } as never,
+      "hero",
+      WITH_MD
+    );
+
+    expect(summary.elsewhere).toBe(0);
+    // Must-be-found: the well-formed base still came through, so this is a
+    // judgement about the malformed contexts beside it.
+    expect(summary.shown.map(d => d.property)).toEqual(["color"]);
+  });
+
+  it("still admits the class, because repair is not this module's job", () => {
+    // The guard makes the projection survive the shape; it does not make the
+    // class disappear. Hiding it would lose the author the only row from which
+    // they could delete or rename it.
+    expect(
+      usableSiteClasses([
+        { id: "c1", slug: "hero", styles: { base: { base: null } } },
+      ] as never)
+    ).toHaveLength(1);
   });
 });
