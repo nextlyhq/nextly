@@ -19,7 +19,10 @@
  * @module lib/entry-heading
  */
 
-import { COMMON_TITLE_FIELDS } from "../domains/collections/entry-title";
+import {
+  COMMON_TITLE_FIELDS,
+  readableTitleText,
+} from "../domains/collections/entry-title";
 
 /**
  * The first candidate that is a usable heading, else `fallback`.
@@ -56,10 +59,8 @@ export function entryHeading<TFallback extends string | undefined>(
     ...COMMON_TITLE_FIELDS.map(name => data[name]),
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.length > 0) return candidate;
-    if (typeof candidate === "number" || typeof candidate === "bigint") {
-      return String(candidate);
-    }
+    const text = readableTitleText(candidate);
+    if (text !== undefined) return text;
   }
   return fallback;
 }

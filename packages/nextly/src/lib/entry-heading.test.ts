@@ -22,6 +22,23 @@ describe("entryHeading", () => {
     expect(entryHeading({ title: "T", name: "N" }, null, "id-1")).toBe("T");
   });
 
+  it("skips a WHITESPACE-ONLY candidate and keeps walking", () => {
+    // 🔴 The value rule is shared for this reason. A blank heading is
+    // indistinguishable from a row that failed to load, and the entry surfaces
+    // trim before accepting -- so a `label` holding two spaces was a blank
+    // heading in the activity feed and the meaningful `subject` everywhere
+    // else. Same entry, two names.
+    expect(
+      entryHeading({ label: "   ", subject: "Re: hello" }, null, "id-1")
+    ).toBe("Re: hello");
+    // The nominated field gets the same treatment: nominating it does not make
+    // whitespace a name.
+    expect(entryHeading({ headline: "  " }, "headline", "id-1")).toBe("id-1");
+    // And an accepted value comes back TRIMMED, so the two surfaces render the
+    // same characters rather than differing by leading space.
+    expect(entryHeading({ title: "  Ada  " }, null, "id-1")).toBe("Ada");
+  });
+
   it("walks the SAME conventional names the field-level rule accepts", () => {
     // 🔴 One question, one answer. The rule that decides which column a list or
     // a generated card SELECTS accepts `label`, `subject` and `heading` beside

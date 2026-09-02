@@ -22,6 +22,7 @@ import type { SqlParam } from "@nextlyhq/adapter-drizzle/types";
 import { container } from "../../di/container";
 import { getNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
+import { COMMON_TITLE_FIELDS } from "../../domains/collections/entry-title";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -724,8 +725,8 @@ export class DashboardService extends BaseService {
         // That is not "the lifecycle filter handles locales correctly"; it
         // is that NO filter is applied, so none can be wrong for either.
         status: "all",
-        // `entryHeading`'s fallback chain is
-        // `data[titleField] ?? data.title ?? data.name`, but the Direct
+        // `entryHeading` walks the nominated field and then every conventional
+        // name in `COMMON_TITLE_FIELDS`, but the Direct
         // API's `select` is a real projection (`applyFieldSelection` in
         // `collection-query-service.ts` keeps only `id`, the system
         // timestamps, and whatever key is named here) -- so `title` and
@@ -734,13 +735,19 @@ export class DashboardService extends BaseService {
         // real read, and the chain can never do anything but return the id:
         // dead code that only "worked" in a test handing the resolver an
         // unprojected row. Selecting a field twice when `titleField` already
-        // IS `title` or `name` is harmless -- every value here is `true`.
+        // IS one of them is harmless -- every value here is `true`.
+        //
+        // 🔴 SPREAD from the same list the walk reads, not written out. A
+        // projection that names fewer candidates than the walk considers is
+        // the dead-code state above wearing a different shape: the walk looks
+        // widened and every candidate it gained is missing from the row.
         select: {
           id: true,
           updatedAt: true,
           [titleField]: true,
-          title: true,
-          name: true,
+          ...Object.fromEntries(
+            COMMON_TITLE_FIELDS.map(name => [name, true] as const)
+          ),
           ...(coll.hasStatus ? { status: true } : {}),
         },
       });

@@ -229,9 +229,14 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
 // Which field NAMES an entry. The admin draws a column with it, the activity
 // feed labels a row with it, and the dashboard's generated list widgets pick a
 // row label with it -- so it is one answer here rather than one per consumer.
+// `readableTitleText` is the VALUE half of the same question and travels with
+// it: which field names an entry and whether that field's value can name one
+// are decided together, and answering the second per consumer is how three
+// spellings of it came to disagree about whitespace, numbers and bigints.
 export {
   COMMON_TITLE_FIELDS,
   entryTitleField,
+  readableTitleText,
 } from "./domains/collections/entry-title";
 // A VALUE, and the only one in this block. The admin batches a dashboard's
 // widgets into requests `POST /api/dashboard/query` will accept, so it needs the

@@ -13,6 +13,8 @@
  * @module components/features/versions/useVersionDocumentTitle
  */
 
+import { readableTitleText } from "nextly/config";
+
 import { entryTitleValue } from "@admin/components/features/entries/entry-title";
 import { useCollection } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
@@ -30,12 +32,17 @@ export type TitleScope =
   | { kind: "collection"; slug: string; entryId: string }
   | { kind: "single"; slug: string };
 
-/** A value is a usable title only if it is text with something in it. */
-function readableText(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
+/**
+ * A value is a usable title only if it is a scalar with something in it.
+ *
+ * Asked of core rather than spelled again here. For every value this hook can
+ * actually receive the two answers are identical -- `ApiSingle.label` is typed
+ * `string`, and this is the only place the rule is used -- so the convergence
+ * buys no behaviour today. It buys the guarantee that the same question keeps
+ * one answer: a fourth private copy is how the other three came to disagree
+ * about whitespace, numbers and bigints in the first place.
+ */
+const readableText = readableTitleText;
 
 /**
  * Both queries are asked unconditionally and gated by `enabled`, because a hook
