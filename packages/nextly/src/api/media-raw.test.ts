@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
    */
   adapter: { read: vi.fn(), getPublicUrl: vi.fn() },
   manager: { getAdapterForCollection: vi.fn() },
+  safeFetch: vi.fn(),
   requirePermission: vi.fn(),
 }));
 
@@ -45,6 +46,17 @@ vi.mock("../di", () => ({
 vi.mock("../storage/storage", () => ({
   getMediaStorage: vi.fn(() => mocks.manager),
 }));
+
+/*
+ * The URL fallback is only reached when the adapter cannot answer, which is one
+ * case below. Partial, so `SafeFetchError` stays real — the classifier the
+ * fallback runs keys on `instanceof`.
+ */
+vi.mock("../utils/validate-external-url", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../utils/validate-external-url")>();
+  return { ...actual, safeFetch: mocks.safeFetch };
+});
 
 vi.mock("../auth/middleware", async importOriginal => {
   const actual = await importOriginal<typeof import("../auth/middleware")>();
@@ -153,6 +165,25 @@ describe("the public byte route", () => {
      */
     storedAs("Font/WOFF2");
     expect((await getRaw("m1")).status).toBe(200);
+  });
+
+  it("answers 404 when the row outlived its stored object", async () => {
+    /*
+     * The adapter says the object is gone while the record remains. From
+     * outside these are the same thing — there is no font here — and the
+     * alternative is a 502 telling a visitor to retry a file that will never
+     * return, cached for a year by the header this route sets.
+     */
+    storedAs("font/woff2");
+    mocks.adapter.read.mockResolvedValue(null);
+    mocks.adapter.getPublicUrl.mockReturnValue("https://cdn.test/f.woff2");
+    mocks.safeFetch.mockResolvedValue(new Response("gone", { status: 404 }));
+
+    const response = await getRaw("m1");
+    expect(response.status).toBe(404);
+    // NOT 502: an outage tells a visitor to retry, and this response is
+    // cacheable for a year.
+    expect(response.status).not.toBe(502);
   });
 
   it("answers 404 for a record that is not there", async () => {

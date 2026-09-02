@@ -76,15 +76,15 @@ export class StoredMediaUnreachableError extends NextlyError {
  * @param storage - The backend, which may or may not implement `read`
  * @param storagePath - The stored path, which some backends record as a full URL
  * @param maxBytes - The cap both routes run under
- * @returns The object's bytes
+ * @returns The object's bytes, or `null` when the store says it is not there
  * @throws StorageReadTooLargeError when the object exceeds `maxBytes`
- * @throws StoredMediaUnreachableError when the URL route answers non-2xx
+ * @throws StoredMediaUnreachableError when the store answers, but badly
  */
 export async function readStoredMediaBytes(
   storage: StoredMediaSource,
   storagePath: string,
   maxBytes: number
-): Promise<Buffer> {
+): Promise<Buffer | null> {
   if (typeof storage.read === "function") {
     /*
      * The cap travels INTO the adapter rather than being checked on what comes
@@ -128,13 +128,20 @@ export async function readStoredMediaBytes(
     }
     if (verdict === "absent") {
       // A 404 whose error page was itself over the cap, so `safeFetch` refused
-      // before a `Response` existed. The object is gone; the status below is
-      // the one that never got as far as being read.
-      throw new StoredMediaUnreachableError(url, 404);
+      // before a `Response` existed. Still an absence, and reported as one.
+      return null;
     }
     throw error;
   }
 
+  /*
+   * ABSENCE, not a fault. A row can outlive its object — a bucket lifecycle
+   * rule, a manual cleanup, a concurrent delete — and calling that an upstream
+   * failure tells a caller to retry something that will never come back. It
+   * also reaches a visitor as 502 for a font that is simply gone, on a response
+   * cacheable for a year.
+   */
+  if (response.status === 404) return null;
   if (!response.ok) {
     throw new StoredMediaUnreachableError(url, response.status);
   }

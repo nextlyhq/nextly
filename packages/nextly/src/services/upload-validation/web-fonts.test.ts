@@ -12,6 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_ALLOWED_MIME_TYPES } from "./mime";
 import {
+  matchesWebFontSignature,
+  resolveClaimedMimeType,
   WEB_FONT_FORMATS,
   WEB_FONT_MIME_TYPES,
   webFontMimeFromFilename,
@@ -43,9 +45,9 @@ describe("the canonical web font table", () => {
 describe("the upload boundary", () => {
   it("accepts every format the table declares", () => {
     /*
-     * The relation Codex's finding is about. A format the serving route hands
-     * out but the allowlist refuses is one an author can never put there; the
-     * reverse leaves an upload nothing will serve.
+     * A format the serving route hands out but the allowlist refuses is one an
+     * author can never put there; the reverse leaves an upload nothing will
+     * serve. Neither shows up in a test that reads one list on its own.
      */
     for (const mimeType of WEB_FONT_MIME_TYPES) {
       expect(DEFAULT_ALLOWED_MIME_TYPES).toContain(mimeType);
@@ -80,5 +82,84 @@ describe("inferring a font type from a filename", () => {
     expect(webFontMimeFromFilename("archive.zip")).toBeUndefined();
     expect(webFontMimeFromFilename("woff2")).toBeUndefined();
     expect(webFontMimeFromFilename("")).toBeUndefined();
+  });
+});
+
+describe("resolving the type an upload claims", () => {
+  it("keeps a real type the client sent, even for a font name", () => {
+    /*
+     * The control, and the fixture has to be a FONT name: with a name that
+     * infers nothing, dropping the guard still returns what the caller sent, so
+     * the case would pass against a resolver that overwrites every claim.
+     *
+     * A client that says `font/woff` about `Inter.woff2` is telling us
+     * something the filename cannot — the extension is not the format.
+     */
+    expect(resolveClaimedMimeType("Inter.woff2", "font/woff")).toBe(
+      "font/woff"
+    );
+    expect(resolveClaimedMimeType("photo.png", "image/png")).toBe("image/png");
+  });
+
+  it("fills in from the name when the client sent nothing", () => {
+    expect(resolveClaimedMimeType("Inter.woff2", "")).toBe("font/woff2");
+    expect(resolveClaimedMimeType("Inter.woff2", "   ")).toBe("font/woff2");
+  });
+
+  it("fills in for the generic type, however it is spelled", () => {
+    /*
+     * Multipart clients send `application/octet-stream` for a format they
+     * cannot name, and mime tokens are case-insensitive — an exact comparison
+     * skips the fallback and the allowlist then refuses a font the name could
+     * have identified.
+     */
+    expect(
+      resolveClaimedMimeType("Inter.woff2", "application/octet-stream")
+    ).toBe("font/woff2");
+    expect(
+      resolveClaimedMimeType("Inter.woff2", "Application/Octet-Stream")
+    ).toBe("font/woff2");
+  });
+
+  it("leaves a generic type alone when the name says nothing", () => {
+    // Absence of a font name is not licence to invent one; the value the caller
+    // sent survives and the allowlist judges it as before.
+    expect(
+      resolveClaimedMimeType("payload.bin", "application/octet-stream")
+    ).toBe("application/octet-stream");
+  });
+});
+
+describe("checking a font claim against the bytes", () => {
+  it("accepts each format's own signature", () => {
+    for (const format of WEB_FONT_FORMATS) {
+      const bytes = Buffer.concat([
+        Buffer.from(format.signature, "ascii"),
+        Buffer.alloc(32),
+      ]);
+      expect(matchesWebFontSignature(bytes, format.mimeType)).toBe(true);
+    }
+  });
+
+  it("refuses content that is not the font it claims to be", () => {
+    expect(
+      matchesWebFontSignature(Buffer.from("not-a-font"), "font/woff2")
+    ).toBe(false);
+    // And a WOFF is not a WOFF2: the signatures differ, and serving one as the
+    // other hands a browser a file it cannot parse.
+    const woff = Buffer.concat([
+      Buffer.from("wOFF", "ascii"),
+      Buffer.alloc(32),
+    ]);
+    expect(matchesWebFontSignature(woff, "font/woff2")).toBe(false);
+    expect(matchesWebFontSignature(woff, "font/woff")).toBe(true);
+  });
+
+  it("says nothing about a type that is not a web font", () => {
+    // The control: a checker refusing everything would satisfy the case above
+    // while rejecting every image in the product.
+    expect(
+      matchesWebFontSignature(Buffer.from("<svg/>"), "image/svg+xml")
+    ).toBe(true);
   });
 });

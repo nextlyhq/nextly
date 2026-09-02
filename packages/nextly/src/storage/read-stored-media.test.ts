@@ -45,7 +45,10 @@ describe("reading a stored object", () => {
     };
     const bytes = await readStoredMediaBytes(storage, "f.woff2", 1000);
 
-    expect(bytes.toString("utf8")).toBe("native");
+    // `?.` rather than a non-null assertion: `null` is now a real answer from
+    // this function, and a case that read it as bytes would say "undefined"
+    // instead of failing on the absence.
+    expect(bytes?.toString("utf8")).toBe("native");
     // The cap travels INTO the adapter: checked on the way back, the memory it
     // exists to save has already been spent.
     expect(storage.read).toHaveBeenCalledWith("f.woff2", { maxBytes: 1000 });
@@ -56,7 +59,7 @@ describe("reading a stored object", () => {
     safeFetch.mockResolvedValue(new Response("fetched"));
     const bytes = await readStoredMediaBytes(urlOnly, "f.woff2", 1000);
 
-    expect(bytes.toString("utf8")).toBe("fetched");
+    expect(bytes?.toString("utf8")).toBe("fetched");
     expect(safeFetch).toHaveBeenCalledWith("https://cdn.test/f.woff2", {
       maxResponseBytes: 1000,
     });
@@ -149,6 +152,23 @@ describe("reading a stored object", () => {
       (error: unknown) => error
     );
     expect(isStorageReadTooLarge(outcome)).toBe(false);
+  });
+
+  it("reports a MISSING object as absence, not as an outage", async () => {
+    /*
+     * A row can outlive its object — a lifecycle rule, a manual cleanup, a
+     * concurrent delete. Calling that an upstream failure tells a caller to
+     * retry something that will never come back, and reaches a visitor as a
+     * 502 for a font that is simply gone, on a response cacheable for a year.
+     *
+     * Its control is the case below, which fails if every non-2xx started
+     * reading as absence; this one fails only when the two are folded.
+     */
+    safeFetch.mockResolvedValue(new Response("gone", { status: 404 }));
+
+    await expect(
+      readStoredMediaBytes(urlOnly, "f.woff2", 1000)
+    ).resolves.toBeNull();
   });
 
   it("reports a non-2xx as unreachable, carrying the status", async () => {

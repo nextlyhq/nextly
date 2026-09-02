@@ -194,11 +194,17 @@ export function registerEmailServices(ctx: RegistrationContext): void {
            */
           const limits = getAttachmentLimits();
           try {
-            return await readStoredMediaBytes(
+            const bytes = await readStoredMediaBytes(
               storage,
               storagePath,
               limits.maxTotalBytes
             );
+            // An attachment whose object is gone cannot be sent, and the author
+            // is owed the same answer as any other failure to read it.
+            if (bytes === null) {
+              throw new StoredMediaUnreachableError(storagePath, 404);
+            }
+            return bytes;
           } catch (err) {
             throw asAttachmentReadError(err, limits.maxTotalBytes);
           }

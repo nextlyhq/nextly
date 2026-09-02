@@ -147,9 +147,14 @@ describe("POST /api/media — unified validation pipeline", () => {
     container.registerSingleton("mediaService", () => bundle.service);
     const { POST } = await import("./media");
 
-    // Bytes `file-type` does not recognise, so the magic-byte check trusts the
-    // claim — the point here is the claim's RESOLUTION, not the sniffer.
-    const bytes = Buffer.from("not-really-a-font", "utf8");
+    // REAL WOFF2 bytes, so the case distinguishes a font from anything else
+    // renamed to look like one. Text here would pass a validator that trusts
+    // whatever it cannot identify, which is the implementation this must fail
+    // against.
+    const bytes = Buffer.concat([
+      Buffer.from("wOF2", "ascii"),
+      Buffer.alloc(64),
+    ]);
     const res = await POST(makeRequest(bytes, "Inter.woff2", ""));
 
     expect(res.status).toBe(201);
@@ -159,6 +164,29 @@ describe("POST /api/media — unified validation pipeline", () => {
       mimeType?: string;
     };
     expect(stored.mimeType).toBe("font/woff2");
+  });
+
+  it("REFUSES content that is not the font it is named as", async () => {
+    /*
+     * The claim can be inferred from a filename, so nothing but the bytes
+     * stands behind it — and the public route serves these types to anonymous
+     * callers as immutable, cacheable assets. `file-type` recognises neither
+     * WOFF nor WOFF2, so a validator trusting what it cannot identify accepts
+     * arbitrary content under a servable type.
+     *
+     * Its control is the case above, which fails if font uploads stop working
+     * at all; this one fails only when the signature goes unchecked.
+     */
+    container.registerSingleton(
+      "mediaService",
+      () => buildStubBundle().service
+    );
+    const { POST } = await import("./media");
+
+    const res = await POST(
+      makeRequest(Buffer.from("not-really-a-font", "utf8"), "Evil.woff2", "")
+    );
+    expect(res.status).toBe(400);
   });
 
   it("does NOT invent a type for a name it does not know", async () => {

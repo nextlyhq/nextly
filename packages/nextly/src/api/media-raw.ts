@@ -119,6 +119,9 @@ export async function handleServeMediaBytes(
     media.filename,
     DEFAULT_READ_MAX_BYTES
   );
+  // The row outlived its object. Same answer as a row that never existed,
+  // because from outside they are the same thing: there is no font here.
+  if (bytes === null) return notFound();
 
   return new Response(new Uint8Array(bytes), {
     status: 200,

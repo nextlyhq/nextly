@@ -23,12 +23,21 @@ export interface WebFontFormat {
   readonly mimeType: string;
   /** The suffix a person sees on their own file, dot included. */
   readonly extension: string;
+  /**
+   * The four bytes the format begins with, as ASCII.
+   *
+   * Both formats carry a fixed signature the W3C specifies, which is what makes
+   * a claim checkable at all: `file-type` does not recognise either of them, so
+   * a font claim it cannot identify is indistinguishable from arbitrary bytes
+   * unless something reads the signature directly.
+   */
+  readonly signature: string;
 }
 
 /** Every web font format this product accepts, serves and advertises. */
 export const WEB_FONT_FORMATS: readonly WebFontFormat[] = [
-  { mimeType: "font/woff2", extension: ".woff2" },
-  { mimeType: "font/woff", extension: ".woff" },
+  { mimeType: "font/woff2", extension: ".woff2", signature: "wOF2" },
+  { mimeType: "font/woff", extension: ".woff", signature: "wOFF" },
 ];
 
 /** The same set as MIME types, for the allowlist and the serving gate. */
@@ -57,10 +66,9 @@ export function webFontMimeFromFilename(filename: string): string | undefined {
 /**
  * The type an upload claims, filled in from its name where nothing was sent.
  *
- * ONE implementation, because four upload entry points needed the same answer
- * and three of them read the file's type under a different variable name — a
- * search for one spelling found some of them, which is exactly how a fix that
- * looks complete covers a subset.
+ * ONE implementation, because four upload entry points need the same answer and
+ * each names its file differently — so the resolution lives here rather than
+ * beside each of them, where a reader looking for one spelling sees a subset.
  *
  * A browser reports no type for formats its platform does not register, which
  * fonts routinely are not, and several multipart clients send
@@ -82,6 +90,38 @@ export function resolveClaimedMimeType(
   reportedType: string
 ): string {
   const claimed = reportedType.trim();
-  if (claimed !== "" && claimed !== "application/octet-stream") return claimed;
+  // Compared in lower case, because a client may spell the generic type
+  // `Application/Octet-Stream` — mime tokens are case-insensitive, and an exact
+  // comparison would skip the fallback and let the allowlist refuse a font the
+  // name could have identified.
+  const generic = claimed.toLowerCase();
+  if (generic !== "" && generic !== "application/octet-stream") return claimed;
   return webFontMimeFromFilename(filename) ?? claimed;
+}
+
+/**
+ * Whether a buffer actually begins as the font type it claims to be.
+ *
+ * The claim decides what an allowlist admits and what the public route will
+ * serve, and a type inferred from a filename is a claim nobody made — so the
+ * bytes have to answer for it. Without this, arbitrary content renamed to
+ * `.woff2` is stored under a servable type and handed to any anonymous caller
+ * as an immutable font.
+ *
+ * @param buffer - The uploaded bytes
+ * @param mimeType - The claimed type; anything not a web font is not this
+ *   function's question and answers `true`
+ */
+export function matchesWebFontSignature(
+  buffer: Buffer,
+  mimeType: string
+): boolean {
+  const format = WEB_FONT_FORMATS.find(
+    candidate => candidate.mimeType === mimeType.toLowerCase().trim()
+  );
+  if (format === undefined) return true;
+  return (
+    buffer.subarray(0, format.signature.length).toString("ascii") ===
+    format.signature
+  );
 }
