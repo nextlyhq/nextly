@@ -24,6 +24,7 @@ import {
   defaultOrderProblem,
   querylessQueryProblem,
   QUERYLESS_ARCHETYPES,
+  widgetValueProblem,
   WIDGET_ARCHETYPES,
 } from "../domains/widgets/definition";
 import { getNextlyLogger } from "../observability/logger";
@@ -304,6 +305,17 @@ const FIELD_RULES: ReadonlyArray<
   // refused the identical declaration, and the admin then ignored the value --
   // so the documented refusal was true of one channel only.
   widget => chromeProblem(widget.chrome, widget.archetype),
+
+  // The rules that hold whatever core version a plugin was built against: a
+  // title that is a string, a query that is an object, orderings between sizes
+  // this core can rank, and `actions` on an archetype it recognises.
+  //
+  // Vocabulary checks are deliberately NOT among them. A contribution crosses a
+  // version boundary, so refusing a size, height or chrome value this core has
+  // not learned yet would abort a whole plugin install over a card the admin
+  // renders anyway -- those belong to `validateWidgetDefinition`, which judges
+  // the resolved widget rather than a declaration from an unknown vintage.
+  widget => widgetValueProblem(widget),
 
   // A QUERYLESS archetype is drawn from its declaration ALONE, so a component
   // beside it is a fallback for an admin too old to draw the archetype -- never

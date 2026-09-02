@@ -165,8 +165,213 @@ function validateId(d: Partial<WidgetDefinition>): void {
 }
 
 /** Confirms `title` carries real, non-whitespace text. */
+/**
+ * Why a widget's field VALUES are unusable, or `undefined`.
+ *
+ * The rules that hold identically whichever channel a widget arrives by, in one
+ * place because they kept being written in two. Four fields have already
+ * drifted this way -- the shortcut rule, the queryless no-query rule,
+ * `defaultOrder` and `chrome` -- each added to one validator, missed by the
+ * other, and each time the contributed side was the more permissive, which is
+ * the direction that ships.
+ *
+ * SHAPE is deliberately not here, because the two channels genuinely disagree
+ * about it: a contribution may omit `title` and `defaultSize`, which resolution
+ * fills in, while a `WidgetDefinition` is the resolved widget and requires
+ * both. Those differences belong to their own validators and are listed by name
+ * in `plugins/__tests__/channel-divergence.test.ts`. What is here is only what
+ * neither channel has a reason to read differently.
+ *
+ * Takes a loose record rather than a `Partial<WidgetDefinition>`, so a decoded
+ * JSON object can ask it without either side casting to the other's shape.
+ */
+/**
+ * How this core should treat a declaration's `archetype`.
+ *
+ * FOUR states, not two. Gating rules on "is it a string this core knows" folded
+ * the other three together and each one leaked a defect: an ABSENT archetype
+ * became `custom` during resolution but skipped every rule that names one; a
+ * NON-STRING skipped them too and reached the admin, which interpolates it into
+ * a diagnostic; and an UNKNOWN string was exempted from shape rules when the
+ * exemption it earns is only from vocabulary ones.
+ */
+type ArchetypeStanding =
+  /** Not supplied. Resolution deterministically fills in `custom`. */
+  | { kind: "resolved-custom" }
+  /** A name this core knows, so every rule about it applies. */
+  | { kind: "known"; name: WidgetArchetype }
+  /** A name from a newer core. Exempt from VOCABULARY rules, not from shape. */
+  | { kind: "newer" }
+  /** Not a string at all, which no version of this contract permits. */
+  | { kind: "invalid" };
+
+function archetypeStanding(value: unknown): ArchetypeStanding {
+  if (value === undefined) return { kind: "resolved-custom" };
+  if (typeof value !== "string") return { kind: "invalid" };
+  return WIDGET_ARCHETYPES.includes(value as WidgetArchetype)
+    ? { kind: "known", name: value as WidgetArchetype }
+    : { kind: "newer" };
+}
+
+export function widgetValueProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  // A title is a STRING in every version, so this is not a vocabulary rule.
+  // Blank is permitted deliberately -- `resolveTitle` trims it and falls back
+  // to the widget id -- but a non-string is a different case: that helper calls
+  // `.trim()` on the value, so a number or object throws and takes widget
+  // resolution down rather than rendering a differently-named card.
+  if (widget.title !== undefined && typeof widget.title !== "string") {
+    return "title, when given, must be a string";
+  }
+
+  // A query is an OBJECT in every version, so it belongs here rather than
+  // beside the body checks. There it was reachable only when the query had to
+  // establish a body, so a widget shipping a component skipped it -- and the
+  // admin put the malformed value in the batched request regardless.
+  if (
+    widget.query !== undefined &&
+    (typeof widget.query !== "object" || widget.query === null)
+  ) {
+    return "query must be an object";
+  }
+
+  const rangeProblem = sizeRangeProblem(widget);
+  if (rangeProblem !== undefined) return rangeProblem;
+
+  return archetypeRelatedProblem(widget);
+}
+
+/**
+ * The rules that depend on what the archetype is, per its standing.
+ *
+ * The split that matters: a newer core's archetype is exempt from VOCABULARY
+ * rules -- this core cannot judge where its payload belongs -- but not from
+ * SHAPE. `resolveOne` calls `readableActions` for every archetype whatever its
+ * name, and that immediately calls `.filter`, so a non-array `actions` throws
+ * during resolution and takes the whole grid down before the unknown-card
+ * fallback can draw. Container shape is version-independent; placement is not.
+ */
+function archetypeRelatedProblem(
+  widget: Record<string, unknown>
+): string | undefined {
+  const standing = archetypeStanding(widget.archetype);
+
+  if (standing.kind === "invalid") {
+    return "archetype, when given, must be a string";
+  }
+
+  // Shape first, and for every standing including a newer core's -- one level
+  // in, not just the container. `readableActions` runs for every archetype and
+  // reads `action.requiredPermission` off each item, so a `null` or `undefined`
+  // entry throws exactly as a non-array `actions` does. A newer core may add
+  // FIELDS to an action; it cannot make an action stop being an object, so this
+  // is version-independent while "must have a label and href" is not.
+  if (widget.actions !== undefined) {
+    if (!Array.isArray(widget.actions)) {
+      return "actions, when given, must be an array";
+    }
+    const badIndex = widget.actions.findIndex(
+      action => typeof action !== "object" || action === null
+    );
+    if (badIndex !== -1) {
+      return `actions[${badIndex}] must be an object`;
+    }
+  }
+
+  // Placement is a vocabulary judgement, so a newer core's archetype is exempt.
+  // An ABSENT one is not: resolution supplies `custom`, which is a name this
+  // core knows perfectly well, so the rule applies as it would to any other.
+  if (standing.kind === "newer") return undefined;
+  const effective =
+    standing.kind === "resolved-custom" ? "custom" : standing.name;
+
+  if (widget.actions !== undefined && effective !== "actions") {
+    return 'actions are only valid for archetype "actions"';
+  }
+
+  return undefined;
+}
+
+/** The ordering rules between the three sizes, once each is known to be valid. */
+/**
+ * The three sizes as ranks, with an unrankable one reported as absent.
+ *
+ * A size this core does not know has no rank, and ordering it would be the
+ * vocabulary check by another route -- which must not cross the contributions
+ * boundary. Reporting it as `undefined` rather than poisoning the whole set
+ * means each comparison skips only the operand it cannot rank: a widget whose
+ * `maxSize` came from a newer core is still checked for a `defaultSize` below
+ * its `minSize`, which are values this core reads perfectly well.
+ */
+function orderableRanks(widget: Record<string, unknown>): {
+  min?: number;
+  max?: number;
+  dflt?: number;
+} {
+  const rank = (value: unknown): number | undefined =>
+    typeof value === "string" && WIDGET_SIZES.includes(value as WidgetSize)
+      ? sizeRank(value as WidgetSize)
+      : undefined;
+
+  return {
+    min: rank(widget.minSize),
+    max: rank(widget.maxSize),
+    dflt: rank(widget.defaultSize),
+  };
+}
+
+/** One ordering rule between the sizes, given their ranks. */
+type SizeOrderRule = (
+  ranks: { min?: number; max?: number; dflt?: number },
+  widget: Record<string, unknown>
+) => string | undefined;
+
+/**
+ * The orderings that must hold between the three sizes.
+ *
+ * A list rather than a ladder for the same reason `FIELD_RULES` is one: they
+ * are independent, none depends on another's answer, and the shape stopped
+ * saying what it was doing once there were three.
+ */
+const SIZE_ORDER_RULES: readonly SizeOrderRule[] = [
+  ({ min, max }, w) =>
+    min !== undefined && max !== undefined && min > max
+      ? `minSize (${String(w.minSize)}) exceeds maxSize (${String(w.maxSize)})`
+      : undefined,
+  ({ min, dflt }, w) =>
+    dflt !== undefined && min !== undefined && dflt < min
+      ? `defaultSize (${String(w.defaultSize)}) is below minSize (${String(w.minSize)})`
+      : undefined,
+  ({ max, dflt }, w) =>
+    dflt !== undefined && max !== undefined && dflt > max
+      ? `defaultSize (${String(w.defaultSize)}) is above maxSize (${String(w.maxSize)})`
+      : undefined,
+];
+
+function sizeRangeProblem(widget: Record<string, unknown>): string | undefined {
+  const ranks = orderableRanks(widget);
+
+  for (const rule of SIZE_ORDER_RULES) {
+    const problem = rule(ranks, widget);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
 function validateTitle(d: Partial<WidgetDefinition>): void {
-  if (typeof d.title !== "string" || d.title.trim() === "") {
+  // Channel-specific, and deliberately not shared. This is the RESOLVED widget,
+  // so a blank title is a card labelled with whitespace. A contribution is a
+  // declaration: `resolveTitle` trims it and falls back to the id, so the same
+  // value renders a correctly named card there and refusing it would turn a
+  // working card into a failed plugin install.
+  // REQUIRED and non-blank here, because this is the RESOLVED widget and a
+  // blank title is a card labelled with whitespace. That a supplied value is a
+  // string is the shared rule's, since it holds on both sides.
+  if (
+    d.title === undefined ||
+    (typeof d.title === "string" && d.title.trim() === "")
+  ) {
     fail(`${d.id}: title is required`);
   }
 }
@@ -180,6 +385,12 @@ function validateArchetype(d: Partial<WidgetDefinition>): void {
 
 /** Confirms each of the three size fields names a real size. */
 function validateSizeValues(d: Partial<WidgetDefinition>): void {
+  // Registry-only, deliberately. A closed vocabulary states THIS core's
+  // version: a plugin built against a newer one may name a size this core has
+  // never heard of, and the admin already survives that by falling back to full
+  // width -- `sizes.ts` calls that fallback expected input rather than
+  // defensive decoration. Refusing it on the contributions side aborts a whole
+  // plugin install over a card that renders.
   if (!WIDGET_SIZES.includes(d.defaultSize as WidgetSize)) {
     fail(`${d.id}: defaultSize must be one of ${WIDGET_SIZES.join(", ")}`);
   }
@@ -188,6 +399,16 @@ function validateSizeValues(d: Partial<WidgetDefinition>): void {
     if (value !== undefined && !WIDGET_SIZES.includes(value)) {
       fail(`${d.id}: ${key} must be one of ${WIDGET_SIZES.join(", ")}`);
     }
+  }
+}
+
+/** Registry-only, for the same version reason as {@link validateSizeValues}. */
+function validateHeight(d: Partial<WidgetDefinition>): void {
+  if (
+    d.defaultHeight !== undefined &&
+    !WIDGET_HEIGHTS.includes(d.defaultHeight)
+  ) {
+    fail(`${d.id}: defaultHeight must be one of ${WIDGET_HEIGHTS.join(", ")}`);
   }
 }
 
@@ -202,22 +423,6 @@ function validateSizeValues(d: Partial<WidgetDefinition>): void {
  * are what a resize is clamped to. Both bounds are inclusive, so a default
  * equal to either is in range.
  */
-function validateSizeRange(d: Partial<WidgetDefinition>): void {
-  if (d.minSize && d.maxSize && sizeRank(d.minSize) > sizeRank(d.maxSize)) {
-    fail(`${d.id}: minSize (${d.minSize}) exceeds maxSize (${d.maxSize})`);
-  }
-  const defaultRank = sizeRank(d.defaultSize as WidgetSize);
-  if (d.minSize && defaultRank < sizeRank(d.minSize)) {
-    fail(
-      `${d.id}: defaultSize (${d.defaultSize}) is below minSize (${d.minSize})`
-    );
-  }
-  if (d.maxSize && defaultRank > sizeRank(d.maxSize)) {
-    fail(
-      `${d.id}: defaultSize (${d.defaultSize}) is above maxSize (${d.maxSize})`
-    );
-  }
-}
 
 /**
  * Confirms `defaultHeight`, when present, names a real height.
@@ -228,14 +433,6 @@ function validateSizeRange(d: Partial<WidgetDefinition>): void {
  * grid resolving a height that does not exist. The two size fields are checked
  * against their vocabulary here; this is the third field of the same kind.
  */
-function validateHeight(d: Partial<WidgetDefinition>): void {
-  if (
-    d.defaultHeight !== undefined &&
-    !WIDGET_HEIGHTS.includes(d.defaultHeight)
-  ) {
-    fail(`${d.id}: defaultHeight must be one of ${WIDGET_HEIGHTS.join(", ")}`);
-  }
-}
 
 /**
  * Confirms `component` is present exactly when the archetype requires it, and
@@ -337,12 +534,9 @@ export type UnclassifiedArchetype = Exclude<
 function validateActions(d: Partial<WidgetDefinition>): void {
   const isActions = d.archetype === "actions";
 
-  if (!isActions) {
-    if (d.actions !== undefined) {
-      fail(`${d.id}: actions are only valid for archetype "actions"`);
-    }
-    return;
-  }
+  // The misplacement case is the shared rule's; what is left here is the
+  // requirement that an `actions` widget actually carries some.
+  if (!isActions) return;
 
   if (!Array.isArray(d.actions) || d.actions.length === 0) {
     fail(`${d.id}: archetype "actions" requires a non-empty actions array`);
@@ -455,11 +649,28 @@ export function chromeProblem(
 ): string | undefined {
   if (chrome === undefined) return undefined;
 
-  if (!WIDGET_CHROME.includes(chrome as WidgetChrome)) {
-    return `chrome must be one of ${WIDGET_CHROME.join(", ")}`;
-  }
+  // The VOCABULARY check is not here, and that is the same version boundary the
+  // sizes obey: a newer core may add a chrome value, and refusing it would
+  // abort the install of a plugin whose card this admin would simply frame,
+  // since anything that is not "none" already frames. `validateChrome` keeps
+  // that check on the registry side.
+  //
+  // The archetype rule likewise only where this core KNOWS the archetype --
+  // otherwise it judges a newer core's shape and refuses the whole install.
+  // Through the same four-state reading as the placement rule, so the two
+  // cannot drift into disagreeing about what an absent or newer archetype
+  // means. An ABSENT one resolves to `custom`, which is exactly where `"none"`
+  // is legal; a NEWER one is exempt, since this core cannot say whether its
+  // body is composed into a card.
+  const standing = archetypeStanding(archetype);
+  const effective =
+    standing.kind === "resolved-custom"
+      ? "custom"
+      : standing.kind === "known"
+        ? standing.name
+        : undefined;
 
-  if (chrome === "none" && archetype !== "custom") {
+  if (chrome === "none" && effective !== undefined && effective !== "custom") {
     return `chrome "none" is only valid for archetype "custom", not "${String(archetype)}" -- core draws that body into the card itself`;
   }
 
@@ -467,6 +678,10 @@ export function chromeProblem(
 }
 
 function validateChrome(d: Partial<WidgetDefinition>): void {
+  // Registry-only vocabulary, for the reason `chromeProblem` gives.
+  if (d.chrome !== undefined && !WIDGET_CHROME.includes(d.chrome)) {
+    fail(`${d.id}: chrome must be one of ${WIDGET_CHROME.join(", ")}`);
+  }
   const problem = chromeProblem(d.chrome, d.archetype);
   if (problem !== undefined) fail(`${d.id}: ${problem}`);
 }
@@ -519,10 +734,13 @@ export function validateWidgetDefinition(
   const d = def as Partial<WidgetDefinition>;
 
   validateId(d);
+  // The rules neither channel reads differently, asked once.
+  const valueProblem = widgetValueProblem(d);
+  if (valueProblem !== undefined) fail(`${d.id}: ${valueProblem}`);
+
   validateTitle(d);
   validateArchetype(d);
   validateSizeValues(d);
-  validateSizeRange(d);
   validateHeight(d);
   validateComponent(d);
   validateActions(d);

@@ -16,6 +16,7 @@ import type {
 } from "@admin/types/branding";
 
 import { resolveDashboardWidgets } from "../resolve-widgets";
+import { WIDGET_SPAN_CLASSES, widgetSpanClass } from "../sizes";
 
 const allow = () => true;
 const deny = () => false;
@@ -386,5 +387,27 @@ describe("a widget declared through BOTH channels keeps its new fields", () => {
       allow
     );
     expect(ids(widgets)).toEqual(["shared", "first"]);
+  });
+});
+
+describe("an unknown size survives, including the inherited names", () => {
+  it("falls back to full width for a size from a newer core", () => {
+    expect(widgetSpanClass("enormous" as never)).toBe(WIDGET_SPAN_CLASSES.full);
+  });
+
+  it("falls back for names that exist on Object.prototype", () => {
+    // A plain `obj[key] ?? fallback` returns the INHERITED member for these, so
+    // the fallback never runs and the grid receives a function or an object
+    // where it expected a class list. The value reaches here from a plugin
+    // declaration over the wire, so any string is possible.
+    for (const size of ["constructor", "toString", "valueOf", "__proto__"]) {
+      expect(widgetSpanClass(size as never)).toBe(WIDGET_SPAN_CLASSES.full);
+    }
+  });
+
+  it("still returns the real class for a size this core knows", () => {
+    // The control. A function returning the fallback unconditionally would
+    // satisfy both assertions above while collapsing every widget to full width.
+    expect(widgetSpanClass("sm")).toBe(WIDGET_SPAN_CLASSES.sm);
   });
 });
