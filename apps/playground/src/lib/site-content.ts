@@ -14,6 +14,7 @@
  *
  * @module lib/site-content
  */
+import type { BlocksDataProvider } from "@nextlyhq/blocks-react";
 import { loadSiteStyle, SITE_STYLE_SLUG } from "@nextlyhq/plugin-page-builder";
 import { getNextly } from "nextly";
 import type { NextlyContentReader, NextlySingleReader } from "nextly/runtime";
@@ -71,6 +72,66 @@ export const siteReader: NextlyContentReader &
     findByID: async args => (await instance()).media.findByID(args),
   },
 };
+
+/**
+ * What a dynamic block reads, backed by this site's own content.
+ *
+ * Without one, `createStandaloneContext` installs `emptyDataProvider` and every
+ * `core/collection-loop` answers with nothing: the block emits its container and
+ * no entries, so a page that says it lists posts renders an empty box. That is
+ * the forgiving-render default doing its job for a standalone consumer with no
+ * database, and it is the wrong answer for a route that has one.
+ *
+ * Bounded by the route helper rather than here. `createBlocksPage` creates a
+ * fresh query budget per render, because depth in a document becomes
+ * multiplication in reads — so a loop nested in a loop is capped by the helper
+ * whatever this provider is willing to answer.
+ *
+ * PAGE, not offset, and the mismatch is stated rather than papered over. Nextly
+ * paginates by page number; `BlocksQuery` carries an offset. The two agree only
+ * when the offset is a whole number of pages, so an offset that is not gets a
+ * refusal instead of the nearest page — silently serving entries 4 to 6 for a
+ * request that asked for 6 to 8 is the kind of wrong answer nobody reports.
+ * Unreachable today, since `core/collection-loop` sends no offset at all, which
+ * is exactly what makes the guard cheap.
+ */
+export function createSiteDataProvider(
+  reader: Pick<NextlyContentReader, "find">
+): BlocksDataProvider {
+  return {
+    find: async ({ collection, limit, offset, sort, locale }) => {
+      if (offset !== undefined && offset !== 0) {
+        if (limit === undefined || limit <= 0 || offset % limit !== 0) {
+          throw new Error(
+            `This site reads by page, so an offset of ${offset} with a limit ` +
+              `of ${String(limit)} names no page it can ask for.`
+          );
+        }
+      }
+      const result = await reader.find({
+        collection,
+        ...(limit === undefined ? {} : { limit }),
+        ...(offset === undefined || offset === 0 || limit === undefined
+          ? {}
+          : { page: offset / limit + 1 }),
+        ...(sort === undefined ? {} : { sort }),
+        ...(locale === undefined ? {} : { locale }),
+      });
+      return { items: result.items, total: result.meta.total };
+    },
+  };
+}
+
+/**
+ * The provider this app's routes use, over its own reader.
+ *
+ * A factory above and one instance here, so the mapping can be exercised against
+ * a stub: the offset-to-page translation and its refusal are decisions worth a
+ * test, and a provider closed over the live instance could only be tested with a
+ * database attached.
+ */
+export const siteDataProvider: BlocksDataProvider =
+  createSiteDataProvider(siteReader);
 
 /**
  * The site's breakpoints, and the reason a route compiles its own sheet.
