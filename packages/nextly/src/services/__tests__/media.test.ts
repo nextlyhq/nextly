@@ -306,7 +306,9 @@ describe("MediaService", () => {
     });
 
     it("should reject files exceeding size limit", async () => {
-      const buffer = Buffer.from("large-file");
+      // Real bytes: the gate measures the buffer rather than reading the
+      // `size` beside it, so a small buffer declaring 11MB is now accepted.
+      const buffer = Buffer.alloc(11 * 1024 * 1024);
       const result = await mediaService.uploadMedia({
         file: buffer,
         filename: "large.jpg",
@@ -319,6 +321,46 @@ describe("MediaService", () => {
       expect(result.statusCode).toBe(400);
       expect(result.message).toContain("File too large");
       expect(result.data).toBeNull();
+    });
+
+    it("refuses by the BYTES, not by the size the caller declared", async () => {
+      /*
+       * `uploadMedia` is exported, so the buffer and the `size` beside it are
+       * two claims a caller can make disagree. Trusting the declared one let a
+       * caller past a cap its bytes exceeded, and wrote a row that misdescribed
+       * its own object — which every later reader then has to distrust.
+       */
+      const result = await mediaService.uploadMedia({
+        file: Buffer.alloc(11 * 1024 * 1024),
+        filename: "big.jpg",
+        mimeType: "image/jpeg",
+        // Declared as one byte.
+        size: 1,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.statusCode).toBe(400);
+      expect(result.message).toContain("File too large");
+    });
+
+    it("records the size of the bytes it stored, not the declared one", async () => {
+      /*
+       * Declared deliberately UNEQUAL to the buffer. A row that repeated the
+       * caller's number would describe an object that is not there, and this
+       * harness writes a real row, so the persisted value is observable.
+       */
+      const buffer = Buffer.from("a short but honest payload");
+      const result = await mediaService.uploadMedia({
+        file: buffer,
+        filename: "small.jpg",
+        mimeType: "image/jpeg",
+        size: 999_999,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.success).toBe(true);
+      expect(buffer.length).not.toBe(999_999);
+      expect(result.data?.size).toBe(buffer.length);
     });
 
     it("should reject invalid image files", async () => {

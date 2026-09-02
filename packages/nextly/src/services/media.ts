@@ -308,13 +308,24 @@ export class MediaService extends BaseService {
         file,
         filename,
         mimeType,
-        size,
         uploadedBy,
         folderId,
         contentDisposition,
       } = input;
 
-      const sizeValidation = validateFileSize(size, this.maxUploadBytes);
+      /*
+       * The BYTES, not the number the caller declared beside them.
+       *
+       * This method is exported, and a caller states `size` separately from
+       * the buffer it hands over, so the two can disagree — by mistake or
+       * deliberately. Checking the declared number let a caller pass a cap it
+       * exceeded, and storing it wrote a row that misdescribes its own object,
+       * which every later reader then has to distrust. Measuring here is what
+       * makes the row true by construction rather than by callers being
+       * careful.
+       */
+      const storedSize = file.length;
+      const sizeValidation = validateFileSize(storedSize, this.maxUploadBytes);
       if (!sizeValidation.valid) {
         return {
           success: false,
@@ -461,7 +472,7 @@ export class MediaService extends BaseService {
         filename: uploadResult.path,
         originalFilename: filename,
         mimeType,
-        size,
+        size: storedSize,
         width,
         height,
         duration: null,
