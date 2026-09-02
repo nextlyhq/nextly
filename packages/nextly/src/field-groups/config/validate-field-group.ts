@@ -266,6 +266,8 @@ function validateField(
     }
 
     case "component":
+    case "fieldGroup":
+      // The migrated spelling follows the same reference rule for field groups.
       validateComponentFieldRefShared(f, path, errsBase);
       break;
 

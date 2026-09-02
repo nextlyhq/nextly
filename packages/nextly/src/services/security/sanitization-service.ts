@@ -257,15 +257,22 @@ const MAX_FIELD_GROUP_RESOLVE_DEPTH = 3;
 
 /**
  * Attach one field-group field's referenced children, single reference or zone.
+ *
+ * Each resolved child schema recurses through the same attachment, so a field
+ * group whose registered fields reference another field group is enriched at
+ * every depth the editor allows — the descent reaches B's text only when B's
+ * own children were attached.
  */
 async function attachFieldGroupReferences(
   field: FieldDefinition,
-  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>
+  resolveChildren: (slug: string) => Promise<FieldDefinition[] | undefined>,
+  depth: number
 ): Promise<void> {
   const { single, many } = extractFieldGroupReferences(field);
   if (single !== undefined) {
     const children = await resolveChildren(single);
     if (children !== undefined) {
+      await attachFieldGroupChildren(children, resolveChildren, depth + 1);
       (field as { componentFields?: FieldDefinition[] }).componentFields =
         children;
     }
@@ -276,6 +283,7 @@ async function attachFieldGroupReferences(
   for (const slug of many) {
     const children = await resolveChildren(slug);
     if (children !== undefined) {
+      await attachFieldGroupChildren(children, resolveChildren, depth + 1);
       schemas[slug] = { fields: children };
     }
   }
@@ -296,11 +304,10 @@ async function attachFieldGroupReferences(
  * on `componentSchemas` — the same shapes the read path's enrichment produces,
  * so the descent reads one vocabulary.
  *
- * Container fields (repeater/group) are walked so their nested field-group
- * references resolve too, to the depth the editor allows. Resolved children
- * are attached one level deep, not re-resolved recursively: a field group
- * nested inside a field group has its scalar text sanitized while its own
- * subtree stays exactly as stored.
+ * Resolved children recurse through the same walk — containers (repeater/group)
+ * so their nested field-group references resolve, and resolved field-group
+ * schemas so a group nested inside a group enriches too — bounded by the depth
+ * the editor allows, which also terminates a registry cycle.
  */
 export async function attachFieldGroupChildren(
   fields: FieldDefinition[],
@@ -311,7 +318,7 @@ export async function attachFieldGroupChildren(
 
   for (const field of fields) {
     if (isFieldGroupType(field.type)) {
-      await attachFieldGroupReferences(field, resolveChildren);
+      await attachFieldGroupReferences(field, resolveChildren, depth);
       continue;
     }
     if (

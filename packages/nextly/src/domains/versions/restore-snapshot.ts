@@ -18,6 +18,7 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { IMMUTABLE_SYSTEM_FIELDS_ANY_ENTITY } from "../../lib/immutable-system-fields";
+import { fieldGroupSlugList } from "../field-groups/storage/field-group-field-type";
 import {
   currentFieldGroupTypeKey,
   isFieldGroupTypeKey,
@@ -118,14 +119,11 @@ function inlineChildren(field: FieldConfig): FieldConfig[] | undefined {
 
 /** The component slugs a field references, which name its child schema. */
 function componentSlugs(field: FieldConfig): string[] {
-  const one = (field as { component?: unknown }).component;
-  const many = (field as { components?: unknown }).components;
-  const slugs: string[] = [];
-  if (typeof one === "string") slugs.push(one);
-  if (Array.isArray(many)) {
-    for (const slug of many) if (typeof slug === "string") slugs.push(slug);
-  }
-  return slugs;
+  // A migrated definition names its slugs under fieldGroup / fieldGroups, and
+  // a restore that misses them partitioned the snapshot wrong — the save path
+  // then rejected every obsolete row and deleted the live ones absent from
+  // it, clearing the field.
+  return fieldGroupSlugList(field);
 }
 
 /**
@@ -135,12 +133,15 @@ function componentSlugs(field: FieldConfig): string[] {
  * names. A dynamic zone stripped back to `components: []` permits nothing —
  * reading that as "permits anything" admits every stored instance to a save
  * path that has no component to apply them to, so the restore reports success
- * having quietly skipped the field.
+ * having quietly skipped the field. The declaration check reads all four keys,
+ * under either spelling; the slugs themselves resolve through the extractor.
  */
 function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
-  const one = (field as { component?: unknown }).component;
-  const many = (field as { components?: unknown }).components;
-  const declaresComponent = typeof one === "string" || Array.isArray(many);
+  const declaresComponent =
+    typeof (field as { component?: unknown }).component === "string" ||
+    typeof (field as { fieldGroup?: unknown }).fieldGroup === "string" ||
+    Array.isArray((field as { components?: unknown }).components) ||
+    Array.isArray((field as { fieldGroups?: unknown }).fieldGroups);
   return declaresComponent ? new Set(componentSlugs(field)) : null;
 }
 
@@ -151,7 +152,10 @@ function allowedComponentSlugs(field: FieldConfig): Set<string> | null {
  * reconciles the incoming set against the live one.
  */
 function fieldNamesMultipleComponents(field: FieldConfig): boolean {
-  return Array.isArray((field as { components?: unknown }).components);
+  return (
+    Array.isArray((field as { components?: unknown }).components) ||
+    Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)
+  );
 }
 
 /**

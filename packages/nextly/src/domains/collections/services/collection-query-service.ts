@@ -98,6 +98,7 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
@@ -3624,13 +3625,10 @@ export class CollectionQueryService extends BaseService {
     // Asked rather than read: the stored spelling of this key changes with the storage
     // migration, and a row written under the other one would read as untagged.
     const tagged = readFieldGroupType(instance);
-    const declared = (field as { component?: unknown }).component;
-    const slug =
-      typeof tagged === "string"
-        ? tagged
-        : typeof declared === "string"
-          ? declared
-          : undefined;
+    // Either spelling for the single-mode fallback, on the same rule the
+    // write and the diff resolve references by.
+    const declared = extractFieldGroupReferences(field).single;
+    const slug = typeof tagged === "string" ? tagged : declared;
     if (slug === undefined) return instance;
 
     const schema = componentSchemas.get(slug);

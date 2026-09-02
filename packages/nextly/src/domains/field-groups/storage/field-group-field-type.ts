@@ -126,3 +126,16 @@ export function withResolvedFieldGroupReferences<T extends object>(
   const { single, many } = extractFieldGroupReferences(field);
   return { ...field, component: single, components: many };
 }
+
+/**
+ * The distinct slugs a field-group field references, as a flat list — the form
+ * the schema walks and the strip walks consume. The single slug comes first,
+ * then the zone whitelist, mirroring dispatch precedence.
+ */
+export function fieldGroupSlugList(field: unknown): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  const slugs: string[] = [];
+  if (single !== undefined) slugs.push(single);
+  if (many !== undefined) slugs.push(...many);
+  return slugs;
+}

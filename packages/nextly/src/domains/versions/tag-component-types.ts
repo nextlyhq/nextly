@@ -795,16 +795,11 @@ export function expandComponentFields(
   };
 
   return fields.map(field => {
-    const one = (field as { component?: unknown }).component;
-    if (typeof one === "string") return expandUnder([one], "group", field);
+    const { single, many } = extractFieldGroupReferences(field);
+    if (single !== undefined) return expandUnder([single], "group", field);
 
-    const many = (field as { components?: unknown }).components;
-    if (Array.isArray(many)) {
-      return expandUnder(
-        many.filter((s): s is string => typeof s === "string"),
-        "repeater",
-        field
-      );
+    if (many !== undefined) {
+      return expandUnder(many, "repeater", field);
     }
 
     const children = (field as { fields?: unknown }).fields;

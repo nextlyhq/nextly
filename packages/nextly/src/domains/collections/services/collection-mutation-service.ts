@@ -103,7 +103,10 @@ import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
+import {
+  fieldGroupSlugList,
+  extractFieldGroupReferences,
+} from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -2051,11 +2054,15 @@ export class CollectionMutationService extends BaseService {
     const out: Record<string, unknown> = { ...base };
     for (const [key, patchVal] of Object.entries(patch)) {
       const field = byName.get(key);
+      // Through the shared extractor: a migrated definition names its fixed
+      // slug under `fieldGroup`, and a merge that misses it would REPLACE the
+      // whole object, dropping sibling sub-fields an earlier save set.
+      const refs = field ? extractFieldGroupReferences(field) : {};
       const slug =
         field &&
-        typeof (field as { component?: unknown }).component === "string" &&
+        refs.single !== undefined &&
         (field as { repeatable?: unknown }).repeatable !== true
-          ? ((field as { component?: string }).component as string)
+          ? refs.single
           : undefined;
       const baseVal = out[key];
       if (
@@ -2151,16 +2158,10 @@ export class CollectionMutationService extends BaseService {
     schema: FieldConfig[],
     componentFields: Map<string, FieldConfig[]>
   ): void {
-    const declaredSlugs = (field: FieldConfig): string[] => {
-      // Through the shared extractor: a migrated definition's slugs sit on
-      // fieldGroup / fieldGroups, and a strip walk that misses them leaves
-      // the plaintext inside the working-draft snapshot.
-      const { single, many } = extractFieldGroupReferences(field);
-      const slugs: string[] = [];
-      if (single !== undefined) slugs.push(single);
-      if (many !== undefined) slugs.push(...many);
-      return slugs;
-    };
+    const declaredSlugs = (field: FieldConfig): string[] =>
+      // A strip walk that misses a migrated definition's slugs leaves the
+      // plaintext inside the working-draft snapshot.
+      fieldGroupSlugList(field);
     const stripInstance = (instance: unknown, cfields: FieldConfig[]): void => {
       if (
         !instance ||
