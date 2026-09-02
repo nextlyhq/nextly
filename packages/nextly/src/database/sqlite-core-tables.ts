@@ -45,6 +45,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    `CREATE INDEX IF NOT EXISTS "users_created_at_idx"
+      ON "users" ("created_at")`,
     `CREATE TABLE IF NOT EXISTS "accounts" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -60,11 +62,17 @@ export function generateSqliteCoreTableStatements(): string[] {
       "session_state" TEXT,
       UNIQUE("provider", "provider_account_id")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "accounts_provider_providerAccountId_unique"
+      ON "accounts" ("provider", "provider_account_id")`,
+    `CREATE INDEX IF NOT EXISTS "accounts_user_id_idx"
+      ON "accounts" ("user_id")`,
     `CREATE TABLE IF NOT EXISTS "sessions" (
       "session_token" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
       "expires" INTEGER NOT NULL
     )`,
+    `CREATE INDEX IF NOT EXISTS "sessions_user_id_idx"
+      ON "sessions" ("user_id")`,
     `CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
@@ -74,6 +82,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "prt_identifier_token_hash_unique"
+      ON "password_reset_tokens" ("identifier", "token_hash")`,
+    `CREATE INDEX IF NOT EXISTS "prt_expires_idx"
+      ON "password_reset_tokens" ("expires")`,
+    `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
+      ON "password_reset_tokens" ("used_at")`,
     `CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
@@ -82,6 +96,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "evt_identifier_token_hash_unique"
+      ON "email_verification_tokens" ("identifier", "token_hash")`,
+    `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
+      ON "email_verification_tokens" ("expires")`,
     `CREATE TABLE IF NOT EXISTS "refresh_tokens" (
       "id" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -91,6 +109,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "expires_at" INTEGER NOT NULL,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    `CREATE INDEX IF NOT EXISTS "refresh_tokens_token_hash_idx"
+      ON "refresh_tokens" ("token_hash")`,
+    `CREATE INDEX IF NOT EXISTS "refresh_tokens_user_id_idx"
+      ON "refresh_tokens" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "refresh_tokens_expires_at_idx"
+      ON "refresh_tokens" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "roles" (
       "id" TEXT PRIMARY KEY,
       "name" TEXT NOT NULL UNIQUE,
@@ -101,6 +125,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    `CREATE INDEX IF NOT EXISTS "roles_level_idx"
+      ON "roles" ("level")`,
+    `CREATE INDEX IF NOT EXISTS "roles_is_system_idx"
+      ON "roles" ("is_system")`,
     `CREATE TABLE IF NOT EXISTS "permissions" (
       "id" TEXT PRIMARY KEY,
       "name" TEXT NOT NULL,
@@ -116,6 +144,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("action", "resource")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "permissions_action_resource_unique"
+      ON "permissions" ("action", "resource")`,
+    `CREATE INDEX IF NOT EXISTS "permissions_resource_idx"
+      ON "permissions" ("resource")`,
+    `CREATE INDEX IF NOT EXISTS "permissions_action_idx"
+      ON "permissions" ("action")`,
     `CREATE TABLE IF NOT EXISTS "role_permissions" (
       "id" TEXT PRIMARY KEY,
       "role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
@@ -123,6 +157,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("role_id", "permission_id")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "role_permissions_role_permission_unique"
+      ON "role_permissions" ("role_id", "permission_id")`,
+    `CREATE INDEX IF NOT EXISTS "role_permissions_role_id_idx"
+      ON "role_permissions" ("role_id")`,
     `CREATE TABLE IF NOT EXISTS "user_roles" (
       "id" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -131,12 +169,24 @@ export function generateSqliteCoreTableStatements(): string[] {
       "expires_at" INTEGER,
       UNIQUE("user_id", "role_id")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "user_roles_user_role_unique"
+      ON "user_roles" ("user_id", "role_id")`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_user_id_idx"
+      ON "user_roles" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "user_roles_expires_at_idx"
+      ON "user_roles" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "role_inherits" (
       "id" TEXT PRIMARY KEY,
       "parent_role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
       "child_role_id" TEXT NOT NULL REFERENCES "roles"("id") ON DELETE CASCADE,
       UNIQUE("parent_role_id", "child_role_id")
     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "role_inherits_parent_child_unique"
+      ON "role_inherits" ("parent_role_id", "child_role_id")`,
+    `CREATE INDEX IF NOT EXISTS "role_inherits_child_idx"
+      ON "role_inherits" ("child_role_id")`,
+    `CREATE INDEX IF NOT EXISTS "role_inherits_parent_idx"
+      ON "role_inherits" ("parent_role_id")`,
     // row_level_security_policies table was removed in the RLS cleanup
     // (refactor(nextly): remove RLS, commits 8c61348f + 433927f9).
     `CREATE TABLE IF NOT EXISTS "media_folders" (
@@ -148,6 +198,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    `CREATE INDEX IF NOT EXISTS "media_folders_parent_id_idx"
+      ON "media_folders" ("parent_id")`,
+    `CREATE INDEX IF NOT EXISTS "media_folders_created_by_idx"
+      ON "media_folders" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "media_folders_created_at_idx"
+      ON "media_folders" ("created_at")`,
     `CREATE TABLE IF NOT EXISTS "media" (
       "id" TEXT PRIMARY KEY,
       "filename" TEXT NOT NULL,
@@ -170,6 +226,14 @@ export function generateSqliteCoreTableStatements(): string[] {
       "uploaded_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    `CREATE INDEX IF NOT EXISTS "media_uploaded_by_idx"
+      ON "media" ("uploaded_by")`,
+    `CREATE INDEX IF NOT EXISTS "media_mime_type_idx"
+      ON "media" ("mime_type")`,
+    `CREATE INDEX IF NOT EXISTS "media_uploaded_at_idx"
+      ON "media" ("uploaded_at")`,
+    `CREATE INDEX IF NOT EXISTS "media_folder_id_idx"
+      ON "media" ("folder_id")`,
     `CREATE TABLE IF NOT EXISTS "user_permission_cache" (
       "id" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -180,6 +244,12 @@ export function generateSqliteCoreTableStatements(): string[] {
       "expires_at" INTEGER NOT NULL,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    `CREATE INDEX IF NOT EXISTS "upc_user_id_idx"
+      ON "user_permission_cache" ("user_id")`,
+    `CREATE INDEX IF NOT EXISTS "upc_expires_at_idx"
+      ON "user_permission_cache" ("expires_at")`,
+    `CREATE INDEX IF NOT EXISTS "upc_user_action_resource_idx"
+      ON "user_permission_cache" ("user_id", "action", "resource")`,
     `CREATE TABLE IF NOT EXISTS "content_schema_events" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "op" TEXT NOT NULL,
@@ -188,6 +258,117 @@ export function generateSqliteCoreTableStatements(): string[] {
       "meta" TEXT,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
+    // The three schema-registry tables. Every collection, single and component
+    // Nextly knows about is a row in one of these, so a database built from
+    // this fallback without them cannot describe its own content: boot reads
+    // the registry before it can load a dynamic table. They were listed as
+    // known gaps rather than written, and their fifteen indexes were declared
+    // on all three dialects and created on none. Their own statements, for the
+    // reason the versions indexes above give: SQLite skips a CREATE TABLE
+    // wholesale once the table exists, so an index folded into one is never
+    // added to a database that predates it.
+    `CREATE TABLE IF NOT EXISTS "dynamic_collections" (
+      "id" TEXT PRIMARY KEY,
+      "slug" TEXT NOT NULL UNIQUE,
+      "labels" TEXT NOT NULL,
+      "table_name" TEXT NOT NULL UNIQUE,
+      "description" TEXT,
+      "fields" TEXT NOT NULL,
+      "timestamps" INTEGER NOT NULL DEFAULT 1,
+      "status" INTEGER NOT NULL DEFAULT 0,
+      "localized" INTEGER NOT NULL DEFAULT 0,
+      "versions" TEXT,
+      "revalidate" TEXT,
+      "webhooks" TEXT,
+      "admin" TEXT,
+      "hooks" TEXT,
+      "source" TEXT NOT NULL DEFAULT 'ui',
+      "locked" INTEGER NOT NULL DEFAULT 0,
+      "config_path" TEXT,
+      "schema_hash" TEXT NOT NULL,
+      "schema_version" INTEGER NOT NULL DEFAULT 1,
+      "migration_status" TEXT NOT NULL DEFAULT 'pending',
+      "last_migration_id" TEXT,
+      "access_rules" TEXT,
+      "created_by" TEXT REFERENCES "users"("id"),
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_collections_source_idx"
+      ON "dynamic_collections" ("source")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_collections_migration_status_idx"
+      ON "dynamic_collections" ("migration_status")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_collections_created_by_idx"
+      ON "dynamic_collections" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_collections_created_at_idx"
+      ON "dynamic_collections" ("created_at")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_collections_updated_at_idx"
+      ON "dynamic_collections" ("updated_at")`,
+    `CREATE TABLE IF NOT EXISTS "dynamic_singles" (
+      "id" TEXT PRIMARY KEY,
+      "slug" TEXT NOT NULL UNIQUE,
+      "label" TEXT NOT NULL,
+      "table_name" TEXT NOT NULL UNIQUE,
+      "description" TEXT,
+      "fields" TEXT NOT NULL,
+      "admin" TEXT,
+      "access_rules" TEXT,
+      "source" TEXT NOT NULL DEFAULT 'ui',
+      "locked" INTEGER NOT NULL DEFAULT 0,
+      "status" INTEGER NOT NULL DEFAULT 0,
+      "localized" INTEGER NOT NULL DEFAULT 0,
+      "versions" TEXT,
+      "revalidate" TEXT,
+      "webhooks" TEXT,
+      "config_path" TEXT,
+      "schema_hash" TEXT NOT NULL,
+      "schema_version" INTEGER NOT NULL DEFAULT 1,
+      "migration_status" TEXT NOT NULL DEFAULT 'pending',
+      "last_migration_id" TEXT,
+      "created_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_singles_source_idx"
+      ON "dynamic_singles" ("source")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_singles_migration_status_idx"
+      ON "dynamic_singles" ("migration_status")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_singles_created_by_idx"
+      ON "dynamic_singles" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_singles_created_at_idx"
+      ON "dynamic_singles" ("created_at")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_singles_updated_at_idx"
+      ON "dynamic_singles" ("updated_at")`,
+    `CREATE TABLE IF NOT EXISTS "dynamic_components" (
+      "id" TEXT PRIMARY KEY,
+      "slug" TEXT NOT NULL UNIQUE,
+      "label" TEXT NOT NULL,
+      "table_name" TEXT NOT NULL UNIQUE,
+      "description" TEXT,
+      "fields" TEXT NOT NULL,
+      "admin" TEXT,
+      "source" TEXT NOT NULL DEFAULT 'ui',
+      "locked" INTEGER NOT NULL DEFAULT 0,
+      "localized" INTEGER NOT NULL DEFAULT 0,
+      "config_path" TEXT,
+      "schema_hash" TEXT NOT NULL,
+      "schema_version" INTEGER NOT NULL DEFAULT 1,
+      "migration_status" TEXT NOT NULL DEFAULT 'pending',
+      "last_migration_id" TEXT,
+      "created_by" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_components_source_idx"
+      ON "dynamic_components" ("source")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_components_migration_status_idx"
+      ON "dynamic_components" ("migration_status")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_components_created_by_idx"
+      ON "dynamic_components" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_components_created_at_idx"
+      ON "dynamic_components" ("created_at")`,
+    `CREATE INDEX IF NOT EXISTS "dynamic_components_updated_at_idx"
+      ON "dynamic_components" ("updated_at")`,
     // Content-version store. Columns match schemas/versions/sqlite.ts. The
     // durable-sequence unique index is created here too, not just the table:
     // once a fallback-created DB exists, later boots skip ensureCoreTables and

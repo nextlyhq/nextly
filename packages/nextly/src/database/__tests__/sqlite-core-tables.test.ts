@@ -17,17 +17,17 @@
  * SQLite's affinity rules make a type comparison mostly noise, and the failure
  * this guards is a column that is not there at all.
  */
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { getTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
-import { nextlyJobsSqlite } from "../../schemas/jobs/sqlite";
+import * as sqliteBundle from "../../schemas/_dialect-bundles/sqlite";
 import { generateSqliteCoreTableStatements } from "../sqlite-core-tables";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const SCHEMAS_DIR = join(here, "..", "..", "schemas");
+/** One table as the canonical Drizzle schema declares it. */
+interface SchemaTable {
+  columns: Set<string>;
+  indexes: { name: string; columns: string[]; unique: boolean }[];
+}
 
 /** Column names per table, as the bootstrap DDL declares them. */
 function ddlColumns(): Map<string, Set<string>> {
@@ -47,80 +47,88 @@ function ddlColumns(): Map<string, Set<string>> {
   return tables;
 }
 
-/** Column names per table, as the canonical `sqliteTable` definitions declare. */
-function schemaColumns(): Map<string, Set<string>> {
-  const tables = new Map<string, Set<string>>();
-  for (const entry of readdirSync(SCHEMAS_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    let source: string;
+/**
+ * Every core SQLite table, read from the dialect bundle rather than parsed.
+ *
+ * This used to regex the schema SOURCE for `sqliteTable("literal", { ... })`,
+ * and that instrument was blind twice over. It could not see a table whose
+ * name is COMPUTED — `dynamic_components` is built inside a factory from
+ * `STORAGE_FORMAT.registryTable` — and it had already been widened once for a
+ * call shape it could not match. Both failures are silent in the same
+ * direction: a table the extractor cannot see is absent from every comparison
+ * below, so it is not checked against the DDL at all. It passes by absence.
+ *
+ * The bundle is the right source because it is the same object graph the ORM
+ * writes through and `reconcileCore` hands to drizzle-kit, so "what the schema
+ * declares" is answered by the schema itself rather than by a pattern that
+ * approximates it. It also carries indexes, which source text did not.
+ */
+function schemaTables(): Map<string, SchemaTable> {
+  const tables = new Map<string, SchemaTable>();
+  for (const value of Object.values(sqliteBundle)) {
+    let config;
     try {
-      source = readFileSync(join(SCHEMAS_DIR, entry.name, "sqlite.ts"), "utf8");
+      config = getTableConfig(value as never);
     } catch {
+      // Not a table — the bundle also re-exports relations and types.
       continue;
     }
-    // Two call shapes, and missing the second is how this guard went blind.
-    // `sqliteTable("t", { ... })` closes its column object at column 0 (`\n});`)
-    // while `sqliteTable(\n  "t",\n  { ... },\n  t => [...])` closes it at two
-    // spaces (`\n  }`). A pattern anchored to the indented form silently
-    // discovered NOTHING in a single-argument schema file -- so the table was
-    // absent from `schemas` entirely, `missing` came back empty, and the
-    // "creates every core table" assertion below passed while the table it was
-    // written to catch had no DDL at all. The closing brace is matched at
-    // either indent, and `TABLES_EXPECTED` below is the control that keeps this
-    // honest rather than a comment promising it.
-    for (const m of source.matchAll(
-      /sqliteTable\(\s*"([a-z_]+)"\s*,\s*\{([\s\S]*?)\n {0,2}\}/g
-    )) {
-      tables.set(
-        m[1],
-        new Set(
-          [...m[2].matchAll(/\b(?:text|integer|real|blob)\("([a-z_]+)"/g)].map(
-            c => c[1]
-          )
-        )
-      );
-    }
+    if (!config?.name) continue;
+    tables.set(config.name, {
+      columns: new Set(config.columns.map(column => column.name)),
+      indexes: config.indexes.map(index => ({
+        name: index.config.name,
+        // An index may be declared over a SQL EXPRESSION rather than a column,
+        // and such an entry carries no name. Dropping it is correct here: the
+        // only thing column names are used for below is recognising a
+        // single-column UNIQUE that the DDL spells inline, which an expression
+        // index can never be.
+        columns: index.config.columns
+          .map(column => ("name" in column ? column.name : undefined))
+          .filter((name): name is string => name !== undefined),
+        unique: Boolean(index.config.unique),
+      })),
+    });
   }
   return tables;
 }
 
 describe("the SQLite bootstrap DDL", () => {
   const ddl = ddlColumns();
-  const schemas = schemaColumns();
+  const schemas = schemaTables();
 
   /**
    * Tables whose discovery is asserted BY NAME.
    *
-   * A size floor is not enough, and that is not hypothetical: the extractor
-   * matched 30-odd tables while missing `nextly_widget_layout` completely,
-   * because that file writes its columns in the single-argument call shape.
-   * Every count-based check stayed green and the table shipped with no
-   * bootstrap DDL.
+   * A size floor is not enough, and that is not hypothetical: the previous
+   * source-text extractor matched 38 tables while missing two completely, and
+   * every count-based check stayed green. `dynamic_components` is built by a
+   * factory from a COMPUTED name, and `nextly_i18n_archive` was the second.
+   * Both were invisible to the pattern, so neither was ever compared against
+   * the bootstrap DDL.
    *
-   * So the control names one schema of EACH call shape. A future extractor
-   * change that stops seeing either one fails here, where the message says
-   * which, rather than silently narrowing what the rest of this file compares.
+   * These two are named because they are the ones that were actually missed.
+   * A change that stops the bundle walk seeing either fails here, where the
+   * message says which, rather than silently narrowing what the rest of this
+   * file compares.
    */
-  const TABLES_EXPECTED = [
-    // `sqliteTable(\n  "t",\n  { ... },\n  t => [...])` -- indented close.
-    "nextly_document_lock",
-    // `sqliteTable("t", { ... })` -- closes at column 0.
-    "nextly_widget_layout",
-  ];
+  const TABLES_EXPECTED = ["dynamic_components", "nextly_i18n_archive"];
 
   it("reads back as tables at all", () => {
-    // Both halves are parsed out of source text, so a parser that quietly
-    // matched nothing would make every comparison below vacuously true.
+    // The DDL half is still parsed out of source text, so a parser that
+    // quietly matched nothing would make every comparison below vacuously
+    // true. The schema half now comes from the bundle, where the failure mode
+    // is an empty export rather than a bad pattern; both are floored.
     expect(ddl.size).toBeGreaterThan(10);
     expect(schemas.size).toBeGreaterThan(10);
   });
 
-  it.each(TABLES_EXPECTED)("discovers %s in the schema sources", table => {
+  it.each(TABLES_EXPECTED)("discovers %s in the schema bundle", table => {
     expect(
       schemas.has(table),
-      `the schema extractor did not find ${table}. Every comparison in this ` +
-        "file iterates what it found, so a table it cannot see is not " +
-        "checked against the bootstrap DDL at all -- it passes by absence."
+      `the bundle walk did not find ${table}. Every comparison in this file ` +
+        "iterates what it found, so a table it cannot see is not checked " +
+        "against the bootstrap DDL at all -- it passes by absence."
     ).toBe(true);
   });
 
@@ -153,12 +161,13 @@ describe("the SQLite bootstrap DDL", () => {
     "site_settings",
     "api_keys",
     "audit_log",
-    "dynamic_collections",
-    "dynamic_singles",
     "email_providers",
     "email_templates",
     "image_sizes",
     "nextly_events",
+    // Newly VISIBLE rather than newly missing: the source-text extractor this
+    // suite used could not see it, so it was never compared. It is a real gap.
+    "nextly_i18n_archive",
     "nextly_meta",
     "nextly_schema_events",
     "nextly_webhook_deliveries",
@@ -184,29 +193,62 @@ describe("the SQLite bootstrap DDL", () => {
     ).toEqual([]);
   });
 
-  /*
-   * Indexes, for `nextly_jobs` only.
+  /**
+   * Indexes, for every bootstrapped table.
    *
-   * The column comparison above cannot see an index: a missing one breaks no
-   * insert, it makes a query slow, which is why `nextly_jobs_recent_idx` was
-   * declared on all three dialects and created on none. Scoped to this table
-   * rather than generalized because the same probe reports ten pre-existing
-   * omissions on `dynamic_collections` and `dynamic_components`, and deciding
-   * what those should be is a separate change from asserting this one.
+   * The column comparison cannot see an index: a missing one breaks no insert,
+   * it makes a query slow. That is why `nextly_jobs_recent_idx` was declared on
+   * all three dialects and created on none, and why this check was scoped to
+   * that one table when it was written — the same probe reported dozens of
+   * pre-existing omissions and deciding what to do about them was left for
+   * later. This is later: 35 of them are now written, so the check is
+   * generalized and the scoping comment retired.
+   *
+   * A single-column UNIQUE index is satisfied by an inline `UNIQUE` on that
+   * column, which is how this DDL already spells `users_email_unique` — SQLite
+   * creates the same implicit index either way. Matching on the index NAME
+   * alone would report four such constraints as missing when they are merely
+   * spelled differently, so they are classified rather than counted.
    */
-  it("creates every index the jobs schema declares", () => {
-    const statements = generateSqliteCoreTableStatements().join("\n");
-    const declared = getTableConfig(nextlyJobsSqlite).indexes.map(
-      index => index.config.name
+  it.each([...schemaTables().keys()].filter(table => ddlColumns().has(table)))(
+    "creates every index the %s schema declares",
+    table => {
+      const statements = generateSqliteCoreTableStatements();
+      const joined = statements.join("\n");
+      const body =
+        statements.find(statement =>
+          statement.includes(`CREATE TABLE IF NOT EXISTS "${table}"`)
+        ) ?? "";
+
+      const declared = schemas.get(table)?.indexes ?? [];
+      const missing = declared
+        .filter(index => !joined.includes(`"${index.name}"`))
+        .filter(index => {
+          // Spelled inline on the column instead, which is the same index.
+          const inlineUnique =
+            index.unique &&
+            index.columns.length === 1 &&
+            new RegExp(`"${index.columns[0]}"[^,\n]*UNIQUE`).test(body);
+          return !inlineUnique;
+        })
+        .map(index => index.name);
+
+      expect(
+        missing,
+        `${table}: the bootstrap DDL never creates ${missing.join(", ")}, so ` +
+          "the declaration is decorative on every SQLite database built from it"
+      ).toEqual([]);
+    }
+  );
+
+  it("compares real indexes rather than an empty list", () => {
+    // The premise of the check above. If the bundle stopped reporting indexes
+    // it would pass for every table while asserting nothing at all.
+    const total = [...schemaTables().values()].reduce(
+      (sum, table) => sum + table.indexes.length,
+      0
     );
-    const missing = declared.filter(name => !statements.includes(`"${name}"`));
-    expect(
-      missing,
-      `nextly_jobs: the bootstrap DDL never creates ${missing.join(", ")}, so ` +
-        "the declaration is decorative on every SQLite database built from it"
-    ).toEqual([]);
-    // The premise: this compared real index names rather than an empty list.
-    expect(declared.length).toBeGreaterThan(1);
+    expect(total).toBeGreaterThan(50);
   });
 
   it("does not carry exclusions for tables that no longer exist", () => {
@@ -224,7 +266,9 @@ describe("the SQLite bootstrap DDL", () => {
       if (declared === undefined) return;
 
       const present = ddl.get(table) ?? new Set<string>();
-      const missing = [...declared].filter(column => !present.has(column));
+      const missing = [...declared.columns].filter(
+        column => !present.has(column)
+      );
       expect(
         missing,
         `${table}: the bootstrap DDL omits ${missing.join(", ")}, so every ` +

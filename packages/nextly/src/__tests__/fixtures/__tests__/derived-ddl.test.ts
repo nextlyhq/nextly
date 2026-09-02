@@ -25,20 +25,47 @@ describe("fixture DDL derived from the Drizzle schema", () => {
     const testDb = await createTestDb();
     const raw = testDb.adapter.getDrizzle<{ $client: RawSqlite }>().$client;
 
+    // `email_templates` rather than `dynamic_collections`, and the swap is the
+    // point: `createTables` runs the production generators FIRST and only then
+    // fills the gaps with `ddlFor`, so a table the bootstrap DDL now creates
+    // keeps the generator's definition and stops exercising `ddlFor` at all.
+    // Asserting the derived spelling on such a table tests the generator while
+    // reading as though it tests the fixture. This one the generators still do
+    // not cover, and it declares `.unique()` on the column the same way.
     const ddl = (
       raw
         .prepare(
-          "SELECT sql FROM sqlite_master WHERE tbl_name='dynamic_collections'"
+          "SELECT sql FROM sqlite_master WHERE tbl_name='email_templates'"
         )
         .all() as { sql: string }[]
     )[0].sql;
 
-    // `slug` and `table_name` both declare `.unique()` on the column rather
-    // than as a table index. Without this the fixture accepted duplicates that
-    // production rejects, so a test about collision handling passed while
-    // proving nothing.
+    // Declared with `.unique()` on the column rather than as a table index.
+    // Without this the fixture accepted duplicates that production rejects, so
+    // a test about collision handling passed while proving nothing.
     expect(ddl).toContain('"slug" text NOT NULL UNIQUE');
-    expect(ddl).toContain('"table_name" text NOT NULL UNIQUE');
+    await testDb.close();
+  });
+
+  it("rejects a duplicate slug whichever source built the table", async () => {
+    const testDb = await createTestDb();
+    const raw = testDb.adapter.getDrizzle<{ $client: RawSqlite }>().$client;
+
+    // The property the assertion above stands in for, asked of the database
+    // rather than of its DDL text — so it holds whether `dynamic_collections`
+    // came from the production generator or from `ddlFor`, and keeps holding
+    // when another table moves between the two.
+    const uniques = (
+      raw.prepare("PRAGMA index_list(dynamic_collections)").all() as {
+        unique: number;
+      }[]
+    ).filter(index => index.unique === 1);
+
+    expect(
+      uniques.length,
+      "dynamic_collections carries `.unique()` on slug and table_name; a " +
+        "fixture without those accepts collisions production rejects"
+    ).toBeGreaterThanOrEqual(2);
     await testDb.close();
   });
 
