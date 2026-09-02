@@ -41,14 +41,7 @@ import {
   type TokenKind,
   type TokenMode,
 } from "@nextlyhq/blocks-engine";
-import {
-  Button,
-  Input,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@nextlyhq/ui";
+import { Button, Input } from "@nextlyhq/ui";
 import * as React from "react";
 
 import { colourHexOf } from "./style-colour";
@@ -59,7 +52,6 @@ import {
   removeToken,
   renameToken,
   setTokenValue,
-  tokenCounts,
   tokenNameIssue,
   tokenRowsFor,
   type TokenRow,
@@ -155,7 +147,23 @@ export function TokensPanel({
   const [mode, setMode] = React.useState<TokenMode>(
     prefersDark ? "dark" : "light"
   );
-  const counts = tokenCounts(tokens);
+  const [query, setQuery] = React.useState("");
+
+  /*
+   * The kinds that have something to show, in catalog order.
+   *
+   * A kind with no rows produces no group at all rather than an empty one. That
+   * is the whole of the shape change: eight tabs meant five clickable dead ends
+   * in a narrow rail, and a place you can go to find nothing is worse than no
+   * place at all.
+   */
+  const needle = query.trim().toLowerCase();
+  const groups = TOKEN_KINDS.map(kind => ({
+    kind,
+    rows: tokenRowsFor(tokens, kind, mode).filter(
+      row => needle === "" || row.name.toLowerCase().includes(needle)
+    ),
+  })).filter(group => group.rows.length > 0);
 
   if (tokens === undefined) {
     return (
@@ -181,7 +189,18 @@ export function TokensPanel({
         <h2 className="nx-tokens__title">Tokens</h2>
         <ModeSwitch mode={mode} onMode={setMode} />
       </div>
-      <TokenTransfer onChange={onChange} currentTokens={currentTokens} />
+      {/*
+       * What a token IS, before any of the machinery.
+       *
+       * The panel opened with a mode switch, a transfer control and eight tabs
+       * of vocabulary, and never said what any of it does to the site. An
+       * author who does not already know the word has nothing to go on, and
+       * this is the surface where they would have learned it.
+       */}
+      <p className="nx-tokens__lede">
+        <b>Tokens are your site&rsquo;s named values.</b> Change one here and
+        every block using it changes with it, on every page.
+      </p>
       {issue === undefined ? null : (
         /*
          * A save that did not happen. `role="alert"` because it reports on an
@@ -193,29 +212,102 @@ export function TokensPanel({
           {issue}
         </p>
       )}
-      <Tabs defaultValue="color" className="nx-tokens__tabs">
-        <TabsList>
-          {TOKEN_KINDS.map(kind => (
-            <TabsTrigger key={kind} value={kind}>
-              {TOKEN_KIND_LABELS[kind]}
-              {counts[kind] > 0 ? (
-                <span className="nx-tokens__count">{counts[kind]}</span>
-              ) : null}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-        {TOKEN_KINDS.map(kind => (
-          <TabsContent key={kind} value={kind}>
+      <TokenSearch value={query} onValue={setQuery} />
+      {groups.length === 0 ? (
+        <EmptyTokens searching={query !== ""} />
+      ) : (
+        groups.map(group => (
+          <section key={group.kind} className="nx-tokens__group">
+            <div className="nx-tokens__grouphead">
+              {/*
+               * The count OUTSIDE the heading, so the heading's accessible name
+               * is the kind itself. Inside it, "Colour" becomes "Colour 3" and
+               * anything addressing the group by name — a test, a screen
+               * reader's heading list — has to know the number to find it.
+               */}
+              <h3 className="nx-tokens__groupname">
+                {TOKEN_KIND_LABELS[group.kind]}
+              </h3>
+              <span className="nx-tokens__count">{group.rows.length}</span>
+            </div>
             <TokenList
-              kind={kind}
+              rows={group.rows}
               tokens={tokens}
               supplied={supplied}
               mode={mode}
               onChange={onChange}
             />
-          </TabsContent>
-        ))}
-      </Tabs>
+          </section>
+        ))
+      )}
+      <AddToken tokens={tokens} onChange={onChange} />
+      {/*
+       * The transfer control, BELOW the tokens rather than above them.
+       *
+       * Importing a token file is a thing an author does once and then rarely;
+       * reading and nudging values is what the panel is for. Putting the rare
+       * one first spends the top of a narrow rail on machinery and pushes the
+       * content it operates on out of view.
+       */}
+      <TokenTransfer onChange={onChange} currentTokens={currentTokens} />
+    </div>
+  );
+}
+
+/**
+ * Search across the whole set, which the tabbed shape could not offer.
+ *
+ * A tabbed panel can only search within a tab, or it crosses a boundary the
+ * tabs assert — so the question "where did I put that token" had no answer
+ * short of clicking through eight of them. One list has no boundary to cross.
+ */
+function TokenSearch({
+  value,
+  onValue,
+}: {
+  value: string;
+  onValue: (value: string) => void;
+}): React.JSX.Element {
+  const id = React.useId();
+  return (
+    <div className="nx-tokens__search">
+      <label className="sr-only" htmlFor={id}>
+        Search tokens
+      </label>
+      <Input
+        id={id}
+        type="search"
+        placeholder="Search tokens"
+        value={value}
+        onChange={event => onValue(event.target.value)}
+      />
+    </div>
+  );
+}
+
+/**
+ * The empty state, which is the first thing a new site shows.
+ *
+ * Three jobs rather than one: say what is absent, say what belongs here, and
+ * offer the way in. "No colour tokens yet." did the first and stopped, which
+ * leaves an author who does not already know what a token is with nowhere to
+ * go — and this panel is where they would have found out.
+ *
+ * A search that matched nothing is a DIFFERENT state and must not be taught at:
+ * the author already knows what a token is, they are looking for one.
+ */
+function EmptyTokens({ searching }: { searching: boolean }): React.JSX.Element {
+  if (searching) {
+    return <p className="nx-inspector__note">No tokens match this search.</p>;
+  }
+  return (
+    <div className="nx-tokens__empty">
+      <p className="nx-tokens__empty-head">No tokens yet.</p>
+      <p className="nx-inspector__note">
+        A token names one value — a colour, a size, a shadow — so every block
+        can point at it instead of repeating it. Change it once and the whole
+        site follows.
+      </p>
     </div>
   );
 }
@@ -626,26 +718,29 @@ function ModeSwitch({
 
 /** Every token of one kind, with the way to add another. */
 function TokenList({
-  kind,
+  rows,
   tokens,
   supplied,
   mode,
   onChange,
 }: {
-  kind: TokenKind;
+  /*
+   * The rows to draw, resolved by the caller rather than here.
+   *
+   * The panel has to know how many rows a kind has BEFORE it draws the group,
+   * because a kind with none does not get a heading at all — so computing them
+   * here as well would be the same question answered twice, and the two would
+   * disagree the moment a filter was added to one of them.
+   */
+  rows: readonly TokenRow[];
   tokens: SiteTokenSet;
   supplied: SiteTokenSet | undefined;
   mode: TokenMode;
   onChange: (tokens: SiteTokenSet) => void;
 }): React.JSX.Element {
-  const rows = tokenRowsFor(tokens, kind, mode);
   return (
     <div className="nx-tokens__list">
-      {rows.length === 0 ? (
-        <p className="nx-inspector__note">
-          No {TOKEN_KIND_LABELS[kind].toLowerCase()} tokens yet.
-        </p>
-      ) : (
+      {rows.length === 0 ? null : (
         <ul>
           {rows.map(row => (
             <li key={row.key}>
@@ -660,6 +755,47 @@ function TokenList({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * The one way to create a token, and the price the grouped shape has to pay.
+ *
+ * Tabs offered creation for free: every kind had a tab, so an empty one was
+ * still somewhere you could stand and press "add". A list that omits empty
+ * kinds has nowhere to stand, so the kind has to be NAMED instead — which is
+ * the same move Figma's variables panel makes.
+ *
+ * One control rather than one per group. Two ways to perform one action drift,
+ * and the per-group button could not reach a kind that had no group anyway.
+ */
+function AddToken({
+  tokens,
+  onChange,
+}: {
+  tokens: SiteTokenSet;
+  onChange: (tokens: SiteTokenSet) => void;
+}): React.JSX.Element {
+  const [kind, setKind] = React.useState<TokenKind>("color");
+  const id = React.useId();
+  return (
+    <div className="nx-tokens__add">
+      <label className="sr-only" htmlFor={id}>
+        Kind of token to add
+      </label>
+      <select
+        id={id}
+        className="nx-tokens__kind"
+        value={kind}
+        onChange={event => setKind(event.target.value as TokenKind)}
+      >
+        {TOKEN_KINDS.map(option => (
+          <option key={option} value={option}>
+            {TOKEN_KIND_LABELS[option]}
+          </option>
+        ))}
+      </select>
       <Button
         type="button"
         variant="outline"

@@ -146,10 +146,37 @@ describe("the filters, which ask three different questions", () => {
     expect(screen.queryByRole("button", { name: /unused/i })).toBeNull();
   });
 
-  it("says so when a filter matches nothing", () => {
+  it("reports an empty 'not in index' as the RESULT it is, not as a miss", () => {
+    /*
+     * Changed deliberately from the generic "no classes match this filter".
+     * Every other empty list here is a narrowing that found nothing; this one
+     * is the outcome an author auditing a site is hoping for, and wording it
+     * like a failure reports success as disappointment.
+     */
     draw({ usage: { "id-hero": 1, "id-badge": 1, "id-card": 1 } });
     fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
-    expect(screen.getByText(/no classes match/i)).toBeTruthy();
+    expect(screen.getByText(/nothing here/i)).toBeTruthy();
+    expect(screen.queryByText(/no classes match/i)).toBeNull();
+  });
+
+  it("still says 'no classes match' for a narrowing that simply found none", () => {
+    /*
+     * The control for the SEARCH branch specifically, which returns before the
+     * filter is consulted — so this is what stops a search that found nothing
+     * being congratulated.
+     *
+     * It does NOT control the filter branch, and saying otherwise would
+     * overclaim: making the good-news wording unconditional leaves this test
+     * green and kills "blames the FILTER, not a search that is not set"
+     * instead. Verified by breaking it, not assumed. That test is the filter
+     * branch's control and the two are needed for different reasons.
+     */
+    draw();
+    fireEvent.change(screen.getByRole("searchbox", { name: /search/i }), {
+      target: { value: "zzzz" },
+    });
+    expect(screen.getByText(/no classes match this search/i)).toBeTruthy();
+    expect(screen.queryByText(/nothing here/i)).toBeNull();
   });
 });
 
@@ -968,5 +995,54 @@ describe("a host whose rename handler returns something else entirely", () => {
     });
     expect(onRename).toHaveBeenCalled();
     expect(screen.queryByText(/could not be renamed/i)).toBeNull();
+  });
+});
+
+describe("the panel explains itself", () => {
+  it("says what a class IS, and where you apply one", () => {
+    /*
+     * The second sentence is load-bearing. This panel has no way to CREATE a
+     * class — deliberately, because applying happens beside the style controls
+     * — and without saying so the absent control reads as a missing feature
+     * rather than as a split.
+     */
+    draw();
+    expect(screen.getByText(/saved set of styles/i)).toBeTruthy();
+    expect(screen.getByText(/beside the style controls/i)).toBeTruthy();
+  });
+
+  it("tells an author that an empty 'not in index' list is good news", () => {
+    /*
+     * The one empty state that is a REPORT rather than a lack. "No classes
+     * match this filter." reads as a failure; here it means nothing is known to
+     * be stranded, which is the outcome the author was hoping for.
+     *
+     * The wording still refuses to claim more than the index can support — a
+     * floor, never a measurement — which is the same care the filter's own name
+     * takes.
+     */
+    draw({ library: [], usage: {}, documentClassIds: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
+    expect(screen.getByText(/nothing here/i)).toBeTruthy();
+    expect(screen.getByText(/floor, not a measurement/i)).toBeTruthy();
+  });
+
+  it("keeps the filters, because they answer questions that OVERLAP", () => {
+    /*
+     * Not converted to groups, and this test is why. `filterClassRows` tests
+     * `indexedDocuments === 0` for one and `onThisPage` for the other, so a
+     * class the open document applies while the index has not recorded it
+     * satisfies BOTH. Groups would have to put it in one and would assert a
+     * mutual exclusivity the rule denies.
+     */
+    draw({
+      library: [cls("id-draft", "draft-only", 0)],
+      usage: {},
+      documentClassIds: ["id-draft"],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Not in index" }));
+    expect(nameField("draft-only")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "On this page" }));
+    expect(nameField("draft-only")).toBeTruthy();
   });
 });

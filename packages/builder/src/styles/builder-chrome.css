@@ -1929,6 +1929,123 @@
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The sentence that says what a token is, before any of the machinery.
+ *
+ * Given the panel's own tone rather than a notice's: it is not a warning and
+ * must not read as one, so it takes the muted foreground and a rule beneath
+ * rather than a coloured ground.
+ */
+.nx-tokens__lede,
+.nx-classman__lede {
+  margin: 0;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid var(--nx-border);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--nx-muted-foreground);
+}
+
+.nx-tokens__lede b,
+.nx-classman__lede b {
+  color: var(--nx-foreground);
+  font-weight: 600;
+}
+
+/*
+ * A group heading, which is a row rather than a heading element on its own.
+ *
+ * The count sits BESIDE the heading rather than inside it, so the heading's
+ * accessible name is the kind alone — inside, "Colour" becomes "Colour 3" and
+ * every reader addressing the group by name has to know the number first.
+ */
+.nx-tokens__grouphead,
+.nx-classman__grouphead {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  padding-top: 0.25rem;
+}
+
+.nx-tokens__groupname,
+.nx-classman__groupname {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--nx-muted-foreground);
+}
+
+/* The rule runs to the end of the row, which is what separates one group from
+ * the next without spending a heavier border on it. */
+.nx-tokens__grouphead::after,
+.nx-classman__grouphead::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--nx-border);
+}
+
+.nx-tokens__group,
+.nx-classman__group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+/*
+ * The empty state, which is the first thing a new site shows.
+ *
+ * Given room rather than a single muted line: this is the one surface where an
+ * author who does not know what a token is can find out, and a sentence set
+ * like an error note reads as something having gone wrong.
+ */
+.nx-tokens__empty,
+.nx-classman__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.75rem 0;
+}
+
+.nx-tokens__empty-head,
+.nx-classman__empty-head {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--nx-foreground);
+}
+
+/* Creating a token names its kind, because a list that omits empty kinds has
+ * nowhere to stand and press "add". */
+.nx-tokens__add {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+.nx-tokens__kind {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--nx-border);
+  border-radius: var(--radius-sm);
+  background: var(--nx-background);
+  color: var(--nx-foreground);
+  font-size: var(--text-xs);
+}
+
+.nx-tokens__kind:focus-visible {
+  outline: 2px solid var(--nx-ring);
+  outline-offset: 1px;
+}
+
+.nx-tokens__search,
+.nx-classman__search {
+  flex: none;
+}
+
 .nx-tokens__list {
   display: flex;
   flex-direction: column;

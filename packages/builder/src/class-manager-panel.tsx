@@ -320,11 +320,25 @@ export function ClassManagerPanel({
           Where these classes are used has not been read.
         </p>
       )}
+      {/*
+       * What a class IS, and where one is made.
+       *
+       * The second sentence is the load-bearing half. This panel deliberately
+       * has no create control — applying happens beside the style controls,
+       * where it is done constantly, while auditing happens here — and without
+       * saying so the absent button reads as a missing feature rather than as a
+       * split someone chose.
+       */}
+      <p className="nx-classman__lede">
+        <b>A class is a saved set of styles you can reuse.</b> Rename and clear
+        them out here; you apply one beside the style controls.
+      </p>
       <FilterChips active={active} filters={offerable} onChange={setFilter} />
       <ClassSearch query={query} onChange={setQuery} />
       <ClassList
         rows={rows}
         searching={query.trim() !== ""}
+        filter={active}
         pendingSlugs={pendingSlugs}
         pageSize={pageSize}
         library={library}
@@ -427,6 +441,7 @@ function usablePageSize(pageSize: number | undefined): number {
 function ClassList({
   rows,
   searching,
+  filter,
   pendingSlugs,
   pageSize,
   library,
@@ -438,6 +453,13 @@ function ClassList({
   rows: readonly ClassRow[];
   /** Whether a search is narrowing them, for the empty-list wording. */
   searching: boolean;
+  /**
+   * Which narrowing is active, because one of them is GOOD news when empty.
+   *
+   * An empty "not in index" is the outcome an author auditing a site wants, and
+   * wording it like the others reports a success as a failure.
+   */
+  filter: ClassFilter;
   pendingSlugs?: Readonly<Record<string, string>>;
   pageSize?: number;
   library: readonly NamedClass[];
@@ -465,18 +487,42 @@ function ClassList({
   const [pagesOpen, setPagesOpen] = React.useState(1);
   const limit = pagesOpen * page;
   if (rows.length === 0) {
-    return (
-      <p className="nx-inspector__note">
-        {/*
-          Which narrowing produced the empty list. Blaming the search when the
-          box is blank sends an author to clear something that is not set, and
-          hides the filter that actually did it.
-        */}
-        {searching
-          ? "No classes match this search."
-          : "No classes match this filter."}
-      </p>
-    );
+    /*
+     * Which narrowing produced the empty list. Blaming the search when the box
+     * is blank sends an author to clear something that is not set, and hides
+     * the filter that actually did it.
+     */
+    if (searching) {
+      return (
+        <p className="nx-inspector__note">No classes match this search.</p>
+      );
+    }
+    /*
+     * An empty "not in index" is the one absence here that is a RESULT rather
+     * than a lack: nothing is known to be stranded. Wording it like the others
+     * reports the outcome an author was hoping for as a failure to find
+     * anything.
+     *
+     * The sentence still refuses to claim more than the index can support. It
+     * says what is not KNOWN, never what is not USED — the same care the
+     * filter's own name takes, and for the same reason: the index errs in both
+     * directions, so an empty list is a floor rather than a measurement.
+     */
+    if (filter === "not-in-index") {
+      return (
+        <div className="nx-classman__empty">
+          <p className="nx-classman__empty-head">
+            Nothing here &mdash; and that is good news.
+          </p>
+          <p className="nx-inspector__note">
+            No class is known to be unused, so none is waiting to be cleared
+            out. It is a floor, not a measurement: the index can miss a class
+            that is still applied.
+          </p>
+        </div>
+      );
+    }
+    return <p className="nx-inspector__note">No classes match this filter.</p>;
   }
   const shown = rows.slice(0, limit);
   const hidden = rows.length - shown.length;

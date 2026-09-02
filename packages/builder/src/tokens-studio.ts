@@ -37,7 +37,6 @@
  * @module tokens-studio
  */
 import {
-  TOKEN_KINDS,
   emitTokenBlocks,
   MAX_TOKEN_NAME_LENGTH,
   MAX_TOKEN_NAME_SEGMENTS,
@@ -452,17 +451,4 @@ export function addToken(
     tokens: { ...base, tokens: [...base.tokens, token] },
     at: base.tokens.length,
   };
-}
-
-/** How many tokens each kind holds, for the tab labels. */
-export function tokenCounts(
-  tokens: SiteTokenSet | undefined
-): Readonly<Record<TokenKind, number>> {
-  const counts = Object.fromEntries(
-    TOKEN_KINDS.map(kind => [kind, 0])
-  ) as Record<TokenKind, number>;
-  for (const token of tokens?.tokens ?? []) {
-    if (token.kind in counts) counts[token.kind] += 1;
-  }
-  return counts;
 }

@@ -1008,3 +1008,75 @@ describe("an import where nothing landed", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe("the panel explains itself and shows the whole set", () => {
+  /** Tokens across three kinds, so grouping and search have something to cross. */
+  const MIXED: SiteTokenSet = {
+    tokens: [
+      { name: "color.ink", kind: "color", values: { light: "#111111" } },
+      { name: "space.gutter", kind: "dimension", values: { light: "1.5rem" } },
+      { name: "motion.settle", kind: "duration", values: { light: "240ms" } },
+    ],
+  };
+
+  it("says what a token IS, in the words an author would use", () => {
+    // The panel opened with a mode switch, a transfer control and eight tabs of
+    // vocabulary, and never a sentence about what any of it does to the site.
+    mount(MIXED);
+    expect(screen.getByText(/named values/i)).toBeTruthy();
+    expect(screen.getByText(/every block using it/i)).toBeTruthy();
+  });
+
+  it("groups every kind that HAS tokens into one list", () => {
+    // The must-be-found half. Three kinds are present, so three headings are.
+    mount(MIXED);
+    for (const heading of ["Colour", "Size", "Duration"]) {
+      expect(screen.getByRole("heading", { name: heading })).toBeTruthy();
+    }
+  });
+
+  it("does not draw a group for a kind with no tokens", () => {
+    /*
+     * The point of the shape. Eight tabs meant five clickable dead ends in a
+     * 320px rail; a kind with nothing in it should not be a place you can go.
+     *
+     * The control is the test above: it proves the query CAN find a heading, so
+     * this absence is about the kind being omitted rather than about the
+     * selector matching nothing.
+     */
+    mount(MIXED);
+    for (const heading of ["Font", "Weight", "Number", "Shadow", "Custom"]) {
+      expect(screen.queryByRole("heading", { name: heading })).toBeNull();
+    }
+  });
+
+  it("searches across every kind at once, which tabs could not", () => {
+    /*
+     * A tabbed panel can only search within a tab, or it crosses a boundary the
+     * tabs assert. One list has no boundary to cross, so a query matching two
+     * kinds returns both — and that is the capability the shape buys.
+     */
+    mount(MIXED);
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: /search tokens/i }),
+      {
+        target: { value: "e" },
+      }
+    );
+    // "color.ink" has no "e"; the other two do, and they are different kinds.
+    expect(screen.getByRole("heading", { name: "Size" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Duration" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Colour" })).toBeNull();
+  });
+
+  it("teaches at the empty state instead of reporting absence and stopping", () => {
+    // "No colour tokens yet." says what is missing and offers nothing. An empty
+    // panel is the first thing a new site shows, so it is the one surface that
+    // has to teach.
+    mount({ tokens: [] });
+    expect(screen.getByText(/no tokens yet/i)).toBeTruthy();
+    expect(
+      screen.getByText(/change it once and the whole site follows/i)
+    ).toBeTruthy();
+  });
+});
