@@ -27,10 +27,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { dequal } from "dequal";
 
-import {
-  collectionHasLifecycle,
-  type CollectionConfig,
-} from "../collections/config/define-collection";
+import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
   SecurityConfig,
@@ -1971,10 +1968,7 @@ async function syncCodeFirstCollections(
       // Resolve + forward the versioning config so it persists to
       // dynamic_collections.versions. `status: true` aliases to a versioned
       // config, so pass both to the resolver.
-      versions: resolveVersionsConfig(
-        collection.versions,
-        collectionHasLifecycle(collection.status)
-      ),
+      versions: resolveVersionsConfig(collection.versions, collection.status),
       // Forward the cache-revalidation config verbatim so it persists to
       // dynamic_collections.revalidate; the write path reads it to honor
       // `disable` and merge extra `tags`.

@@ -38,6 +38,7 @@ import {
   inArray,
   notInArray,
   or,
+  sql,
   type SQL,
   type SQLWrapper,
 } from "drizzle-orm";
@@ -83,10 +84,18 @@ export function statusCondition(input: StatusConditionInput): SQL | undefined {
    * one public state, which is every workflow that exists before a team writes
    * its own.
    */
+  /*
+   * An EMPTY set is a read bounded to nothing — reachable when a workflow calls
+   * every state public and a caller asks explicitly for drafts. It must select
+   * no rows rather than select every row, and it must not reach the driver as
+   * `IN ()`, which two dialects reject outright.
+   */
   const base =
-    filter.values.length === 1
-      ? eq(statusColumn, filter.values[0])
-      : inArray(statusColumn, [...filter.values]);
+    filter.values.length === 0
+      ? sql`1 = 0`
+      : filter.values.length === 1
+        ? eq(statusColumn, filter.values[0])
+        : inArray(statusColumn, [...filter.values]);
 
   // Only a PUBLIC read is adjusted. A read bounded to the non-public states is
   // asking for pending work: a document a release is about to publish is not

@@ -982,6 +982,15 @@ function statusMembership(
 ): SQL {
   if (statusValues === undefined) return sql``;
   const column = sql`${table}.${sql.identifier("_status")}`;
+  /*
+   * An EMPTY set is a read bounded to nothing, and it has to say so in SQL.
+   * Rendered as written it becomes `_status IN ()`, which PostgreSQL and MySQL
+   * reject as a syntax error — the whole query fails rather than returning the
+   * no rows the caller asked for. It is reachable: a workflow whose every state
+   * is public leaves the non-public set empty, and an explicit draft read of
+   * that collection resolves to it.
+   */
+  if (statusValues.length === 0) return sql` AND 1 = 0`;
   if (statusValues.length === 1)
     return sql` AND ${column} = ${statusValues[0]}`;
   const list = sql.join(

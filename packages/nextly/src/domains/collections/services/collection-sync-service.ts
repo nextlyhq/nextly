@@ -37,11 +37,9 @@ import { dirname, join, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import {
-  collectionHasLifecycle,
-  collectionWorkflow,
-  type CollectionAdminOptions,
-  type CollectionConfig,
+import type {
+  CollectionAdminOptions,
+  CollectionConfig,
 } from "../../../collections/config/define-collection";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
@@ -68,7 +66,6 @@ import {
   type CodeFirstCollectionConfig,
   type SyncResult,
 } from "./collection-registry-service";
-import { registerCollectionWorkflow } from "./collection-workflows";
 import { hasPreviewConfigured } from "./preview-url-resolver";
 
 /**
@@ -809,14 +806,6 @@ export class CollectionSyncService extends BaseService {
   private convertToCodeFirstConfigs(
     collections: CollectionConfig[]
   ): CodeFirstCollectionConfig[] {
-    // Record each declared workflow as the configs are read. The workflow
-    // travels with the CONFIG and not with the row — the persisted record
-    // carries a boolean — so this is the only moment the states are in hand,
-    // and the read path has no route back here to ask later.
-    for (const config of collections) {
-      const workflow = collectionWorkflow(config.status);
-      if (workflow) registerCollectionWorkflow(config.slug, workflow);
-    }
     return collections.map(config => ({
       slug: config.slug,
       labels: {
@@ -832,12 +821,9 @@ export class CollectionSyncService extends BaseService {
       // boot/HMR registry sync. status/localized must be forwarded too, else the
       // sync would register status-enabled collections with status=0 (or toggle
       // existing ones off) since it reads these off the payload.
-      status: collectionHasLifecycle(config.status),
+      status: config.status === true,
       localized: config.localized === true,
-      versions: resolveVersionsConfig(
-        config.versions,
-        collectionHasLifecycle(config.status)
-      ),
+      versions: resolveVersionsConfig(config.versions, config.status),
       // Forward the cache-revalidation config verbatim (no resolver — the
       // authored `{ tags?, disable? }` shape is persisted as-is).
       revalidate: config.revalidate,

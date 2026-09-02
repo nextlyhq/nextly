@@ -186,6 +186,30 @@ describe("statusCondition", () => {
     expect(both.sql.toLowerCase()).toContain(" in (");
   });
 
+  it("selects NOTHING for an empty set, without emitting IN ()", () => {
+    /*
+     * Reachable, not hypothetical: a workflow whose every state is public
+     * leaves the non-public set empty, and an explicit draft read of that
+     * collection resolves to it. Rendered literally it becomes `_status IN ()`,
+     * which PostgreSQL and MySQL reject as a syntax error — so the query fails
+     * instead of returning the no rows the caller asked for, and the failure is
+     * a 500 rather than an empty list.
+     */
+    const none = rendered(
+      statusCondition({
+        filter: { values: [], isPublicRead: false },
+        statusColumn: table.status,
+        idColumn: table.id,
+        decisions: { reveal: [], hide: [] },
+      })
+    );
+    expect(none.sql).not.toContain("in ()");
+    expect(none.sql.toLowerCase()).toContain("1 = 0");
+    // The premise: it produced a condition at all, rather than `undefined`,
+    // which would leave the read UNBOUNDED and return every row.
+    expect(none.sql).not.toBe("");
+  });
+
   it("keeps a single state an EQUALITY rather than a one-element set", () => {
     // The control, and a deliberate property: every workflow that exists before
     // a team writes its own names one public state, so this widening has to be

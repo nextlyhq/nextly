@@ -58,31 +58,13 @@ otherwise found at write time, on one dialect, in production — and SQLite is t
 permissive one, so a suite run against it says nothing about the two dialects
 that reject it.
 
-A collection can now name the workflow its documents move through:
+An EMPTY status set selects nothing rather than breaking the query. A workflow
+whose every state is public leaves the non-public set empty, and an explicit
+draft read of that collection resolves to it; rendered literally that is
+`_status IN ()`, which PostgreSQL and MySQL reject as a syntax error. The read
+then fails with a 500 instead of returning the no rows the caller asked for.
 
-```ts
-defineCollection({
-  slug: "articles",
-  status: {
-    workflow: defineWorkflow({
-      name: "editorial",
-      states: [
-        { name: "draft", label: "Draft", isPublic: false },
-        { name: "in_review", label: "In legal review", isPublic: false },
-        { name: "live", label: "Live", isPublic: true },
-      ],
-    }),
-  },
-});
-```
-
-`status: true` still means the two-state default, so no existing config moves.
-The workflow is passed as a VALUE rather than by name: a config shares one by
-importing the const, which is type-checked and impossible to misspell, where a
-string would be resolved at boot and fail with a name nobody can find. Workflows
-authored in the admin arrive by name later, and the option widens to accept
-both.
-
-A public read of that collection admits only `live`, and a caller asking for
-unpublished work sees `draft` and `in_review` — the queue the workflow exists to
-create. A collection that declares nothing answers exactly as it did before.
+No collection can name a workflow yet. This change makes the read path able to
+carry one and validates a workflow where it is declared; the option that lets a
+config attach one is deliberately not here, because it reaches write, schema and
+boot paths that still compare against a single word.

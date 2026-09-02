@@ -154,7 +154,6 @@ import {
   getMinSearchLength,
   decodeJsonFieldValues,
 } from "./collection-utils";
-import { workflowForCollection } from "./collection-workflows";
 
 /**
  * One component-field predicate, as raw SQL against a named column.
@@ -1258,9 +1257,6 @@ export class CollectionQueryService extends BaseService {
           (collectionForStatus as { status?: boolean }).status === true,
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
-        // The states THIS collection declared, so a public read admits what its
-        // own workflow calls public rather than the word the default uses.
-        workflow: workflowForCollection(params.collectionName),
       });
       // ONE instant for this read. Each release lookup taking its own
       // `new Date()` let a release become due between the row query and a
@@ -2380,9 +2376,6 @@ export class CollectionQueryService extends BaseService {
           (collectionForStatus as { status?: boolean }).status === true,
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
-        // The states THIS collection declared, so a public read admits what its
-        // own workflow calls public rather than the word the default uses.
-        workflow: workflowForCollection(params.collectionName),
       });
       // ONE instant for this read. Each release lookup taking its own
       // `new Date()` let a release become due between the row query and a
@@ -2868,9 +2861,6 @@ export class CollectionQueryService extends BaseService {
           (collectionForStatus as { status?: boolean }).status === true,
         overrideAccess: params.overrideAccess === true,
         explicit: params.status,
-        // The states THIS collection declared, so a public read admits what its
-        // own workflow calls public rather than the word the default uses.
-        workflow: workflowForCollection(params.collectionName),
       });
 
       const idCondition = eq(schema.id, entryId);

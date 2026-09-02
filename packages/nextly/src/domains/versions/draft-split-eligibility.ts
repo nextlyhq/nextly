@@ -24,10 +24,7 @@
  * @module domains/versions/draft-split-eligibility
  */
 
-import {
-  collectionHasLifecycle,
-  type CollectionConfig,
-} from "../../collections/config/define-collection";
+import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 
@@ -317,14 +314,8 @@ export async function collectionDraftSplit(
   collection: AuthoredDraftSplitCollection
 ): Promise<DraftSplitEligibility> {
   return schemaDraftSplit({
-    // The eligibility question is whether a lifecycle EXISTS, which is true of
-    // both forms of the option; which states it names is the read path's
-    // business, not the draft split's.
-    status: collectionHasLifecycle(collection.status),
-    versions: resolveVersionsConfig(
-      collection.versions,
-      collectionHasLifecycle(collection.status)
-    ),
+    status: collection.status,
+    versions: resolveVersionsConfig(collection.versions, collection.status),
     fields: collection.fields,
     slug: collection.slug,
   });
