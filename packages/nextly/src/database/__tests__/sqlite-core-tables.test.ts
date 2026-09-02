@@ -361,6 +361,19 @@ describe("the SQLite bootstrap DDL", () => {
       expect(indexesOn(forReplay(LEGACY), LEGACY).length).toBe(5);
     });
 
+    /**
+     * A database that genuinely has no registry still gets one on the fresh
+     * path. Suppressing the create everywhere would leave a partially
+     * bootstrapped database — `users` present, registry dropped — with nothing
+     * to register components into.
+     */
+    it("creates the registry for a fresh database that has none", () => {
+      // The resolver answers with the legacy name when neither table exists,
+      // which is the same answer as "legacy is present" — and both want it
+      // created, since the create is IF NOT EXISTS.
+      expect(creates(forFresh(LEGACY), LEGACY)).toBe(true);
+    });
+
     /** Nothing outside the registry is touched by either option. */
     it("narrows nothing else", () => {
       const full = generateSqliteCoreTableStatements();

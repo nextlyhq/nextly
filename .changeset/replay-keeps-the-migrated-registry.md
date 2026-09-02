@@ -36,9 +36,15 @@ has been migrated to `dynamic_field_groups` that does not add a spare table:
 every subsequent read and registration switches to the empty one and every
 migrated component becomes unreachable.
 
-The replay is now narrowed for an existing database — the legacy registry and
-its five indexes are dropped when the migrated spelling is there — while a
-fresh database, which has chosen neither, still gets the full set. The probe
-fails closed: if it cannot tell, it assumes migrated, because skipping a create
-on a database that did not migrate costs a table the fresh path adds, while
-creating one on a database that did is silent.
+The registry's `CREATE TABLE` is no longer replayed at all. Its five indexes
+are, retargeted to whichever registry the database actually holds — an
+installation created by the older fallback has none of them, and the rename
+carries that gap across, so `db:sync` still reconciles them. A registry that is
+genuinely absent is created by the system-table service, which resolves the
+spelling before creating rather than writing a fixed name.
+
+Which registry a database holds is resolved once, through the same catalog
+resolver its readers use, and applied to both the fresh push bundle and the raw
+DDL — so a database holding a migrated registry and no `users` table cannot have
+the legacy spelling created for it by either path. When resolution cannot say,
+neither path names a registry: a CREATE is additive and nothing undoes it.
