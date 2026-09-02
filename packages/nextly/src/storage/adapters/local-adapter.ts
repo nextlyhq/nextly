@@ -27,7 +27,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { resolveReadBounds, withDeadline } from "../fetch-stored-bytes";
+import {
+  deadlineSignal,
+  resolveReadBounds,
+  withDeadline,
+} from "../fetch-stored-bytes";
 import { StorageReadTooLargeError } from "../read-errors";
 import type {
   UploadOptions,
@@ -76,13 +80,23 @@ const READ_CHUNK_BYTES = 64 * 1024;
 async function readCounted(
   handle: fs.FileHandle,
   filePath: string,
-  maxBytes: number
+  maxBytes: number,
+  signal: AbortSignal
 ): Promise<Buffer> {
   const chunks: Buffer[] = [];
   const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
   let received = 0;
 
   for (;;) {
+    /*
+     * Checked before each syscall, so a read the caller has already given up on
+     * stops asking for more. It cannot cancel the one in flight — no filesystem
+     * call takes a signal — but it bounds the abandoned work to a SINGLE chunk
+     * rather than the whole file, which is the difference between one blocked
+     * threadpool slot and one held for as long as the file is long.
+     */
+    if (signal.aborted) throw signal.reason as Error;
+
     const { bytesRead } = await handle.read(chunk, 0, READ_CHUNK_BYTES, null);
     if (bytesRead === 0) break;
 
@@ -269,14 +283,20 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
      * `read` answers within the deadline it advertised instead of holding its
      * caller for as long as the mount stays down.
      */
-    const work = this.readWithinCap(fullPath, filePath, bounds.maxBytes);
+    const signal = deadlineSignal(bounds.timeoutMs, filePath);
+    const work = this.readWithinCap(
+      fullPath,
+      filePath,
+      bounds.maxBytes,
+      signal
+    );
     /*
      * A lost race rejects the caller from `withDeadline` and leaves this
      * promise to settle with nobody attached — an unhandled rejection for a
      * read whose outcome has already been reported.
      */
     void work.catch(() => undefined);
-    return await withDeadline(work, AbortSignal.timeout(bounds.timeoutMs));
+    return await withDeadline(work, signal);
   }
 
   // ============================================================
@@ -297,7 +317,8 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
   private async readWithinCap(
     fullPath: string,
     filePath: string,
-    maxBytes: number
+    maxBytes: number,
+    signal: AbortSignal
   ): Promise<Buffer | null> {
     const handle = await fs.open(fullPath, "r").catch(() => null);
     // A missing file, and every other reason opening one fails — the same
@@ -319,7 +340,7 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
          */
         throw new StorageReadTooLargeError(filePath, maxBytes, size);
       }
-      return await readCounted(handle, filePath, maxBytes);
+      return await readCounted(handle, filePath, maxBytes, signal);
     } catch (error) {
       // The refusal is an answer about a file that exists, so it travels;
       // everything else keeps reading as absence, unchanged.

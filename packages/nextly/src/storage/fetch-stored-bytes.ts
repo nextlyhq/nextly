@@ -25,7 +25,10 @@ import {
   DEFAULT_MAX_RESPONSE_BYTES,
 } from "../utils/validate-external-url";
 
-import { StorageReadTooLargeError } from "./read-errors";
+import {
+  StorageReadTimeoutError,
+  StorageReadTooLargeError,
+} from "./read-errors";
 import type { StorageReadOptions } from "./types";
 
 /**
@@ -205,6 +208,34 @@ export function resolveReadBounds(options?: StorageReadOptions): {
     maxBytes: options?.maxBytes ?? DEFAULT_READ_MAX_BYTES,
     timeoutMs: options?.timeoutMs ?? DEFAULT_READ_TIMEOUT_MS,
   };
+}
+
+/**
+ * A deadline that aborts with a NextlyError rather than a platform exception.
+ *
+ * `AbortSignal.timeout` rejects with a `DOMException` named `TimeoutError`, and
+ * product code in this package answers in `NextlyError` — so a caller can
+ * classify what it caught rather than matching a name the runtime chose. Built
+ * here rather than per adapter so every storage deadline says the same thing.
+ *
+ * The timer is unreferenced: a read that finishes early leaves it pending, and
+ * a pending deadline must not be a reason the process stays alive.
+ *
+ * @param timeoutMs - How long the read may take
+ * @param context - What is being read, carried into the refusal's log side
+ */
+export function deadlineSignal(
+  timeoutMs: number,
+  context: string
+): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new StorageReadTimeoutError(context, timeoutMs));
+  }, timeoutMs);
+  // Guarded because `unref` is Node's, and this module is bundled for runtimes
+  // whose `setTimeout` returns a number.
+  (timer as { unref?: () => void }).unref?.();
+  return controller.signal;
 }
 
 /**
