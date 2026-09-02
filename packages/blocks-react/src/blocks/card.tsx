@@ -74,25 +74,6 @@ export const CARD_BASE_STYLES = {
     base: {
       borderRadius: "12px",
       overflow: "hidden",
-      /*
-       * The inside of the surface, which this block drew a border around and
-       * then did not make room in.
-       *
-       * Measured on a published page: a card rendered its heading and body
-       * flush against the hairline on all four sides. A border with nothing
-       * behind it reads as a rendering fault rather than as a card, and the
-       * author cannot tell whether the block is broken or their content is.
-       *
-       * A LITERAL, on the reasoning the comment below already gives: spacing
-       * carries no light/dark asymmetry, so it needs no token to be correct in
-       * both. Stated per logical side so it follows writing direction.
-       */
-      padding: {
-        blockStart: "1.25rem",
-        blockEnd: "1.25rem",
-        inlineStart: "1.25rem",
-        inlineEnd: "1.25rem",
-      },
       // The two properties this block declined until the tokens existed. Both
       // are `{ $token }` rather than literals BECAUSE they are colours: a
       // literal is wrong in whichever of light and dark it was not chosen for,

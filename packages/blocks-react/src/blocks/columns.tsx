@@ -89,15 +89,18 @@ export const COLUMNS_BASE_STYLES = {
        * columns touching. Measured on a published page: three tracks of 427px
        * with no space between them.
        *
-       * A LITERAL rather than a token reference, and `core/gallery` and
-       * `core/accordion` both carry this same note for the same reason: a
-       * reference to a token no site defines compiles to a `var()` with
-       * nothing behind it and the gap falls back to `normal`, which is zero —
-       * the exact failure this line exists to fix. `1rem` matches both of them,
-       * because three grid containers spacing their children differently is a
-       * difference an author has to learn rather than one that helps.
+       * A TOKEN reference, which it could not have been until now. `core/gallery`
+       * and `core/accordion` both shipped `{ $token: "space.4" }`, rendered their
+       * children touching, and were changed to the literal `1rem` — because
+       * nothing turned a token set into CSS, so the reference compiled to a
+       * `var()` with nothing behind it and `gap` fell back to `normal`. Each of
+       * the three said the literal stood "until `compileSiteSheet` is wired into
+       * the render path", and it now is: `PageRenderer` compiles a site sheet by
+       * default, so a rendered page defines `--site-space-4: 1rem`. The default
+       * is therefore unchanged and a site that retunes its spacing scale now
+       * reaches the gutter instead of finding a second answer here.
        */
-      gap: "1rem",
+      gap: { $token: "space.4" },
     },
   },
 } as const;

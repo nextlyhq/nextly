@@ -8,9 +8,12 @@
  * identity the template gives each column, so those are what is asserted.
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { PageRenderer } from "../page-renderer";
 import type { BlockResolver } from "../resolver";
+import { createBlockResolver } from "../resolver";
 import { resolvePageStyles } from "../styles";
 
 import { column, COLUMN_BLOCK, COLUMNS_BLOCK } from "./column";
@@ -71,24 +74,26 @@ describe("the columns pair", () => {
     // to nothing while the object assertion stays green — which is exactly
     // how an unsupported `flex` shipped here and had to be withdrawn. These
     // assert the emitted CSS.
-    function compiledCss(): string {
-      const doc: BlockDocument = {
-        formatVersion: 1,
-        kind: "page",
-        nodes: [
-          {
-            id: "row",
-            type: COLUMNS_BLOCK,
-            version: 1,
-            props: {},
-            slots: {
-              children: [
-                { id: "c1", type: COLUMN_BLOCK, version: 1, props: {} },
-              ],
-            },
+    // ONE document for both the compile-tier and the whole-page assertions, so
+    // the two cannot drift into describing different trees.
+    const DOC: BlockDocument = {
+      formatVersion: 1,
+      kind: "page",
+      nodes: [
+        {
+          id: "row",
+          type: COLUMNS_BLOCK,
+          version: 1,
+          props: {},
+          slots: {
+            children: [{ id: "c1", type: COLUMN_BLOCK, version: 1, props: {} }],
           },
-        ],
-      };
+        },
+      ],
+    };
+
+    function compiledCss(): string {
+      const doc = DOC;
       const resolver: BlockResolver = {
         get: (name: string) =>
           coreBlocks.find(block => block.name === name) as never,
@@ -139,10 +144,51 @@ describe("the columns pair", () => {
        */
       const css = compiledCss();
 
-      expect(css).toContain("gap: 1rem");
+      expect(css).toContain("gap: var(--site-space-4)");
       // Must-differ: the row is still a grid, so this is about the gutter and
       // not about the layout having been replaced by something simpler.
       expect(css).toContain("display: grid");
+    });
+
+    it("names a token the RENDERED page actually defines", () => {
+      /*
+       * The half the assertion above cannot make, and the half that matters.
+       *
+       * `resolvePageStyles` compiles the page tier alone, so it emits the
+       * `var()` whether or not anything defines it — which is exactly the state
+       * `core/gallery` and `core/accordion` shipped in. Both declared
+       * `{ $token: "space.4" }`, both compiled to `var(--site-space-4)`, and
+       * both rendered their children touching, because an unresolved custom
+       * property makes the declaration invalid at computed-value time and `gap`
+       * falls back to `normal` — zero for a grid.
+       *
+       * The custom-property name is READ OUT of the gutter rather than written
+       * here. A literal `--site-space-4:` would be satisfied by the site sheet
+       * emitting the default set, which it does whatever this block references
+       * — so the assertion would hold while the gutter pointed at a token
+       * nothing defines. Verified: naming `space.nonesuch` passes the literal
+       * form of this test and fails the form below.
+       */
+      const markup = renderToStaticMarkup(
+        <PageRenderer
+          document={DOC}
+          blocks={createBlockResolver([...coreBlocks])}
+          styleContext={{
+            breakpoints: {
+              viewport: [{ id: "base", label: "Desktop" }],
+              container: [],
+            },
+          }}
+        />
+      );
+
+      const reference = markup.match(/gap:\s*var\((--site-[a-z0-9-]+)\)/);
+
+      // Must-be-found: the gutter reached the page AS a token reference. Without
+      // this the derivation below would have nothing to check and pass vacuously.
+      expect(reference).not.toBeNull();
+      // The definition, named by the reference itself.
+      expect(markup).toContain(`${reference?.[1]}:`);
     });
 
     it("emits the column's min-width so a long child cannot force overflow", () => {

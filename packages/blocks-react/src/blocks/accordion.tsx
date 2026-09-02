@@ -78,19 +78,25 @@ export { ACCORDION_BLOCK, ACCORDION_ITEM_BLOCK } from "./accordion-item";
  * are absent), so a flex layout here would leave the sections unable to express
  * how they take space; a grid puts that on the track list, which the group owns.
  *
- * The gap is a LENGTH rather than `{ $token: "space.4" }`, and `1rem` is what
- * `space.4` itself declares — so the value survives the change back once
- * `compileSiteSheet` is wired into the render path and tokens resolve.
+ * The gap is `{ $token: "space.4" }`. It was a LENGTH, on the note that the
+ * literal stood "until `compileSiteSheet` is wired into the render path and
+ * tokens resolve" — that condition is now met, `PageRenderer` compiles a site
+ * sheet by default, and the literal has been retired exactly as written. The
+ * rendered value does not change, because `1rem` is what `space.4` declares;
+ * what changes is that a site retuning its spacing scale reaches these
+ * sections instead of finding a second answer here.
  */
 export const ACCORDION_BASE_STYLES = {
   base: {
     base: {
       display: "grid",
-      // A LENGTH, not a token: nothing emits token CSS yet, so a `{ $token }`
-      // reference compiles to a `var()` with nothing behind it and the gap
-      // silently falls back to `normal`, which for a grid is zero. `1rem` is
-      // what `space.4` itself declares, so the value survives the change back.
-      gap: "1rem",
+      // A TOKEN, which this could not be until the site sheet reached the
+      // render path: before that a `{ $token }` compiled to a `var()` with
+      // nothing behind it and the gap fell back to `normal` — zero for a grid,
+      // which is how this block shipped with its sections touching. `space.4`
+      // is in the guaranteed default set and resolves to the `1rem` this line
+      // previously hardcoded, so the rendered gap is unchanged.
+      gap: { $token: "space.4" },
     },
   },
 } as const;
