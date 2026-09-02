@@ -180,15 +180,39 @@ export function renderedTagOf(
    * The cost is a walk over the marked elements instead of an indexed lookup. It
    * runs once per commit for one selected node, over the elements of one page.
    */
+  return markedElementOf(root, nodeId)?.tagName.toLowerCase();
+}
+
+/**
+ * The canvas element the node is drawn as, or `undefined` when it is not drawn.
+ *
+ * The lookup `renderedTagOf` was written around, lifted out because a second
+ * question needs the same element rather than its tag: the box of logical sides
+ * asks the element which way it runs. Two walks would be two answers to "which
+ * element is this node", and they would drift the moment either learns
+ * something — a Suspense boundary, a portal, a block that marks more than its
+ * root.
+ *
+ * The id NEVER reaches a selector, for the reason spelled out above: a node id
+ * is author data, `querySelector` THROWS on invalid syntax rather than missing,
+ * and escaping does not cover a raw line break at all.
+ *
+ * @param root - the canvas root to search under
+ * @param nodeId - the node whose element is wanted
+ * @returns the marked element, or `undefined`
+ */
+export function markedElementOf(
+  root: HTMLElement | null | undefined,
+  nodeId: string | null
+): Element | undefined {
+  if (root == null || nodeId === null) return undefined;
   const marked = root.querySelectorAll(`[${NODE_ID_ATTRIBUTE}]`);
   // An index loop rather than `for...of`: a `NodeList` is not iterable under
   // this package's lib target, and rather than widen that for one walk it is
   // read the way the DOM has always allowed.
   for (let index = 0; index < marked.length; index += 1) {
     const element = marked[index];
-    if (element?.getAttribute(NODE_ID_ATTRIBUTE) === nodeId) {
-      return element.tagName.toLowerCase();
-    }
+    if (element?.getAttribute(NODE_ID_ATTRIBUTE) === nodeId) return element;
   }
   return undefined;
 }

@@ -70,6 +70,7 @@ import {
 } from "./style-inspector-panel";
 import type { StylePolicy } from "./style-values";
 import { useRenderedTag } from "./use-rendered-tag";
+import { useSideOrientation } from "./use-side-orientation";
 
 export interface StyleStateBinding {
   /** The state being edited. `base` when omitted. */
@@ -304,6 +305,14 @@ export function InspectorPanel({
     editor.selectedId,
     editor.document
   );
+  // Owned here for the same reason, and read from the same canvas: a box of
+  // logical sides is a claim about which physical edge each one is, and only
+  // the edited element can settle that.
+  const sideOrientation = useSideOrientation(
+    canvasRoot,
+    editor.selectedId,
+    editor.document
+  );
   const inspection = inspectSelection(editor.document, editor.selectedId);
   /*
    * The NODE rather than the inspection, because the marker is about stored
@@ -476,6 +485,7 @@ export function InspectorPanel({
           <StyleInspectorPanel
             editor={editor}
             renderedTag={renderedTag}
+            sideOrientation={sideOrientation}
             policy={policy}
             state={editedStyleState(styleState)}
             breakpoint={breakpoint}

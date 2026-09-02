@@ -77,6 +77,7 @@ import { commitOnEnter } from "./commit-on-enter";
 import type { EditorState } from "./editor-state";
 import { fieldLabel } from "./inspector";
 import type { BuilderOp } from "./ops";
+import type { SideOrientation } from "./side-orientation";
 import {
   activeTokenMode,
   colourHexOf,
@@ -120,6 +121,7 @@ import {
   type BreakpointSource,
   type StyleProvenance,
 } from "./style-provenance";
+import { logicalSideGroup } from "./style-sides";
 import { styleSubjectFor } from "./style-subject";
 import {
   readStyleValue,
@@ -193,6 +195,15 @@ export interface StyleInspectorPanelProps {
    * than a guess.
    */
   renderedTag?: string;
+  /**
+   * How the selected node's element runs, when the canvas could be read.
+   *
+   * `undefined` is NOT KNOWN rather than left-to-right. A per-side property is
+   * drawn as a box only when this resolves, because the arrangement is a claim
+   * about which physical edge each logical side is and only the edited element
+   * settles it. Resolved by the wrapper, which owns the canvas subscription.
+   */
+  sideOrientation?: SideOrientation;
   /**
    * The interaction state being edited. `base` when the host says nothing.
    *
@@ -487,6 +498,7 @@ function SelectedNodeClasses({
 export function StyleInspectorPanel({
   editor,
   renderedTag,
+  sideOrientation,
   policy,
   tokens,
   state,
@@ -646,6 +658,7 @@ export function StyleInspectorPanel({
             // would keep the previous block's uncommitted text.
             key={`${inspected.nodeId}:${section.group}`}
             section={section}
+            orientation={sideOrientation}
             nodeId={inspected.nodeId}
             state={inspected.state}
             breakpoint={inspected.breakpoint}
@@ -790,6 +803,7 @@ function useLiveBreakpoints(
 /** One catalog group, as a section that opens onto its properties. */
 function StyleSectionItem({
   section,
+  orientation,
   nodeId,
   state,
   breakpoint,
@@ -802,6 +816,8 @@ function StyleSectionItem({
   onChooseForm,
 }: {
   section: StyleSection;
+  /** Passed through to the per-side box, which is the only thing that reads it. */
+  orientation: SideOrientation | undefined;
   nodeId: string;
   state: StyleState;
   breakpoint: BreakpointId;
@@ -837,6 +853,7 @@ function StyleSectionItem({
             <StylePropertyFields
               key={`${nodeId}:${property.property}`}
               property={property}
+              orientation={orientation}
               nodeId={nodeId}
               state={state}
               breakpoint={breakpoint}
@@ -865,6 +882,7 @@ function StyleSectionItem({
  */
 function StylePropertyFields({
   property,
+  orientation,
   nodeId,
   state,
   breakpoint,
@@ -877,6 +895,8 @@ function StylePropertyFields({
   onChooseForm,
 }: {
   property: InspectedStyleProperty;
+  /** How the edited element runs, or `undefined` when the canvas could not answer. */
+  orientation: SideOrientation | undefined;
   nodeId: string;
   state: StyleState;
   breakpoint: BreakpointId;
@@ -889,10 +909,47 @@ function StylePropertyFields({
   onChooseForm: ChooseForm;
 }): React.JSX.Element {
   const many = property.controls.length > 1;
+  /*
+   * The four sides of a per-side property, grouped for the DRAWING only. Each
+   * side keeps its own control, so it commits on its own and undo stays per
+   * side; `undefined` for everything else, including a per-side property that
+   * does not offer all four — three edges positioned as edges with one missing
+   * and unexplained is worse than four honest rows.
+   */
+  const sides = logicalSideGroup(property.controls);
+  /*
+   * A box is drawn only when its arrangement can be JUSTIFIED. The picture
+   * makes a positional claim — this control is the leading edge — and the
+   * mapping from a logical side to a physical edge is a property of the element
+   * being edited, not of this panel. Unknown orientation therefore keeps the
+   * rows, which name their side in words and are true either way.
+   */
+  const asBox = sides !== undefined && orientation !== undefined;
+  const ordered = asBox && sides !== undefined ? sides : property.controls;
   return (
     <div
       className="nx-style-inspector__property"
       data-property={property.property}
+      // Read by the stylesheet, which owns the box arrangement.
+      data-sides={asBox ? "logical" : undefined}
+      /*
+       * The EDITED ELEMENT's axes, put on the grid so its own placement
+       * resolves in them: grid columns run along the inline axis and rows along
+       * the block axis, so column one is the inline start in either direction
+       * and a vertical mode transposes the pair — with no table of physical
+       * edges here to keep in step with CSS. The children set these back to the
+       * panel's own so their text still reads normally.
+       */
+      style={
+        asBox && orientation !== undefined
+          ? {
+              writingMode:
+                orientation.writingMode as React.CSSProperties["writingMode"],
+              direction:
+                orientation.direction as React.CSSProperties["direction"],
+            }
+          : undefined
+      }
     >
       {many ? (
         <p
@@ -939,7 +996,7 @@ function StylePropertyFields({
           the page and can be cleared.
         </p>
       )}
-      {property.controls.map(control => (
+      {ordered.map(control => (
         <StyleControlField
           // The ADDRESS, not just the position: a host switching state or
           // breakpoint leaves this field mounted, and where the old and new
@@ -950,6 +1007,9 @@ function StylePropertyFields({
             "."
           )}
           control={control}
+          {...(asBox && control.path[0] !== undefined
+            ? { side: control.path[0] }
+            : {})}
           label={
             many
               ? fieldLabel(control.path[control.path.length - 1] ?? "")
@@ -1108,6 +1168,7 @@ type CommitOutcome = "applied" | "refused" | "unchanged";
 /** One editable position, drawn as the control its leaf kind resolves to. */
 function StyleControlField({
   control,
+  side,
   label,
   summary,
   propertyLabel,
@@ -1123,6 +1184,17 @@ function StyleControlField({
   editing,
 }: {
   control: StyleControl;
+  /**
+   * Which side of a box this field draws, when the property is drawn as one.
+   *
+   * Present only where the panel decided a box is justified, and read by the
+   * stylesheet to PLACE the field. Placement by identity rather than by the
+   * field's position among its siblings, because that list varies: the property
+   * heading, a form selector and the notice for a withdrawn property are all
+   * siblings, so a rule counting elements moves every side the moment one of
+   * them appears.
+   */
+  side?: string;
   label: string;
   summary: string | undefined;
   /**
@@ -1222,9 +1294,21 @@ function StyleControlField({
   }
 
   return (
-    <div className="nx-inspector__field" data-control={control.kind}>
+    <div
+      className="nx-inspector__field"
+      data-control={control.kind}
+      {...(side === undefined ? {} : { "data-side": side })}
+    >
       <Label id={labelId} htmlFor={readOnly ? undefined : id} title={summary}>
-        {label}
+        {/*
+          The words are wrapped so the BOX can hide them without hiding the
+          label. Inside a box the side is told by position and the words are
+          noise to a sighted author — but the label also carries the provenance
+          dot, which says whether this side is authored or inherited, and that
+          is not something position tells anyone. Clipping the whole label takes
+          the dot and its focus-revealed explanation with it.
+        */}
+        <span className="nx-style-inspector__field-label-text">{label}</span>
         <ProvenanceDot
           answer={answer}
           editing={editing}

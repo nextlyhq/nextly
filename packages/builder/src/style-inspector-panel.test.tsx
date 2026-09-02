@@ -2941,5 +2941,134 @@ describe("a segmented keyword control behaves as a toggle", () => {
     fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
 
     expect(editor.applyAll).not.toHaveBeenCalled();
+ * A per-side property drawn as the box it describes.
+ *
+ * Two things are asserted here that no CSS file can state: that the box is
+ * drawn ONLY when the edited element's axes are known, and that each side is
+ * marked with WHICH side it is so the stylesheet can place it by identity
+ * rather than by counting siblings.
+ *
+ * The orientation is supplied rather than measured in most of these, because
+ * jsdom computes neither `writing-mode` nor `direction` — which is the same
+ * reason the panel treats an unreadable orientation as a reason to draw rows.
+ * The last test does the measuring, through the wrapper that owns the canvas.
+ */
+describe("a per-side property is drawn as a box", () => {
+  const LTR = { writingMode: "horizontal-tb", direction: "ltr" } as const;
+
+  /** The Style panel with an orientation already resolved, or deliberately not. */
+  function mountWithOrientation(
+    orientation: { writingMode: string; direction: string } | undefined
+  ) {
+    register({ spacing: true });
+    const editor = editorFor(documentOf());
+    render(
+      <StyleInspectorPanel
+        editor={editor}
+        {...(orientation === undefined ? {} : { sideOrientation: orientation })}
+      />
+    );
+    return document.querySelector(
+      '[data-property="padding"]'
+    ) as HTMLElement | null;
+  }
+
+  it("marks each side with WHICH side it is, not with its position", () => {
+    /*
+     * The property the stylesheet places on. The heading, a form selector and
+     * the notice for a withdrawn property are all siblings of the four sides,
+     * so a rule counting elements moves every side the moment one appears.
+     */
+    const box = mountWithOrientation(LTR);
+
+    expect(box?.getAttribute("data-sides")).toBe("logical");
+    expect(
+      [...(box?.querySelectorAll("[data-side]") ?? [])].map(field =>
+        field.getAttribute("data-side")
+      )
+    ).toEqual(["blockStart", "inlineStart", "inlineEnd", "blockEnd"]);
   });
+
+  it("carries the EDITED ELEMENT's axes, so its grid resolves in them", () => {
+    /*
+     * Grid columns run along the inline axis, so putting the element's own
+     * writing mode on the box is what makes column one the inline START edge in
+     * a right-to-left page as well as a left-to-right one. Read from the style
+     * attribute because that is the whole mechanism — there is no map from
+     * logical side to physical edge anywhere to assert instead.
+     */
+    const box = mountWithOrientation({
+      writingMode: "vertical-rl",
+      direction: "rtl",
+    });
+
+    expect(box?.style.writingMode).toBe("vertical-rl");
+    expect(box?.style.direction).toBe("rtl");
+  });
+
+  it("draws ROWS, not a box, when the element's axes are unknown", () => {
+    /*
+     * The whole reason the reading is allowed to fail. A box is a positional
+     * claim — this control is the leading edge — and an unknown orientation
+     * cannot support one. Four labelled rows name their side in words instead,
+     * which is true whichever way the element runs.
+     *
+     * `undefined` here is the ordinary state, not an error: the canvas mounts
+     * after styles load, and a block whose render returns a promise shows a
+     * fallback first.
+     */
+    const box = mountWithOrientation(undefined);
+
+    expect(box?.getAttribute("data-sides")).toBeNull();
+    expect(box?.querySelectorAll("[data-side]").length).toBe(0);
+    // The sides are still all there and still named — the fallback is a layout
+    // change, never a control that goes missing.
+    expect(
+      within(box as HTMLElement).getByLabelText("Block start")
+    ).toBeDefined();
+    expect(
+      within(box as HTMLElement).getByLabelText("Inline start")
+    ).toBeDefined();
+  });
+
+  it("resolves the axes from the CANVAS, through the panel that owns it", () => {
+    /*
+     * The forwarding hop, and the only test here that measures rather than is
+     * told. `StyleInspectorPanel` taking an orientation proves nothing about
+     * `InspectorPanel` reading one, and that is the component the page-builder
+     * plugin mounts.
+     */
+    const canvasRoot = document.createElement("div");
+    const drawn = document.createElement("div");
+    drawn.setAttribute("data-nx-node", "a");
+    canvasRoot.append(drawn);
+    document.body.append(canvasRoot);
+
+    const real = window.getComputedStyle.bind(window);
+    vi.spyOn(window, "getComputedStyle").mockImplementation(((
+      element: Element,
+      pseudo?: string | null
+    ) =>
+      element === drawn
+        ? ({
+            writingMode: "horizontal-tb",
+            direction: "rtl",
+          } as unknown as CSSStyleDeclaration)
+        : real(element, pseudo)) as typeof window.getComputedStyle);
+
+    register({ spacing: true });
+    render(
+      <InspectorPanel
+        editor={editorFor(documentOf())}
+        canvasRoot={canvasRoot}
+      />
+    );
+    // The Inspector opens on Content, and the box lives in the Style tab.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Style" }));
+
+    const box = document.querySelector(
+      '[data-property="padding"]'
+    ) as HTMLElement | null;
+    expect(box?.getAttribute("data-sides")).toBe("logical");
+    expect(box?.style.direction).toBe("rtl");  });
 });
