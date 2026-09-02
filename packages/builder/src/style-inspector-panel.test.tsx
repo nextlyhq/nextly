@@ -2725,6 +2725,12 @@ describe("a segmented keyword control behaves as a toggle", () => {
   const optionButton = (name: string) =>
     fieldsOf("fontStyle").getByRole("button", { name });
 
+  /** Every option button, so an assertion can cover the control rather than one. */
+  const allOptions = () =>
+    within(fieldsOf("fontStyle").getByRole("group")).getAllByRole(
+      "button"
+    ) as HTMLButtonElement[];
+
   /** The styles one `applyAll` call would leave on the node. */
   const committedStyles = (
     editor: ReturnType<typeof editorFor>
@@ -2737,78 +2743,102 @@ describe("a segmented keyword control behaves as a toggle", () => {
     return (op.patch as { styles?: NodeStyles }).styles;
   };
 
-  it("shows the stored value as the pressed option, and only that one", () => {
+  /** The panel with one `fontStyle` value already stored, or none. */
+  const mountWith = (stored?: string) =>
+    mount(
+      { typography: true },
+      stored === undefined
+        ? undefined
+        : ({ base: { [BASE_BREAKPOINT]: { fontStyle: stored } } } as NodeStyles)
+    );
+
+  /*
+   * Every case below is driven from MORE THAN ONE option, and that is the point
+   * rather than thoroughness for its own sake. `fontStyle` offers three, so an
+   * implementation special-cased to whichever one a fixture happens to store —
+   * pressing `italic` whenever anything is set, committing `oblique` for every
+   * unpressed button, clearing only when `italic` is the pressed one — passes a
+   * suite that only ever exercises that value, and passes it while being wrong
+   * about the other two.
+   */
+  it.each(["normal", "italic", "oblique"])(
+    "shows %s as the pressed option when it is the stored value",
+    stored => {
+      mountWith(stored);
+
+      for (const button of allOptions()) {
+        expect(button.getAttribute("aria-pressed")).toBe(
+          String(button.textContent?.trim() === stored)
+        );
+      }
+    }
+  );
+
+  it.each(["normal", "italic", "oblique"])(
+    "CLEARS when the pressed option %s is pressed again",
+    stored => {
+      /*
+       * The only route to unset that does not spend a button on "neither".
+       *
+       * BOTH assertions are load-bearing. Re-writing a value the document
+       * already holds produces NO ops — the write path treats "the document
+       * already says this" as nothing to do — so `applyAll` is never reached
+       * and the styles it would have left read as absent. Absent is also what a
+       * clear leaves, so the value assertion alone passes for the very
+       * implementation it exists to reject.
+       */
+      const editor = mountWith(stored);
+
+      fireEvent.click(optionButton(stored));
+
+      // Exactly once: a handler committing twice would satisfy "was called" and
+      // spend two history entries on one gesture.
+      expect(editor.applyAll).toHaveBeenCalledTimes(1);
+      expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
+        undefined
+      );
+    }
+  );
+
+  it.each([
+    ["italic", "normal"],
+    ["italic", "oblique"],
+    ["normal", "oblique"],
+  ])("writes %s -> %s when a different option is pressed", (stored, next) => {
     /*
-     * `aria-pressed` is the whole state model here — the group is buttons
-     * rather than a radio set precisely because "neither" is reachable — so a
-     * toggle that drew every option unpressed would still render three buttons
-     * with the right names and satisfy any assertion about their presence.
+     * The positive control for the clear case, and the option-to-value mapping
+     * with it: a handler that committed one constant for every unpressed button
+     * would leave the clear assertions green while storing the wrong style.
      */
-    mount({ typography: true }, {
-      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
-    } as NodeStyles);
+    const editor = mountWith(stored);
 
-    expect(optionButton("italic").getAttribute("aria-pressed")).toBe("true");
-    expect(optionButton("normal").getAttribute("aria-pressed")).toBe("false");
-    expect(optionButton("oblique").getAttribute("aria-pressed")).toBe("false");
-  });
+    fireEvent.click(optionButton(next));
 
-  it("CLEARS when the pressed option is pressed again", () => {
-    /*
-     * The only route to unset that does not spend a button on "neither". A
-     * toggle that re-wrote the value instead would leave an author who wants
-     * the block's inherited style with no way to ask for it from this control.
-     *
-     * BOTH halves are load-bearing, and the second was added after the first
-     * alone failed to catch a toggle that re-wrote the value. Re-writing
-     * `italic` onto a node that already holds `italic` produces NO ops — the
-     * write path treats "the document already says this" as nothing to do — so
-     * `applyAll` is never reached and the styles it would have left read as
-     * absent. Absent is also what a clear leaves behind, so the value assertion
-     * on its own passes for the very implementation it exists to reject.
-     */
-    const editor = mount({ typography: true }, {
-      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
-    } as NodeStyles);
-
-    fireEvent.click(optionButton("italic"));
-
-    expect(editor.applyAll).toHaveBeenCalled();
+    expect(editor.applyAll).toHaveBeenCalledTimes(1);
     expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
-      undefined
+      next
     );
   });
 
-  it("writes the option when a DIFFERENT one is pressed", () => {
-    /*
-     * The positive control for the case above. Without it "cleared" and "did
-     * nothing at all" produce the same absent value, and a toggle whose click
-     * handler was removed entirely would pass that assertion.
-     */
-    const editor = mount({ typography: true }, {
-      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
-    } as NodeStyles);
-
-    fireEvent.click(optionButton("oblique"));
-
-    expect(committedStyles(editor)?.base?.[BASE_BREAKPOINT]?.fontStyle).toBe(
-      "oblique"
-    );
-  });
-
-  it("marks the buttons invalid when the store refuses the edit", () => {
+  it("marks EVERY button invalid when the store refuses the edit", () => {
     /*
      * A control described by a refusal and not marked invalid announces the
      * message as a HINT rather than as a failure. `aria-invalid` sits on the
      * buttons rather than on the group because `role="group"` does not support
      * the state, so setting it there is an attribute a reader may ignore.
+     *
+     * Asserted across the whole control: one refused control has one state, and
+     * marking only the button that was clicked would leave the other two
+     * reading as valid parts of a control that is not.
      */
     const editor = mount({ typography: true });
     editor.applyAll.mockReturnValue(null);
 
     fireEvent.click(optionButton("italic"));
 
-    expect(optionButton("italic").getAttribute("aria-invalid")).toBe("true");
+    for (const button of allOptions()) {
+      expect(button.getAttribute("aria-invalid")).toBe("true");
+    }
     const message = screen.getByRole("alert");
     expect(
       fieldsOf("fontStyle").getByRole("group").getAttribute("aria-describedby")
@@ -2823,9 +2853,7 @@ describe("a segmented keyword control behaves as a toggle", () => {
      * it, when already pressed. The group's id sits on a `div`, which is not
      * labelable, so the association is inert by construction.
      */
-    const editor = mount({ typography: true }, {
-      base: { [BASE_BREAKPOINT]: { fontStyle: "italic" } },
-    } as NodeStyles);
+    const editor = mountWith("italic");
 
     fireEvent.click(fieldsOf("fontStyle").getByText("Font style"));
 
