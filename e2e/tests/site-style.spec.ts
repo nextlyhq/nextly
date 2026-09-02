@@ -49,6 +49,25 @@ const TOKEN_LIGHT = "#1b7f5c";
 const TOKEN_DARK = "#8fe3c0";
 
 /**
+ * The two forms a dark block can be written under, one per supported
+ * `darkMode` strategy: `attribute` writes a selector the host activates,
+ * `media` writes an at-rule the operating system activates. The emitter picks
+ * one, so a sheet carries exactly one of these and never both.
+ *
+ * Spelled out rather than imported from the engine, deliberately. Both are
+ * published contract: a host wires its own theme toggle to `data-nx-theme` in
+ * markup this repository never sees, so renaming it breaks every such host.
+ * Importing the engine's constant would make this expectation follow a rename
+ * and keep passing — expectation and output would be two derivations of one
+ * source, which cannot detect the source changing. Written out, a rename fails
+ * here, which is what an end-to-end test of a wire format is for.
+ */
+const DARK_BLOCK_GUARDS = [
+  '[data-nx-theme="dark"]',
+  "@media (prefers-color-scheme:dark)",
+] as const;
+
+/**
  * The stored font face, and the family its `@font-face` declares.
  *
  * A family no other tier names, for the reason the token above is named that
@@ -142,6 +161,21 @@ function siteSheetOf(html: string): string {
 }
 
 /**
+ * The prelude opening the block that the declaration at `index` sits in:
+ * every selector and at-rule since the previous block closed.
+ *
+ * Scoping matters because the alternative is to search the whole sheet before
+ * the declaration, and a guard found there need not be the one enclosing it —
+ * any earlier token's dark block satisfies that search while this token's
+ * value sits unguarded in the light block. Declarations within a block are
+ * separated by `;` and every block ends with `}`, so the text since the last
+ * `}` is exactly what opened the block this declaration is in.
+ */
+function enclosingPreludeOf(sheet: string, index: number): string {
+  return sheet.slice(sheet.lastIndexOf("}", index) + 1, index);
+}
+
+/**
  * Seeds the stored style and the fixture page, in a hook rather than a test
  * so no `--grep` can deselect it out from under the assertions.
  */
@@ -197,7 +231,17 @@ test("a stored token reaches the published page's site sheet, both modes", async
   // have put a dark block for this property into the sheet.
   const darkIndex = sheet.indexOf(`${TOKEN_PROPERTY}:${TOKEN_DARK}`);
   expect(darkIndex).toBeGreaterThan(-1);
-  expect(sheet.slice(0, darkIndex)).toContain('[data-nx-theme="dark"]');
+  // Which guard is correct is decided by this app's `darkMode` setting, not by
+  // this test: both strategies are supported and each emits the other's form
+  // never. Asserting one names a configuration rather than the property, and
+  // fails on an app that chose the other while nothing is wrong. What must
+  // hold under either is that the dark value is inside a dark guard at all —
+  // unguarded, it would apply in light mode, which is the actual defect.
+  const prelude = enclosingPreludeOf(sheet, darkIndex);
+  expect(
+    DARK_BLOCK_GUARDS.some(guard => prelude.includes(guard)),
+    `The dark value is not inside a dark-mode guard. The block enclosing it opens with: ${JSON.stringify(prelude)}`
+  ).toBe(true);
 });
 
 test("a stored font face reaches the published page as a rule a browser would act on", async ({
