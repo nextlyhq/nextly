@@ -170,6 +170,14 @@ function siteSheetOf(html: string): string {
  * value sits unguarded in the light block. Declarations within a block are
  * separated by `;` and every block ends with `}`, so the text since the last
  * `}` is exactly what opened the block this declaration is in.
+ *
+ * The scoping is TEXTUAL rather than a parse, which is sound for what this
+ * emitter writes and has two known limits, both of which fail in the safe
+ * direction — a spurious failure, never a defect hidden. A second rule inside
+ * one at-rule block would put a `}` between the at-rule and the declaration
+ * and lose the guard; the emitter writes one selector per media block, so this
+ * is latent rather than live. A `}` inside a quoted value earlier in the same
+ * block would truncate the prelude the same way.
  */
 function enclosingPreludeOf(sheet: string, index: number): string {
   return sheet.slice(sheet.lastIndexOf("}", index) + 1, index);
