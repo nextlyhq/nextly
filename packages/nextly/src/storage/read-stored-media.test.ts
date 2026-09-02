@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SafeFetchError } from "../utils/validate-external-url";
 
-import { isStorageReadTooLarge } from "./read-errors";
+import { isStorageReadTimeout, isStorageReadTooLarge } from "./read-errors";
 import {
   readStoredMediaBytes,
   StoredMediaUnreachableError,
@@ -176,6 +176,69 @@ describe("reading a stored object", () => {
     ).resolves.toBeNull();
     expect(safeFetch).not.toHaveBeenCalled();
     expect(storage.getPublicUrl).not.toHaveBeenCalled();
+  });
+
+  it("translates an adapter's own deadline into this package's error", async () => {
+    /*
+     * Adapters in sibling packages bound their reads with
+     * `AbortSignal.timeout`, which rejects with a platform `DOMException` this
+     * package can neither construct nor extend. Passed through, the route's
+     * error handler sees no `NextlyError` and answers 500 — an internal fault —
+     * for a backend that simply did not reply, which a caller and a gateway
+     * would both retry if they could read it as such.
+     */
+    const platformTimeout = Object.assign(new Error("aborted"), {
+      name: "TimeoutError",
+    });
+    const storage = {
+      read: vi.fn().mockRejectedValue(platformTimeout),
+      getPublicUrl: vi.fn(),
+    };
+
+    const outcome = await readStoredMediaBytes(storage, "f.woff2", 1000).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(isStorageReadTimeout(outcome)).toBe(true);
+    // NOT the raw platform error, which is what carried the 500.
+    expect(outcome).not.toBe(platformTimeout);
+  });
+
+  it("passes a NON-timeout adapter failure through unchanged", async () => {
+    /*
+     * The control: a translation that renamed every adapter rejection would
+     * satisfy the case above while reporting a credential failure as a
+     * retryable timeout, which a caller would retry forever.
+     */
+    const outage = new Error("bucket unreachable");
+    const storage = {
+      read: vi.fn().mockRejectedValue(outage),
+      getPublicUrl: vi.fn(),
+    };
+
+    const outcome = await readStoredMediaBytes(storage, "f.woff2", 1000).then(
+      value => value,
+      (error: unknown) => error
+    );
+    expect(outcome).toBe(outage);
+    expect(isStorageReadTimeout(outcome)).toBe(false);
+  });
+
+  it("treats a KEY beginning with http as a key, not an address", async () => {
+    /*
+     * `http-font.woff2` is a valid object name, and reading it as an address
+     * sends it to `safeFetch`, which refuses it — so an ordinary file became
+     * unservable on exactly the read-less adapters this fallback exists for.
+     *
+     * Asserted on which ADDRESS was fetched, since both routes end in a fetch
+     * and the outcome alone cannot say which string was used.
+     */
+    safeFetch.mockResolvedValue(new Response("ok"));
+    await readStoredMediaBytes(urlOnly, "http-font.woff2", 1000);
+
+    expect(safeFetch.mock.calls[0]?.[0]).toBe(
+      "https://cdn.test/http-font.woff2"
+    );
   });
 
   it("reports a MISSING object as absence, not as an outage", async () => {

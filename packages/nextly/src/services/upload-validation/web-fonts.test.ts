@@ -98,10 +98,11 @@ describe("resolving the type an upload claims", () => {
      * the case would pass against a resolver that overwrites every claim.
      *
      * A client that says `font/woff` about `Inter.woff2` is telling us
-     * something the filename cannot — the extension is not the format.
+     * something the filename cannot — the extension is not the format, and the
+     * BYTES here are a WOFF, so the claim is the true one.
      */
     expect(
-      resolveClaimedMimeType("Inter.woff2", "font/woff", fontBytes("wOF2"))
+      resolveClaimedMimeType("Inter.woff2", "font/woff", fontBytes("wOFF"))
     ).toBe("font/woff");
     expect(
       resolveClaimedMimeType("photo.png", "image/png", Buffer.from("png"))
@@ -188,6 +189,32 @@ describe("checking a font claim against the bytes", () => {
 });
 
 describe("the inference answers to the bytes", () => {
+  it("refuses an EXPLICIT font claim the bytes do not support", () => {
+    /*
+     * Platforms that register these formats send `font/woff2` themselves, so an
+     * explicit claim reaches the same anonymous route with the same bytes — the
+     * only difference being who typed the string. The caller that most needs
+     * this has no validator behind it: the published server action reaches the
+     * legacy service, which persists the type it is handed.
+     */
+    expect(
+      resolveClaimedMimeType("Evil.woff2", "font/woff2", Buffer.from("nope"))
+    ).toBe("");
+    // A real font sent with its real type is untouched — the control, since a
+    // rule refusing every font claim would satisfy the case above.
+    expect(
+      resolveClaimedMimeType("Inter.woff2", "font/woff2", fontBytes("wOF2"))
+    ).toBe("font/woff2");
+  });
+
+  it("leaves a NON-font claim alone whatever the bytes are", () => {
+    // The bytes are only this module's business for the formats it declares;
+    // an image claim is somebody else's check and must pass through untouched.
+    expect(
+      resolveClaimedMimeType("photo.png", "image/png", Buffer.from("nope"))
+    ).toBe("image/png");
+  });
+
   it("refuses to name a font when the content is not one", () => {
     /*
      * The inference invents a claim nobody made, and not every upload path runs

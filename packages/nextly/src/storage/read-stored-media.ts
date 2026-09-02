@@ -22,7 +22,10 @@ import { NextlyError } from "../errors/nextly-error";
 import { safeFetch } from "../utils/validate-external-url";
 
 import { classifyFetchFailure } from "./fetch-stored-bytes";
-import { StorageReadTooLargeError } from "./read-errors";
+import {
+  StorageReadTimeoutError,
+  StorageReadTooLargeError,
+} from "./read-errors";
 import type { StorageReadOptions } from "./types";
 
 /**
@@ -71,6 +74,39 @@ export class StoredMediaUnreachableError extends NextlyError {
 }
 
 /**
+ * Whether a stored path is itself an address, rather than a key.
+ *
+ * Parsed rather than prefix-matched: a key may legitimately begin with those
+ * four letters — `http-font.woff2` is a valid object name — and reading it as
+ * an address sends it to `safeFetch`, which refuses it, so an ordinary file
+ * became unservable on exactly the adapters this fallback exists for.
+ */
+function isAbsoluteHttpUrl(storagePath: string): boolean {
+  try {
+    const { protocol } = new URL(storagePath);
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    // Not a URL at all, which is the ordinary case for a stored key.
+    return false;
+  }
+}
+
+/**
+ * Whether a rejection is a platform deadline rather than this package's.
+ *
+ * Adapters in sibling packages bound their reads with `AbortSignal.timeout`,
+ * whose rejection is a `DOMException` this package cannot construct or extend —
+ * so it is recognised by name, which is the only thing the runtime guarantees
+ * about it.
+ */
+function isNativeTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || error.name === "AbortError")
+  );
+}
+
+/**
  * Read one stored object, bounded by `maxBytes` whichever route serves it.
  *
  * @param storage - The backend, which may or may not implement `read`
@@ -100,7 +136,22 @@ export async function readStoredMediaBytes(
      *
      * The URL route below is for adapters that cannot read at all.
      */
-    return await storage.read(storagePath, { maxBytes });
+    try {
+      return await storage.read(storagePath, { maxBytes });
+    } catch (error) {
+      /*
+       * An adapter outside this package bounds its own read with
+       * `AbortSignal.timeout`, which rejects with a platform `DOMException`
+       * named `TimeoutError`. Passed through, the route's error handler sees no
+       * `NextlyError` and answers 500 — an internal fault — for a backend that
+       * simply did not reply in time, which a caller and a gateway would both
+       * treat as retryable if they could read it.
+       */
+      if (isNativeTimeout(error)) {
+        throw new StorageReadTimeoutError(storagePath, maxBytes);
+      }
+      throw error;
+    }
   }
 
   /*
@@ -108,7 +159,7 @@ export async function readStoredMediaBytes(
    * stored path, so asking for a public URL for one would build an address out
    * of an address.
    */
-  const url = storagePath.startsWith("http")
+  const url = isAbsoluteHttpUrl(storagePath)
     ? storagePath
     : storage.getPublicUrl(storagePath);
 

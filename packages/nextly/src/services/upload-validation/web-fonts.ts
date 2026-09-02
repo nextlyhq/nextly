@@ -111,8 +111,10 @@ export function matchesWebFontSignature(
  *
  * @param filename - The uploaded name
  * @param reportedType - The type the client sent, which may be empty
- * @param buffer - The uploaded bytes, which must back an inferred font type
- * @returns The type to validate and store
+ * @param buffer - The uploaded bytes, which must back ANY font type — one the
+ *   caller sent as much as one inferred from the name
+ * @returns The type to validate and store, or `""` when a font claim's bytes
+ *   do not support it
  */
 export function resolveClaimedMimeType(
   filename: string,
@@ -125,7 +127,21 @@ export function resolveClaimedMimeType(
   // comparison would skip the fallback and let the allowlist refuse a font the
   // name could have identified.
   const generic = claimed.toLowerCase();
-  if (generic !== "" && generic !== "application/octet-stream") return claimed;
+
+  if (generic !== "" && generic !== "application/octet-stream") {
+    /*
+     * A font type the CLIENT sent answers to the bytes exactly as an inferred
+     * one does. Platforms that do register these formats send `font/woff2`
+     * themselves, so trusting an explicit claim leaves the same objects
+     * servable by the same anonymous route on the same platforms — the only
+     * difference being who typed the string.
+     *
+     * Refused as an empty claim rather than passed on, because the caller that
+     * most needs this has no validator behind it: the published server action
+     * reaches the legacy service, which persists the type it is handed.
+     */
+    return matchesWebFontSignature(buffer, generic) ? claimed : "";
+  }
 
   const inferred = webFontMimeFromFilename(filename);
   if (inferred === undefined) return claimed;
