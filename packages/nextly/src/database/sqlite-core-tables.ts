@@ -23,8 +23,6 @@ import { STORAGE_FORMAT } from "../schemas/storage-format";
 // added to a schema and not here is a column the ORM writes and the table does
 // not have, and every insert naming it fails.
 
-import { STORAGE_FORMAT } from "../schemas/storage-format";
-
 /**
  * Return SQLite CREATE TABLE IF NOT EXISTS statements for all core Nextly
  * tables in foreign-key-safe order.
