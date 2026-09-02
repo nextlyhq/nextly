@@ -24,7 +24,10 @@ import {
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
-import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
+import {
+  forgetFieldGroupStorageNames,
+  resolveRegistryNameFromCatalog,
+} from "../../domains/field-groups/storage/resolve-storage-names";
 // F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
 // MySQL `databaseName` can be threaded through to drizzle-kit.pushSchema.
 // The DI-bound `applyDesiredSchema` from pipeline/index.ts throws on
@@ -139,7 +142,7 @@ async function resolveRegistryTable(
 async function ensureSystemTables(
   drizzleAdapter: DrizzleAdapter,
   logger: CommandContext["logger"]
-): Promise<void> {
+): Promise<boolean> {
   try {
     const { SystemTableService } = await import(
       "../../services/system/system-table-service"
@@ -150,12 +153,20 @@ async function ensureSystemTables(
       error: (m: string) => logger.error(m),
       debug: (m: string) => logger.debug(m),
     };
-    await new SystemTableService(
+    // The result is READ. `ensureSystemTables` catches its own failures and
+    // reports `{ success: false }` rather than throwing, so discarding it lets
+    // a repair that did nothing be reported as one that worked.
+    const result = await new SystemTableService(
       drizzleAdapter,
       serviceLogger
     ).ensureSystemTables();
+    if (!result.success) {
+      logger.debug(`System table creation: ${result.error ?? "unknown error"}`);
+    }
+    return result.success;
   } catch (sysError) {
     logger.debug(`System table creation: ${describeError(sysError)}`);
+    return false;
   }
 }
 
@@ -232,51 +243,65 @@ export async function ensureCoreTables(
     // "no users table", which is the answer the fresh path wants anyway.
   }
 
-  {
-    if (usersExists) {
-      if (dialect === "sqlite") {
-        await applyCoreStatements(
-          drizzleAdapter,
+  if (usersExists) {
+    // `--no-auto-sync` promises to leave schema changes to migrations, and the
+    // reconcile below is schema change: it replays every core CREATE and then
+    // repairs system tables. Gating only the lock helper's DDL was not enough —
+    // the reconcile itself is the thing the option forbids. A database run this
+    // way is left exactly as the option says it will be.
+    const mayChangeSchema = options.autoSync !== false;
+
+    if (dialect === "sqlite" && mayChangeSchema) {
+      await applyCoreStatements(
+        drizzleAdapter,
+        logger,
+        sqliteCoreStatementsFor({
+          registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
+          // Not this replay's to create: its CREATE TABLE is a fixed string,
+          // and a rename landing beside it would restore the empty legacy
+          // table. A registry that is genuinely absent is created below,
+          // through the service that resolves the spelling first.
+          mayCreateRegistryTable: false,
+        })
+      );
+      // Under the exclusion, and only now: the service resolves the registry
+      // name and then creates it, with awaits in between, so a migration
+      // renaming the table between those two steps would put the empty legacy
+      // one back. The replay above has already run, so the lock's own table is
+      // available — which is why this could not wrap the replay itself.
+      const repaired = await withMigrationExcluded(
+        {
+          adapter: drizzleAdapter,
           logger,
-          sqliteCoreStatementsFor({
-            registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
-            // Not this replay's to create: its CREATE TABLE is a fixed string,
-            // and a rename landing beside it would restore the empty legacy
-            // table. A registry that is genuinely absent is created below,
-            // through the service that resolves the spelling first.
-            mayCreateRegistryTable: false,
-          })
+          label: "core table reconcile",
+          mayCreateLock: mayChangeSchema,
+          // Idempotent table creation, and the documented way to stop a sync
+          // is Ctrl+C — a claim stuck behind a dead process is the worse
+          // outcome, which is the trade a sync already makes.
+          releaseOnInterrupt: true,
+        },
+        () => ensureSystemTables(drizzleAdapter, logger)
+      );
+
+      // Dropped as soon as the claim is: the resolver memoises per adapter for
+      // the process's life, and this scope releases its lock before `db:sync`
+      // takes the outer one. A migration completing in that window would leave
+      // the sync reading a name resolved before it, against a table that has
+      // since been renamed. Re-resolving costs one catalog query.
+      forgetFieldGroupStorageNames(drizzleAdapter);
+
+      if (!repaired) {
+        logger.error(
+          "Core tables could not be reconciled. Run `nextly migrate` to " +
+            "repair the schema before syncing."
         );
-        // Under the exclusion, and only now: the service resolves the
-        // registry name and then creates it, with awaits in between, so a
-        // migration renaming the table between those two steps would put the
-        // empty legacy one back. The replay above has already run, so the
-        // lock's own table is available — which is why this could not wrap the
-        // replay itself.
-        await withMigrationExcluded(
-          {
-            adapter: drizzleAdapter,
-            logger,
-            label: "core table reconcile",
-            // `--no-auto-sync` promises to leave schema changes to migrations,
-            // and its credential may hold DML without DDL. `sync-guard` reserves
-            // `false` for exactly that: the lock table is not created, and a
-            // database without one has never run a migration, so the residual
-            // is a first-ever migration starting during this sync.
-            mayCreateLock: options.autoSync !== false,
-            // Idempotent table creation, and the documented way to stop a sync
-            // is Ctrl+C — a claim stuck behind a dead process is the worse
-            // outcome, which is the trade a sync already makes.
-            releaseOnInterrupt: true,
-          },
-          () => ensureSystemTables(drizzleAdapter, logger)
-        );
-        logger.debug("Core tables reconciled");
-      } else {
-        logger.debug("Core tables already exist, skipping ensureCoreTables");
+        process.exit(1);
       }
-      return;
+      logger.debug("Core tables reconciled");
+    } else {
+      logger.debug("Core tables already exist, skipping ensureCoreTables");
     }
+    return;
   }
 
   // Refused rather than half-built. The push can create `users` and every

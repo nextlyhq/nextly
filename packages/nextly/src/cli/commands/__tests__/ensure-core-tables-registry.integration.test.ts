@@ -54,9 +54,9 @@ async function adapterFor() {
   return { adapter, drizzleAdapter };
 }
 
-async function runEnsureCoreTables(adapter: unknown) {
+async function runEnsureCoreTables(adapter: unknown, autoSync = true) {
   const logger = createLogger({ quiet: true });
-  const options = { cwd: dir, autoSync: true } as ResolvedDevOptions;
+  const options = { cwd: dir, autoSync } as ResolvedDevOptions;
   const context = { logger, options: {}, cwd: dir } as CommandContext;
   await ensureCoreTables(adapter as CLIDatabaseAdapter, options, context);
 }
@@ -76,6 +76,28 @@ describe("ensureCoreTables and the field-group registry", () => {
     expect(await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable)).toBe(
       true
     );
+  });
+
+  /**
+   * `--no-auto-sync` promises to leave schema changes to migrations, and the
+   * reconcile is schema change — it replays every core CREATE and repairs
+   * system tables. So a database run that way is left exactly as it was, even
+   * though the credential may well have the privileges to fix it.
+   */
+  it("leaves an existing database alone when auto-sync is disabled", async () => {
+    const { adapter, drizzleAdapter } = await adapterFor();
+    await runEnsureCoreTables(adapter);
+    await drizzleAdapter.executeQuery(
+      `DROP TABLE "${STORAGE_FORMAT.registryTable}"`
+    );
+
+    await runEnsureCoreTables(adapter, false);
+
+    expect(
+      await drizzleAdapter.tableExists(STORAGE_FORMAT.registryTable),
+      "--no-auto-sync must not repair the schema; the option exists to leave " +
+        "that to migrations"
+    ).toBe(false);
   });
 
   /**
