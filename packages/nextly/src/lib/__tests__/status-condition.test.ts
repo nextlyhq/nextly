@@ -11,23 +11,7 @@
 import { PgDialect, pgTable, text } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_WORKFLOW, type ContentWorkflow } from "../content-states";
 import { statusCondition } from "../status-condition";
-
-/**
- * A workflow whose public state is NOT called `published`.
- *
- * The only shape that can tell a workflow question from a word comparison:
- * every other case in this file uses the default vocabulary, where "is this
- * state public" and "is this state the word published" agree by construction.
- */
-const RENAMED: ContentWorkflow = {
-  name: "renamed",
-  states: [
-    { name: "working", isPublic: false },
-    { name: "live", isPublic: true },
-  ],
-};
 
 const table = pgTable("posts", {
   id: text("id").primaryKey(),
@@ -64,7 +48,7 @@ describe("statusCondition", () => {
   it("is a plain comparison when no release is due", () => {
     const only = rendered(
       statusCondition({
-        filter: { value: "published" },
+        filter: { values: ["published"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: [], hide: [] },
@@ -79,7 +63,7 @@ describe("statusCondition", () => {
   it("widens a PUBLISHED read to include what a due release publishes", () => {
     const widened = rendered(
       statusCondition({
-        filter: { value: "published" },
+        filter: { values: ["published"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: ["e1", "e2"], hide: [] },
@@ -100,7 +84,7 @@ describe("statusCondition", () => {
     // was supposed to take down.
     const narrowed = rendered(
       statusCondition({
-        filter: { value: "published" },
+        filter: { values: ["published"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: [], hide: ["gone"] },
@@ -119,7 +103,7 @@ describe("statusCondition", () => {
     // pass each single-direction case above.
     const both = rendered(
       statusCondition({
-        filter: { value: "published" },
+        filter: { values: ["published"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: ["new"], hide: ["gone"] },
@@ -136,7 +120,7 @@ describe("statusCondition", () => {
     // question nobody asked — the mirror of the reveal rule below.
     const draft = rendered(
       statusCondition({
-        filter: { value: "draft" },
+        filter: { values: ["draft"], isPublicRead: false },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: [], hide: ["gone"] },
@@ -152,7 +136,7 @@ describe("statusCondition", () => {
     // asked — while also showing a published-bound row to a draft listing.
     const draft = rendered(
       statusCondition({
-        filter: { value: "draft" },
+        filter: { values: ["draft"], isPublicRead: false },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: ["e1"], hide: [] },
@@ -161,19 +145,20 @@ describe("statusCondition", () => {
     expect(draft.params).toEqual(["draft"]);
   });
 
-  it("widens a read bounded to a public state the workflow did NOT call published", () => {
-    // What a literal cannot do. A team renames its public state and the
+  it("widens a public read whatever the state is CALLED", () => {
+    // What a literal cannot do. A team names its public state `live` and the
     // release machinery must keep working: a due publication is still due, and
     // a comparison against the word `published` would silently stop revealing
     // it — the row simply never appears, on a query that returns rows and
-    // looks like it worked.
+    // looks like it worked. Nothing here mentions a state name, which is the
+    // property: the filter says whether the read is public and the condition
+    // believes it.
     const widened = rendered(
       statusCondition({
-        filter: { value: "live" },
+        filter: { values: ["live"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: ["e1"], hide: ["gone"] },
-        workflow: RENAMED,
       })
     );
     expect(widened.params).toEqual(["live", "gone", "e1"]);
@@ -181,44 +166,52 @@ describe("statusCondition", () => {
     expect(widened.sql.toLowerCase()).toContain("not in (");
   });
 
-  it("falls back to the default workflow when none is supplied", () => {
-    // An optional input defaults somewhere, and the default is where two call
-    // sites quietly answer different questions. Asserted as an equality
-    // between the two forms rather than as a property of one of them, so a
-    // changed default cannot satisfy both sides.
-    const supplied = rendered(
+  it("treats several public states as a SET, not as one of them", () => {
+    /*
+     * The widening phase 1 refused to attempt. A workflow may call more than
+     * one state public — `published` and a `featured` that is also live — and
+     * an equality would silently drop every row in the second from public
+     * reads. Phase 1 threw rather than emit that query; this is the predicate
+     * that makes the refusal unnecessary.
+     */
+    const both = rendered(
       statusCondition({
-        filter: { value: "published" },
+        filter: { values: ["published", "featured"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: table.id,
-        decisions: { reveal: ["e1"], hide: [] },
-        workflow: DEFAULT_WORKFLOW,
+        decisions: { reveal: [], hide: [] },
       })
     );
-    const omitted = rendered(
-      statusCondition({
-        filter: { value: "published" },
-        statusColumn: table.status,
-        idColumn: table.id,
-        decisions: { reveal: ["e1"], hide: [] },
-      })
-    );
-    expect(omitted).toEqual(supplied);
-    // The premise: this compared a widened condition, not two undefineds.
-    expect(omitted.params).toEqual(["published", "e1"]);
+    expect(both.params).toEqual(["published", "featured"]);
+    expect(both.sql.toLowerCase()).toContain(" in (");
   });
 
-  it("leaves a NON-public state alone under that same workflow", () => {
-    // The control for the case above: the workflow is what changed the answer,
-    // not the mere fact that an unfamiliar word was passed in. `working` is
-    // declared not public, so it must be treated exactly as `draft` is.
+  it("keeps a single state an EQUALITY rather than a one-element set", () => {
+    // The control, and a deliberate property: every workflow that exists before
+    // a team writes its own names one public state, so this widening has to be
+    // invisible to them — same SQL, same plan, same rendered parameters.
+    const one = rendered(
+      statusCondition({
+        filter: { values: ["published"], isPublicRead: true },
+        statusColumn: table.status,
+        idColumn: table.id,
+        decisions: { reveal: [], hide: [] },
+      })
+    );
+    expect(one.params).toEqual(["published"]);
+    expect(one.sql.toLowerCase()).not.toContain(" in (");
+  });
+
+  it("leaves a NON-public read alone whatever ITS state is called", () => {
+    // The control for the rename case: what changed the answer is the filter's
+    // own statement about the read, not the mere fact that an unfamiliar word
+    // was passed in. `working` is not public, so it is treated as `draft` is.
     const pending = rendered(
       statusCondition({
-        filter: { value: "working" },
+        filter: { values: ["working"], isPublicRead: false },
         statusColumn: table.status,
         idColumn: table.id,
         decisions: { reveal: ["e1"], hide: ["gone"] },
-        workflow: RENAMED,
       })
     );
     expect(pending.params).toEqual(["working"]);
@@ -231,7 +224,7 @@ describe("statusCondition", () => {
     // everything rather than to the named documents.
     const noId = rendered(
       statusCondition({
-        filter: { value: "published" },
+        filter: { values: ["published"], isPublicRead: true },
         statusColumn: table.status,
         idColumn: undefined,
         decisions: { reveal: ["e1"], hide: [] },

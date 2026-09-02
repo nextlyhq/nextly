@@ -56,7 +56,7 @@ export interface LocalizedQueryContext {
    * single status and the collection has per-locale status, so localized where/search EXISTS
    * checks only match companion rows in that state. Undefined = no status constraint.
    */
-  statusValue?: string;
+  statusValues?: readonly string[];
 }
 
 /** Emits the companion-table EXISTS for a filter on a localized field. */
@@ -128,7 +128,7 @@ export function buildLocalizedWhereExists(
         mainIdColumn: ctx.mainIdColumn,
         locale: ctx.locale,
         valueCondition: sql`${t}.${col} IS NOT NULL`,
-        statusValue: ctx.statusValue,
+        statusValues: ctx.statusValues,
       });
       return sql`NOT ${present}`;
     }
@@ -166,7 +166,7 @@ export function buildLocalizedWhereExists(
     mainIdColumn: ctx.mainIdColumn,
     locale: ctx.locale,
     valueCondition,
-    statusValue: ctx.statusValue,
+    statusValues: ctx.statusValues,
   });
 }
 
