@@ -8,7 +8,10 @@ import * as Icons from "@admin/components/icons";
 import { Database } from "@admin/components/icons";
 import { ThemeAwareLogo } from "@admin/components/shared/ThemeAwareLogo";
 import { Link } from "@admin/components/ui/link";
-import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
+import {
+  API_KEYS_LIST_PERMISSIONS,
+  SIDEBAR_NAVIGATION,
+} from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
@@ -241,10 +244,10 @@ export function DualSidebar({ isMobile }: DualSidebarProps = {}) {
   const hasMediaSection = hasPermissionDataPending
     ? true
     : capabilities.canViewMedia;
-  const canAccessApiKeys =
-    hasPermission("read-api-keys") ||
-    hasPermission("create-api-keys") ||
-    hasPermission("update-api-keys");
+  // What OPENS the list, not every grant naming the resource: `create-` and
+  // `delete-api-keys` act through the API without listing, so showing the entry
+  // to them offered a link that turned them away.
+  const canAccessApiKeys = API_KEYS_LIST_PERMISSIONS.some(hasPermission);
   // Any webhook grant reveals the link, matching the list route: read/update
   // view the list, create reaches the create form from it.
   const canAccessWebhooks =

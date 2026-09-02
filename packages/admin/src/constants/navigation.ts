@@ -111,20 +111,24 @@ export type SidebarNavigation = NavigationItem[];
  * through the API and must be able to see the one it just made.
  */
 /**
- * The grant the API Keys LIST route demands.
+ * The grants that reach the API Keys list, as ANY-OF.
  *
- * Named because two places gate on it and they must agree, and because they
- * are not the same question: the Settings panel SHOWS the entry to any api-key
- * grant, while this route admits only `update-api-keys`. The sidebar consults
- * it to avoid choosing a landing destination that would then refuse the
- * reader, and a copy of the value there would go stale in the direction no
- * test can see — widen the route and the copy still refuses someone the page
- * would now admit.
+ * Named because four places gate on it and they must agree: the route, the
+ * panel entry, the landing resolver, and the umbrella deciding whether the
+ * Settings rail appears at all.
  *
- * Lives here rather than in the panel's own table because `pages/registry`
- * already imports that table, so the table cannot import the registry back.
+ * Read off the API rather than chosen here. `requireApiKeyPermission` accepts
+ * the action's own grant OR `update-api-keys`, so listing keys answers to
+ * read-or-update. The route demanded `update-api-keys` alone, which was
+ * narrower than the endpoint behind it: a reader holding `read-api-keys` could
+ * fetch the list over the API and was turned away from the page that displays
+ * it. `create-api-keys` is deliberately absent — it opens the create form, not
+ * the list this entry links to.
  */
-export const API_KEYS_ROUTE_PERMISSION = "update-api-keys";
+export const API_KEYS_LIST_PERMISSIONS = [
+  "read-api-keys",
+  "update-api-keys",
+] as const;
 
 export const RELEASE_SECTION_PERMISSIONS = [
   "read-content-releases",

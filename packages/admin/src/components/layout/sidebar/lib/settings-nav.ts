@@ -21,7 +21,7 @@ import {
   Users,
   Webhook,
 } from "@admin/components/icons";
-import { API_KEYS_ROUTE_PERMISSION } from "@admin/constants/navigation";
+import { API_KEYS_LIST_PERMISSIONS } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
 
 /**
@@ -104,12 +104,9 @@ export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
         icon: Key,
         href: ROUTES.SETTINGS_API_KEYS,
         gate: { kind: "capability", capability: "apiKeys" },
-        // The list screen is guarded more narrowly than the link is shown: any
-        // api-key grant reveals this entry, but only `update-api-keys` opens
-        // it. Taken from the route's own constant rather than copied, so
-        // widening the route cannot leave this refusing a reader the page
-        // would now admit.
-        routePermission: API_KEYS_ROUTE_PERMISSION,
+        // Taken from the route's own constant rather than copied, so the two
+        // cannot drift in either direction.
+        routePermission: API_KEYS_LIST_PERMISSIONS,
       },
       {
         id: "webhooks",
@@ -230,13 +227,15 @@ export function visibleSettingsNav(
     .filter(group => group.items.length > 0 || group.pluginPlacement);
 }
 
-/** Any grant that reaches the API-keys screen; the panel gates it as a capability. */
-const API_KEY_SLUGS = [
-  "read-api-keys",
-  "create-api-keys",
-  "update-api-keys",
-  "delete-api-keys",
-] as const;
+/**
+ * Any grant that reaches the API-keys screen.
+ *
+ * The grants that OPEN it, not every grant naming the resource. `create-` and
+ * `delete-api-keys` let a holder act through the API but not list keys, so
+ * counting them here offered a rail entry whose only destination turned them
+ * away.
+ */
+const API_KEY_SLUGS = API_KEYS_LIST_PERMISSIONS;
 
 /** Any grant that reaches the webhooks screen, for the same reason. */
 const WEBHOOK_SLUGS = [

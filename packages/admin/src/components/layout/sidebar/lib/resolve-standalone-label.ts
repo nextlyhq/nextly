@@ -21,13 +21,11 @@ export type LabelledStandalonePlugin = StandalonePluginSummary &
  * empty string when the selected rail item is not a standalone plugin at all,
  * which is what the caller renders as "no heading".
  *
- * `||` rather than `??`, deliberately, and this is the rule's disagreement with
- * itself rather than a copied habit: `label` is free-form plugin config, so a
+ * `||` rather than `??`, deliberately: `label` is free-form plugin config, so a
  * plugin can ship `label: ""`, and under `??` that empty string is a value and
  * heads the panel with nothing. Six other sites spell this rule and four of
  * them use `??`, so a reader finding them should not assume this one is the
- * stale copy. Converging all seven is filed separately; it spans the plugins
- * pages, not just the sidebar.
+ * stale copy.
  *
  * @module components/layout/sidebar/lib/resolve-standalone-label
  */

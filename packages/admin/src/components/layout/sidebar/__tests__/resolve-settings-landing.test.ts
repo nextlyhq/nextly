@@ -6,6 +6,7 @@ import { routeConfig } from "@admin/pages/registry";
 import {
   SETTINGS_NAV,
   isSettingsNavItemVisible,
+  settingsPanelSlugs,
   type SettingsNavAccess,
 } from "../lib/settings-nav";
 import { resolveSettingsLanding } from "../lib/resolve-settings-landing";
@@ -58,15 +59,27 @@ describe("resolveSettingsLanding", () => {
   });
 
   /**
-   * The narrower-route case, and the reason `routePermission` exists. The
-   * panel SHOWS API Keys to any api-key grant, but its route admits only
-   * `update-api-keys`. Landing a read-only holder there would bounce them to
-   * the dashboard, so the entry must be skipped rather than chosen.
+   * The API is what settles this. `requireApiKeyPermission` accepts the
+   * action's own grant OR `update-api-keys`, so listing keys answers to
+   * read-or-update, and the route now says the same. A reader who could fetch
+   * the list over the API is no longer turned away from the page that shows it.
    */
-  it("does not land a read-only api-key holder on a page that refuses them", () => {
-    const landing = resolveSettingsLanding(only("read-api-keys"));
-    expect(landing).not.toBe(ROUTES.SETTINGS_API_KEYS);
-    expect(landing).toBe(ROUTES.SETTINGS);
+  it("sends an api-key reader to API Keys", () => {
+    expect(resolveSettingsLanding(only("read-api-keys"))).toBe(
+      ROUTES.SETTINGS_API_KEYS
+    );
+  });
+
+  /**
+   * `create-api-keys` opens the create form, not the list this entry links to,
+   * so it is not one of the grants that reaches the panel at all. The landing
+   * falls through, and the assertion further down proves no reader the panel
+   * admits can reach that fallthrough.
+   */
+  it("does not offer API Keys to a grant that cannot list them", () => {
+    expect(resolveSettingsLanding(only("create-api-keys"))).not.toBe(
+      ROUTES.SETTINGS_API_KEYS
+    );
   });
 
   it("sends a webhook reader to Webhooks", () => {
@@ -102,38 +115,35 @@ describe("resolveSettingsLanding", () => {
   });
 
   /**
-   * The anti-drift assertion, derived from the route registry rather than
-   * restated beside it. For every destination the panel can choose, whoever
-   * the landing admits, the ROUTE must admit too — otherwise the rail sends
-   * someone to a guard that turns them away.
+   * The invariant, derived from the route registry rather than restated.
    *
-   * A destination added to the table whose route is narrower than its gate
-   * fails here until it declares `routePermission`, which is the whole reason
-   * the field exists.
+   * For every grant that reaches the panel, the landing must be a page that
+   * grant can actually OPEN.
+   *
+   * A landing on `/admin/settings` itself does not count as placed.
+   * `settingsPanelSlugs()` admits a reader to that URL, but the page behind it
+   * is General Settings, whose query answers to `manage-settings` and returns
+   * 403 without it — so a reader sent there has been placed on a page that
+   * fails. There is therefore no escape hatch for the fallthrough: within this
+   * set it must never occur except for `manage-settings`, which is the grant
+   * General Settings itself needs.
    */
-  it("never chooses a destination whose route would refuse the reader", () => {
-    const grants = [
-      "manage-settings",
-      "manage-background-jobs",
-      "manage-email-providers",
-      "manage-email-templates",
-      "read-users",
-      "read-roles",
-      "read-api-keys",
-      "create-api-keys",
-      "update-api-keys",
-      "read-webhooks",
-      "create-webhooks",
-      "update-webhooks",
-    ];
-
-    const items = SETTINGS_NAV.flatMap(group => group.items);
-    expect(items.length).toBeGreaterThan(5);
+  it("lands every panel-reaching grant on a page that grant can open", () => {
+    const grants = settingsPanelSlugs();
+    expect(grants.length).toBeGreaterThan(3);
 
     for (const grant of grants) {
       const access = only(grant);
       const landing = resolveSettingsLanding(access);
-      if (landing === ROUTES.SETTINGS) continue;
+
+      if (landing === ROUTES.SETTINGS) {
+        expect(
+          grant,
+          `"${grant}" reaches the panel but lands on the panel URL itself, ` +
+            "whose page answers to manage-settings and returns 403 without it"
+        ).toBe("manage-settings");
+        continue;
+      }
 
       const required = routeConfig[landing]?.requiredPermission;
       const admitted =
@@ -181,21 +191,47 @@ describe("resolveSettingsLanding", () => {
   });
 
   /**
-   * A control for the assertion above: it must be capable of failing. The
-   * panel does show a destination whose route is narrower than its gate, so
-   * consulting visibility ALONE — which is what the check would do if
-   * `routePermission` were ignored — picks a refusing route.
+   * A control for the invariant above: it must be capable of failing.
+   *
+   * Two ways it could pass while asserting nothing. If `routeConfig` did not
+   * resolve the landings, `required` would be `undefined` throughout and every
+   * reader would count as admitted. And if the panel's gate were broader than
+   * what its destinations open, some grant would reach the panel with nothing
+   * to open, and the assertion above would be measuring an empty set.
+   *
+   * Both are checked directly rather than assumed: the landings resolve to
+   * real guards, and no grant that reaches the panel is left without a
+   * destination.
    */
-  it("would pick a refusing route if visibility alone decided it", () => {
-    const access = only("read-api-keys");
-    const firstVisible = SETTINGS_NAV.flatMap(group => group.items).find(item =>
-      isSettingsNavItemVisible(item, access)
-    );
+  it("resolves real route guards for the landings it checks", () => {
+    const guarded = settingsPanelSlugs()
+      .map(grant => resolveSettingsLanding(only(grant)))
+      .filter(landing => landing !== ROUTES.SETTINGS)
+      .map(landing => routeConfig[landing]?.requiredPermission);
 
-    expect(firstVisible?.href).toBe(ROUTES.SETTINGS_API_KEYS);
+    expect(guarded.length).toBeGreaterThan(2);
+    expect(guarded.every(required => required !== undefined)).toBe(true);
+  });
 
-    const required = routeConfig[ROUTES.SETTINGS_API_KEYS]?.requiredPermission;
-    expect(required).toBe("update-api-keys");
-    expect(access.hasPermission(required as string)).toBe(false);
+  /**
+   * The panel's gate and its destinations answer the same question.
+   *
+   * `settingsPanelSlugs()` is the umbrella that shows the rail entry and opens
+   * `/admin/settings`. A grant in it that opens no destination is a rail entry
+   * leading to a 403, which is the defect this file exists to prevent.
+   */
+  it("admits no grant that opens nothing", () => {
+    const stranded = settingsPanelSlugs().filter(grant => {
+      const access = only(grant);
+      return (
+        resolveSettingsLanding(access) === ROUTES.SETTINGS &&
+        grant !== "manage-settings"
+      );
+    });
+
+    expect(
+      stranded,
+      `these grants reach the Settings panel and open nothing in it: ${stranded.join(", ")}`
+    ).toEqual([]);
   });
 });
