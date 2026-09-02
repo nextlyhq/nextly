@@ -22,6 +22,7 @@ import {
   sqliteCoreStatementsFor,
 } from "../../database/sqlite-core-tables";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
+import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 // F8 PR 1: per-call factory pattern (matches reload-config.ts) so the
@@ -233,7 +234,25 @@ export async function ensureCoreTables(
             mayCreateRegistryTable: false,
           })
         );
-        await ensureSystemTables(drizzleAdapter, logger);
+        // Under the exclusion, and only now: the service resolves the
+        // registry name and then creates it, with awaits in between, so a
+        // migration renaming the table between those two steps would put the
+        // empty legacy one back. The replay above has already run, so the
+        // lock's own table is available — which is why this could not wrap the
+        // replay itself.
+        await withMigrationExcluded(
+          {
+            adapter: drizzleAdapter,
+            logger,
+            label: "core table reconcile",
+            mayCreateLock: true,
+            // Idempotent table creation, and the documented way to stop a sync
+            // is Ctrl+C — a claim stuck behind a dead process is the worse
+            // outcome, which is the trade a sync already makes.
+            releaseOnInterrupt: true,
+          },
+          () => ensureSystemTables(drizzleAdapter, logger)
+        );
         logger.debug("Core tables reconciled");
       } else {
         logger.debug("Core tables already exist, skipping ensureCoreTables");
@@ -242,6 +261,21 @@ export async function ensureCoreTables(
     }
   } catch {
     // tableExists may fail if the DB is completely empty — continue with creation
+  }
+
+  // Refused rather than half-built. The push can create `users` and every
+  // other core table while the bundle omits a registry it could not name, and
+  // the next run then sees `users`, takes the branch above, and never creates
+  // the missing one — a database that cannot repair itself. Aborting leaves
+  // nothing to repair, and the catalog read that failed can be fixed and the
+  // command re-run.
+  if (registryTable === null) {
+    logger.error(
+      "Could not read the database catalog to determine which field-group " +
+        "registry this database uses, so core tables were not created. " +
+        "Re-run once the database is reachable."
+    );
+    process.exit(1);
   }
 
   logger.newline();
@@ -281,11 +315,11 @@ export async function ensureCoreTables(
         drizzleAdapter,
         logger,
         sqliteCoreStatementsFor({
-          registryTable: registryTable ?? STORAGE_FORMAT.registryTable,
+          registryTable,
           // A database with no `users` may still legitimately need its
-          // registry created — unless resolution says another spelling is
-          // already there, or could not say at all.
-          mayCreateRegistryTable: registryTable !== null,
+          // registry created; the helper declines when the resolved name is
+          // the migrated one.
+          mayCreateRegistryTable: true,
         })
       );
 
