@@ -225,6 +225,16 @@ export function widgetValueProblem(
     return "title, when given, must be a string";
   }
 
+  // Chrome is a STRING in every version. Moving the closed-vocabulary check to
+  // the registry took the shape check with it, so `chrome: 42` was published as
+  // a `WidgetChrome` -- and the renderer treats anything but `"none"` as
+  // `"card"`, so it renders and boot says nothing about a configuration its
+  // author got wrong. Unknown STRING values still pass, which is the version
+  // skew this boundary exists for.
+  if (widget.chrome !== undefined && typeof widget.chrome !== "string") {
+    return "chrome, when given, must be a string";
+  }
+
   // A query is an OBJECT in every version, so it belongs here rather than
   // beside the body checks. There it was reachable only when the query had to
   // establish a body, so a widget shipping a component skipped it -- and the

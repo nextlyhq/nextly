@@ -215,8 +215,19 @@ const DECLARED_DIFFERENCES: Array<{
   },
 ];
 
-/** Rules that must hold identically on both sides. */
-const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
+/**
+ * Rules that must hold identically on both sides.
+ *
+ * `expect` names the diagnostic the row exists for. Without it a fixture can be
+ * refused by a DIFFERENT rule and the row stays green when its own is deleted:
+ * `{ defaultSize: "sm", minSize: "xl", maxSize: "sm" }` violates both size
+ * orderings, so removing either left the pair assertion satisfied by the other.
+ */
+const MUST_AGREE: Array<{
+  case: string;
+  widget: Record<string, unknown>;
+  expect?: RegExp;
+}> = [
   {
     case: "minSize above defaultSize",
     widget: {
@@ -291,6 +302,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a query that is not an object",
+    expect: /query must be an object/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -301,6 +313,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a title that is not a string",
+    expect: /title, when given, must be a string/,
     widget: {
       id: "acme/thing",
       title: 42,
@@ -322,6 +335,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a defaultSize below minSize when only maxSize is unknown",
+    expect: /below minSize/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -334,6 +348,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "minSize above maxSize",
+    expect: /exceeds maxSize/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -346,6 +361,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "minSize above maxSize when defaultSize is from a newer core",
+    expect: /exceeds maxSize/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -358,6 +374,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "defaultSize above maxSize",
+    expect: /above maxSize/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -369,6 +386,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "defaultSize above maxSize when minSize is from a newer core",
+    expect: /above maxSize/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -381,6 +399,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "an archetype that is not a string",
+    expect: /archetype, when given, must be a string/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -391,6 +410,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "actions beside a component with no archetype at all",
+    expect: /only valid for archetype "actions"/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -401,6 +421,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a non-array actions on an archetype this core does not know",
+    expect: /must be an array/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -411,6 +432,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a null action item on an archetype this core does not know",
+    expect: /must be an object/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -421,6 +443,7 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
   },
   {
     case: "a primitive action item on an archetype this core does not know",
+    expect: /must be an object/,
     widget: {
       id: "acme/thing",
       title: "T",
@@ -429,10 +452,22 @@ const MUST_AGREE: Array<{ case: string; widget: Record<string, unknown> }> = [
       actions: [42],
     },
   },
+  {
+    case: "a chrome that is not a string",
+    expect: /chrome, when given, must be a string/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      chrome: 42,
+    },
+  },
 ];
 
 describe("the registry and contributions channels agree except where declared", () => {
-  it.each(MUST_AGREE)("both refuse: $case", ({ widget }) => {
+  it.each(MUST_AGREE)("both refuse: $case", ({ widget, expect: expected }) => {
     const registry = refuses(() => validateWidgetDefinition(widget));
     const contributions = refuses(() => assertAdminWidgets([asPlugin(widget)]));
 
@@ -447,9 +482,13 @@ describe("the registry and contributions channels agree except where declared", 
     // runs -- so the registry half was green for every row whatever the rule
     // under test did, and deleting a registry rule would not have moved it. A
     // pair of booleans cannot see that; only the message can.
-    expect(reasonFrom(() => validateWidgetDefinition(widget))).not.toMatch(
-      /id must be namespace/
-    );
+    const reason = reasonFrom(() => validateWidgetDefinition(widget));
+    expect(reason).not.toMatch(/id must be namespace/);
+
+    // And, where the row names one, that the refusal is the rule the row is
+    // FOR. A fixture can violate more than one rule, so without this a row
+    // stays green when its own rule is deleted and another catches the input.
+    if (expected) expect(reason).toMatch(expected);
   });
 
   it.each(DECLARED_DIFFERENCES)(
@@ -462,6 +501,23 @@ describe("the registry and contributions channels agree except where declared", 
       expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
     }
   );
+
+  it("accepts chrome none on an archetype resolution supplies", () => {
+    // `{ component, chrome: "none" }` with no archetype is the typed, renderable
+    // form: resolution fills in `custom`, which is exactly where `"none"` is
+    // legal. Nothing else exercises the `resolved-custom` standing THROUGH the
+    // chrome rule -- the valid-chrome case spells `archetype: "custom"` out --
+    // so remapping that standing would start refusing this and no row would
+    // move.
+    const widget = {
+      id: "acme/thing",
+      title: "T",
+      defaultSize: "sm",
+      component: "p#X",
+      chrome: "none",
+    };
+    expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
+  });
 
   it("accepts a well-formed widget through BOTH channels", () => {
     // The positive control. Two validators that refused everything would
