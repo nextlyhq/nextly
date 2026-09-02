@@ -89,7 +89,11 @@ export function DashboardEditChrome({
         // reloaded, so the arrangement stays exactly where it is.
         <div
           role="alert"
-          className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
+          // Full-strength border, as every other error notice in the admin
+          // spells it. At 40% alpha it composites to 1.69:1 on the page
+          // surface, below the 3:1 a meaningful boundary needs — and this
+          // boundary is what separates the failure from the toolbar above it.
+          className="rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm"
           data-testid="dashboard-edit-error"
         >
           Your dashboard could not be saved. Your changes are still here — try
