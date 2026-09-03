@@ -9,6 +9,7 @@ import {
   addPlacement,
   columnAffordance,
   columnDropId,
+  columnFromDropId,
   resolveDrop,
   moveToColumn,
   placementsByColumn,
@@ -390,5 +391,34 @@ describe("a column move counts as an unsaved change", () => {
     // The control: a comparison that answered true for everything would pass
     // the assertion above while leaving Save permanently enabled.
     expect(hasChanges([at("a", 0, 0)], [at("a", 0, 0)])).toBe(false);
+  });
+});
+
+describe("a card is never mistaken for a column", () => {
+  const at = (id: string, column: number, order: number): WidgetPlacement => ({
+    id,
+    widgetId: `w-${id}`,
+    column,
+    order,
+    hidden: false,
+  });
+
+  it("treats a placement NAMED like a column as the card it is", () => {
+    // 🔴 Placement ids are opaque and the layout API accepts any non-empty
+    // string; a widget id also becomes a default placement id, and no prefix
+    // rule governs those. A card called `widget-column:1` must stay a card, or
+    // dropping onto it silently re-columns instead of reordering.
+    const colliding = columnDropId(1);
+    const start = [at("a", 0, 0), { ...at("x", 2, 10), id: colliding }];
+    const next = resolveDrop(start, "a", colliding, 3);
+    // It took the CARD's column (2), not the column the name spells (1).
+    expect(next.find(p => p.id === "a")?.column).toBe(2);
+  });
+
+  it("refuses a column id whose remainder is not all digits", () => {
+    // 🔴 `parseInt` reads a numeric prefix and stops, so `widget-column:1-card`
+    // parsed as column 1 — a card id classified as a column.
+    expect(columnFromDropId(`${columnDropId(1)}-card`)).toBeUndefined();
+    expect(columnFromDropId(columnDropId(1))).toBe(1);
   });
 });

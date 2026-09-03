@@ -10,9 +10,10 @@
  * @module components/features/widgets/edit/DashboardEditBar
  */
 
-import { Button } from "@nextlyhq/ui";
+import { Button, RadioGroup, RadioGroupItem } from "@nextlyhq/ui";
 
 import * as Icons from "@admin/components/icons";
+import { cn } from "@admin/lib/utils";
 
 export interface DashboardEditBarProps {
   isEditing: boolean;
@@ -67,46 +68,55 @@ export function DashboardEditBar({
           because it discards an arrangement rather than an edit. Offered only
           when there IS one: a reader already on the default has nothing to
           reset, and a button that does nothing is worse than no button. */}
-      {/* 🔴 A RADIO GROUP, not a select. Three or four short, mutually
-          exclusive choices are what radios are for: every option is visible
-          without opening anything, the arrow keys move between them, and the
-          current one is announced. A select hides the alternatives behind a
-          click and reads its own value rather than the set.
+      {/* 🔴 The REAL radio group, not buttons wearing `role="radio"`.
+          ARIA roles announce a widget; they do not implement one. Custom
+          buttons with those roles leave every choice a separate Tab stop and
+          the arrow keys inert, so a keyboard reader meets something that
+          claims to be a radio group and does not behave like one -- which is
+          worse than a plain set of buttons, because the announcement sets an
+          expectation the control then breaks.
 
-          Labelled by a real element rather than an `aria-label` on the group,
-          so the name is visible to everyone rather than only to a screen
-          reader deciding what this cluster of numbers is for. */}
-      <div
-        role="radiogroup"
-        aria-labelledby="dashboard-columns-label"
-        className="mr-auto flex items-center gap-1"
-        data-testid="dashboard-column-picker"
-      >
+          Radix supplies roving focus, arrow-key selection and the checked
+          state; this only has to style it and say what it is for. The label is
+          a visible element rather than an `aria-label`, so the name of the
+          control is available to everyone rather than only to a screen reader
+          deciding what a cluster of digits means. */}
+      <div className="mr-auto flex items-center gap-2">
         <span
           id="dashboard-columns-label"
-          className="mr-1 text-xs text-muted-foreground"
+          className="text-xs text-muted-foreground"
         >
           Columns
         </span>
-        {columnChoices.map(choice => (
-          <Button
-            key={choice}
-            type="button"
-            role="radio"
-            aria-checked={choice === columnCount}
-            variant={choice === columnCount ? "secondary" : "ghost"}
-            size="sm"
-            disabled={isSaving}
-            onClick={() => onColumnCount(choice)}
-            // The count is in the label because the digit alone does not say
-            // what it counts, and a reader arriving on it by keyboard has no
-            // surrounding context to read.
-            aria-label={`${choice} columns`}
-            data-testid={`dashboard-column-choice-${choice}`}
-          >
-            {choice}
-          </Button>
-        ))}
+        <RadioGroup
+          aria-labelledby="dashboard-columns-label"
+          value={String(columnCount)}
+          onValueChange={value => onColumnCount(Number(value))}
+          disabled={isSaving}
+          className="flex items-center gap-1"
+          data-testid="dashboard-column-picker"
+        >
+          {columnChoices.map(choice => (
+            <label
+              key={choice}
+              // The whole chip is the target, so the hit area matches what a
+              // reader sees rather than a small circle beside it.
+              className={cn(
+                "flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
+                choice === columnCount
+                  ? "border-primary bg-primary/10 text-foreground"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+              data-testid={`dashboard-column-choice-${choice}`}
+            >
+              <RadioGroupItem
+                value={String(choice)}
+                aria-label={`${choice} columns`}
+              />
+              {choice}
+            </label>
+          ))}
+        </RadioGroup>
       </div>
 
       {canReset ? (

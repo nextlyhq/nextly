@@ -248,11 +248,10 @@ export interface ColumnAffordance {
  * cards in the columns that went away are still the reader's; showing one
  * somewhere unexpected is recoverable, deleting it is not.
  */
-export function placementsByColumn(
-  placements: readonly WidgetPlacement[],
-  columnCount: number
-): WidgetPlacement[][] {
-  const columns: WidgetPlacement[][] = Array.from(
+export function placementsByColumn<
+  T extends { column?: number; order: number },
+>(placements: readonly T[], columnCount: number): T[][] {
+  const columns: T[][] = Array.from(
     { length: Math.max(1, columnCount) },
     () => []
   );
@@ -319,10 +318,14 @@ export function columnDropId(column: number): string {
 }
 
 /** The column a droppable id names, or `undefined` when it names a card. */
-function columnFromDropId(id: string): number | undefined {
+export function columnFromDropId(id: string): number | undefined {
   if (!id.startsWith(COLUMN_DROP_PREFIX)) return undefined;
-  const parsed = Number.parseInt(id.slice(COLUMN_DROP_PREFIX.length), 10);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+  const rest = id.slice(COLUMN_DROP_PREFIX.length);
+  // 🔴 The WHOLE remainder must be digits. `parseInt` reads a numeric prefix
+  // and stops, so `widget-column:1-card` would parse as column 1 -- a card id
+  // silently classified as a column.
+  if (!/^\d+$/.test(rest)) return undefined;
+  return Number.parseInt(rest, 10);
 }
 
 /**
@@ -346,14 +349,18 @@ export function resolveDrop(
 ): WidgetPlacement[] {
   if (overId === null || overId === activeId) return [...placements];
 
-  const targetColumn = columnFromDropId(overId);
-  if (targetColumn !== undefined) {
+  // 🔴 A PLACEMENT wins over the column namespace. Placement ids are opaque and
+  // the layout API accepts any non-empty string, so a card can legitimately be
+  // named `widget-column:1` -- and a widget id becomes a default placement id,
+  // which no prefix rule governs. Asking the placements first means a real card
+  // is never mistaken for a column, whatever it is called.
+  const over = placements.find(placement => placement.id === overId);
+  if (over === undefined) {
+    const targetColumn = columnFromDropId(overId);
+    if (targetColumn === undefined) return [...placements];
     const bounded = Math.min(targetColumn, Math.max(0, columnCount - 1));
     return renumber(moveToColumn(placements, activeId, bounded));
   }
-
-  const over = placements.find(placement => placement.id === overId);
-  if (over === undefined) return [...placements];
 
   // The column FIRST, then the position, and both are needed. Taking the
   // column alone lands every card in arrival order, so a reader could never

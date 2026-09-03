@@ -155,7 +155,7 @@ export function WidgetGrid() {
     columns,
     columnCount,
     editor,
-    moveBy,
+    moveWithinColumn,
     moveColumn,
     hasArrangement,
     sensors,
@@ -242,7 +242,7 @@ export function WidgetGrid() {
           updatedAt={updatedAt}
           isFetching={isFetching}
           announcement={announcement}
-          onMove={moveBy}
+          onMove={moveWithinColumn}
           onMoveColumn={moveColumn}
           onToggleHidden={editor.toggleHidden}
           onRemove={editor.remove}

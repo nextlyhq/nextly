@@ -29,8 +29,9 @@ export interface ArrangedColumnsProps {
   updatedAt: Date | null;
   isFetching: boolean;
   announcement: string;
-  onMove: (index: number, delta: number) => void;
-  onMoveColumn: (placementId: string, delta: number) => void;
+  /** Move one card one step within the column it is drawn in. */
+  onMove: (placementId: string, neighbourId: string) => void;
+  onMoveColumn: (placementId: string, targetColumn: number) => void;
   onToggleHidden: (placementId: string) => void;
   onRemove: (placementId: string) => void;
 }
@@ -95,7 +96,7 @@ export function ArrangedColumns({
           items={rowsInColumn.map(row => row.placementId)}
           isEditing={isEditing}
         >
-          {rowsInColumn.map(row => (
+          {rowsInColumn.map((row, indexInColumn) => (
             <ArrangedCell
               key={row.placementId}
               row={row}
@@ -112,8 +113,16 @@ export function ArrangedColumns({
               // The arrangement hook announces, because it is the one that
               // resolves the destination -- announcing here would name a
               // position computed a second time, and the two would drift.
-              onMove={onMove}
+              // 🔴 Resolved against THIS column, not the whole arrangement.
+              // The sequence is interleaved across columns, so the row before
+              // this one globally is usually in a different column -- moving
+              // toward it swapped two cards a reader could not see move.
+              onMove={(delta: number) => {
+                const neighbour = rowsInColumn[indexInColumn + delta];
+                if (neighbour) onMove(row.placementId, neighbour.placementId);
+              }}
               columnCount={columnCount}
+              column={columnIndex}
               onMoveColumn={onMoveColumn}
               onToggleHidden={onToggleHidden}
               onRemove={onRemove}

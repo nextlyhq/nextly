@@ -983,3 +983,60 @@ describe("choosing how many columns", () => {
     expect(api.put.mock.calls[0][1]).toMatchObject({ columnCount: 4 });
   });
 });
+
+describe("the per-card controls act on the column a reader sees", () => {
+  it("moves a card DOWN past its own column's neighbour, not the global one", async () => {
+    // 🔴 The arrangement is interleaved across columns, so the card after this
+    // one in the whole sequence usually sits in a different column. Resolved
+    // globally, Move down swapped two entries and the reader saw nothing move
+    // — an enabled control that is not the pointer equivalent of dragging.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a", column: 0, order: 0 },
+        { id: "p2", widgetId: "core/b", column: 1, order: 10 },
+        { id: "p3", widgetId: "core/c", column: 0, order: 20 },
+      ],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-card-body").length).toBe(3)
+    );
+    const user = await beginEditing();
+    const columnZero = () =>
+      Array.from(
+        screen
+          .getByTestId("widget-column-0")
+          .querySelectorAll("[data-testid^='widget-cell-']")
+      ).map(node => node.getAttribute("data-testid"));
+    expect(columnZero()).toEqual(["widget-cell-core/a", "widget-cell-core/c"]);
+    const [firstDown] = screen.getAllByTestId("widget-move-down");
+    await user.click(firstDown);
+    await waitFor(() =>
+      expect(columnZero()).toEqual(["widget-cell-core/c", "widget-cell-core/a"])
+    );
+  });
+
+  it("offers Left from the column a card is DRAWN in, not its stored one", async () => {
+    // 🔴 A card stored past the count is folded into the last column for
+    // drawing. Computing from the stored value offered a Left that resolved
+    // outside the dashboard and a label naming a column the reader cannot see.
+    layoutResponse = layout(
+      [{ id: "p1", widgetId: "core/a", column: 3, order: 0 }],
+      { columnCount: 2 }
+    );
+    renderGrid();
+    await waitFor(() => expect(screen.queryByText("Widget core/b")).toBeNull());
+    const user = await beginEditing();
+    const left = screen.getByTestId("widget-move-left");
+    expect(left).toBeEnabled();
+    await user.click(left);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByTestId("widget-column-0")
+          .querySelector("[data-testid^='widget-cell-']")
+      ).not.toBeNull()
+    );
+  });
+});

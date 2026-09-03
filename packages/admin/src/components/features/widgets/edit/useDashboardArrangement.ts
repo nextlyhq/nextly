@@ -20,7 +20,11 @@ import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboard
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { useSortableFieldArray } from "../../entries/fields/structured/field-array-helpers";
-import { columnDropId } from "../layout-editor";
+import {
+  columnDropId,
+  columnFromDropId,
+  placementsByColumn,
+} from "../layout-editor";
 
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
 
@@ -39,6 +43,13 @@ export interface ArrangedWidget {
   size?: string;
   /** Which column this card is drawn in. Absent on a pre-column arrangement. */
   column?: number;
+  /**
+   * Its position within that column.
+   *
+   * Carried so the ONE grouping helper can order these rows, rather than the
+   * grid relying on the sequence they happen to arrive in.
+   */
+  order: number;
 }
 
 export interface DashboardArrangement {
@@ -56,17 +67,17 @@ export interface DashboardArrangement {
   /** How many columns this reader arranged their dashboard into. */
   columnCount: number;
   editor: LayoutEditor;
-  /** Move the card at a VIEW index one step, resolving ids for the editor. */
-  moveBy: (index: number, delta: number) => void;
+  /** Swap one card with a named neighbour in the same column. */
+  moveWithinColumn: (placementId: string, neighbourId: string) => void;
   /**
-   * Move one card sideways by `delta` columns.
+   * Move one card into `targetColumn`, named absolutely.
    *
    * The CLICKABLE route across columns. Dragging one there is the same
    * capability, and WCAG 2.2 SC 2.5.7 asks for a single-pointer alternative to
    * anything a drag achieves -- so this is not a convenience beside the drag,
    * it is what makes the drag permissible.
    */
-  moveColumn: (placementId: string, delta: number) => void;
+  moveColumn: (placementId: string, targetColumn: number) => void;
   /**
    * Whether an arrangement has been READ — not whether it holds anything.
    *
@@ -134,6 +145,7 @@ export function useDashboardArrangement(
         widget,
         hidden: false,
         column: index % DEFAULT_COLUMN_COUNT,
+        order: index,
       }));
     }
     const rows: ArrangedWidget[] = [];
@@ -153,6 +165,7 @@ export function useDashboardArrangement(
         hidden: placement.hidden,
         ...(placement.size === undefined ? {} : { size: placement.size }),
         ...(placement.column === undefined ? {} : { column: placement.column }),
+        order: placement.order,
       });
     }
     return rows;
@@ -163,18 +176,15 @@ export function useDashboardArrangement(
   // the reader is looking at the one they just chose.
   const columnCount = editor.columnCount;
 
-  const columns = useMemo(() => {
-    const buckets: ArrangedWidget[][] = Array.from(
-      { length: Math.max(1, columnCount) },
-      () => []
-    );
-    for (const row of visible) {
-      const declaredColumn = row.column ?? 0;
-      const index = Math.min(Math.max(0, declaredColumn), buckets.length - 1);
-      buckets[index].push(row);
-    }
-    return buckets;
-  }, [visible, columnCount]);
+  // 🔴 The SHARED helper, not a second grouping. An inline copy here is the
+  // path production takes while the unit tests exercise the helper, so the
+  // tests stay green while the shipped grid regresses -- and the two already
+  // disagreed, since the helper orders each bucket by `order` and a local copy
+  // took whatever sequence the rows arrived in.
+  const columns = useMemo(
+    () => placementsByColumn(visible, columnCount),
+    [visible, columnCount]
+  );
 
   const sortableItems = useMemo(
     () => visible.map(row => ({ id: row.placementId })),
@@ -204,10 +214,16 @@ export function useDashboardArrangement(
       const moved = visible.find(row => row.placementId === activeId);
       if (!moved) return;
       editor.dropOn(activeId, overId);
-      // Announced from the position the card is moving TO, resolved against
-      // the view it was dropped in. A card dropped onto a column has no
-      // neighbour to count from, so it is announced as the column's arrival
-      // rather than with a position that would be invented.
+      // 🔴 A drop onto a COLUMN has no neighbouring card to count from, and
+      // `findIndex` answers -1 for it. Announced from that, every empty-column
+      // drop claimed the card had gone to the last position in the whole
+      // dashboard, whichever column actually received it. The column target is
+      // parsed instead, and the announcement names the column.
+      const droppedColumn = columnFromDropId(overId);
+      if (droppedColumn !== undefined) {
+        announceMove(moved.widget.title, droppedColumn + 1, columnCount);
+        return;
+      }
       const target = visible.findIndex(row => row.placementId === overId);
       announceMove(
         moved.widget.title,
@@ -215,39 +231,53 @@ export function useDashboardArrangement(
         visible.length
       );
     },
-    [visible, editor, announceMove]
+    [visible, editor, announceMove, columnCount]
   );
 
   /**
-   * The button path: move the card at `index` one step in the VIEW.
+   * Move one card into `targetColumn`.
    *
-   * Resolved to the neighbour's id here rather than to `index + delta`, because
-   * the neighbour in the view may not be the neighbour in the stored array.
+   * 🔴 An ABSOLUTE target, computed by the caller from the column the card is
+   * DRAWN in. A delta applied to the stored column is wrong for any card whose
+   * column is past the current count: folded into the last column for drawing,
+   * it would offer a Left that lands outside the dashboard and a label naming a
+   * column the reader cannot see.
    */
   const moveColumn = useCallback(
-    (placementId: string, delta: number) => {
+    (placementId: string, targetColumn: number) => {
       const moved = visible.find(row => row.placementId === placementId);
       if (!moved) return;
-      const target = (moved.column ?? 0) + delta;
-      // Refused rather than clamped. Clamping would let a button that LOOKS
-      // disabled still act -- the affordance and the handler would disagree,
-      // and the one a reader trusts is whichever moved the card.
-      if (target < 0 || target >= columnCount) return;
-      editor.dropOn(placementId, columnDropId(target));
-      announceMove(moved.widget.title, target + 1, columnCount);
+      if (targetColumn < 0 || targetColumn >= columnCount) return;
+      editor.dropOn(placementId, columnDropId(targetColumn));
+      announceMove(moved.widget.title, targetColumn + 1, columnCount);
     },
     [visible, editor, columnCount, announceMove]
   );
 
-  const moveBy = useCallback(
-    (index: number, delta: number) => {
-      const moved = visible[index];
-      const target = visible[index + delta];
-      if (!moved || !target) return;
-      editor.move(moved.placementId, target.placementId);
-      announceMove(moved.widget.title, index + delta + 1, visible.length);
+  /**
+   * The button path: swap one card with a NAMED neighbour.
+   *
+   * Takes both ids rather than an index and a delta. The caller renders one
+   * column and knows which card sits next to which; an index handed back here
+   * would have to be re-resolved against the interleaved whole, which is the
+   * translation that moved the wrong card.
+   */
+  const moveWithinColumn = useCallback(
+    (placementId: string, neighbourId: string) => {
+      const moved = visible.find(row => row.placementId === placementId);
+      if (!moved) return;
+      editor.dropOn(placementId, neighbourId);
+      const column = placementsByColumn(visible, columnCount)[
+        Math.min(Math.max(0, moved.column ?? 0), columnCount - 1)
+      ];
+      const landed = column.findIndex(row => row.placementId === neighbourId);
+      announceMove(
+        moved.widget.title,
+        landed === -1 ? column.length : landed + 1,
+        column.length
+      );
     },
-    [visible, editor, announceMove]
+    [visible, editor, columnCount, announceMove]
   );
 
   return {
@@ -255,7 +285,7 @@ export function useDashboardArrangement(
     editor,
     columns,
     columnCount,
-    moveBy,
+    moveWithinColumn,
     moveColumn,
     hasArrangement,
     sortableItems,
