@@ -30,6 +30,7 @@ import { collectPluginRoutes } from "./routes/collect-routes";
 import { isRouteError } from "./routes/route-error";
 import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
+import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
 
 /**
@@ -171,6 +172,89 @@ export { pluginAdminSlug } from "./plugin-slug";
  * applies) but contribute NO behavioral admin UI — no menu/pages/settings.
  */
 /**
+ * Resolve a menu item's destination and gate through the plugin's renameMap.
+ *
+ * An item naming one of the plugin's own collections is re-pointed at the slug
+ * the host REGISTERED, and gated on the read permission that slug seeds. An
+ * item naming none is copied through: it addresses something the rename cannot
+ * move, and rewriting a path the author wrote literally would be a different
+ * and much harder-to-predict rule.
+ *
+ * `collection` is dropped rather than forwarded. The admin's contract is a
+ * resolved `to` and a resolved `requiredPermission`; shipping the declared
+ * slug alongside them would offer a second answer to the same question, and
+ * the stale one is the one that looks authoritative.
+ *
+ * Children are resolved too, so a nested item is no more likely to be stranded
+ * than a top-level one.
+ */
+function resolvedMenuItem(
+  item: PluginMenuItem,
+  renameMap: Record<string, string>
+): PluginMenuItem {
+  const children = item.children?.map(child =>
+    resolvedMenuItem(child, renameMap)
+  );
+  const withChildren = children ? { ...item, children } : item;
+
+  // Destructured before the guard so the narrowing survives it: reading
+  // `item.collection` and then indexing `withChildren.collection` are two
+  // reads of two objects as far as the checker is concerned.
+  const { collection, ...rest } = withChildren;
+  if (collection === undefined) return withChildren;
+
+  // An OWN property only. `renameMap` is an ordinary object, so a plugin whose
+  // collection is legitimately called `constructor` or `toString` would index
+  // into `Object.prototype` and resolve its slug to a function — and `??`
+  // cannot see that, because an inherited method is neither null nor
+  // undefined. The destination becomes `/admin/collections/function Object()
+  // { [native code] }` and the gate an equally unseeded permission.
+  const renamed = Object.prototype.hasOwnProperty.call(renameMap, collection)
+    ? renameMap[collection]
+    : undefined;
+  const slug = typeof renamed === "string" ? renamed : collection;
+
+  return {
+    ...rest,
+    to: retargetedTo(rest.to, collection, slug),
+    // The seeded per-collection read verb. Written from the resolved slug for
+    // the same reason the destination is: a rename moves the permission the
+    // seeder creates, and a gate naming the declared slug would hide the item
+    // from exactly the readers who can open the list.
+    requiredPermission: `read-${slug}`,
+  };
+}
+
+/**
+ * The item's destination, pointed at the slug the host registered.
+ *
+ * Returns the declared `to` UNCHANGED when nothing was renamed. Naming a
+ * collection is how an item opts into rename-safety and RBAC, not a request to
+ * be sent somewhere canonical, so an item whose destination carries list state
+ * — `?status=draft`, a hash, a sub-path — keeps it. Overwriting it made adding
+ * `collection` to a working link change where that link went.
+ *
+ * When the slug DID move, only the collection segment is rewritten and
+ * whatever followed it is carried across. A destination that does not address
+ * the declared collection at all is left alone: the item named a collection so
+ * its permission still moves, but a path this function does not recognise is
+ * not one it should be inventing a new spelling for.
+ */
+function retargetedTo(to: string, declared: string, resolved: string): string {
+  if (declared === resolved) return to;
+
+  const prefix = `/admin/collections/${declared}`;
+  const addressesTheList =
+    to === prefix ||
+    to.startsWith(`${prefix}/`) ||
+    to.startsWith(`${prefix}?`) ||
+    to.startsWith(`${prefix}#`);
+  if (!addressesTheList) return to;
+
+  return `/admin/collections/${resolved}${to.slice(prefix.length)}`;
+}
+
+/**
  * The routes a plugin would actually serve, with the namespace they answer at.
  *
  * Asks `collectPluginRoutes` rather than restating its rules. That function is
@@ -243,6 +327,7 @@ export function buildPluginAdminMeta(
   // rewrite `config.plugins` after `resolvePlugins` has already run. Both
   // would publish ambiguous addresses from a list nothing had checked.
   validatePluginSlugs(plugins);
+  validatePluginMenus(plugins);
 
   return plugins.map(plugin => {
     const slug = pluginAdminSlug(plugin.name);
@@ -308,7 +393,11 @@ export function buildPluginAdminMeta(
     // Behavioral admin UI only for enabled plugins.
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
-      if (admin.menu && admin.menu.length > 0) meta.menu = admin.menu;
+      if (admin.menu && admin.menu.length > 0) {
+        meta.menu = admin.menu.map(item =>
+          resolvedMenuItem(item, plugin.renameMap ?? {})
+        );
+      }
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       if (admin.settings) meta.settings = admin.settings;
       // Header customization. `header.slot` supersedes the

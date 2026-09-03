@@ -56,6 +56,7 @@ export {
   ChevronUp,
   Circle, // useFields: radio
   Clipboard, // Collection Settings: icon picker
+  Component, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   Clock, // useFields: time picker
   Cloud, // AutoSaveIndicator: saved state
   CloudOff, // AutoSaveIndicator: not saved state
@@ -111,6 +112,7 @@ export {
   Laptop,
   Layout, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   LayoutGrid, // Collection Builder: blocks field
+  LayoutTemplate, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   Languages, // Translations: the worklist's sidebar entry
   Layers,
   LayoutDashboard,
@@ -144,6 +146,7 @@ export {
   PanelRightClose,
   PanelRightOpen,
   PanelTop, // Collection Builder: tabs field
+  PanelsTopLeft, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   Paperclip, // Email Template editor: default attachments
   Pencil, // Collection Settings: icon picker
   Pilcrow, // Rich text editor: paragraph block type

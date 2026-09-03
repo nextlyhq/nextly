@@ -139,6 +139,7 @@ import {
 } from "../plugins/services/plugin-services-registry";
 import { clearPluginSubscriptions } from "../plugins/subscription-tracker";
 import { assertAdminWidgets } from "../plugins/validate-admin-widgets";
+import { validatePluginMenus } from "../plugins/validate-menus";
 import { validatePluginSlugs } from "../plugins/validate-slugs";
 import { setBootedConfig } from "../route-handler/auth-handler";
 import type {
@@ -505,6 +506,11 @@ export async function registerServices(
   // Boot is where this should fail; without it a transformer-introduced
   // collision would surface on the first admin-meta request instead.
   validatePluginSlugs(setupConfig.plugins ?? []);
+  // And the menu targets on that same transformed list. A transformer may
+  // rename a contributed collection or replace a plugin outright, so an item
+  // that named a collection its plugin owned before the transform can name one
+  // it no longer does.
+  validatePluginMenus(setupConfig.plugins ?? []);
   // And the widgets on that same transformed list, for the same reason one
   // level in. `resolvePlugins` checks the list the CALLER passed; a transformer
   // that adds or replaces a plugin contributes widgets that list never held, and
