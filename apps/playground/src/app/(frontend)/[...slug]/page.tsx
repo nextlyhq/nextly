@@ -42,6 +42,7 @@ import { createBlocksPage } from "@nextlyhq/blocks-react/next";
 import { previewDraftGate } from "nextly/runtime";
 
 import {
+  siteDataProvider,
   siteReader,
   SITE_STYLE_CONTEXT,
   SITE_STYLES,
@@ -94,6 +95,16 @@ const { ContentPage, generateMetadata } = createBlocksPage({
   // — so a public route depending on it renders the unknown-block placeholder
   // whenever this request arrived before the admin did.
   blocks: createBlockResolver(coreBlocks),
+  // What a `core/collection-loop` reads. Without it `createStandaloneContext`
+  // installs `emptyDataProvider`, which answers every query with nothing — so a
+  // block an author inserted from the palette renders as an empty container on
+  // a page that is otherwise entirely correct, and nothing reports it.
+  //
+  // The SAME provider the `/blocks` route uses, rather than a second one built
+  // here: it reads as the visitor with `overrideAccess: false` and
+  // `status: "published"`, and a route that assembled its own would be one
+  // rewrite away from a trusted read serving drafts to anyone with a URL.
+  data: siteDataProvider,
   styleContext: SITE_STYLE_CONTEXT,
   // The one provider, shared with the two single-page routes so all three
   // resolve their tokens the same way. See `SITE_STYLES`.
