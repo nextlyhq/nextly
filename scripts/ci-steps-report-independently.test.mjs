@@ -99,7 +99,7 @@ const SETUP_STEPS = new Set([
  *
  * `Test` is NOT one of them, though it reads built output too: `turbo.jsonc`
  * gives `test` `dependsOn: ["^build"]`, so it rebuilds the dependency subgraph
- * of whatever it is filtered to. Gating it on Build would silence seventeen
+ * of whatever it is filtered to. Gating it on Build would silence every
  * suites for a failure in a package none of them depends on.
  *
  * `Playground tests` IS one, and the contrast with `Test` is the reason: it runs
@@ -332,7 +332,7 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     ).toEqual([]);
   });
 
-  it("does NOT gate Test on Build, which would silence seventeen suites", async () => {
+  it("does NOT gate Test on Build, which would silence every filtered suite", async () => {
     const steps = ciJobSteps(await readFile(CI_WORKFLOW, "utf-8"));
     const test = steps.find(s => s.name === "Test");
 
@@ -340,8 +340,8 @@ describe("the ci job reports every gate, not only the first to fail", () => {
     // steps around it carry the build conjunct, so adding it here reads as
     // tidying up an inconsistency. It is not one — `turbo.jsonc` gives `test`
     // `dependsOn: ["^build"]`, so it rebuilds what it needs, and gating it
-    // means a Build failure in a package none of the seventeen filters depends
-    // on contributes nothing instead of seventeen suites' worth of verdict.
+    // means a Build failure in a package none of the filters depends on
+    // contributes nothing instead of every filtered suite's worth of verdict.
     expect(test).toBeDefined();
     expect(test.ifCondition).toContain(NOT_CANCELLED);
     expect(test.ifCondition).toContain(INSTALL_OK);
